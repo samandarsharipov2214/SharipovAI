@@ -30,3 +30,8 @@ class RunnerOutput:
     paper_equity: float
     learning_summary: LearningSummary
     report: str
+    reason: str = ""
+    consensus: str = ""
+    consensus_agreement: float = 0.0
+    paper_pnl: float = 0.0
+    open_positions: int = 0

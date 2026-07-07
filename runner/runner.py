@@ -135,6 +135,7 @@ class SharipovAIRunner:
             )
 
         paper_account = self._paper_engine.account()
+        open_positions = len(self._paper_engine.positions())
         self._learning_engine.record(
             LearningRecord(
                 trade=trade,
@@ -154,6 +155,11 @@ class SharipovAIRunner:
             paper_equity=paper_account.equity,
             learning_summary=learning_summary,
             report=self._report(ai_output, paper_account, learning_summary),
+            reason=ai_output.decision.reason,
+            consensus=ai_output.consensus.level.value,
+            consensus_agreement=ai_output.consensus.agreement,
+            paper_pnl=paper_account.realized_pnl + paper_account.unrealized_pnl,
+            open_positions=open_positions,
         )
 
     def _providers_for_mode(
