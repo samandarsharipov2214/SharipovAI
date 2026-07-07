@@ -1,0 +1,18 @@
+run_mode = "demo"
+
+[paper]
+initial_balance = 10000
+
+[risk]
+max_drawdown = 10
+max_position_percent = 20
+
+[news]
+rss_feeds = [
+  "https://www.coindesk.com/arc/outboundfeeds/rss/",
+  "https://cointelegraph.com/rss"
+]
+
+[market]
+exchange = "bybit"
+category = "spot"

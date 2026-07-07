@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from core.orchestrator import Agent, AgentResult
-from data_layer.providers import RSSProvider
+from data_layer.providers import BaseDataProvider
 
 from .classifier import NewsClassifier
 from .models import NewsAnalysis
@@ -23,7 +23,7 @@ class NewsAgent(Agent):
 
     def __init__(
         self,
-        provider: RSSProvider,
+        provider: BaseDataProvider,
         classifier: NewsClassifier | None = None,
     ) -> None:
         """Initialize the News Agent.

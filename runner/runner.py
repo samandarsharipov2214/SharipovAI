@@ -12,9 +12,17 @@ from datetime import datetime, timezone
 from agents import MarketAgent
 from ai_core import AICore, AICoreInput
 from bybit import TickerInfo
+import config.settings as config_settings
 from core.orchestrator import Orchestrator
 from data_layer import DataItem
-from data_layer.providers import RSSProvider
+from data_layer.models import DataBatch
+from data_layer.providers import (
+    BaseDataProvider,
+    LiveMarketProvider,
+    LiveRSSProvider,
+    MarketDataProvider,
+    RSSProvider,
+)
 from decision import DecisionType
 from learning_engine import LearningEngine, LearningRecord
 from memory import MemoryEngine
@@ -23,6 +31,7 @@ from paper_trading import PaperEngine, PaperTrade
 from portfolio_engine import PortfolioInput, Position
 from risk_engine import RiskInput
 
+from .exceptions import RunnerError
 from .models import RunnerOutput
 
 
@@ -49,12 +58,26 @@ class SharipovAIRunner:
             memory_engine=self._memory_engine
         )
         self._last_orchestrator: Orchestrator | None = None
+        self._last_market_provider_name: str | None = None
+        self._last_news_provider_name: str | None = None
 
     @property
     def last_orchestrator(self) -> Orchestrator | None:
         """Return the last orchestrator used by the runner."""
 
         return self._last_orchestrator
+
+    @property
+    def last_market_provider_name(self) -> str | None:
+        """Return the last market provider name used by the runner."""
+
+        return self._last_market_provider_name
+
+    @property
+    def last_news_provider_name(self) -> str | None:
+        """Return the last news provider name used by the runner."""
+
+        return self._last_news_provider_name
 
     def run(self) -> RunnerOutput:
         """Run the complete offline SharipovAI pipeline.
@@ -63,11 +86,16 @@ class SharipovAIRunner:
             Runner output.
         """
 
-        tickers = self._sample_tickers()
-        news_items = self._sample_news_items()
+        market_provider, news_provider = self._providers_for_mode(
+            config_settings.settings.run_mode
+        )
+        self._last_market_provider_name = market_provider.name()
+        self._last_news_provider_name = news_provider.name()
+        market_batch = market_provider.fetch()
+        tickers = self._tickers_from_market_batch(market_batch)
         orchestrator = Orchestrator()
         orchestrator.register_agent(MarketAgent())
-        orchestrator.register_agent(NewsAgent(RSSProvider(items=news_items)))
+        orchestrator.register_agent(NewsAgent(news_provider))
         self._last_orchestrator = orchestrator
 
         ai_core = AICore(
@@ -127,6 +155,54 @@ class SharipovAIRunner:
             learning_summary=learning_summary,
             report=self._report(ai_output, paper_account, learning_summary),
         )
+
+    def _providers_for_mode(
+        self,
+        run_mode: str,
+    ) -> tuple[BaseDataProvider, BaseDataProvider]:
+        """Create data providers for the configured run mode.
+
+        Args:
+            run_mode: Configured runner mode.
+
+        Returns:
+            Market and news providers.
+
+        Raises:
+            RunnerError: If the run mode is unsupported.
+        """
+
+        if run_mode == "demo":
+            return self._create_demo_market_provider(), self._create_demo_news_provider()
+
+        if run_mode == "live":
+            return self._create_live_market_provider(), self._create_live_news_provider()
+
+        raise RunnerError(f"Unsupported run mode: {run_mode}.")
+
+    def _create_demo_market_provider(self) -> MarketDataProvider:
+        """Create the static demo market provider."""
+
+        return MarketDataProvider(
+            items=[self._ticker_to_data_item(ticker) for ticker in self._sample_tickers()]
+        )
+
+    def _create_demo_news_provider(self) -> RSSProvider:
+        """Create the static demo news provider."""
+
+        return RSSProvider(items=self._sample_news_items())
+
+    def _create_live_market_provider(self) -> LiveMarketProvider:
+        """Create the live market provider."""
+
+        from bybit import BybitClient
+
+        return LiveMarketProvider(client=BybitClient())
+
+    def _create_live_news_provider(self) -> LiveRSSProvider:
+        """Create the live RSS news provider."""
+
+        return LiveRSSProvider(feed_urls=config_settings.settings.news.rss_feeds)
 
     def _sample_tickers(self) -> list[TickerInfo]:
         """Create static sample market tickers."""
@@ -188,6 +264,56 @@ class SharipovAIRunner:
             ),
         ]
 
+    def _ticker_to_data_item(self, ticker: TickerInfo) -> DataItem:
+        """Convert a ticker into a market data item."""
+
+        return DataItem(
+            source="demo",
+            category="market",
+            title=ticker.symbol,
+            content=(
+                f"Last price: {ticker.last_price}. "
+                f"24h change: {ticker.price_24h_change_percent}. "
+                f"24h turnover: {ticker.turnover_24h}."
+            ),
+            url=None,
+            published_at=None,
+            metadata={
+                "symbol": ticker.symbol,
+                "last_price": ticker.last_price,
+                "price_24h_change_percent": ticker.price_24h_change_percent,
+                "turnover_24h": ticker.turnover_24h,
+                "volume_24h": ticker.volume_24h,
+                "bid_price": ticker.bid_price,
+                "ask_price": ticker.ask_price,
+            },
+        )
+
+    def _tickers_from_market_batch(self, batch: DataBatch) -> list[TickerInfo]:
+        """Convert market data items into ticker models."""
+
+        tickers: list[TickerInfo] = []
+        for item in batch.items:
+            symbol = item.metadata.get("symbol", item.title)
+            if not symbol:
+                continue
+
+            tickers.append(
+                TickerInfo(
+                    category=config_settings.settings.market.category,
+                    symbol=str(symbol),
+                    last_price=_optional_string(item.metadata.get("last_price")),
+                    bid_price=_optional_string(item.metadata.get("bid_price")),
+                    ask_price=_optional_string(item.metadata.get("ask_price")),
+                    price_24h_change_percent=_optional_string(
+                        item.metadata.get("price_24h_change_percent")
+                    ),
+                    volume_24h=_optional_string(item.metadata.get("volume_24h")),
+                    turnover_24h=_optional_string(item.metadata.get("turnover_24h")),
+                )
+            )
+        return tickers
+
     def _portfolio_input(self) -> PortfolioInput:
         """Create static sample portfolio input."""
 
@@ -220,9 +346,20 @@ class SharipovAIRunner:
 
         return (
             "SharipovAI runner completed. "
+            f"Mode: {config_settings.settings.run_mode}. "
+            f"Market provider: {self._last_market_provider_name}. "
+            f"News provider: {self._last_news_provider_name}. "
             f"Decision: {ai_output.decision.decision.value}. "
             f"Confidence: {ai_output.decision.confidence:.2f}. "
             f"Risk: {ai_output.risk.risk_level.value}. "
             f"Paper equity: {paper_account.equity:.2f}. "
             f"Learning trades: {learning_summary.total_trades}."
         )
+
+
+def _optional_string(value: object) -> str | None:
+    """Convert a value to an optional string."""
+
+    if value is None:
+        return None
+    return str(value)
