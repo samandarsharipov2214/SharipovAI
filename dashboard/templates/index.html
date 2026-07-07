@@ -6,464 +6,99 @@
     <title>SharipovAI OS</title>
     <link rel="icon" href="/favicon.ico" type="image/svg+xml">
     <link rel="stylesheet" href="/static/style.css">
-    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"></script>
+    <script src="/static/app.js" defer></script>
   </head>
   <body>
-    <aside class="sidebar">
-      <a class="brand" href="/?lang={{ lang }}" aria-label="SharipovAI OS">
-        <img src="/static/logo.svg" alt="SharipovAI OS">
-      </a>
-      <nav class="nav">
+    <aside class="os-sidebar">
+      <a class="os-logo" href="/?lang={{ lang }}"><img src="/static/logo.svg" alt="SharipovAI OS"></a>
+      <nav class="os-nav">
         {% for item in nav_items %}
-          <a class="{% if page == item.page %}active{% endif %}" href="{{ item.href }}">
-            <span></span>{{ t[item.key] }}
-          </a>
+          <a class="{% if page == item.page %}active{% endif %}" href="{{ item.href }}">{{ t[item.key] }}</a>
         {% endfor %}
       </nav>
-      <section class="sidebar-status">
-        <span class="pulse"></span>
-        <div>
-          <b>{{ t.heartbeat }}</b>
-          <small>{{ t.system_active }}</small>
-        </div>
-      </section>
+      <div class="os-heartbeat"><span id="heartbeat-dot" class="live-dot"></span><div><b>{{ t.system_active }}</b><small id="system-message">Система готова к анализу</small></div></div>
     </aside>
 
-    <main class="main">
-      <header class="topbar">
-        <div class="title-block">
-          <h1>SharipovAI OS</h1>
-          <p>{{ t.subtitle }}</p>
+    <main class="os-main">
+      <header class="os-topbar">
+        <div>
+          <p class="eyebrow">SharipovAI OS</p>
+          <h1>{{ t.subtitle }}</h1>
         </div>
-        <div class="topbar-tools">
-          <span class="status-pill"><i class="pulse"></i>{{ display.run_mode }}</span>
-          <label class="inline-control">{{ t.language }}
-            <select id="language-select">
-              <option value="ru" {% if lang == "ru" %}selected{% endif %}>RU</option>
-              <option value="en" {% if lang == "en" %}selected{% endif %}>EN</option>
-              <option value="uz" {% if lang == "uz" %}selected{% endif %}>UZ</option>
-            </select>
-          </label>
-          <label class="inline-control">{{ t.theme }}
-            <select>
-              <option>{{ t.dark }}</option>
-              <option>{{ t.light }}</option>
-              <option>{{ t.midnight }}</option>
-            </select>
-          </label>
-          <time id="current-time">--:--:--</time>
-          <span class="runner-status"><i class="pulse"></i>{{ t.runner_ready }}</span>
+        <div class="top-controls">
+          <span class="mode-pill">{{ display.run_mode }}</span>
+          <label>{{ t.language }}<select id="language-select"><option value="ru" {% if lang == "ru" %}selected{% endif %}>RU</option><option value="en" {% if lang == "en" %}selected{% endif %}>EN</option><option value="uz" {% if lang == "uz" %}selected{% endif %}>UZ</option></select></label>
+          <span class="clock" data-clock>--:--:--</span>
         </div>
       </header>
 
       {% if page == "overview" %}
-        <section class="hero-grid">
-          <article class="decision-hero">
-            <div class="hero-topline">
-              <span class="section-label">{{ t.current_decision }}</span>
-              <span class="thinking"><i class="pulse"></i>{{ t.ai_thinking }}</span>
-            </div>
-            <strong>{{ display.decision }}</strong>
-            <p>{{ display.reason }}</p>
-            <div class="progress-shell" aria-label="{{ t.confidence }}">
-              <span style="width: {{ view.confidence }}%"></span>
-            </div>
-            <div class="hero-metrics">
-              <div><small>{{ t.confidence }}</small><b>{{ "%.1f"|format(view.confidence) }}%</b></div>
-              <div><small>{{ t.risk }}</small><b>{{ display.risk }}</b></div>
+        <section class="os-layout">
+          <article class="hero-decision">
+            <div class="hero-header"><span>AI DECISION</span><span class="thinking"><i></i>AI THINKING</span></div>
+            <strong id="hero-decision">{{ display.decision }}</strong>
+            <p class="decision-reason">{{ display.reason }}</p>
+            <div class="confidence-line"><span style="width: {{ view.confidence }}%"></span></div>
+            <div class="hero-stats">
+              <div><small>{{ t.confidence }}</small><b id="hero-confidence">{{ "%.1f"|format(view.confidence) }}%</b></div>
+              <div><small>{{ t.risk }}</small><b id="hero-risk">{{ display.risk }}</b></div>
               <div><small>{{ t.consensus }}</small><b>{{ display.consensus }} {{ "%.1f"|format(view.consensus_agreement) }}%</b></div>
             </div>
-            <div class="hero-actions">
-              <a class="primary-action" href="/api/run">{{ t.run_analysis }}</a>
-              <a class="secondary-action" href="/ai-decision?lang={{ lang }}">{{ t.detailed_explanation }}</a>
-            </div>
+            <div class="action-row"><button id="run-analysis">▶ Запустить анализ</button><a href="/stress-lab?lang={{ lang }}">🧪 Стресс-лаборатория</a></div>
           </article>
-          <aside class="status-stack">
-            <article class="mini-card"><span>{{ t.agent_market }}</span><b><i class="dot ok"></i>{{ t.status_online }}</b></article>
-            <article class="mini-card"><span>{{ t.agent_news }}</span><b><i class="dot ok"></i>{{ t.status_online }}</b></article>
-            <article class="mini-card"><span>{{ t.agent_ai_core }}</span><b><i class="dot ok"></i>{{ t.status_online }}</b></article>
-            <article class="mini-card"><span>{{ t.agent_risk }}</span><b><i class="dot warning"></i>{{ t.status_warning }}</b></article>
-            <article class="mini-card"><span>{{ t.paper_trading }}</span><b><i class="dot ok"></i>{{ t.status_online }}</b></article>
-            <article class="mini-card"><span>{{ t.learning }}</span><b><i class="dot inactive"></i>{{ t.status_inactive }}</b></article>
+
+          <aside class="agent-grid">
+            <div><span></span><b>Market Agent</b><small>онлайн</small></div>
+            <div><span></span><b>News Agent</b><small>онлайн</small></div>
+            <div><span></span><b>AI Core</b><small>готов</small></div>
+            <div><span class="warn"></span><b>Risk Engine</b><small>контроль</small></div>
+            <div><span></span><b>Paper Trading</b><small>виртуально</small></div>
+            <div><span class="idle"></span><b>Learning</b><small>ожидает данных</small></div>
           </aside>
         </section>
 
-        <section class="grid">
-          <article class="card"><span>{{ t.portfolio }}</span><b>{{ t.equity }} {{ "%.2f"|format(view.paper_equity) }}</b><p>{{ t.cash }} {{ "%.2f"|format(view.paper_cash) }} · {{ t.pnl }} {{ "%.2f"|format(view.paper_pnl) }} · {{ t.open_positions }} {{ view.open_positions }}</p></article>
-          <article class="card"><span>{{ t.paper_trading }}</span><b>{{ t.virtual_wallet }}</b><p>{{ t.current_cash }} {{ "%.2f"|format(view.paper_cash) }} · {{ t.current_equity }} {{ "%.2f"|format(view.paper_equity) }}</p></article>
-          <article class="card"><span>{{ t.latest_news }}</span><b>{{ t.news_intelligence }}</b><p>{{ t.source }}: CoinDesk, Cointelegraph · {{ t.impact_score }} 72</p></article>
-          <article class="card"><span>{{ t.learning }}</span><b>{{ t.win_rate }} {{ "%.1f"|format(view.learning_summary.win_rate) }}%</b><p>{{ t.trades }} {{ view.learning_summary.total_trades }} · {{ t.accuracy }} {{ "%.1f"|format(view.learning_summary.win_rate) }}%</p></article>
-          <article class="card"><span>{{ t.system_status }}</span><b>{{ t.system_active }}</b><p>{{ t.last_update }} <time class="inline-time">--:--:--</time></p></article>
-          <article class="card"><span>{{ t.crash_test_quick_panel }}</span><b>{{ t.btc_drop_20 }}</b><p>{{ t.safe_deterministic_simulation }}</p></article>
+        <section class="metric-grid">
+          <article class="metric-card"><small>{{ t.portfolio }}</small><b id="portfolio-equity">{{ "%.2f"|format(view.paper_equity) }} USDT</b><p>{{ t.cash }}: <span id="portfolio-cash">{{ "%.2f"|format(view.paper_cash) }} USDT</span></p><p class="{% if view.paper_pnl >= 0 %}positive{% else %}negative{% endif %}">PnL: <span id="portfolio-pnl">{{ "%.2f"|format(view.paper_pnl) }} USDT</span></p></article>
+          <article class="metric-card"><small>{{ t.paper_trading }}</small><b>Виртуальный кошелек</b><p>Позиции: {{ view.open_positions }}</p><p>Реальные деньги не используются</p></article>
+          <article class="metric-card"><small>{{ t.latest_news }}</small><b>Новости и импакт</b><p>CoinDesk · Cointelegraph · RSS</p><p>Оценка влияния: 72</p></article>
+          <article class="metric-card"><small>{{ t.learning }}</small><b>{{ "%.1f"|format(view.learning_summary.win_rate) }}%</b><p>Сделок: {{ view.learning_summary.total_trades }}</p><p>Последнее обновление: <span id="last-update" data-clock>--:--:--</span></p></article>
         </section>
 
-        <section class="split">
-          <article class="panel">
-            <h2>{{ t.ai_timeline }}</h2>
-            <ol class="timeline">
-              <li><b>{{ display.decision }}</b><span>{{ display.report }}</span></li>
-              <li><b>{{ display.consensus }}</b><span>{{ t.consensus }} {{ "%.1f"|format(view.consensus_agreement) }}%</span></li>
-              <li><b>{{ display.risk }}</b><span>{{ t.risk_factors }}</span></li>
-            </ol>
-          </article>
-          <article class="panel">
-            <h2>{{ t.explain_ai }}</h2>
-            <details open><summary>{{ t.market_factors }}</summary><p>{{ t.market_intelligence }}</p></details>
-            <details><summary>{{ t.news_factors }}</summary><p>{{ t.news_intelligence }}</p></details>
-            <details><summary>{{ t.confidence_factors }}</summary><p>{{ t.confidence }} · {{ t.consensus }} · {{ t.risk }}</p></details>
-            <details><summary>{{ t.risk_factors }}</summary><p>{{ t.maximum_drawdown }} · {{ t.maximum_risk_score }} · {{ t.maximum_position_size }}</p></details>
-          </article>
+        <section class="deep-grid">
+          <article class="os-panel"><h2>{{ t.ai_timeline }}</h2><ol class="timeline"><li><b>{{ display.decision }}</b><span>{{ display.report }}</span></li><li><b>{{ display.risk }}</b><span>Риск проверен перед виртуальным действием</span></li><li><b>{{ display.consensus }}</b><span>Консенсус агентов: {{ "%.1f"|format(view.consensus_agreement) }}%</span></li></ol></article>
+          <article class="os-panel"><h2>{{ t.explain_ai }}</h2><details open><summary>Факторы рынка</summary><p>Momentum, объем, тренд и волатильность учитываются перед решением.</p></details><details><summary>Факторы риска</summary><p>Лимит просадки, размер позиции, риск-score и exposure.</p></details></article>
         </section>
 
-      {% elif page == "market" %}
-        <section class="page-hero"><h2>{{ t.market_overview }}</h2><p>{{ t.market_intelligence }}</p></section>
-        <section class="grid">
-          <article class="card"><span>{{ t.market_provider_status }}</span><b>{{ t.status_online }}</b><p>{{ t.exchange }} {{ settings.market.exchange }} · {{ t.data_freshness }} 12s</p></article>
-          <article class="card"><span>{{ t.top_assets }}</span><b>BTCUSDT · ETHUSDT · SOLUSDT</b><p>{{ t.market_factors }}</p></article>
-          <article class="card"><span>{{ t.top_gainers }}</span><b>SOL +4.8%</b><p>ETH +2.1% · BTC +1.3%</p></article>
-          <article class="card"><span>{{ t.top_losers }}</span><b>ADA -2.4%</b><p>XRP -1.8% · DOGE -1.2%</p></article>
-        </section>
-        <section class="panel"><h2>{{ t.chart_area }}</h2><canvas id="marketChart" height="92"></canvas></section>
-      {% elif page == "news" %}
-        <section class="page-hero"><h2>{{ t.latest_news }}</h2><p>{{ t.news_intelligence }}</p></section>
-        <section class="grid">
-          <article class="card"><span>{{ t.source }}</span><b>CoinDesk</b><p>{{ t.category }}: Bitcoin · {{ t.sentiment }}: Bullish · {{ t.impact_score }} 82</p></article>
-          <article class="card"><span>{{ t.source }}</span><b>Cointelegraph</b><p>{{ t.category }}: Regulation · {{ t.sentiment }}: Neutral · {{ t.impact_score }} 64</p></article>
-          <article class="card"><span>{{ t.empty_state }}</span><b>{{ t.rss_sources }}</b><p>{% for feed in settings.news.rss_feeds %}{{ feed }} {% endfor %}</p></article>
-        </section>
-      {% elif page == "ai-decision" %}
-        <section class="page-hero"><h2>{{ t.current_decision }}</h2><p>{{ display.reason }}</p></section>
-        <section class="grid">
-          <article class="card"><span>{{ t.decision }}</span><b>{{ display.decision }}</b><p>{{ t.reason }}: {{ display.reason }}</p></article>
-          <article class="card"><span>{{ t.confidence }}</span><b>{{ "%.1f"|format(view.confidence) }}%</b><p>{{ t.confidence_factors }}</p></article>
-          <article class="card"><span>{{ t.risk }}</span><b>{{ display.risk }}</b><p>{{ t.risk_factors }}</p></article>
-          <article class="card"><span>{{ t.consensus }}</span><b>{{ display.consensus }}</b><p>{{ "%.1f"|format(view.consensus_agreement) }}%</p></article>
-          <article class="card"><span>{{ t.agent_contribution }}</span><b>{{ t.market }} · {{ t.news }} · AI Core</b><p>{{ t.decision_path }}</p></article>
-          <article class="card"><span>{{ t.factor_breakdown }}</span><b>{{ t.market_factors }}</b><p>{{ t.exposure }} · {{ t.risk }}</p></article>
-        </section>
-      {% elif page == "portfolio" %}
-        <section class="page-hero"><h2>{{ t.portfolio_state }}</h2><p>{{ t.total_equity }} {{ "%.2f"|format(view.paper_equity) }}</p></section>
-        <section class="grid">
-          <article class="card"><span>{{ t.total_equity }}</span><b>{{ "%.2f"|format(view.paper_equity) }}</b></article>
-          <article class="card"><span>{{ t.cash }}</span><b>{{ "%.2f"|format(view.paper_cash) }}</b></article>
-          <article class="card"><span>{{ t.positions }}</span><b>{{ view.open_positions }}</b><p>BTCUSDT · ETHUSDT</p></article>
-          <article class="card"><span>{{ t.pnl }}</span><b>{{ "%.2f"|format(view.paper_pnl) }}</b></article>
-          <article class="card"><span>{{ t.exposure }}</span><b>5.0%</b></article>
-          <article class="card"><span>{{ t.largest_position }}</span><b>BTCUSDT 3.2%</b></article>
-        </section>
-        <section class="panel"><h2>{{ t.chart_area }}</h2><canvas id="portfolioChart" height="84"></canvas></section>
-      {% elif page == "paper-trading" %}
-        <section class="page-hero"><h2>{{ t.virtual_wallet }}</h2><p>{{ t.safe_deterministic_simulation }}</p></section>
-        <section class="grid">
-          <article class="card"><span>{{ t.initial_balance }}</span><b>{{ settings.paper.initial_balance }}</b></article>
-          <article class="card"><span>{{ t.current_cash }}</span><b>{{ "%.2f"|format(view.paper_cash) }}</b></article>
-          <article class="card"><span>{{ t.current_equity }}</span><b>{{ "%.2f"|format(view.paper_equity) }}</b></article>
-          <article class="card"><span>{{ t.open_positions }}</span><b>{{ view.open_positions }}</b></article>
-          <article class="card"><span>{{ t.performance_metrics }}</span><b>{{ t.win_rate }} {{ "%.1f"|format(view.learning_summary.win_rate) }}%</b></article>
-          <article class="card"><span>{{ t.trade_history }}</span><b>{{ t.trades }} {{ view.learning_summary.total_trades }}</b></article>
-        </section>
-        <section class="panel actions-row"><button>{{ t.deposit }}</button><button>{{ t.withdraw }}</button><button>{{ t.reset_account }}</button></section>
-      {% elif page == "learning" %}
-        <section class="page-hero"><h2>{{ t.learning_state }}</h2><p>{{ t.only_recommend_improvements }}</p></section>
-        <section class="grid">
-          <article class="card"><span>{{ t.win_rate }}</span><b>{{ "%.1f"|format(view.learning_summary.win_rate) }}%</b></article>
-          <article class="card"><span>{{ t.trades }}</span><b>{{ view.learning_summary.total_trades }}</b></article>
-          <article class="card"><span>{{ t.accuracy }}</span><b>{{ "%.1f"|format(view.learning_summary.win_rate) }}%</b></article>
-          <article class="card"><span>{{ t.average_profit }}</span><b>{{ "%.2f"|format(view.learning_summary.average_profit) }}</b></article>
-          <article class="card"><span>{{ t.average_loss }}</span><b>{{ "%.2f"|format(view.learning_summary.average_loss) }}</b></article>
-          <article class="card"><span>{{ t.recommendations }}</span><b>{{ t.minimum_trades }}</b><p>{{ t.learning_history }}</p></article>
-        </section>
-      {% elif page == "self-analysis" %}
-        <section class="page-hero"><h2>{{ t.self_analysis }}</h2><p>{{ t.no_automatic_self_modification }} · {{ t.user_must_approve_changes }}</p></section>
-        <section class="grid compact">
-          <article class="card"><span>{{ t.wrong_trades }}</span><b>0</b><p>{{ t.recommendations }}</p></article>
-          <article class="card"><span>{{ t.missed_opportunities }}</span><b>0</b><p>{{ t.market_factors }}</p></article>
-          <article class="card"><span>{{ t.false_signals }}</span><b>0</b><p>{{ t.confidence_factors }}</p></article>
-          <article class="card"><span>{{ t.agent_conflicts }}</span><b>0</b><p>{{ t.consensus }}</p></article>
-        </section>
-        <article class="safety-note"><b>{{ t.only_recommend_improvements }}</b><p>{{ t.no_automatic_self_modification }}. {{ t.user_must_approve_changes }}.</p></article>
-        <section class="settings-sections single">
-          <fieldset><legend>{{ t.self_analysis_settings }}</legend><label>{{ t.enable_analysis }}<input type="checkbox" checked></label><label>{{ t.minimum_trades }}<input value="10"></label><label>{{ t.loss_threshold }}<input value="5%"></label><label>{{ t.recommendation_mode }}<select><option>{{ t.review_only }}</option></select></label></fieldset>
-        </section>
       {% elif page == "stress-lab" %}
-        <section class="page-hero"><h2>{{ t.stress_lab }}</h2><p>{{ t.safe_deterministic_simulation }}</p></section>
-        <section class="panel">
-          <h2>{{ t.scenario_selection }}</h2>
-          <div class="scenario-grid">
-            <button data-stress-scenario="btc_drop_10">{{ t.btc_drop_10 }}</button>
-            <button data-stress-scenario="btc_drop_20">{{ t.btc_drop_20 }}</button>
-            <button data-stress-scenario="market_crash_50">{{ t.market_crash_50 }}</button>
-            <button data-stress-scenario="virtual_capital_loss_10">{{ t.virtual_capital_loss_10 }}</button>
-            <button data-stress-scenario="liquidity_shock">{{ t.liquidity_shock }}</button>
-            <button data-stress-scenario="news_panic">{{ t.news_panic }}</button>
-            <button data-stress-scenario="exchange_outage">{{ t.exchange_outage }}</button>
-            <button data-stress-scenario="custom_scenario">{{ t.custom_scenario }}</button>
-          </div>
+        <section class="stress-hero">
+          <div><p class="eyebrow">STRESS LAB</p><h2>Стресс-лаборатория капитала</h2><p>Проверь, что сделает AI при падении рынка, просадке капитала или панике в новостях.</p></div>
+          <button data-stress-scenario="btc_drop_20">Запустить BTC −20%</button>
         </section>
-        <section class="settings-sections">
-          <fieldset><legend>{{ t.scenario_parameters }}</legend><label>{{ t.asset_symbol }}<input id="stress-asset" value="BTCUSDT"></label><label>{{ t.price_drop_percent }}<input id="stress-price-drop" value="20"></label><label>{{ t.capital_loss_percent }}<input id="stress-capital-loss" value="20"></label><label>{{ t.liquidity_reduction_percent }}<input id="stress-liquidity" value="35"></label><label>{{ t.volatility_spike_percent }}<input id="stress-volatility" value="32"></label><label>{{ t.news_sentiment_shock }}<input id="stress-news" value="negative"></label><label>{{ t.duration }}<input id="stress-duration" value="4h"></label><label>{{ t.starting_virtual_capital }}<input id="stress-capital" value="10000"></label><label>{{ t.current_exposure }}<input id="stress-exposure" value="28"></label><label>{{ t.maximum_acceptable_drawdown }}<input id="stress-drawdown" value="10"></label><button id="run-stress-lab">{{ t.run_stress_test }}</button></fieldset>
-          <fieldset><legend>{{ t.result_classification }}</legend><b id="stress-classification">{{ t.capital_protection_triggered }}</b><p>{{ t.ai_reaction }} · {{ t.protective_measures }}</p></fieldset>
+        <section class="stress-grid">
+          <article class="os-panel scenario-panel"><h3>Сценарии</h3><button data-stress-scenario="btc_drop_10">BTC −10%</button><button data-stress-scenario="btc_drop_20">BTC −20%</button><button data-stress-scenario="market_crash_50">Рынок −50%</button><button data-stress-scenario="capital_loss_10">Капитал −10%</button></article>
+          <article class="os-panel result-panel"><h3>Результат теста</h3><dl><dt>Сценарий</dt><dd id="stress-scenario">{{ stress.scenario }}</dd><dt>Капитал до</dt><dd id="stress-before">{{ stress.capital_before }} USDT</dd><dt>Капитал после</dt><dd id="stress-after">{{ stress.capital_after }} USDT</dd><dt>Потеря</dt><dd id="stress-loss" class="negative">-{{ stress.loss_amount }} USDT ({{ stress.loss_percent }}%)</dd><dt>Статус</dt><dd id="stress-result">{{ stress.result }}</dd></dl></article>
+          <article class="os-panel protection-panel"><h3>Защитные меры AI</h3><ul id="stress-measures">{% for item in stress.protective_measures %}<li>{{ item }}</li>{% endfor %}</ul></article>
         </section>
-        <section class="grid" id="stress-result">
-          <article class="card"><span>{{ t.before_state }}</span><b>{{ t.capital_before }} {{ "%.2f"|format(stress.before.capital) }}</b><p>{{ t.cash_before }} {{ "%.2f"|format(stress.before.cash) }} · {{ t.equity_before }} {{ "%.2f"|format(stress.before.equity) }} · {{ t.positions_before }} {{ stress.before.positions }} · {{ t.risk_before }} {{ stress.before.risk }} · {{ t.exposure_before }} {{ "%.1f"|format(stress.before.exposure) }}%</p></article>
-          <article class="card"><span>{{ t.after_simulated_shock }}</span><b>{{ t.capital_after }} {{ "%.2f"|format(stress.after.capital) }}</b><p>{{ t.cash_after }} {{ "%.2f"|format(stress.after.cash) }} · {{ t.equity_after }} {{ "%.2f"|format(stress.after.equity) }} · {{ t.unrealized_loss }} {{ "%.2f"|format(stress.after.unrealized_loss) }} · {{ t.realized_loss }} {{ "%.2f"|format(stress.after.realized_loss) }} · {{ t.loss_percent }} {{ "%.1f"|format(stress.after.loss_percent) }}%</p></article>
-          <article class="card"><span>{{ t.ai_reaction }}</span><b>{{ t.switch_to_watch_mode }}</b><p>{{ t.block_new_buy_decisions }} · {{ t.reduce_risk_per_trade }} · {{ t.reduce_high_risk_positions }} · {{ t.increase_monitoring }} · {{ t.notify_user }} · {{ t.recommend_safer_settings }} · {{ t.pause_trading_if_drawdown_limit_exceeded }}</p></article>
-          <article class="card"><span>{{ t.protective_measures }}</span><b>{{ t.risk_limit_applied }}</b><p>{{ t.buy_signals_blocked }} · {{ t.drawdown_checked }} · {{ t.portfolio_exposure_reduced }} · {{ t.user_notification_prepared }} · {{ t.learning_record_created }} · {{ t.self_analysis_report_updated }}</p></article>
+
+      {% elif page == "settings" or page == "ai-control-center" %}
+        <section class="page-title"><h2>{% if page == "settings" %}Настройки{% else %}AI Control Center{% endif %}</h2><p>Управление виртуальным кошельком, риском, количеством сделок и режимом системы.</p></section>
+        <section class="control-grid">
+          <article class="os-panel"><h3>Виртуальный кошелек</h3><label>Начальный баланс<input value="{{ settings.paper.initial_balance }}"></label><div class="action-row"><button>Пополнить</button><button>Вывести</button><button>Сбросить</button></div></article>
+          <article class="os-panel"><h3>Риск</h3><label>Риск на сделку<input type="range" min="0" max="10" value="2"></label><label>Максимальная просадка<input type="range" min="0" max="50" value="10"></label><label>Минимальная уверенность<input type="range" min="0" max="100" value="75"></label></article>
+          <article class="os-panel"><h3>Лимиты</h3><label>Сделок в день<input value="5"></label><label>Открытых позиций<input value="3"></label><label>Размер позиции %<input value="20"></label></article>
+          <article class="os-panel"><h3>Безопасность</h3><p>Реальная торговля выключена. Все действия остаются в Paper Trading.</p><button>Сохранить настройки</button></article>
         </section>
-        <section class="grid chart-grid">
-          <article class="panel"><h2>{{ t.capital_before_after }}</h2><canvas id="stressCapitalChart" height="92"></canvas></article>
-          <article class="panel"><h2>{{ t.loss_waterfall }}</h2><canvas id="stressWaterfallChart" height="92"></canvas></article>
-          <article class="panel"><h2>{{ t.crash_dynamics }}</h2><canvas id="stressDynamicsChart" height="92"></canvas></article>
-          <article class="panel"><h2>{{ t.risk_level_change }}</h2><canvas id="stressRiskChart" height="92"></canvas></article>
-        </section>
-      {% elif page == "ai-improvement" %}
-        <section class="page-hero"><h2>{{ t.ai_improvement }}</h2><p>{{ t.no_automatic_self_modification }} · {{ t.user_must_approve_changes }}</p></section>
-        <section class="panel">
-          <h2>{{ t.user_approval_rule }}</h2>
-          <p>{{ t.only_recommend_improvements }}. {{ t.no_automatic_self_modification }}. {{ t.user_must_approve_changes }}.</p>
-        </section>
-        <section class="grid">
-          {% for item in improvements %}
-            <article class="card improvement-card">
-              <span>{{ t.improvement_recommendations }}</span>
-              <b>{{ item.title }}</b>
-              <p>{{ t.priority }}: {{ item.priority }} · {{ t.difficulty }}: {{ item.difficulty }} · {{ t.status }}: {{ item.status }}</p>
-              <p>{{ t.expected_benefit }}: {{ item.expected_benefit }}</p>
-              <p>{{ t.affected_modules }}: {{ item.affected_modules | join(", ") }}</p>
-              <p>{{ t.reason }}: {{ item.reason }}</p>
-            </article>
-          {% endfor %}
-        </section>
-        <section class="panel">
-          <h2>{{ t.self_analysis_connection }}</h2>
-          <p>{{ t.wrong_trades }} · {{ t.missed_opportunities }} · {{ t.false_signals }} · {{ t.agent_conflicts }} · {{ t.win_rate }} · {{ t.maximum_drawdown }} · {{ t.news_factors }} · {{ t.market_factors }}</p>
-        </section>
-      {% elif page == "reports" %}
-        <section class="page-hero"><h2>{{ t.reports }}</h2><p>{{ display.report }}</p></section>
-        <section class="grid">
-          <article class="card"><span>{{ t.daily_report }}</span><b>{{ t.system_active }}</b><p>{{ t.performance_summary }}</p></article>
-          <article class="card"><span>{{ t.weekly_report }}</span><b>{{ t.status_online }}</b><p>{{ t.portfolio_state }}</p></article>
-          <article class="card"><span>{{ t.monthly_report }}</span><b>{{ t.status_online }}</b><p>{{ t.learning_state }}</p></article>
-          <article class="card"><span>{{ t.export_button }}</span><b>{{ t.report }}</b><p>{{ t.memory }}</p></article>
-        </section>
-      {% elif page == "ai-control-center" %}
-        <section class="page-hero"><h2>{{ t.ai_control_center }}</h2><p>{{ t.system_controls }}</p></section>
-        <section class="settings-sections">
-          <fieldset><legend>{{ t.risk }}</legend><label>{{ t.minimum_confidence }}<input value="70"></label><label>{{ t.maximum_risk_score }}<input value="80"></label><label>{{ t.maximum_risk_per_trade }}<input value="1%"></label><label>{{ t.maximum_daily_trades }}<input value="5"></label><label>{{ t.maximum_open_positions }}<input value="10"></label><label>{{ t.maximum_position_size }}<input value="20%"></label></fieldset>
-          <fieldset><legend>{{ t.agent_status }}</legend><label>{{ t.use_market_agent }}<input type="checkbox" checked></label><label>{{ t.use_news_agent }}<input type="checkbox" checked></label><label>{{ t.use_learning }}<input type="checkbox" checked></label><label>{{ t.use_sentiment }}<input type="checkbox"></label><button>{{ t.save_settings }}</button></fieldset>
-        </section>
-      {% elif page == "settings" %}
-        <section class="page-hero"><h2>{{ t.settings }}</h2><p>{{ t.mobile_ecosystem }} · {{ t.mobile_preview_text }}</p></section>
-        <section class="settings-sections">
-          <fieldset><legend>{{ t.general }}</legend><label>{{ t.run_mode }}<select><option>{{ t.demo }}</option><option>{{ t.live }}</option></select></label><label>{{ t.language }}<select><option>ru</option><option>en</option><option>uz</option></select></label><label>{{ t.theme }}<select><option>{{ t.dark }}</option><option>{{ t.light }}</option><option>{{ t.midnight }}</option></select></label></fieldset>
-          <fieldset><legend>{{ t.paper_trading }}</legend><label>{{ t.initial_balance }}<input value="{{ settings.paper.initial_balance }}"></label><button>{{ t.reset_account }}</button><button>{{ t.deposit }}</button><button>{{ t.withdraw }}</button></fieldset>
-          <fieldset><legend>{{ t.risk }}</legend><label>{{ t.maximum_risk_per_trade }}<input value="1%"></label><label>{{ t.maximum_drawdown }}<input value="{{ settings.risk.max_drawdown }}"></label><label>{{ t.maximum_daily_trades }}<input value="5"></label><label>{{ t.maximum_open_positions }}<input value="10"></label><label>{{ t.maximum_position_size }}<input value="{{ settings.risk.max_position_percent }}"></label><label>{{ t.minimum_confidence }}<input value="70"></label><label>{{ t.maximum_risk_score }}<input value="80"></label></fieldset>
-          <fieldset><legend>{{ t.trading }}</legend><label>{{ t.spot }}<input type="checkbox" checked></label><label>{{ t.futures }}<input type="checkbox"></label><label>{{ t.long }}<input type="checkbox" checked></label><label>{{ t.short }}<input type="checkbox"></label><label>{{ t.timeframes }}<input value="1h, 4h, 1d"></label></fieldset>
-          <fieldset><legend>{{ t.market }}</legend><label>{{ t.exchange }}<input value="{{ settings.market.exchange }}"></label><label>{{ t.trading_pairs }}<input value="BTCUSDT, ETHUSDT, SOLUSDT"></label></fieldset>
-          <fieldset><legend>{{ t.news }}</legend><label>{{ t.rss_sources }}<textarea>{% for feed in settings.news.rss_feeds %}{{ feed }}&#10;{% endfor %}</textarea></label></fieldset>
-          <fieldset><legend>{{ t.notifications }}</legend><label>{{ t.telegram }}<input type="checkbox"></label><label>{{ t.email }}<input type="checkbox"></label><label>{{ t.push }}<input type="checkbox"></label></fieldset>
-          <fieldset><legend>{{ t.learning }}</legend><label>{{ t.enable_learning }}<input type="checkbox" checked></label><label>{{ t.learning_window }}<input value="90"></label><label>{{ t.minimum_trades }}<input value="10"></label></fieldset>
-          <fieldset><legend>{{ t.memory }}</legend><button>{{ t.export }}</button><button>{{ t.import }}</button><button>{{ t.clear }}</button></fieldset>
-          <fieldset><legend>{{ t.safety }}</legend><label>{{ t.demo_live }}<select><option>{{ t.demo }}</option><option>{{ t.live }}</option></select></label><label>{{ t.require_confirmation_before_real_trading }}<input type="checkbox" checked></label></fieldset>
-          <fieldset><legend>{{ t.self_analysis }}</legend><label>{{ t.enable_analysis }}<input type="checkbox" checked></label><label>{{ t.minimum_trades }}<input value="10"></label><label>{{ t.loss_threshold }}<input value="5%"></label><label>{{ t.recommendation_mode }}<select><option>{{ t.review_only }}</option></select></label><p>{{ t.only_recommend_improvements }} · {{ t.no_automatic_self_modification }}</p></fieldset>
-        </section>
-        <button class="primary-action wide">{{ t.save_settings }}</button>
+
+      {% elif page == "self-analysis" or page == "ai-improvement" %}
+        <section class="page-title"><h2>{% if page == "self-analysis" %}Самоанализ ошибок{% else %}Улучшение AI{% endif %}</h2><p>AI не меняет себя автоматически. Он только предлагает улучшения, а пользователь подтверждает.</p></section>
+        <section class="metric-grid"><article class="metric-card"><small>Ошибочные сделки</small><b>0</b><p>Пока недостаточно истории</p></article><article class="metric-card"><small>Упущенные возможности</small><b>0</b><p>Будет анализироваться после сделок</p></article><article class="metric-card"><small>Конфликт агентов</small><b>0</b><p>Market / News / Risk</p></article><article class="metric-card"><small>Рекомендации</small><b>Macro Agent</b><p>Добавить макроанализ для ставок и инфляции</p></article></section>
+        <section class="os-panel"><h3>Предложения развития</h3><ul><li>Добавить Sentiment Agent — улучшит оценку новостей.</li><li>Добавить On-chain Agent — усилит анализ BTC/ETH.</li><li>Добавить Telegram Bot — быстрые уведомления и запуск анализа.</li><li>Добавить Scheduler — автономный запуск по расписанию.</li></ul></section>
+
+      {% else %}
+        <section class="page-title"><h2>{{ t[page.replace('-', '_')] if page.replace('-', '_') in t else 'SharipovAI OS' }}</h2><p>Раздел активен. Данные будут обновляться через Runner, Paper Trading и Memory.</p></section>
+        <section class="metric-grid"><article class="metric-card"><small>Статус</small><b>Активен</b><p>Страница подключена к SharipovAI OS.</p></article><article class="metric-card"><small>AI</small><b>{{ display.decision }}</b><p>{{ display.reason }}</p></article><article class="metric-card"><small>Портфель</small><b>{{ "%.2f"|format(view.paper_equity) }} USDT</b><p>PnL: {{ "%.2f"|format(view.paper_pnl) }}</p></article></section>
       {% endif %}
-
-      <section class="split lower">
-        <article class="panel crash-panel">
-          <h2>{{ t.crash_test }}</h2>
-          <p>{{ t.safe_deterministic_simulation }}</p>
-          <div class="scenario-grid">
-            <button data-scenario="system_crash">{{ t.system_crash_test }}</button>
-            <button data-scenario="market_drop">{{ t.market_drop_test }}</button>
-            <button data-scenario="btc_drop_10">{{ t.btc_drop_10 }}</button>
-            <button data-scenario="btc_drop_20">{{ t.btc_drop_20 }}</button>
-            <button data-scenario="market_crash_50">{{ t.market_crash_50 }}</button>
-            <button data-scenario="virtual_capital_loss_10">{{ t.virtual_capital_loss_10 }}</button>
-            <button data-scenario="custom_scenario">{{ t.custom_scenario }}</button>
-          </div>
-          <div id="crash-output" class="crash-output">
-            <b>{{ t.crash_result }}</b>
-            <dl>
-              <dt>{{ t.scenario }}</dt><dd>{{ crash.scenario }}</dd>
-              <dt>{{ t.capital_before }}</dt><dd>{{ "%.2f"|format(crash.capital_before) }}</dd>
-              <dt>{{ t.capital_after }}</dt><dd>{{ "%.2f"|format(crash.capital_after) }}</dd>
-              <dt>{{ t.loss_amount }}</dt><dd>{{ "%.2f"|format(crash.loss_amount) }}</dd>
-              <dt>{{ t.loss_percent }}</dt><dd>{{ "%.1f"|format(crash.loss_percent) }}%</dd>
-            </dl>
-            <p>{{ t.ai_reaction }}: {{ t.switch_to_watch_mode }}.</p>
-            <p>{{ t.protective_measures }}: {{ t.reduce_risk_per_trade }} · {{ t.block_new_buy_decisions }} · {{ t.notify_user }} · {{ t.recommend_safer_settings }}.</p>
-          </div>
-        </article>
-        <article class="panel telegram-card">
-          <h2>{{ t.telegram_preview }}</h2>
-          <div class="telegram-preview">
-            <b>SharipovAI OS</b>
-            <span>{{ t.telegram_mode }}</span>
-            <span>{{ t.telegram_status }}</span>
-            <span>{{ t.telegram_decision }}</span>
-            <span>{{ t.telegram_confidence }}</span>
-            <span>{{ t.telegram_risk }}</span>
-            <div class="telegram-actions">
-              <button>{{ t.run_analysis }}</button>
-              <button>{{ t.portfolio_button }}</button>
-              <button>{{ t.explain_decision_button }}</button>
-              <button>{{ t.crash_test }}</button>
-              <button>{{ t.settings_button }}</button>
-            </div>
-          </div>
-        </article>
-      </section>
     </main>
-
-    <script>
-      const clock = document.getElementById("current-time");
-      const inlineTimes = document.querySelectorAll(".inline-time");
-      const updateClock = () => {
-        const value = new Date().toLocaleTimeString();
-        clock.textContent = value;
-        inlineTimes.forEach((item) => { item.textContent = value; });
-      };
-      updateClock();
-      setInterval(updateClock, 1000);
-
-      document.getElementById("language-select").addEventListener("change", (event) => {
-        window.location.href = `${window.location.pathname}?lang=${event.target.value}`;
-      });
-
-      document.querySelectorAll("[data-scenario]").forEach((button) => {
-        button.addEventListener("click", async () => {
-          const response = await fetch("/api/crash-test", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ scenario: button.dataset.scenario })
-          });
-          const result = await response.json();
-          document.getElementById("crash-output").innerHTML = `
-            <b>{{ t.crash_result }}</b>
-            <dl>
-              <dt>{{ t.scenario }}</dt><dd>${result.scenario}</dd>
-              <dt>{{ t.capital_before }}</dt><dd>${result.capital_before.toFixed(2)}</dd>
-              <dt>{{ t.capital_after }}</dt><dd>${result.capital_after.toFixed(2)}</dd>
-              <dt>{{ t.loss_amount }}</dt><dd>${result.loss_amount.toFixed(2)}</dd>
-              <dt>{{ t.loss_percent }}</dt><dd>${result.loss_percent.toFixed(1)}%</dd>
-            </dl>
-            <p>{{ t.ai_reaction }}: {{ t.switch_to_watch_mode }}.</p>
-            <p>{{ t.protective_measures }}: {{ t.reduce_risk_per_trade }} · {{ t.block_new_buy_decisions }} · {{ t.notify_user }} · {{ t.recommend_safer_settings }}.</p>
-          `;
-        });
-      });
-
-      let activeStressScenario = "btc_drop_20";
-      const renderStressResult = (result) => {
-        const classification = document.getElementById("stress-classification");
-        const target = document.getElementById("stress-result");
-        if (!target || !classification) {
-          return;
-        }
-        classification.textContent = result.classification;
-        target.innerHTML = `
-          <article class="card"><span>{{ t.before_state }}</span><b>{{ t.capital_before }} ${result.before.capital.toFixed(2)}</b><p>{{ t.cash_before }} ${result.before.cash.toFixed(2)} · {{ t.equity_before }} ${result.before.equity.toFixed(2)} · {{ t.positions_before }} ${result.before.positions} · {{ t.risk_before }} ${result.before.risk} · {{ t.exposure_before }} ${result.before.exposure.toFixed(1)}%</p></article>
-          <article class="card"><span>{{ t.after_simulated_shock }}</span><b>{{ t.capital_after }} ${result.after.capital.toFixed(2)}</b><p>{{ t.cash_after }} ${result.after.cash.toFixed(2)} · {{ t.equity_after }} ${result.after.equity.toFixed(2)} · {{ t.unrealized_loss }} ${result.after.unrealized_loss.toFixed(2)} · {{ t.realized_loss }} ${result.after.realized_loss.toFixed(2)} · {{ t.loss_percent }} ${result.after.loss_percent.toFixed(1)}%</p></article>
-          <article class="card"><span>{{ t.ai_reaction }}</span><b>{{ t.switch_to_watch_mode }}</b><p>{{ t.block_new_buy_decisions }} · {{ t.reduce_risk_per_trade }} · {{ t.reduce_high_risk_positions }} · {{ t.increase_monitoring }} · {{ t.notify_user }} · {{ t.recommend_safer_settings }} · {{ t.pause_trading_if_drawdown_limit_exceeded }}</p></article>
-          <article class="card"><span>{{ t.protective_measures }}</span><b>{{ t.risk_limit_applied }}</b><p>{{ t.buy_signals_blocked }} · {{ t.drawdown_checked }} · {{ t.portfolio_exposure_reduced }} · {{ t.user_notification_prepared }} · {{ t.learning_record_created }} · {{ t.self_analysis_report_updated }}</p></article>
-        `;
-      };
-      const runStressLab = async () => {
-        const response = await fetch("/api/stress-lab/run", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            scenario: activeStressScenario,
-            asset_symbol: document.getElementById("stress-asset")?.value,
-            price_drop_percent: document.getElementById("stress-price-drop")?.value,
-            capital_loss_percent: document.getElementById("stress-capital-loss")?.value,
-            liquidity_reduction_percent: document.getElementById("stress-liquidity")?.value,
-            volatility_spike_percent: document.getElementById("stress-volatility")?.value,
-            news_sentiment_shock: document.getElementById("stress-news")?.value,
-            duration: document.getElementById("stress-duration")?.value,
-            starting_virtual_capital: document.getElementById("stress-capital")?.value,
-            current_exposure: document.getElementById("stress-exposure")?.value,
-            maximum_acceptable_drawdown: document.getElementById("stress-drawdown")?.value
-          })
-        });
-        renderStressResult(await response.json());
-      };
-      document.querySelectorAll("[data-stress-scenario]").forEach((button) => {
-        button.addEventListener("click", () => {
-          activeStressScenario = button.dataset.stressScenario;
-          runStressLab();
-        });
-      });
-      document.getElementById("run-stress-lab")?.addEventListener("click", (event) => {
-        event.preventDefault();
-        runStressLab();
-      });
-
-      const chartOptions = {
-        plugins: { legend: { labels: { color: "#C0C0C0" } } },
-        scales: {
-          x: { ticks: { color: "#C0C0C0" }, grid: { color: "rgba(192,192,192,.08)" } },
-          y: { ticks: { color: "#C0C0C0" }, grid: { color: "rgba(192,192,192,.08)" } }
-        }
-      };
-      const marketChart = document.getElementById("marketChart");
-      if (marketChart && window.Chart) {
-        new Chart(marketChart, {
-          type: "line",
-          data: {
-            labels: ["BTC", "ETH", "SOL", "BNB", "XRP", "ADA"],
-            datasets: [{ label: "SharipovAI OS", data: [92, 74, 81, 63, 57, 49], borderColor: "#00D2FF", backgroundColor: "rgba(0,210,255,.14)", fill: true, tension: .42 }]
-          },
-          options: chartOptions
-        });
-      }
-      const portfolioChart = document.getElementById("portfolioChart");
-      if (portfolioChart && window.Chart) {
-        new Chart(portfolioChart, {
-          type: "doughnut",
-          data: {
-            labels: ["Cash", "BTC", "ETH"],
-            datasets: [{ data: [78, 14, 8], backgroundColor: ["#C0C0C0", "#00D2FF", "#1E90FF"] }]
-          },
-          options: { plugins: { legend: { labels: { color: "#C0C0C0" } } } }
-        });
-      }
-      const stressColors = ["#1E90FF", "#00D2FF", "#C0C0C0", "#ff4d5e"];
-      const stressCapitalChart = document.getElementById("stressCapitalChart");
-      if (stressCapitalChart && window.Chart) {
-        new Chart(stressCapitalChart, {
-          type: "bar",
-          data: { labels: ["{{ t.capital_before }}", "{{ t.capital_after }}"], datasets: [{ label: "{{ t.capital_before_after }}", data: [{{ stress.before.capital }}, {{ stress.after.capital }}], backgroundColor: [stressColors[1], stressColors[3]] }] },
-          options: chartOptions
-        });
-      }
-      const stressWaterfallChart = document.getElementById("stressWaterfallChart");
-      if (stressWaterfallChart && window.Chart) {
-        new Chart(stressWaterfallChart, {
-          type: "bar",
-          data: { labels: ["{{ t.unrealized_loss }}", "{{ t.realized_loss }}", "{{ t.loss_amount }}"], datasets: [{ label: "{{ t.loss_waterfall }}", data: [{{ stress.after.unrealized_loss }}, {{ stress.after.realized_loss }}, {{ stress.after.loss_amount }}], backgroundColor: [stressColors[3], stressColors[3], stressColors[2]] }] },
-          options: chartOptions
-        });
-      }
-      const stressDynamicsChart = document.getElementById("stressDynamicsChart");
-      if (stressDynamicsChart && window.Chart) {
-        new Chart(stressDynamicsChart, {
-          type: "line",
-          data: { labels: ["T0", "T1", "T2"], datasets: [{ label: "{{ t.crash_dynamics }}", data: [{{ stress.charts.crash_dynamics[0] }}, {{ stress.charts.crash_dynamics[1] }}, {{ stress.charts.crash_dynamics[2] }}], borderColor: stressColors[1], backgroundColor: "rgba(0,210,255,.12)", fill: true, tension: .35 }] },
-          options: chartOptions
-        });
-      }
-      const stressRiskChart = document.getElementById("stressRiskChart");
-      if (stressRiskChart && window.Chart) {
-        new Chart(stressRiskChart, {
-          type: "bar",
-          data: { labels: ["{{ t.risk_before }}", "{{ t.new_risk_level }}"], datasets: [{ label: "{{ t.risk_level_change }}", data: [{{ stress.charts.risk_level_change[0] }}, {{ stress.charts.risk_level_change[1] }}], backgroundColor: [stressColors[0], stressColors[3]] }] },
-          options: chartOptions
-        });
-      }
-    </script>
   </body>
 </html>
