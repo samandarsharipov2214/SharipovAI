@@ -70,6 +70,24 @@ class LoginAttemptGuard:
         users[self._key(username)] = {"failed_attempts": 0, "locked_until": 0, "last_success_at": int(time.time())}
         self._save(data)
 
+    def snapshot(self, *, now: int | None = None) -> dict[str, Any]:
+        """Return a safe snapshot of lockout state."""
+
+        now = int(time.time()) if now is None else now
+        data = self._load()
+        users: dict[str, Any] = {}
+        for username, record in data.get("users", {}).items():
+            locked_until = int(record.get("locked_until", 0) or 0)
+            users[username] = {
+                "failed_attempts": int(record.get("failed_attempts", 0) or 0),
+                "locked": locked_until > now,
+                "locked_until": locked_until,
+                "seconds_left": max(0, locked_until - now),
+                "last_failed_at": int(record.get("last_failed_at", 0) or 0),
+                "last_success_at": int(record.get("last_success_at", 0) or 0),
+            }
+        return {"users": users, "max_failed_attempts": self.max_failed_attempts, "lock_seconds": self.lock_seconds}
+
     def _load(self) -> dict[str, Any]:
         if not self.path.exists():
             return {"users": {}}
