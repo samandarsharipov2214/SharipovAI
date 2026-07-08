@@ -1,4 +1,4 @@
-"""Trust, urgency, and market-impact analyzer for monitored news."""
+"""Trust, urgency, credibility, and market-impact analyzer for monitored news."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from collections import Counter
 from datetime import UTC, datetime
 from typing import Iterable
 
+from .credibility import error_risk, truth_probability, verification_status
 from .models import NewsItem, NewsSource
 from .sources import default_sources
 
@@ -27,13 +28,15 @@ def analyze_items(raw_items: Iterable[dict[str, object]], sources: list[NewsSour
     """Analyze raw items and return normalized NewsItem objects."""
 
     source_map = {source.id: source for source in (sources or default_sources())}
+    raw_list = list(raw_items)
     analyzed: list[NewsItem] = []
-    titles = [str(item.get("title", "")) for item in raw_items]
+    titles = [str(item.get("title", "")) for item in raw_list]
     symbol_counts = _symbol_confirmation_counts(titles)
 
-    for raw in raw_items:
+    for raw in raw_list:
         source_id = str(raw.get("source_id", "manual"))
         source = source_map.get(source_id)
+        kind = str(raw.get("kind", source.kind if source else "manual"))
         title = str(raw.get("title", "")).strip() or "Untitled news item"
         summary = str(raw.get("summary", ""))
         text = f"{title} {summary}".lower()
@@ -43,14 +46,23 @@ def analyze_items(raw_items: Iterable[dict[str, object]], sources: list[NewsSour
         urgency = "high" if any(word in text for word in URGENT_WORDS) else "medium" if abs(impact_score) >= 40 else "low"
         trust = int(raw.get("trust_score", source.trust_score if source else 45))
         confirmation_count = max([symbol_counts.get(symbol, 1) for symbol in symbols] or [1])
-        needs_confirmation = _needs_confirmation(trust, source.kind if source else "manual", confirmation_count, urgency)
-        action = _ai_action(impact=impact, trust=trust, urgency=urgency, needs_confirmation=needs_confirmation)
-        reason = _reason(impact, trust, urgency, needs_confirmation, confirmation_count)
+        needs_confirmation = _needs_confirmation(trust, kind, confirmation_count, urgency)
+        credibility = truth_probability(
+            trust_score=trust,
+            kind=kind,
+            confirmation_count=confirmation_count,
+            urgency=urgency,
+            tags=tags,
+        )
+        status = verification_status(credibility, confirmation_count, needs_confirmation)
+        risk = error_risk(credibility)
+        action = _ai_action(impact=impact, trust=trust, urgency=urgency, needs_confirmation=needs_confirmation, credibility=credibility)
+        reason = _reason(impact, trust, urgency, needs_confirmation, confirmation_count, credibility, status)
         analyzed.append(
             NewsItem(
                 source_id=source_id,
                 source_name=str(raw.get("source_name", source.name if source else "Manual")),
-                kind=str(raw.get("kind", source.kind if source else "manual")),
+                kind=kind,
                 title=title,
                 url=str(raw.get("url", source.url if source else "")),
                 published_at=str(raw.get("published_at", _now_iso())),
@@ -58,6 +70,9 @@ def analyze_items(raw_items: Iterable[dict[str, object]], sources: list[NewsSour
                 symbols=symbols,
                 tags=tags,
                 trust_score=trust,
+                credibility_percent=credibility,
+                error_risk=risk,
+                verification_status=status,
                 urgency=urgency,
                 impact=impact,
                 impact_score=impact_score,
@@ -67,7 +82,7 @@ def analyze_items(raw_items: Iterable[dict[str, object]], sources: list[NewsSour
                 reason=reason,
             )
         )
-    return sorted(analyzed, key=lambda item: (item.urgency != "high", -abs(item.impact_score), -item.trust_score))
+    return sorted(analyzed, key=lambda item: (item.urgency != "high", -item.credibility_percent, -abs(item.impact_score), -item.trust_score))
 
 
 def demo_items() -> list[dict[str, object]]:
@@ -89,6 +104,8 @@ def analyzed_news_payload(raw_items: Iterable[dict[str, object]] | None = None) 
     high = [item for item in items if item.urgency == "high"]
     blocked = [item for item in items if item.ai_action == "BLOCK_BUY"]
     confirmations_needed = [item for item in items if item.needs_confirmation]
+    avg_credibility = round(sum(item.credibility_percent for item in items) / max(len(items), 1), 1)
+    low_credibility = [item for item in items if item.credibility_percent < 60]
     return {
         "status": "ok",
         "summary": {
@@ -96,6 +113,8 @@ def analyzed_news_payload(raw_items: Iterable[dict[str, object]] | None = None) 
             "high_urgency": len(high),
             "block_buy": len(blocked),
             "needs_confirmation": len(confirmations_needed),
+            "average_credibility_percent": avg_credibility,
+            "low_credibility": len(low_credibility),
             "last_updated": _now_iso(),
         },
         "items": [item.to_dict() for item in items],
@@ -104,7 +123,8 @@ def analyzed_news_payload(raw_items: Iterable[dict[str, object]] | None = None) 
             "Do not trade from one Telegram/X post without confirmation.",
             "Require at least two independent sources for social-only claims.",
             "Official exchange/security announcements can block risky trades immediately.",
-            "Rank sources by trust and historical reliability.",
+            "Rank sources by trust, confirmations, source type, urgency, and error risk.",
+            "Credibility percent is an estimate for decision safety, not a guarantee of absolute truth.",
         ],
     }
 
@@ -159,20 +179,22 @@ def _needs_confirmation(trust: int, kind: str, confirmation_count: int, urgency:
     return urgency == "high" and confirmation_count < 2
 
 
-def _ai_action(*, impact: str, trust: int, urgency: str, needs_confirmation: bool) -> str:
+def _ai_action(*, impact: str, trust: int, urgency: str, needs_confirmation: bool, credibility: int) -> str:
+    if credibility < 55 and urgency == "high":
+        return "BLOCK_BUY"
     if needs_confirmation and urgency == "high":
         return "BLOCK_BUY"
     if impact == "bearish" and trust >= 60:
         return "WATCH_OR_REDUCE_RISK"
-    if impact == "bullish" and trust >= 75 and not needs_confirmation:
+    if impact == "bullish" and trust >= 75 and not needs_confirmation and credibility >= 75:
         return "ALLOW_ANALYSIS_ONLY"
     return "WATCH"
 
 
-def _reason(impact: str, trust: int, urgency: str, needs_confirmation: bool, confirmation_count: int) -> str:
+def _reason(impact: str, trust: int, urgency: str, needs_confirmation: bool, confirmation_count: int, credibility: int, status: str) -> str:
     if needs_confirmation:
-        return f"Нужно подтверждение: trust={trust}, urgency={urgency}, confirmations={confirmation_count}."
-    return f"Источник достаточно надёжен для анализа: impact={impact}, trust={trust}, confirmations={confirmation_count}."
+        return f"{status}: credibility={credibility}%, trust={trust}, urgency={urgency}, confirmations={confirmation_count}."
+    return f"{status}: impact={impact}, credibility={credibility}%, trust={trust}, confirmations={confirmation_count}."
 
 
 def _now_iso() -> str:
