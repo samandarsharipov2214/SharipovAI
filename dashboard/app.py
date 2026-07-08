@@ -28,6 +28,28 @@ def create_app(
     )
     app.include_router(router)
 
+    @app.get("/api/intelligence")
+    def intelligence() -> dict[str, Any]:
+        """Return compact Intelligence Center status."""
+
+        sources = _intelligence_sources()
+        active = sum(1 for source in sources if source["status"] == "ACTIVE")
+        average_trust = round(
+            sum(float(source["trust_score"]) for source in sources) / len(sources),
+            2,
+        )
+        return {
+            "status": "monitoring",
+            "live_monitoring": True,
+            "active_sources": active,
+            "total_sources": len(sources),
+            "average_trust_score": average_trust,
+            "page": "/static/intelligence.html",
+            "sources_api": "/api/intelligence/sources",
+            "summary_api": "/api/intelligence/summary",
+            "rule": "Signals must be confirmed by at least 2 independent sources. Social sources are never used alone.",
+        }
+
     @app.get("/api/intelligence/sources")
     def intelligence_sources() -> dict[str, Any]:
         """Return monitored information sources and trust scores."""
@@ -166,66 +188,9 @@ def _demo_trades() -> list[dict[str, Any]]:
     """Return stable demo trades with full reasoning for the dashboard."""
 
     return [
-        {
-            "id": "BTC-20260708-001",
-            "asset": "BTC/USDT",
-            "side": "BUY",
-            "status": "OPEN",
-            "opened_at": "2026-07-08 18:19:20",
-            "expected_horizon": "24-72 часа",
-            "entry_price": 67214.20,
-            "size": "0.10 BTC",
-            "notional_usdt": 6721.42,
-            "pnl_usdt": 52.40,
-            "confidence": 88.0,
-            "risk_level": "LOW",
-            "stop_loss": 65350.00,
-            "take_profit": 70400.00,
-            "reason": "AI купил BTC в демо-режиме, потому что Market Agent дал восходящий сигнал, News Agent не нашел критической паники, а Risk Engine подтвердил низкий риск.",
-            "expected_result": "Ожидается умеренный рост при сохранении объема и отсутствии негативных новостей.",
-            "sources": ["Market Agent", "News Agent", "Risk Engine", "Consensus Engine"],
-            "ai_decision_link": "BUY BITCOIN / confidence 88.0% / consensus 100.0%",
-        },
-        {
-            "id": "ETH-20260708-002",
-            "asset": "ETH/USDT",
-            "side": "SELL",
-            "status": "CLOSED",
-            "opened_at": "2026-07-08 16:42:11",
-            "expected_horizon": "6-24 часа",
-            "entry_price": 3142.88,
-            "size": "1.00 ETH",
-            "notional_usdt": 3142.88,
-            "pnl_usdt": -18.30,
-            "confidence": 71.0,
-            "risk_level": "MEDIUM",
-            "stop_loss": 3198.00,
-            "take_profit": 3030.00,
-            "reason": "AI закрыл демо-сделку по ETH после ухудшения импульса и роста краткосрочного риска. Убыток ограничен правилами risk management.",
-            "expected_result": "Сделка закрыта. Данные пойдут в Learning Engine для улучшения фильтров входа.",
-            "sources": ["Market Agent", "Risk Engine", "Learning Engine"],
-            "ai_decision_link": "SELL ETH / risk MEDIUM / learning update required",
-        },
-        {
-            "id": "SOL-20260708-003",
-            "asset": "SOL/USDT",
-            "side": "BUY",
-            "status": "OPEN",
-            "opened_at": "2026-07-08 15:10:04",
-            "expected_horizon": "1-3 дня",
-            "entry_price": 171.35,
-            "size": "5.00 SOL",
-            "notional_usdt": 856.75,
-            "pnl_usdt": 31.20,
-            "confidence": 79.0,
-            "risk_level": "LOW",
-            "stop_loss": 164.00,
-            "take_profit": 188.00,
-            "reason": "AI открыл демо-позицию SOL после подтверждения импульса и допустимого соотношения риск/прибыль.",
-            "expected_result": "Ожидается продолжение движения при подтверждении рынка BTC и отсутствии негативных новостей по сектору.",
-            "sources": ["Market Agent", "Portfolio Engine", "Consensus Engine"],
-            "ai_decision_link": "BUY SOL / confidence 79.0% / low risk",
-        },
+        {"id": "BTC-20260708-001", "asset": "BTC/USDT", "side": "BUY", "status": "OPEN", "opened_at": "2026-07-08 18:19:20", "expected_horizon": "24-72 часа", "entry_price": 67214.20, "size": "0.10 BTC", "notional_usdt": 6721.42, "pnl_usdt": 52.40, "confidence": 88.0, "risk_level": "LOW", "stop_loss": 65350.00, "take_profit": 70400.00, "reason": "AI купил BTC в демо-режиме, потому что Market Agent дал восходящий сигнал, News Agent не нашел критической паники, а Risk Engine подтвердил низкий риск.", "expected_result": "Ожидается умеренный рост при сохранении объема и отсутствии негативных новостей.", "sources": ["Market Agent", "News Agent", "Risk Engine", "Consensus Engine"], "ai_decision_link": "BUY BITCOIN / confidence 88.0% / consensus 100.0%"},
+        {"id": "ETH-20260708-002", "asset": "ETH/USDT", "side": "SELL", "status": "CLOSED", "opened_at": "2026-07-08 16:42:11", "expected_horizon": "6-24 часа", "entry_price": 3142.88, "size": "1.00 ETH", "notional_usdt": 3142.88, "pnl_usdt": -18.30, "confidence": 71.0, "risk_level": "MEDIUM", "stop_loss": 3198.00, "take_profit": 3030.00, "reason": "AI закрыл демо-сделку по ETH после ухудшения импульса и роста краткосрочного риска. Убыток ограничен правилами risk management.", "expected_result": "Сделка закрыта. Данные пойдут в Learning Engine для улучшения фильтров входа.", "sources": ["Market Agent", "Risk Engine", "Learning Engine"], "ai_decision_link": "SELL ETH / risk MEDIUM / learning update required"},
+        {"id": "SOL-20260708-003", "asset": "SOL/USDT", "side": "BUY", "status": "OPEN", "opened_at": "2026-07-08 15:10:04", "expected_horizon": "1-3 дня", "entry_price": 171.35, "size": "5.00 SOL", "notional_usdt": 856.75, "pnl_usdt": 31.20, "confidence": 79.0, "risk_level": "LOW", "stop_loss": 164.00, "take_profit": 188.00, "reason": "AI открыл демо-позицию SOL после подтверждения импульса и допустимого соотношения риск/прибыль.", "expected_result": "Ожидается продолжение движения при подтверждении рынка BTC и отсутствии негативных новостей по сектору.", "sources": ["Market Agent", "Portfolio Engine", "Consensus Engine"], "ai_decision_link": "BUY SOL / confidence 79.0% / low risk"},
     ]
 
 
