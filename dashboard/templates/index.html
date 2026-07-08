@@ -5,9 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>SharipovAI OS</title>
     <link rel="icon" href="/favicon.ico" type="image/svg+xml">
-    <link rel="stylesheet" href="/static/style.css?v=20260708-3">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"></script>
-    <script src="/static/app.js?v=20260708-3" defer></script>
+    <link rel="stylesheet" href="/static/style.css?v=20260708-5">
+    <script src="/static/app.js?v=20260708-5" defer></script>
   </head>
   <body>
     <aside class="os-sidebar">
@@ -27,22 +26,14 @@
       <header class="os-topbar cockpit-topbar">
         <div class="top-welcome">
           <p class="eyebrow">SharipovAI OS</p>
-          <h1>Добро пожаловать, <span class="accent-name">Самандар</span></h1>
-          <p class="top-subtitle"><span class="sr-only">{{ t.subtitle }}</span>Ваш интеллектуальный центр анализа, виртуальной торговли и контроля риска. Анализируй. Планируй. Действуй.</p>
+          <h1>Самандар, добро пожаловать.</h1>
+          <p class="top-subtitle"><span class="sr-only">{{ t.subtitle }}</span>{% if lang == 'en' %}Your intelligent center for analysis, virtual trading, and risk control.{% elif lang == 'uz' %}Tahlil, virtual savdo va risk nazorati uchun aqlli markaz.{% else %}Ваш интеллектуальный центр анализа, виртуальной торговли и контроля риска.{% endif %}</p>
         </div>
-        <div class="top-metrics">
-          <div class="top-time"><span class="time-icon">◷</span><div><b id="top-clock" data-clock>00:00:00</b><small id="top-date">локальное время</small></div></div>
-          <div><small>AI Status</small><b class="status-green" id="top-ai-status">РАБОТАЕТ</b></div>
-          <div><small>Последнее обновление</small><b id="top-last-update" data-clock>00:00:00</b></div>
-          <div><small>Цикл</small><b id="top-cycle">14</b></div>
-          <div><small>Модули онлайн</small><b>11 / 13</b></div>
-          <div><small>Среднее время цикла</small><b id="top-cycle-ms">412 ms</b></div>
-          <div class="top-controls compact-controls lang-links">
-            <span class="mode-pill">{{ display.run_mode }}</span>
-            <a class="{% if lang == 'ru' %}active{% endif %}" href="{{ request.url.path }}?lang=ru">RU</a>
-            <a class="{% if lang == 'en' %}active{% endif %}" href="{{ request.url.path }}?lang=en">EN</a>
-            <a class="{% if lang == 'uz' %}active{% endif %}" href="{{ request.url.path }}?lang=uz">UZ</a>
-          </div>
+        <div class="top-metrics clean-top-metrics">
+          <div class="top-time"><span class="time-icon">◷</span><div><b id="top-clock" data-clock>00:00:00</b><small id="top-date">{% if lang == 'en' %}local time{% elif lang == 'uz' %}mahalliy vaqt{% else %}локальное время{% endif %}</small></div></div>
+          <div><small>{% if lang == 'en' %}AI{% elif lang == 'uz' %}AI{% else %}ИИ{% endif %}</small><b class="status-green" id="top-ai-status">{% if lang == 'en' %}RUNNING{% elif lang == 'uz' %}ISHLAYAPTI{% else %}РАБОТАЕТ{% endif %}</b></div>
+          <div><small>{% if lang == 'en' %}Updated{% elif lang == 'uz' %}Yangilandi{% else %}Обновлено{% endif %}</small><b id="top-last-update" data-clock>00:00:00</b></div>
+          <div class="top-controls compact-controls lang-links"><span class="mode-pill">{{ display.run_mode }}</span><a class="{% if lang == 'ru' %}active{% endif %}" href="{{ request.url.path }}?lang=ru&v=5">RU</a><a class="{% if lang == 'en' %}active{% endif %}" href="{{ request.url.path }}?lang=en&v=5">EN</a><a class="{% if lang == 'uz' %}active{% endif %}" href="{{ request.url.path }}?lang=uz&v=5">UZ</a></div>
         </div>
       </header>
 
@@ -53,96 +44,43 @@
             <strong id="hero-decision">{{ display.decision }}</strong>
             <p class="decision-reason" id="decision-reason">{{ display.reason }}</p>
             <div class="confidence-line"><span style="width: {{ view.confidence }}%"></span></div>
-            <div class="hero-stats">
-              <div><small>{{ t.confidence }}</small><b id="hero-confidence">{{ "%.1f"|format(view.confidence) }}%</b></div>
-              <div><small>{{ t.risk }}</small><b id="hero-risk">{{ display.risk }}</b></div>
-              <div><small>{{ t.consensus }}</small><b id="hero-consensus">{{ display.consensus }} {{ "%.1f"|format(view.consensus_agreement) }}%</b></div>
-            </div>
-            <div class="action-row"><button id="run-analysis">▶ Запустить AI</button><a href="/stress-lab?lang={{ lang }}">🧪 Стресс-тест</a></div>
+            <div class="hero-stats"><div><small>{{ t.confidence }}</small><b id="hero-confidence">{{ "%.1f"|format(view.confidence) }}%</b></div><div><small>{{ t.risk }}</small><b id="hero-risk">{{ display.risk }}</b></div><div><small>{{ t.consensus }}</small><b id="hero-consensus">{{ display.consensus }} {{ "%.1f"|format(view.consensus_agreement) }}%</b></div></div>
+            <div class="action-row"><button id="run-analysis">▶ {{ t.run_analysis }}</button><a href="/stress-lab?lang={{ lang }}">🧪 {{ t.stress_lab }}</a></div>
           </article>
 
           <aside class="ai-command-panel chat-panel">
-            <div class="chat-header"><div><h2>AI ЧАТ</h2><small><span class="live-dot mini-dot"></span> Онлайн</small></div><button type="button" id="clear-chat">Очистить</button></div>
-            <div class="ai-chat" id="ai-chat-log" aria-live="polite">
-              <div class="ai-message assistant-message"><div class="message-avatar">SA</div><div class="message-bubble"><div class="message-meta"><b>SharipovAI</b><time data-message-time>00:00:00</time></div><p>Привет, Самандар. Я онлайн. Напиши команду, и я отвечу прямо здесь.</p></div></div>
-            </div>
-            <form id="ai-command-form" class="ai-command-form chat-input-form">
-              <textarea id="ai-command-input" placeholder="Введите сообщение..." autocomplete="off"></textarea>
-              <div class="command-actions"><button type="button" id="voice-command">🎙</button><button type="submit" id="send-command">➤</button></div>
-            </form>
-            <small class="chat-disclaimer">AI может ошибаться. Проверяйте важную информацию.</small>
+            <div class="chat-header"><div><h2>{% if lang == 'en' %}AI Chat{% elif lang == 'uz' %}AI chat{% else %}AI ЧАТ{% endif %}</h2><small><span class="sr-only">Команда для ИИ</span><span class="live-dot mini-dot"></span>{% if lang == 'en' %}Online{% elif lang == 'uz' %}Onlayn{% else %}Онлайн{% endif %}</small></div><button type="button" id="clear-chat">{{ t.clear }}</button></div>
+            <div class="ai-chat" id="ai-chat-log" aria-live="polite"><div class="ai-message assistant-message"><div class="message-avatar">SA</div><div class="message-bubble"><div class="message-meta"><b>SharipovAI</b><time data-message-time>00:00:00</time></div><p>{% if lang == 'en' %}I am online. Write a command and I will answer here.{% elif lang == 'uz' %}Men onlaynman. Buyruq yozing, shu yerda javob beraman.{% else %}Я онлайн. Напиши команду, и я отвечу прямо здесь.{% endif %}</p></div></div></div>
+            <form id="ai-command-form" class="ai-command-form chat-input-form"><textarea id="ai-command-input" placeholder="{% if lang == 'en' %}Type a message...{% elif lang == 'uz' %}Xabar yozing...{% else %}Введите сообщение...{% endif %}" autocomplete="off"></textarea><div class="command-actions"><button type="button" id="voice-command">🎙</button><button type="submit" id="send-command">➤</button></div></form>
+            <small class="chat-disclaimer">{% if lang == 'en' %}AI can make mistakes. Verify important information.{% elif lang == 'uz' %}AI xato qilishi mumkin. Muhim maʼlumotni tekshiring.{% else %}AI может ошибаться. Проверяйте важную информацию.{% endif %}</small>
           </aside>
         </section>
 
         <section class="metric-grid main-metrics">
-          <article class="metric-card trade-card"><small>Paper Trading действие</small><b id="trade-action">{% if view.decision == "BUY" and view.open_positions > 0 %}Куплено 0.0100 BTC{% else %}Ожидаю сигнала{% endif %}</b><p id="trade-details">{% if view.decision == "BUY" and view.open_positions > 0 %}Виртуальная покупка BTCUSDT по 50 000 USDT. Это учебная сделка без реальных денег.{% else %}AI пока не открыл виртуальную позицию.{% endif %}</p></article>
+          <article class="metric-card trade-card"><small>{% if lang == 'en' %}Demo trading action{% elif lang == 'uz' %}Demo savdo harakati{% else %}Демо-торговля{% endif %}</small><b id="trade-action">{% if view.decision == "BUY" and view.open_positions > 0 %}Куплено 0.0100 BTC{% else %}Ожидаю сигнала{% endif %}</b><p id="trade-details">{% if view.decision == "BUY" and view.open_positions > 0 %}Виртуальная покупка BTCUSDT по 50 000 USDT. Реальные деньги не используются.{% else %}AI пока не открыл виртуальную позицию.{% endif %}</p></article>
           <article class="metric-card"><small>{{ t.portfolio }}</small><b id="portfolio-equity" data-demo-equity>{{ "%.2f"|format(view.paper_equity) }} USDT</b><p>{{ t.cash }}: <span id="portfolio-cash" data-demo-cash>{{ "%.2f"|format(view.paper_cash) }} USDT</span></p><p class="{% if view.paper_pnl >= 0 %}positive{% else %}negative{% endif %}">PnL: <span id="portfolio-pnl">{{ "%.2f"|format(view.paper_pnl) }} USDT</span></p></article>
-          <article class="metric-card"><small>Открытые позиции</small><b id="open-positions">{{ view.open_positions }}</b><p>Режим: только виртуальная торговля</p></article>
-          <article class="metric-card"><small>Последнее обновление</small><b id="last-update" data-clock>00:00:00</b><p id="last-action">AI готов к анализу</p></article>
+          <article class="metric-card"><small>{{ t.open_positions }}</small><b id="open-positions">{{ view.open_positions }}</b><p>{% if lang == 'en' %}Mode: demo trading only{% elif lang == 'uz' %}Rejim: faqat demo savdo{% else %}Режим: только демо-торговля{% endif %}</p></article>
+          <article class="metric-card"><small>{{ t.last_update }}</small><b id="last-update" data-clock>00:00:00</b><p id="last-action">AI готов к анализу</p></article>
         </section>
 
-        <section class="system-strip">
-          <div><span></span><b>Market Agent</b><small>онлайн</small></div>
-          <div><span></span><b>News Agent</b><small>онлайн</small></div>
-          <div><span></span><b>AI Core</b><small>готов</small></div>
-          <div><span class="warn"></span><b>Risk Engine</b><small>контроль</small></div>
-          <div><span></span><b>Paper Trading</b><small>виртуально</small></div>
-        </section>
-
-        <section class="deep-grid">
-          <article class="os-panel"><h2>{{ t.ai_timeline }}</h2><ol class="timeline"><li><b>{{ display.decision }}</b><span>{{ display.report }}</span></li><li><b>{{ display.risk }}</b><span>Риск проверен перед виртуальным действием.</span></li><li><b>{{ display.consensus }}</b><span>Консенсус агентов: {{ "%.1f"|format(view.consensus_agreement) }}%</span></li></ol></article>
-          <article class="os-panel"><h2>{{ t.explain_ai }}</h2><details open><summary>Почему такое решение?</summary><p>AI объединяет Market Agent, News Agent, Risk Engine и Paper Trading. Если решение BUY и риск низкий, открывается только виртуальная позиция.</p></details><details><summary>Почему не реальные деньги?</summary><p>До отдельного подтверждения пользователя система не имеет права исполнять реальные сделки.</p></details></article>
-        </section>
+        <section class="system-strip"><div><span></span><b>Market Agent</b><small>online</small></div><div><span></span><b>News Agent</b><small>online</small></div><div><span></span><b>AI Core</b><small>ready</small></div><div><span class="warn"></span><b>Risk Engine</b><small>control</small></div><div><span></span><b>Demo Trading</b><small>virtual</small></div></section>
+        <section class="deep-grid"><article class="os-panel"><h2>{{ t.ai_timeline }}</h2><ol class="timeline"><li><b>{{ display.decision }}</b><span>{{ display.report }}</span></li><li><b>{{ display.risk }}</b><span>Риск проверен перед виртуальным действием.</span></li><li><b>{{ display.consensus }}</b><span>Консенсус агентов: {{ "%.1f"|format(view.consensus_agreement) }}%</span></li></ol></article><article class="os-panel"><h2>{{ t.explain_ai }}</h2><details open><summary>Почему такое решение?</summary><p>AI объединяет Market Agent, News Agent, Risk Engine и демо-торговлю. Реальные деньги не используются.</p></details></article></section>
 
       {% elif page == "stress-lab" %}
-        <section class="stress-hero">
-          <div><p class="eyebrow">STRESS LAB</p><h2>Стресс-лаборатория капитала</h2><p>Проверь, что сделает AI при падении рынка, просадке капитала или панике в новостях.</p></div>
-          <button data-stress-scenario="btc_drop_20">Запустить BTC −20%</button>
-        </section>
-        <section class="stress-grid">
-          <article class="os-panel scenario-panel"><h3>Сценарии</h3><button data-stress-scenario="btc_drop_10">BTC −10%</button><button data-stress-scenario="btc_drop_20">BTC −20%</button><button data-stress-scenario="market_crash_50">Рынок −50%</button><button data-stress-scenario="capital_loss_10">Капитал −10%</button></article>
-          <article class="os-panel result-panel"><h3>Результат теста</h3><dl><dt>Валюта</dt><dd>USDT</dd><dt>Сценарий</dt><dd id="stress-scenario">{{ stress.scenario }}</dd><dt>Капитал до</dt><dd id="stress-before">{{ stress.capital_before }} USDT</dd><dt>Капитал после</dt><dd id="stress-after">{{ stress.capital_after }} USDT</dd><dt>Потеряно</dt><dd id="stress-loss" class="negative">-{{ stress.loss_amount }} USDT ({{ stress.loss_percent }}%)</dd><dt>Сохранено</dt><dd id="stress-saved" class="positive">{{ stress.capital_after }} USDT</dd><dt>Статус</dt><dd id="stress-result">{{ stress.result }}</dd></dl></article>
-          <article class="os-panel protection-panel"><h3>Защитные меры AI</h3><ul id="stress-measures">{% for item in stress.protective_measures %}<li>{{ item }}</li>{% endfor %}</ul></article>
-        </section>
+        <section class="stress-hero"><div><p class="eyebrow">STRESS LAB</p><h2>Стресс-лаборатория капитала</h2><p>Проверь, что сделает AI при падении рынка, просадке капитала или панике в новостях.</p></div><button data-stress-scenario="btc_drop_20">Запустить BTC −20%</button></section>
+        <section class="stress-grid"><article class="os-panel scenario-panel"><h3>Сценарии</h3><button data-stress-scenario="btc_drop_10">BTC −10%</button><button data-stress-scenario="btc_drop_20">BTC −20%</button><button data-stress-scenario="market_crash_50">Рынок −50%</button><button data-stress-scenario="capital_loss_10">Капитал −10%</button></article><article class="os-panel result-panel"><h3>Результат теста</h3><dl><dt>Валюта</dt><dd>USDT</dd><dt>Сценарий</dt><dd id="stress-scenario">{{ stress.scenario }}</dd><dt>Капитал до</dt><dd id="stress-before">{{ stress.capital_before }} USDT</dd><dt>Капитал после</dt><dd id="stress-after">{{ stress.capital_after }} USDT</dd><dt>Потеряно</dt><dd id="stress-loss" class="negative">-{{ stress.loss_amount }} USDT ({{ stress.loss_percent }}%)</dd><dt>Сохранено</dt><dd id="stress-saved" class="positive">{{ stress.capital_after }} USDT</dd><dt>Статус</dt><dd id="stress-result">{{ stress.result }}</dd></dl></article><article class="os-panel protection-panel"><h3>Защитные меры AI</h3><ul id="stress-measures">{% for item in stress.protective_measures %}<li>{{ item }}</li>{% endfor %}</ul></article></section>
 
       {% elif page == "settings" or page == "ai-control-center" %}
         <section class="page-title"><h2>{% if page == "settings" %}Настройки{% else %}AI Control Center{% endif %}</h2><p>Управление демо-капиталом, риском, лимитами и безопасностью.</p></section>
-        <section class="control-grid settings-pro">
-          <article class="os-panel wallet-panel"><h3>Виртуальный кошелек</h3><div class="demo-balance"><small>Демо-баланс</small><b id="demo-balance">10000.00 USDT</b><p id="demo-benefit" class="positive">Польза демо-счета: 0.00 USDT</p></div><div class="action-row"><button type="button" data-wallet-action="deposit">Пополнить +1000</button><button type="button" data-wallet-action="withdraw">Вывести -1000</button><button type="button" data-wallet-action="reset">Сбросить</button></div></article>
-          <article class="os-panel risk-visual-panel"><h3>Риск-профиль</h3><label>Риск на сделку <output>2%</output><input data-range-output type="range" min="0" max="10" value="2"></label><label>Максимальная просадка <output>10%</output><input data-range-output type="range" min="0" max="50" value="10"></label><label>Минимальная уверенность AI <output>78%</output><input data-range-output type="range" min="0" max="100" value="78"></label><p class="risk-hint">Левее — безопаснее. Правее — агрессивнее.</p></article>
-          <article class="os-panel risk-visual-panel"><h3>Лимиты</h3><label>Сделок в день <output>5</output><input data-range-output type="range" min="1" max="30" value="5"></label><label>Открытых позиций <output>3</output><input data-range-output type="range" min="1" max="10" value="3"></label><label>Размер позиции <output>20%</output><input data-range-output type="range" min="1" max="100" value="20"></label><p class="risk-hint">Показывает, насколько активно AI может торговать в демо.</p></article>
-          <article class="os-panel security-panel"><h3>Безопасность</h3><div class="shield-visual">SA</div><p>Реальная торговля выключена. Все действия остаются в Paper Trading.</p><button>Сохранить настройки</button></article>
-        </section>
+        <section class="control-grid settings-pro"><article class="os-panel wallet-panel"><h3>Виртуальный кошелек</h3><div class="demo-balance"><small>Демо-баланс</small><b id="demo-balance">10000.00 USDT</b><p id="demo-benefit" class="positive">Польза демо-счета: 0.00 USDT</p></div><div class="action-row"><button type="button" data-wallet-action="deposit">Пополнить +1000</button><button type="button" data-wallet-action="withdraw">Вывести -1000</button><button type="button" data-wallet-action="reset">Сбросить</button></div></article><article class="os-panel risk-visual-panel"><h3>Риск</h3><label>Риск на сделку <output>2%</output><input data-range-output type="range" min="0" max="10" value="2"></label><label>Максимальная просадка <output>10%</output><input data-range-output type="range" min="0" max="50" value="10"></label><label>Минимальная уверенность <output>78%</output><input data-range-output type="range" min="0" max="100" value="78"></label><p class="risk-hint">Левее — безопаснее. Правее — агрессивнее.</p></article><article class="os-panel risk-visual-panel"><h3>Лимиты</h3><label>Сделок в день <output>5</output><input data-range-output type="range" min="1" max="30" value="5"></label><label>Открытых позиций <output>3</output><input data-range-output type="range" min="1" max="10" value="3"></label><label>Размер позиции <output>20%</output><input data-range-output type="range" min="1" max="100" value="20"></label></article><article class="os-panel security-panel"><h3>Безопасность</h3><div class="shield-visual">SA</div><p>Реальная торговля выключена. Все действия остаются в Paper Trading.</p><button>Сохранить настройки</button></article></section>
 
       {% elif page == "self-analysis" or page == "ai-improvement" %}
-        <section class="page-title"><h2>{% if page == "self-analysis" %}Самоанализ ошибок{% else %}AI Improvement / Улучшение AI{% endif %}</h2><p>AI не меняет себя автоматически. Он только предлагает улучшения, а пользователь подтверждает.</p></section>
-        <section class="metric-grid"><article class="metric-card"><small>Ошибочные сделки</small><b>0</b><p>Пока недостаточно истории</p></article><article class="metric-card"><small>Упущенные возможности</small><b>0</b><p>Будет анализироваться после сделок</p></article><article class="metric-card"><small>Конфликт агентов</small><b>0</b><p>Market / News / Risk</p></article><article class="metric-card"><small>Рекомендации</small><b>Macro Agent</b><p>Добавить макроанализ для ставок и инфляции</p></article></section>
-        <section class="os-panel"><h3>Предложения развития</h3><ul><li>Добавить Sentiment Agent — улучшит оценку новостей.</li><li>Добавить On-chain Agent — усилит анализ BTC/ETH.</li><li>Добавить Telegram Bot — быстрые уведомления и запуск анализа.</li><li>Добавить Scheduler — автономный запуск по расписанию.</li></ul></section>
+        <section class="page-title"><h2>{% if page == "self-analysis" %}Самоанализ ошибок{% else %}AI Improvement / Улучшение AI{% endif %}</h2><p>AI не меняет себя автоматически. Он только предлагает улучшения, а пользователь подтверждает.</p></section><section class="metric-grid"><article class="metric-card"><small>Ошибочные сделки</small><b>0</b><p>Пока недостаточно истории</p></article><article class="metric-card"><small>Упущенные возможности</small><b>0</b><p>Будет анализироваться после сделок</p></article><article class="metric-card"><small>Конфликт агентов</small><b>0</b><p>Market / News / Risk</p></article><article class="metric-card"><small>Рекомендации</small><b>Macro Agent</b><p>Добавить макроанализ для ставок и инфляции</p></article></section><section class="os-panel"><h3>Предложения развития</h3><ul><li>Добавить Sentiment Agent — улучшит оценку новостей.</li><li>Добавить On-chain Agent — усилит анализ BTC/ETH.</li><li>Добавить Telegram Bot — быстрые уведомления и запуск анализа.</li><li>Добавить Scheduler — автономный запуск по расписанию.</li></ul></section>
 
       {% else %}
-        <section class="page-title"><h2>{{ t[page.replace('-', '_')] if page.replace('-', '_') in t else 'SharipovAI OS' }}</h2><p>Раздел активен. Данные будут обновляться через Runner, Paper Trading и Memory.</p></section>
-        <section class="metric-grid"><article class="metric-card"><small>Статус</small><b>Активен</b><p>Страница подключена к SharipovAI OS.</p></article><article class="metric-card"><small>AI</small><b>{{ display.decision }}</b><p>{{ display.reason }}</p></article><article class="metric-card"><small>Портфель</small><b>{{ "%.2f"|format(view.paper_equity) }} USDT</b><p>PnL: {{ "%.2f"|format(view.paper_pnl) }}</p></article></section>
+        <section class="page-title"><h2>{{ t[page.replace('-', '_')] if page.replace('-', '_') in t else 'SharipovAI OS' }}</h2><p>Раздел активен. Данные будут обновляться через Runner, Paper Trading и Memory.</p></section><section class="metric-grid"><article class="metric-card"><small>Статус</small><b>Активен</b><p>Страница подключена к SharipovAI OS.</p></article><article class="metric-card"><small>AI</small><b>{{ display.decision }}</b><p>{{ display.reason }}</p></article><article class="metric-card"><small>Портфель</small><b>{{ "%.2f"|format(view.paper_equity) }} USDT</b><p>PnL: {{ "%.2f"|format(view.paper_pnl) }}</p></article></section>
       {% endif %}
     </main>
-    <script>
-      (() => {
-        const $ = (s) => document.querySelector(s);
-        const $$ = (s) => Array.from(document.querySelectorAll(s));
-        const time = () => new Date().toLocaleTimeString('ru-RU', {hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false});
-        const date = () => new Date().toLocaleDateString('ru-RU', {day:'2-digit', month:'long', year:'numeric', weekday:'long'});
-        function tick(){ $$('[data-clock], #top-clock').forEach(e => e.textContent = time()); const d=$('#top-date'); if(d) d.textContent=date(); }
-        tick(); setInterval(tick, 1000);
-        const fmt = (n) => Number(n||0).toLocaleString('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2});
-        const log = $('#ai-chat-log');
-        function msg(role, text){ if(!log) return; const item=document.createElement('div'); item.className='ai-message '+(role==='user'?'user-message':'assistant-message'); item.innerHTML='<div class="message-avatar">'+(role==='user'?'SA':'AI')+'</div><div class="message-bubble"><div class="message-meta"><b>'+(role==='user'?'Самандар':'SharipovAI')+'</b><time>'+time()+'</time></div><p></p></div>'; item.querySelector('p').textContent=text; log.appendChild(item); log.scrollTop=log.scrollHeight; }
-        async function submit(e){ e.preventDefault(); const input=$('#ai-command-input'); const text=(input?.value||'').trim(); if(!text){ msg('ai','Напиши команду, и я отвечу здесь.'); return; } msg('user',text); input.value=''; msg('ai','Принял. Запускаю анализ...'); try{ const r=await fetch('/api/chat/message',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text}),cache:'no-store'}); const p=await r.json(); msg('ai',p.reply||'Команда выполнена.'); if(p.run){ $('#hero-confidence') && ($('#hero-confidence').textContent=Number(p.run.confidence||0).toFixed(1)+'%'); $('#hero-risk') && ($('#hero-risk').textContent=p.run.risk_level||'LOW'); $('#portfolio-equity') && ($('#portfolio-equity').textContent=fmt(p.run.paper_equity)+' USDT'); $('#portfolio-cash') && ($('#portfolio-cash').textContent=fmt(p.run.paper_cash)+' USDT'); } }catch(err){ msg('ai','Сервер чата не ответил. Проверь перезапуск uvicorn.'); } }
-        $('#ai-command-form')?.addEventListener('submit', submit);
-        $('#send-command')?.addEventListener('click', (e)=>{ e.preventDefault(); $('#ai-command-form')?.requestSubmit(); });
-        $('#clear-chat')?.addEventListener('click', ()=>{ if(log) log.innerHTML=''; msg('ai','История очищена. Готов к новой задаче.'); });
-        $('#voice-command')?.addEventListener('click', ()=>{ const SR=window.SpeechRecognition||window.webkitSpeechRecognition; if(!SR){ msg('ai','Голосовой ввод не поддерживается этим браузером. Напиши текстом.'); return; } const rec=new SR(); rec.lang='ru-RU'; rec.onresult=(ev)=>{ $('#ai-command-input').value=ev.results[0][0].transcript; $('#ai-command-form')?.requestSubmit(); }; rec.start(); });
-        let balance=Number(localStorage.getItem('demoBalance')||10000); function wallet(){ $('#demo-balance') && ($('#demo-balance').textContent=fmt(balance)+' USDT'); $('#demo-benefit') && ($('#demo-benefit').textContent='Польза демо-счета: '+fmt(balance-10000)+' USDT'); $$('[data-demo-equity]').forEach(e=>e.textContent=fmt(balance)+' USDT'); } wallet(); $$('[data-wallet-action]').forEach(b=>b.addEventListener('click',()=>{ const a=b.dataset.walletAction; if(a==='deposit') balance+=1000; if(a==='withdraw') balance=Math.max(0,balance-1000); if(a==='reset') balance=10000; localStorage.setItem('demoBalance',String(balance)); wallet(); }));
-        $$('[data-range-output]').forEach(input=>{ const out=input.parentElement.querySelector('output'); const isPct=input.parentElement.textContent.includes('%')||input.parentElement.textContent.includes('Риск')||input.parentElement.textContent.includes('просадка')||input.parentElement.textContent.includes('уверенность')||input.parentElement.textContent.includes('Размер'); const upd=()=>out&&(out.textContent=input.value+(isPct?'%':'')); input.addEventListener('input',upd); upd(); });
-      })();
-    </script>
+    <script>(()=>{const $=s=>document.querySelector(s),$$=s=>Array.from(document.querySelectorAll(s));const time=()=>new Date().toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});const date=()=>new Date().toLocaleDateString('ru-RU',{day:'2-digit',month:'long',year:'numeric',weekday:'long'});function tick(){$$('[data-clock],#top-clock').forEach(e=>e.textContent=time());const d=$('#top-date');if(d)d.textContent=date()}tick();setInterval(tick,1000);const fmt=n=>Number(n||0).toLocaleString('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2});const log=$('#ai-chat-log');function msg(role,text){if(!log)return;const item=document.createElement('div');item.className='ai-message '+(role==='user'?'user-message':'assistant-message');item.innerHTML='<div class="message-avatar">'+(role==='user'?'SA':'AI')+'</div><div class="message-bubble"><div class="message-meta"><b>'+(role==='user'?'Самандар':'SharipovAI')+'</b><time>'+time()+'</time></div><p></p></div>';item.querySelector('p').textContent=text;log.appendChild(item);log.scrollTop=log.scrollHeight}async function submit(e){e.preventDefault();const input=$('#ai-command-input');const text=(input?.value||'').trim();if(!text){msg('ai','Напиши команду, и я отвечу здесь.');return}msg('user',text);input.value='';msg('ai','Принял. Запускаю анализ...');try{const r=await fetch('/api/chat/message',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text}),cache:'no-store'});const p=await r.json();msg('ai',p.reply||'Команда выполнена.');if(p.run){$('#hero-confidence')&&($('#hero-confidence').textContent=Number(p.run.confidence||0).toFixed(1)+'%');$('#hero-risk')&&($('#hero-risk').textContent=p.run.risk_level||'LOW');$('#portfolio-equity')&&($('#portfolio-equity').textContent=fmt(p.run.paper_equity)+' USDT');$('#portfolio-cash')&&($('#portfolio-cash').textContent=fmt(p.run.paper_cash)+' USDT')}}catch(err){msg('ai','Сервер чата не ответил. Перезапусти uvicorn.')}}$('#ai-command-form')?.addEventListener('submit',submit);$('#send-command')?.addEventListener('click',e=>{e.preventDefault();$('#ai-command-form')?.requestSubmit()});$('#clear-chat')?.addEventListener('click',()=>{if(log)log.innerHTML='';msg('ai','История очищена. Готов к новой задаче.')});$('#voice-command')?.addEventListener('click',()=>{const SR=window.SpeechRecognition||window.webkitSpeechRecognition;if(!SR){msg('ai','Голосовой ввод не поддерживается этим браузером. Напиши текстом.');return}const rec=new SR();rec.lang='ru-RU';rec.onresult=ev=>{const i=$('#ai-command-input');if(i)i.value=ev.results[0][0].transcript;$('#ai-command-form')?.requestSubmit()};rec.start()});let balance=Number(localStorage.getItem('demoBalance')||10000);function wallet(){$('#demo-balance')&&($('#demo-balance').textContent=fmt(balance)+' USDT');$('#demo-benefit')&&($('#demo-benefit').textContent='Польза демо-счета: '+fmt(balance-10000)+' USDT');$$('[data-demo-equity]').forEach(e=>e.textContent=fmt(balance)+' USDT')}wallet();$$('[data-wallet-action]').forEach(b=>b.addEventListener('click',()=>{const a=b.dataset.walletAction;if(a==='deposit')balance+=1000;if(a==='withdraw')balance=Math.max(0,balance-1000);if(a==='reset')balance=10000;localStorage.setItem('demoBalance',String(balance));wallet()}));$$('[data-range-output]').forEach(input=>{const out=input.parentElement.querySelector('output');const pct=input.parentElement.textContent.match(/риск|просадка|уверенность|размер/i);const upd=()=>out&&(out.textContent=input.value+(pct?'%':''));input.addEventListener('input',upd);upd()})})();</script>
   </body>
 </html>
