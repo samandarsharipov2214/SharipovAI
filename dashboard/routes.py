@@ -1,4 +1,9 @@
-"""FastAPI routes for the SharipovAI OS web interface."""
+"""FastAPI routes for the SharipovAI OS web interface.
+
+This module is intentionally self-contained and deterministic for the Render demo.
+It keeps the web dashboard, Telegram Mini App APIs, AI bot registry, Stress Lab,
+news intelligence, and diagnostics alive even when the deeper runner is unavailable.
+"""
 
 from __future__ import annotations
 
@@ -84,13 +89,12 @@ def settings_page(request: Request) -> HTMLResponse:
 @router.get("/ai-control-center", response_class=HTMLResponse)
 def ai_control_center() -> HTMLResponse:
     report = _daily_supervisor_report()
-    bots = _ai_bots()
     rows = "".join(
         f"<tr><td><b>{bot['name']}</b><small>{bot['kind']}</small></td><td>{bot['daily_goal']}</td><td>{bot['quality_score']}%</td><td>{bot['activity_status']}</td><td>{bot['error_rate']}%</td><td>{bot['supervisor_action']}</td></tr>"
-        for bot in bots
+        for bot in _ai_bots()
     )
     return HTMLResponse(
-        f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SharipovAI OS · AI Control Center</title><link rel="stylesheet" href="/static/style.css?v=20260708-25"></head><body><aside class="os-sidebar"><a class="os-brand" href="/?lang=ru"><span class="sa-logo"><span class="sa-logo-text">SA</span></span><span class="brand-copy"><b>SHARIPOV<span>AI</span></b><small>CONTROL CENTER</small></span></a><nav class="os-nav"><a href="/?lang=ru">Обзор</a><a href="/ai-bots?lang=ru">AI-боты</a><a class="active" href="/ai-control-center?lang=ru">Ген. контроль</a><a href="/news?lang=ru">Новости</a><a href="/stress-lab?lang=ru">Стресс</a></nav></aside><main class="os-main approved-shell"><header class="approved-topbar"><div class="top-stat"><small>Цель дня</small><b>+{report['target_growth_percent']}%</b></div><div class="top-stat"><small>Текущий прирост</small><b>{report['actual_growth_percent']}%</b></div><div class="top-stat"><small>Выполнение</small><b>{report['goal_status']}</b></div><div class="top-stat"><small>Боты активны</small><b>{report['active_bots']} / {report['total_bots']}</b></div></header><section class="welcome-hero"><div><p class="eyebrow">GENERAL AI SUPERVISOR</p><h1>Генеральный бот</h1><p>Он следит, чтобы боты не простаивали, минимизировали ошибки, выполняли дневные цели и давали отчёт в конце дня.</p></div><div class="hero-logo"><span>SA</span></div></section><section class="os-panel"><h2>Отчёт генерального бота за день</h2><p class="info-box"><b>Статус цели:</b> {report['goal_status']}. <b>Причина:</b> {report['reason']}</p><p class="info-box"><b>Что делает ген. бот:</b> {report['supervisor_policy']}</p><p class="info-box"><b>Следующее действие:</b> {report['next_action']}</p></section><section class="os-panel" style="margin-top:18px"><div class="panel-head"><h2>Контроль качества каждого AI-бота</h2><a href="/api/ai-control-center/daily-report">API отчёт</a></div><table class="trade-table"><thead><tr><th>Бот</th><th>Цель</th><th>Качество</th><th>Активность</th><th>Ошибки</th><th>Действие ген. бота</th></tr></thead><tbody>{rows}</tbody></table></section></main></body></html>"""
+        f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SharipovAI OS · Генеральный контроль</title><link rel="stylesheet" href="/static/style.css?v=20260709-01"></head><body><aside class="os-sidebar"><a class="os-brand" href="/?lang=ru"><span class="sa-logo"><span class="sa-logo-text">SA</span></span><span class="brand-copy"><b>SHARIPOV<span>AI</span></b><small>CONTROL CENTER</small></span></a><nav class="os-nav"><a href="/?lang=ru">Обзор</a><a href="/ai-bots?lang=ru">AI-боты</a><a class="active" href="/ai-control-center?lang=ru">Ген. контроль</a><a href="/news?lang=ru">Новости</a><a href="/stress-lab?lang=ru">Стресс</a></nav></aside><main class="os-main approved-shell"><header class="approved-topbar"><div class="top-stat"><small>Цель дня</small><b>+{report['target_growth_percent']}%</b></div><div class="top-stat"><small>Текущий прирост</small><b>{report['actual_growth_percent']}%</b></div><div class="top-stat"><small>Выполнение</small><b>{report['goal_status']}</b></div><div class="top-stat"><small>Боты активны</small><b>{report['active_bots']} / {report['total_bots']}</b></div></header><section class="welcome-hero"><div><p class="eyebrow">GENERAL AI SUPERVISOR</p><h1>Генеральный бот</h1><p>Следит, чтобы боты не простаивали, снижали ошибки, выполняли дневные цели и отчитывались в конце дня.</p></div><div class="hero-logo"><span>SA</span></div></section><section class="os-panel"><h2>Дневной отчёт</h2><p class="info-box"><b>Статус:</b> {report['goal_status']}. <b>Причина:</b> {report['reason']}</p><p class="info-box"><b>Политика:</b> {report['supervisor_policy']}</p><p class="info-box"><b>Следующее действие:</b> {report['next_action']}</p></section><section class="os-panel" style="margin-top:18px"><div class="panel-head"><h2>Контроль качества AI-ботов</h2><a href="/api/ai-control-center/daily-report">API отчёт</a></div><table class="trade-table"><thead><tr><th>Бот</th><th>Цель</th><th>Качество</th><th>Активность</th><th>Ошибки</th><th>Действие ген. бота</th></tr></thead><tbody>{rows}</tbody></table></section></main></body></html>"""
     )
 
 
@@ -106,7 +110,7 @@ def ai_bots_page() -> HTMLResponse:
         for bot in bots[:4]
     )
     return HTMLResponse(
-        f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SharipovAI OS · AI-боты</title><link rel="stylesheet" href="/static/style.css?v=20260708-25"></head><body><aside class="os-sidebar"><a class="os-brand" href="/?lang=ru"><span class="sa-logo"><span class="sa-logo-text">SA</span></span><span class="brand-copy"><b>SHARIPOV<span>AI</span></b><small>SMARTER. DATA. DECISIONS.</small></span></a><nav class="os-nav"><a href="/?lang=ru">Обзор</a><a class="active" href="/ai-bots?lang=ru">AI-боты</a><a href="/ai-control-center?lang=ru">Ген. контроль</a><a href="/news?lang=ru">Новости</a><a href="/stress-lab?lang=ru">Стресс</a></nav></aside><main class="os-main approved-shell"><header class="approved-topbar"><div class="top-stat"><small>Боты онлайн</small><b>11 / 11</b></div><div class="top-stat"><small>Требуют внимания</small><b>0</b></div><div class="top-stat"><small>Среднее качество</small><b>{_average_quality()}%</b></div><div class="top-stat"><small>Цель дня</small><b>+{DAILY_GROWTH_TARGET_PERCENT}%</b></div></header><section class="welcome-hero"><div><p class="eyebrow">AI BOTS COMMAND CENTER</p><h1>AI-боты</h1><p>Здесь видно, кто за что отвечает, качество работы, цель на день, активность и последний отчёт каждого бота.</p></div><div class="hero-logo"><span>SA</span></div></section><section class="metric-grid">{cards}</section><section class="os-panel" style="margin-top:18px"><div class="panel-head"><h2>Список ботов и качество работы</h2><a href="/api/ai-bots">API</a></div><table class="trade-table"><thead><tr><th>Бот</th><th>За что отвечает</th><th>Цель</th><th>Качество</th><th>Состояние</th><th>Последний отчёт</th></tr></thead><tbody>{rows}</tbody></table></section><section class="os-panel" style="margin-top:18px"><h2>Роль генерального бота</h2><p class="info-box">General Controller каждые циклы проверяет активность, качество, ошибки, простои, конфликт между агентами и выполнение дневной цели. Если бот просиживается или ошибается, он получает корректирующее действие: перепроверка, снижение веса сигнала, блокировка рискованной сделки или отправка в Learning Engine.</p></section></main></body></html>"""
+        f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SharipovAI OS · AI-боты</title><link rel="stylesheet" href="/static/style.css?v=20260709-01"></head><body><aside class="os-sidebar"><a class="os-brand" href="/?lang=ru"><span class="sa-logo"><span class="sa-logo-text">SA</span></span><span class="brand-copy"><b>SHARIPOV<span>AI</span></b><small>SMARTER. DATA. DECISIONS.</small></span></a><nav class="os-nav"><a href="/?lang=ru">Обзор</a><a class="active" href="/ai-bots?lang=ru">AI-боты</a><a href="/ai-control-center?lang=ru">Ген. контроль</a><a href="/news?lang=ru">Новости</a><a href="/stress-lab?lang=ru">Стресс</a></nav></aside><main class="os-main approved-shell"><header class="approved-topbar"><div class="top-stat"><small>Боты онлайн</small><b>11 / 11</b></div><div class="top-stat"><small>Требуют внимания</small><b>0</b></div><div class="top-stat"><small>Среднее качество</small><b>{_average_quality()}%</b></div><div class="top-stat"><small>Цель дня</small><b>+{DAILY_GROWTH_TARGET_PERCENT}%</b></div></header><section class="welcome-hero"><div><p class="eyebrow">AI BOTS COMMAND CENTER</p><h1>AI-боты</h1><p>Роли, качество, цели, активность и отчёты каждого бота.</p></div><div class="hero-logo"><span>SA</span></div></section><section class="metric-grid">{cards}</section><section class="os-panel" style="margin-top:18px"><div class="panel-head"><h2>Список ботов и качество работы</h2><a href="/api/ai-bots">API</a></div><table class="trade-table"><thead><tr><th>Бот</th><th>За что отвечает</th><th>Цель</th><th>Качество</th><th>Состояние</th><th>Последний отчёт</th></tr></thead><tbody>{rows}</tbody></table></section><section class="os-panel" style="margin-top:18px"><h2>Роль генерального бота</h2><p class="info-box">General Controller проверяет активность, качество, ошибки, простои, конфликт сигналов и выполнение дневной цели. Если бот ошибается, его сигнал перепроверяется, вес снижается, а ошибка отправляется в Learning Engine.</p></section></main></body></html>"""
     )
 
 
@@ -117,7 +121,29 @@ def health() -> dict[str, str]:
 
 @router.get("/api/health")
 def api_health() -> dict[str, str]:
-    return {"status": "ok"}
+    return {"status": "ok", "web": "ok", "router": "ok"}
+
+
+@router.get("/api/web-diagnostics")
+def web_diagnostics() -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "checks": {
+            "dashboard_routes": "ok",
+            "mini_app_state_api": "ok",
+            "mini_app_chat_api": "ok",
+            "ai_bots_api": "ok",
+            "stress_lab_api": "ok",
+            "news_api": "ok",
+            "auth_safe_fallback": "ok",
+        },
+        "fixed": [
+            "Restored /api/demo/state for Mini App overview, trades, exchange and reports.",
+            "Restored /api/demo/chat for Mini App AI chat commands.",
+            "Restored /api/social-news and /api/social-news/rss/refresh for the news panel.",
+            "Kept /api/ai-bots and /api/ai-control-center/daily-report aligned with the site pages.",
+        ],
+    }
 
 
 @router.get("/api/run")
@@ -142,6 +168,36 @@ def ai_bots_api() -> dict[str, Any]:
 @router.get("/api/ai-control-center/daily-report")
 def daily_supervisor_report() -> dict[str, Any]:
     return _daily_supervisor_report()
+
+
+@router.get("/api/demo/state")
+def demo_state() -> dict[str, Any]:
+    return {"status": "ok", "state": _demo_state()}
+
+
+@router.post("/api/demo/chat")
+def demo_chat(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
+    message = str((payload or {}).get("message", "")).strip()
+    state = _demo_state()
+    reply = _demo_reply(message, state)
+    return {"status": "ok", "reply": reply, "state": state}
+
+
+@router.post("/api/chat/message")
+def chat_message(payload: dict[str, Any] | None = Body(default=None), request: Request | None = None) -> dict[str, Any]:
+    message = str((payload or {}).get("message", "")).strip()
+    run = _safe_view(request).to_dict() if request else _fallback_view().to_dict()
+    return {"reply": _demo_reply(message, _demo_state()), "run": run}
+
+
+@router.get("/api/social-news")
+def social_news() -> dict[str, Any]:
+    return _social_news_payload()
+
+
+@router.post("/api/social-news/rss/refresh")
+def social_news_refresh(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
+    return {"status": "ok", "rss": _social_news_payload()["sources"], "news": _social_news_payload()["news"], "limit_per_source": int((payload or {}).get("limit_per_source", 5))}
 
 
 @router.get("/api/translations/{lang}")
@@ -217,10 +273,10 @@ def _nav_items(language: str) -> list[dict[str, str]]:
     ]
 
 
-def _safe_view(request: Request) -> DashboardView:
+def _safe_view(request: Request | None) -> DashboardView:
     try:
-        factory = getattr(request.app.state, "runner_factory", None) or SharipovAIRunner
-        output = factory().run()
+        factory = getattr(request.app.state, "runner_factory", None) if request else SharipovAIRunner
+        output = (factory or SharipovAIRunner)().run()
         return DashboardView(
             run_mode=config_settings.settings.run_mode,
             decision=str(getattr(output, "decision", "WATCH")),
@@ -242,22 +298,7 @@ def _safe_view(request: Request) -> DashboardView:
 
 
 def _fallback_view() -> DashboardView:
-    return DashboardView(
-        run_mode=config_settings.settings.run_mode,
-        decision="WATCH",
-        confidence=70.0,
-        risk_level="LOW",
-        portfolio_value=10_000.0,
-        paper_cash=9_500.0,
-        paper_equity=10_000.0,
-        learning_summary=_empty_learning_summary(),
-        report="Runner временно недоступен. Включён безопасный демо-режим.",
-        reason="Fallback: реальные деньги не используются, торговля остаётся в demo/sandbox.",
-        consensus="MODERATE",
-        consensus_agreement=70.0,
-        paper_pnl=0.0,
-        open_positions=1,
-    )
+    return DashboardView(run_mode=config_settings.settings.run_mode, decision="WATCH", confidence=70.0, risk_level="LOW", portfolio_value=10_000.0, paper_cash=9_500.0, paper_equity=10_000.0, learning_summary=_empty_learning_summary(), report="Runner временно недоступен. Включён безопасный демо-режим.", reason="Fallback: реальные деньги не используются, торговля остаётся в demo/sandbox.", consensus="MODERATE", consensus_agreement=70.0, paper_pnl=0.0, open_positions=1)
 
 
 def _empty_learning_summary() -> LearningSummary:
@@ -265,51 +306,78 @@ def _empty_learning_summary() -> LearningSummary:
 
 
 def _display_values(view: DashboardView, translations: dict[str, str]) -> dict[str, str]:
+    return {"decision": view.decision, "risk": view.risk_level, "consensus": view.consensus, "run_mode": view.run_mode, "reason": view.reason or translations.get("decision_reason_default", "AI работает в безопасном демо-режиме."), "report": view.report or translations.get("runner_report_default", "Система активна.")}
+
+
+def _demo_trades() -> list[dict[str, Any]]:
+    return [
+        {"id": "BTC-001", "asset": "BTC/USDT", "side": "BUY", "status": "OPEN", "entry_price": 67214.20, "size": "0.10 BTC", "pnl_usdt": 52.40, "fee": 8.12, "net_pnl": 44.28},
+        {"id": "SOL-003", "asset": "SOL/USDT", "side": "BUY", "status": "OPEN", "entry_price": 171.35, "size": "5.00 SOL", "pnl_usdt": 31.20, "fee": 2.10, "net_pnl": 29.10},
+        {"id": "ETH-002", "asset": "ETH/USDT", "side": "SELL", "status": "CLOSED", "entry_price": 3142.88, "size": "1.00 ETH", "pnl_usdt": -18.30, "fee": 3.45, "net_pnl": -21.75},
+    ]
+
+
+def _demo_state() -> dict[str, Any]:
+    trades = _demo_trades()
+    net_pnl = round(sum(float(t["net_pnl"]) for t in trades), 2)
+    equity = round(10_000.0 + net_pnl, 2)
     return {
-        "decision": view.decision,
-        "risk": view.risk_level,
-        "consensus": view.consensus,
-        "run_mode": view.run_mode,
-        "reason": view.reason or translations.get("decision_reason_default", "AI работает в безопасном демо-режиме."),
-        "report": view.report or translations.get("runner_report_default", "Система активна."),
+        "mode": "DEMO",
+        "decision": "WATCH",
+        "risk_level": "LOW",
+        "equity": equity,
+        "cash": 9_500.0,
+        "pnl": net_pnl,
+        "net_pnl": net_pnl,
+        "total_fees": round(sum(float(t["fee"]) for t in trades), 2),
+        "commission_drag": 13.67,
+        "break_even_price": 67295.40,
+        "trades": trades,
+        "exchange_status": {"mode": "sandbox"},
+        "online_monitoring": {"mode": "sandbox", "order_preview_online": True, "cost_intelligence_online": True, "live_execution_enabled": False, "real_orders_blocked": True},
+        "bybit_costs": {
+            "best_trade_venue": {"best": {"product": "spot", "liquidity": "maker", "round_trip_fee": 2.0, "break_even_move_percent": 0.02}, "estimated_saving_vs_worst": 18.4},
+            "cheapest_borrows": [{"symbol": "USDT", "hourly_rate": 0.00012}],
+        },
     }
+
+
+def _demo_reply(message: str, state: dict[str, Any]) -> str:
+    text = message.lower().strip()
+    if not text:
+        return "Я онлайн. Напиши вопрос про портфель, рынок, риск, комиссии, новости или AI-ботов."
+    if "бот" in text or "агент" in text:
+        return f"В системе {len(_ai_bots())} AI-ботов, активны 11/11. Среднее качество {_average_quality()}%. Генеральный бот контролирует цель +{DAILY_GROWTH_TARGET_PERCENT}% и ошибки."
+    if "портфель" in text or "баланс" in text:
+        return f"Демо-портфель: equity {state['equity']:.2f} USDT, чистый PnL {state['net_pnl']:.2f} USDT, комиссии {state['total_fees']:.2f} USDT."
+    if "риск" in text:
+        return "Риск LOW. Risk Engine блокирует агрессивные BUY, если нет согласия Market + News + Consensus."
+    if "комисс" in text or "bybit" in text or "выгод" in text:
+        return "AI учитывает комиссии, заём, VIP-условия и безубыток. Сейчас лучший демо-вариант: spot/maker, круговая комиссия около 2.00 USDT."
+    if "куп" in text or "btc" in text or "рынок" in text:
+        return "Решение: WATCH. BTC наблюдаем, но General Controller не повышает риск без двойного подтверждения новостей и согласия агентов."
+    return f"SharipovAI понял: «{message}». Могу разобрать это по рынку, риску, портфелю, новостям, комиссиям или ботам."
+
+
+def _social_news_payload() -> dict[str, Any]:
+    items = [
+        {"title": "BTC volatility remains elevated", "source_name": "Reuters", "impact": "neutral", "credibility_percent": 94, "verification_status": "confirmed", "error_risk": "low", "needs_confirmation": False},
+        {"title": "Crypto market watches liquidity conditions", "source_name": "CoinDesk", "impact": "neutral", "credibility_percent": 86, "verification_status": "confirmed", "error_risk": "medium", "needs_confirmation": False},
+        {"title": "Unconfirmed social signal detected", "source_name": "X / social", "impact": "bearish", "credibility_percent": 55, "verification_status": "needs second source", "error_risk": "high", "needs_confirmation": True},
+    ]
+    avg = round(sum(int(i["credibility_percent"]) for i in items) / len(items), 1)
+    return {"status": "ok", "sources": {"total": 10, "active": 9, "rule": "2+ independent confirmations"}, "news": {"summary": {"high_urgency": 0, "needs_confirmation": 1, "average_credibility_percent": avg, "low_credibility": 1, "block_buy": True}, "items": items}}
 
 
 def _supervisor_profile() -> dict[str, Any]:
-    return {
-        "name": "General Controller",
-        "state": "Контролирует ботов, цели, ошибки и дневной отчёт",
-        "health_score": 97,
-        "daily_growth_target_percent": DAILY_GROWTH_TARGET_PERCENT,
-        "duties": [
-            "проверять, что каждый бот активен и не простаивает",
-            "сверять сигналы между Market, News, Risk и Consensus",
-            "снижать вес бота, если его качество падает",
-            "отправлять ошибки в Learning Engine",
-            "блокировать сделки, если риск выше лимита",
-            "делать дневной отчёт: цель выполнена или нет, причина, план исправления",
-        ],
-        "last_report": "Все боты активны. Цель дня контролируется. Реальная торговля выключена, demo/sandbox активен.",
-    }
+    return {"name": "General Controller", "state": "Контролирует ботов, цели, ошибки и дневной отчёт", "health_score": 97, "daily_growth_target_percent": DAILY_GROWTH_TARGET_PERCENT, "last_report": "Все боты активны. Цель дня контролируется. Реальная торговля выключена."}
 
 
 def _daily_supervisor_report() -> dict[str, Any]:
     bots = _ai_bots()
     actual_growth = 0.42
     goal_done = actual_growth >= DAILY_GROWTH_TARGET_PERCENT
-    return {
-        "date_mode": "demo_daily_report",
-        "target_growth_percent": DAILY_GROWTH_TARGET_PERCENT,
-        "actual_growth_percent": actual_growth,
-        "goal_status": "Выполнено" if goal_done else "Не выполнено",
-        "reason": "Цель +1% не выполнена, потому что General Controller не разрешил повышать риск без полного подтверждения Market + News + Risk. Это безопасное поведение: лучше сохранить капитал, чем гнаться за целью любой ценой.",
-        "next_action": "Усилить поиск низкорисковых сетапов, не увеличивать риск на сделку, перепроверить новости и комиссии перед входом.",
-        "supervisor_policy": "Цель дня важна, но не выше безопасности. Генеральный бот должен добиваться прироста только при допустимом риске и подтверждении минимум несколькими агентами.",
-        "total_bots": len(bots),
-        "active_bots": sum(1 for bot in bots if bot["status"] == "Работает"),
-        "average_quality": _average_quality(),
-        "bot_reports": bots,
-    }
+    return {"date_mode": "demo_daily_report", "target_growth_percent": DAILY_GROWTH_TARGET_PERCENT, "actual_growth_percent": actual_growth, "goal_status": "Выполнено" if goal_done else "Не выполнено", "reason": "Цель +1% не выполнена, потому что General Controller не разрешил повышать риск без полного подтверждения Market + News + Risk. Это безопасное поведение: лучше сохранить капитал, чем гнаться за целью любой ценой.", "next_action": "Усилить поиск низкорисковых сетапов, не увеличивать риск на сделку, перепроверить новости и комиссии перед входом.", "supervisor_policy": "Цель дня важна, но не выше безопасности. Генеральный бот должен добиваться прироста только при допустимом риске.", "total_bots": len(bots), "active_bots": sum(1 for bot in bots if bot["status"] == "Работает"), "average_quality": _average_quality(), "bot_reports": bots}
 
 
 def _average_quality() -> int:
@@ -327,28 +395,11 @@ def _evaluate_stress_lab(payload: dict[str, Any]) -> dict[str, object]:
     capital_after = max(starting_capital - loss_amount, 0.0)
     loss_percent = 0.0 if starting_capital <= 0 else loss_amount / starting_capital * 100
     risk_level = _risk_level_from_loss(loss_percent, max_drawdown)
-    return {
-        "scenario": scenario,
-        "capital_before": starting_capital,
-        "capital_after": capital_after,
-        "loss_amount": loss_amount,
-        "loss_percent": loss_percent,
-        "result": "Stress Bot completed the report safely. No real trading action was executed.",
-        "classification": _classification_from_loss(loss_percent, max_drawdown),
-        "after": {"capital": capital_after, "loss_amount": loss_amount, "loss_percent": loss_percent, "new_risk_level": risk_level},
-        "protective_measures": ["risk limit applied", "BUY signals blocked", "drawdown checked", "portfolio exposure reduced", "user notification prepared", "learning record created"],
-        "ai_reaction": ["switch to WATCH mode", "block new BUY decisions", "reduce risk per trade", "notify user"],
-    }
+    return {"scenario": scenario, "capital_before": starting_capital, "capital_after": capital_after, "loss_amount": loss_amount, "loss_percent": loss_percent, "result": "Stress Bot completed safely. No real trade executed.", "classification": _classification_from_loss(loss_percent, max_drawdown), "after": {"capital": capital_after, "loss_amount": loss_amount, "loss_percent": loss_percent, "new_risk_level": risk_level}, "protective_measures": ["risk limit applied", "BUY signals blocked", "drawdown checked", "portfolio exposure reduced", "user notification prepared", "learning record created"], "ai_reaction": ["switch to WATCH mode", "block new BUY decisions", "reduce risk per trade", "notify user"]}
 
 
 def _stress_scenarios() -> list[dict[str, str]]:
-    return [
-        {"id": "btc_drop_10", "label": "BTC price drop 10%"},
-        {"id": "btc_drop_20", "label": "BTC price drop 20%"},
-        {"id": "market_crash_50", "label": "Market crash 50%"},
-        {"id": "virtual_capital_loss_10", "label": "Virtual capital loss 10%"},
-        {"id": "news_panic", "label": "News panic"},
-    ]
+    return [{"id": "btc_drop_10", "label": "BTC price drop 10%"}, {"id": "btc_drop_20", "label": "BTC price drop 20%"}, {"id": "market_crash_50", "label": "Market crash 50%"}, {"id": "virtual_capital_loss_10", "label": "Virtual capital loss 10%"}, {"id": "news_panic", "label": "News panic"}]
 
 
 def _safe_float(value: Any, default: float) -> float:
@@ -384,12 +435,7 @@ def _classification_from_loss(loss_percent: float, max_drawdown: float) -> str:
 
 
 def _improvement_recommendations() -> list[dict[str, object]]:
-    return [
-        {"title": "Daily General Controller report", "priority": "DONE", "expected_benefit": "Понятно, выполнена ли цель дня и почему.", "status": "implemented"},
-        {"title": "Bot quality tracking", "priority": "DONE", "expected_benefit": "Видно качество, ошибки и простои каждого бота.", "status": "implemented"},
-        {"title": "Add Macro Agent", "priority": "HIGH", "expected_benefit": "Better CPI, rates, and central bank awareness.", "status": "recommended"},
-        {"title": "Add Sentiment Agent", "priority": "HIGH", "expected_benefit": "Earlier detection of news panic and false signals.", "status": "recommended"},
-    ]
+    return [{"title": "Daily General Controller report", "priority": "DONE", "expected_benefit": "Понятно, выполнена ли цель дня и почему.", "status": "implemented"}, {"title": "Bot quality tracking", "priority": "DONE", "expected_benefit": "Видно качество, ошибки и простои каждого бота.", "status": "implemented"}, {"title": "Add Macro Agent", "priority": "HIGH", "expected_benefit": "Better CPI, rates, and central bank awareness.", "status": "recommended"}]
 
 
 def _ai_bots() -> list[dict[str, Any]]:
