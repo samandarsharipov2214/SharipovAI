@@ -7,6 +7,16 @@ configured in the environment.
 
 from __future__ import annotations
 
+from .bybit_costs import (
+    ai_cost_report,
+    best_trade_venue,
+    borrow_table,
+    estimate_borrow_cost,
+    estimate_trade_cost,
+    fee_table,
+    select_fee_rate,
+    vip_progress,
+)
 from .models import ExchangeConfig, ExchangeOrderPreview, ExchangeStatus
 from .safe_client import SafeExchangeConnector
 
@@ -15,4 +25,12 @@ __all__ = (
     "ExchangeOrderPreview",
     "ExchangeStatus",
     "SafeExchangeConnector",
+    "ai_cost_report",
+    "best_trade_venue",
+    "borrow_table",
+    "estimate_borrow_cost",
+    "estimate_trade_cost",
+    "fee_table",
+    "select_fee_rate",
+    "vip_progress",
 )
