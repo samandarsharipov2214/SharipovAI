@@ -11,6 +11,7 @@ stable; feature APIs are installed by their own modules.
 from __future__ import annotations
 
 from collections.abc import Callable
+from html import escape
 from typing import Any
 
 from fastapi import FastAPI
@@ -76,9 +77,32 @@ def _install_public_entrypoints(app_instance: FastAPI) -> None:
 
     @app_instance.get("/", response_class=HTMLResponse)
     def root_page() -> HTMLResponse:
+        headlines = _home_headlines()
         return HTMLResponse(
-            """<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SharipovAI</title><style>body{margin:0;background:#070b12;color:#eef4ff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}main{padding:22px;max-width:760px;margin:auto}.card{background:#111827;border:1px solid #253047;border-radius:18px;padding:18px;margin:14px 0}a{color:#60a5fa;font-weight:700}.ok{display:inline-block;background:#10b981;color:#04140d;border-radius:999px;padding:7px 12px;font-weight:900}</style></head><body><main><section class="card"><span class="ok">LIVE</span><h1>SharipovAI backend работает</h1><p>Открой проверку ИИ:</p><p><a href="/check-ai">Проверить ИИ</a></p><p><a href="/api/check-ai">JSON проверка</a></p></section></main></body></html>"""
+            f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SharipovAI</title><style>body{{margin:0;background:#070b12;color:#eef4ff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}}main{{padding:18px;max-width:980px;margin:auto}}.card{{background:#111827;border:1px solid #253047;border-radius:18px;padding:18px;margin:14px 0;box-shadow:0 20px 60px rgba(0,0,0,.25)}}.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px}}.news{{background:#0b1220;border:1px solid #1f2a3d;border-radius:16px;padding:13px}}.news b{{display:block;margin-bottom:7px}}small{{color:#8ea2c4;display:block;line-height:1.4}}a{{color:#60a5fa;font-weight:800}}.ok{{display:inline-block;background:#10b981;color:#04140d;border-radius:999px;padding:7px 12px;font-weight:900}}.nav{{display:flex;gap:12px;flex-wrap:wrap;margin-top:12px}}</style></head><body><main><section class="card"><span class="ok">LIVE</span><h1>SharipovAI живой</h1><p>Главный News Supervisor и подсистемные AI подключены. Ниже — заголовки новостей, чтобы сразу видеть, что ИИ работает.</p><div class="nav"><a href="/news-live">Раздел Новости</a><a href="/check-ai">Проверить ИИ</a><a href="/api/news-live">JSON новости</a></div></section><section class="card"><h2>Самые обсуждаемые новости</h2><div class="grid">{headlines}</div></section><section class="card"><h2>Быстрая проверка</h2><p><a href="/api/social-news/agents">Подсистемные News AI</a></p><p><a href="/api/social-news/supervisor">Главный News Supervisor</a></p></section></main></body></html>"""
         )
+
+
+def _home_headlines() -> str:
+    """Return compact news cards for the home page."""
+
+    try:
+        from news_monitor.analyzer import analyzed_news_payload
+
+        news = analyzed_news_payload()
+        items = list(news.get("items", []))[:6]
+    except Exception as exc:  # pragma: no cover - safe public fallback
+        return f"<article class='news'><b>Новости временно недоступны</b><small>{escape(type(exc).__name__)}</small></article>"
+    if not items:
+        return "<article class='news'><b>Новостей пока нет</b><small>Жду обновления источников</small></article>"
+    cards = []
+    for item in items:
+        title = escape(str(item.get("title", "Новость")))
+        source = escape(str(item.get("source_name", "Источник")))
+        credibility = escape(str(item.get("credibility_percent", item.get("trust_score", 0))))
+        action = escape(str(item.get("ai_action", "WATCH")))
+        cards.append(f"<article class='news'><b>{title}</b><small>{source}</small><small>Достоверность: {credibility}% · AI: {action}</small></article>")
+    return "".join(cards)
 
 
 # Required for Render start command: uvicorn dashboard.app:app
