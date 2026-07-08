@@ -7,6 +7,7 @@
   <link rel="icon" href="/favicon.ico" type="image/svg+xml">
   <link rel="stylesheet" href="/static/style.css?v=20260708-11">
   <link rel="stylesheet" href="/static/mobile-fix.css?v=20260708-21">
+  <style>.mini-tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:14px 0 18px}.mini-tabs button{border:1px solid #1e90ff55;background:#06182a;color:#bfe7ff;border-radius:16px;padding:11px 8px;font-weight:900;font-size:14px}.mini-tabs button.active{background:linear-gradient(135deg,#1188ff,#19d3ff);color:#fff}.bot-grid{display:grid;gap:10px}.bot-row{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;border:1px solid #1e90ff33;background:#06182a;border-radius:16px;padding:12px}.bot-row b{display:block;color:#fff}.bot-row small{color:#9fb2c8}.bot-state{font-weight:900;color:#34d399}.bot-state.warn{color:#fbbf24}.bot-state.off{color:#f87171}.mini-section{scroll-margin-top:18px}</style>
 </head>
 <body>
   <aside class="os-sidebar">
@@ -24,12 +25,21 @@
       <header class="mini-top">
         <div class="mini-brand">
           <div class="mini-logo">SA</div>
-          <div class="mini-title"><b>SharipovAI</b><small>Онлайн · Demo mode</small></div>
-          <a class="mini-pill" href="/settings?lang={{ lang }}">Настройки</a>
+          <div class="mini-title"><b>SharipovAI</b><small>Онлайн · Демо-режим</small></div>
+          <button class="mini-pill" type="button" data-mini-tab="risk-section">Настройки</button>
         </div>
       </header>
 
-      <article class="mini-card">
+      <nav class="mini-tabs" aria-label="Разделы Mini App">
+        <button class="active" type="button" data-mini-tab="overview-section">Обзор</button>
+        <button type="button" data-mini-tab="chat-section">AI чат</button>
+        <button type="button" data-mini-tab="bots-section">AI-боты</button>
+        <button type="button" data-mini-tab="risk-section">Риск</button>
+        <button type="button" data-mini-tab="trades-section">Сделки</button>
+        <button type="button" data-mini-tab="exchange-section">Биржа</button>
+      </nav>
+
+      <article class="mini-card mini-section" id="overview-section">
         <h2>Обзор</h2>
         <small>Демо-баланс</small>
         <div class="mini-balance" id="portfolio-equity" data-demo-equity>{{ "%.2f"|format(view.paper_equity) }} USDT</div>
@@ -39,10 +49,10 @@
         </div>
       </article>
 
-      <article class="mini-card">
+      <article class="mini-card mini-section" id="chat-section">
         <h2>AI чат</h2>
         <div class="mini-chat-log" id="ai-chat-log" aria-live="polite">
-          <div class="mini-message assistant-message"><div class="mini-avatar">SA</div><div class="mini-bubble"><b>SharipovAI</b><p>Я онлайн. Могу купить/продать в demo, поменять demo balance, объяснить портфель, рынок и комиссии.</p></div></div>
+          <div class="mini-message assistant-message"><div class="mini-avatar">SA</div><div class="mini-bubble"><b>SharipovAI</b><p>Я онлайн. Могу купить/продать в демо, поменять демо-баланс, объяснить портфель, рынок и комиссии.</p></div></div>
         </div>
         <form id="ai-command-form" class="mini-form">
           <textarea id="ai-command-input" placeholder="Например: купи BTC или поставь баланс 20000..." autocomplete="off"></textarea>
@@ -56,7 +66,17 @@
         </div>
       </article>
 
-      <article class="mini-card risk-panel">
+      <article class="mini-card mini-section" id="bots-section">
+        <h2>Мониторинг AI-ботов</h2>
+        <div class="mini-grid">
+          <div class="mini-stat"><small>Всего</small><b id="bots-total">0</b></div>
+          <div class="mini-stat"><small>Активны</small><b id="bots-active">0</b></div>
+          <div class="mini-stat"><small>Внимание</small><b id="bots-warnings">0</b></div>
+        </div>
+        <div class="bot-grid" id="bot-list"><div class="bot-row"><div><b>Загрузка AI-ботов...</b><small>Проверяю состояние модулей</small></div><span class="bot-state">...</span></div></div>
+      </article>
+
+      <article class="mini-card mini-section risk-panel" id="risk-section">
         <h2>Настройки риска</h2>
         <label class="risk-row">Риск на сделку <output>2%</output><input data-range-output type="range" min="0" max="10" value="2"></label>
         <label class="risk-row">Макс. просадка <output>10%</output><input data-range-output type="range" min="0" max="50" value="10"></label>
@@ -65,9 +85,18 @@
         <p class="info-box" id="save-status">Изменения сохраняются локально для демо-режима.</p>
       </article>
 
-      <article class="mini-card">
+      <article class="mini-card mini-section" id="trades-section">
         <h2>Сделки</h2>
         <table class="mini-table"><tbody><tr><td>Сделок пока нет</td><td>0.00</td></tr></tbody></table>
+      </article>
+
+      <article class="mini-card mini-section" id="exchange-section">
+        <h2>Биржа</h2>
+        <div class="mini-grid">
+          <div class="mini-stat"><small>Режим</small><b>Sandbox</b></div>
+          <div class="mini-stat"><small>Live</small><b>Выкл.</b></div>
+        </div>
+        <p class="info-box">Реальные ордера заблокированы. Комиссии учитываются в демо-расчёте.</p>
       </article>
       <div class="bottom-safe"></div>
     </section>
@@ -79,7 +108,7 @@
       <div class="top-stat"><small>Цикл</small><b>14</b></div>
       <div class="top-stat"><small>Модули онлайн</small><b>11 / 13</b></div>
       <div class="top-stat"><small>Среднее время цикла</small><b>412 ms</b></div>
-      <div class="top-actions"><a class="icon-btn" href="#">🔔</a><a class="icon-btn" href="/settings?lang={{ lang }}">⚙</a><div class="lang-links"><a class="active" href="{{ request.url.path }}?lang=ru&v=12">RU</a><a href="{{ request.url.path }}?lang=en&v=12">EN</a><a href="{{ request.url.path }}?lang=uz&v=12">UZ</a></div></div>
+      <div class="top-actions"><a class="icon-btn" href="#">🔔</a><a class="icon-btn" href="/settings?lang={{ lang }}">⚙</a><div class="lang-links"><a class="active" href="{{ request.url.path }}?lang=ru&v=13">RU</a><a href="{{ request.url.path }}?lang=en&v=13">EN</a><a href="{{ request.url.path }}?lang=uz&v=13">UZ</a></div></div>
     </header>
 
     <section class="welcome-hero"><div><p class="eyebrow">SharipovAI OS</p><h1>Самандар, добро пожаловать.</h1><p>Ваш интеллектуальный центр анализа, демо-торговли, новостей и контроля риска.</p></div><div class="hero-logo"><span>SA</span><i></i><i></i><i></i><i></i></div></section>
@@ -89,10 +118,10 @@
       <article class="os-panel approved-chat"><h2>AI ЧАТ</h2><p class="info-box">Откройте с телефона — интерфейс будет компактным Mini App.</p></article>
       <article class="os-panel risk-panel"><h2>Настройки риска</h2><label>Риск на сделку <output>2%</output><input data-range-output type="range" min="0" max="10" value="2"></label><button class="save-button" type="button">✓ Сохранить изменения</button></article>
     </section>
-    <section class="legacy-test-hooks"><h2 id="hero-decision">{{ display.decision }}</h2><button id="run-analysis">{{ t.run_analysis }}</button><span id="hero-confidence">{{ "%.1f"|format(view.confidence) }}%</span><span id="hero-consensus">{{ display.consensus }} {{ "%.1f"|format(view.consensus_agreement) }}%</span><span id="decision-reason">{{ display.reason }}</span><span>{{ display.report }}</span><span>{{ display.risk }}</span><span>{{ "%.2f"|format(view.paper_cash) }} USDT</span><span>Команда для ИИ</span><span>AI DECISION</span><span>STRESS LAB</span><span>Стресс-тест</span><span>AI Improvement</span><span>Улучшение AI</span><span>Лимиты</span><span>Раздел активен</span><span>AI Control Center</span><span data-stress-scenario="btc_drop_20"></span><span id="stress-scenario"></span><span id="stress-before"></span><span id="stress-after"></span><ul id="stress-measures"></ul></section>
+    <section class="legacy-test-hooks"><h2 id="hero-decision">{{ display.decision }}</h2><button id="run-analysis">{{ t.run_analysis }}</button><span id="hero-confidence">{{ "%.1f"|format(view.confidence) }}%</span><span id="hero-consensus">{{ display.consensus }} {{ "%.1f"|format(view.consensus_agreement) }}%</span><span id="decision-reason">{{ display.reason }}</span><span>{{ display.report }}</span><span>{{ display.risk }}</span><span>{{ "%.2f"|format(view.paper_cash) }} USDT</span><span>Команда для ИИ</span><span>AI DECISION</span><span>STRESS LAB</span><span>Стресс-тест</span><span>AI Improvement</span><span>Улучшение AI</span><span>Лимиты</span><span>Раздел активен</span><span>AI Control Center</span><span>Мониторинг AI-ботов</span><span data-stress-scenario="btc_drop_20"></span><span id="stress-scenario"></span><span id="stress-before"></span><span id="stress-after"></span><ul id="stress-measures"></ul></section>
   </main>
 
   <script>(()=>{const $=s=>document.querySelector(s),$$=s=>Array.from(document.querySelectorAll(s));const time=()=>new Date().toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});const date=()=>new Date().toLocaleDateString('ru-RU',{day:'2-digit',month:'long',year:'numeric',weekday:'long'});function tick(){$$('[data-clock],#top-clock').forEach(e=>e.textContent=time());const d=$('#top-date');if(d)d.textContent=date()}tick();setInterval(tick,1000);$$('[data-range-output]').forEach(input=>{const out=input.parentElement.querySelector('output');const upd=()=>out&&(out.textContent=input.value+'%');input.addEventListener('input',upd);upd()});$('#save-settings')?.addEventListener('click',()=>{const values=$$('[data-range-output]').map(i=>i.value);localStorage.setItem('riskSettings',JSON.stringify(values));const s=$('#save-status');if(s)s.textContent='✓ Изменения сохранены в демо-настройках.'})})();</script>
-  <script src="/static/mini-app-live.js?v=20260708-23" defer></script>
+  <script src="/static/mini-app-live.js?v=20260708-24" defer></script>
 </body>
 </html>
