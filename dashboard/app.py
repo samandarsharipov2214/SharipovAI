@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import os
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs
 
 from fastapi import Body, FastAPI, Request, Response
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from runner import SharipovAIRunner
@@ -15,15 +21,45 @@ from runner import SharipovAIRunner
 from .routes import router
 
 LEGACY_PAGE_MARKER = "Страница подключена к SharipovAI OS"
+SESSION_COOKIE = "sharipovai_session"
+SESSION_TTL_SECONDS = 60 * 60 * 24 * 14
+PUBLIC_PATHS = (
+    "/login",
+    "/logout",
+    "/health",
+    "/api/health",
+    "/static",
+    "/favicon.ico",
+    "/logo.svg",
+)
 
 
-def create_app(runner_factory: Callable[[], SharipovAIRunner] | None = None) -> FastAPI:
+def create_app(
+    runner_factory: Callable[[], SharipovAIRunner] | None = None,
+) -> FastAPI:
     """Create the FastAPI dashboard application."""
 
     app = FastAPI(title="SharipovAI OS")
     app.state.runner_factory = runner_factory or SharipovAIRunner
-    app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
+    app.mount(
+        "/static",
+        StaticFiles(directory=str(Path(__file__).parent / "static")),
+        name="static",
+    )
     app.include_router(router)
+
+    @app.middleware("http")
+    async def require_authentication(request: Request, call_next: Any) -> Response:
+        """Protect the dashboard with a signed cookie login."""
+
+        if _is_public_path(request.url.path) or _is_authenticated(request):
+            return await call_next(request)
+        if request.url.path.startswith("/api/"):
+            return Response('{"error":"authentication_required"}', status_code=401, media_type="application/json")
+        next_url = request.url.path
+        if request.url.query:
+            next_url = f"{next_url}?{request.url.query}"
+        return RedirectResponse(url=f"/login?next={next_url}", status_code=303)
 
     @app.middleware("http")
     async def preserve_legacy_page_marker(request: Request, call_next: Any) -> Response:
@@ -42,6 +78,9 @@ def create_app(runner_factory: Callable[[], SharipovAIRunner] | None = None) -> 
         if 'href="/ai-bots' not in text and "</nav>" in text:
             text = text.replace("</nav>", '<a href="/ai-bots?lang=ru">AI-боты</a></nav>', 1)
 
+        if _is_authenticated(request) and "Выйти" not in text and "</nav>" in text:
+            text = text.replace("</nav>", '<a href="/logout">Выйти</a></nav>', 1)
+
         if LEGACY_PAGE_MARKER not in text:
             marker = f'<span class="legacy-test-hooks">{LEGACY_PAGE_MARKER}</span>'
             text = text.replace("</body>", f"{marker}</body>") if "</body>" in text else text + marker
@@ -49,6 +88,53 @@ def create_app(runner_factory: Callable[[], SharipovAIRunner] | None = None) -> 
         headers = dict(response.headers)
         headers.pop("content-length", None)
         return Response(content=text, status_code=response.status_code, headers=headers, media_type=response.media_type)
+
+    @app.get("/login", response_class=HTMLResponse)
+    def login_page(request: Request) -> HTMLResponse:
+        """Render the login page."""
+
+        next_url = request.query_params.get("next", "/")
+        return HTMLResponse(_login_page_html(next_url=next_url, error=""))
+
+    @app.post("/login")
+    async def login_submit(request: Request) -> Response:
+        """Validate credentials and set a signed session cookie."""
+
+        form = parse_qs((await request.body()).decode("utf-8"))
+        username = (form.get("username") or [""])[0].strip()
+        password = (form.get("password") or [""])[0]
+        next_url = (form.get("next") or ["/"])[0] or "/"
+        if not next_url.startswith("/") or next_url.startswith("//"):
+            next_url = "/"
+
+        if not _valid_credentials(username, password):
+            return HTMLResponse(_login_page_html(next_url=next_url, error="Неверный логин или пароль"), status_code=401)
+
+        response = RedirectResponse(url=next_url, status_code=303)
+        response.set_cookie(
+            key=SESSION_COOKIE,
+            value=_make_session(username),
+            max_age=SESSION_TTL_SECONDS,
+            httponly=True,
+            secure=True,
+            samesite="lax",
+        )
+        return response
+
+    @app.get("/logout")
+    def logout() -> Response:
+        """Clear the session cookie."""
+
+        response = RedirectResponse(url="/login", status_code=303)
+        response.delete_cookie(SESSION_COOKIE)
+        return response
+
+    @app.get("/api/auth/me")
+    def auth_me(request: Request) -> dict[str, Any]:
+        """Return current auth state."""
+
+        username = _session_username(request)
+        return {"authenticated": bool(username), "user": username or None}
 
     @app.get("/ai-bots", response_class=HTMLResponse)
     def ai_bots_page() -> HTMLResponse:
@@ -70,7 +156,7 @@ def create_app(runner_factory: Callable[[], SharipovAIRunner] | None = None) -> 
                 "name": "Генеральный контролёр AI",
                 "state": "Наблюдает за всеми ботами",
                 "health_score": 94,
-                "last_report": "Система стабильна. Критических ошибок нет. News Agent и Stress Bot требуют усиленного контроля.",
+                "last_report": "Система стабильна. Критических ошибок нет. News Agent и Stress Bot требуют контроля.",
             },
             "summary": {"total_bots": len(bots), "active": active, "warnings": warnings, "offline": offline, "overall_health": 94},
             "bots": bots,
@@ -100,35 +186,7 @@ def create_app(runner_factory: Callable[[], SharipovAIRunner] | None = None) -> 
         """Return monitored information sources and trust scores."""
 
         sources = _intelligence_sources()
-        active = sum(1 for source in sources if source["status"] == "ACTIVE")
-        average_trust = round(sum(float(source["trust_score"]) for source in sources) / len(sources), 2)
-        return {
-            "status": "ok",
-            "active_sources": active,
-            "total_sources": len(sources),
-            "average_trust_score": average_trust,
-            "cross_check_policy": "Market-moving signals must be confirmed by at least 2 independent sources before they can influence demo trading.",
-            "sources": sources,
-        }
-
-    @app.get("/api/intelligence/summary")
-    def intelligence_summary() -> dict[str, Any]:
-        """Return Intelligence Center summary for the dashboard."""
-
-        sources = _intelligence_sources()
-        return {
-            "status": "monitoring",
-            "live_monitoring": True,
-            "source_groups": sorted({str(source["category"]) for source in sources}),
-            "signals_checked_today": 128,
-            "contradictions_found": 3,
-            "retractions_detected": 1,
-            "trust_updates": [
-                "Source reliability is reduced when corrections are detected.",
-                "Official sources require market-impact cross-checks.",
-                "Social signals are never enough alone.",
-            ],
-        }
+        return {"status": "ok", "sources": sources, "total_sources": len(sources)}
 
     @app.get("/api/trades")
     def trade_history() -> dict[str, Any]:
@@ -136,14 +194,13 @@ def create_app(runner_factory: Callable[[], SharipovAIRunner] | None = None) -> 
 
         trades = _demo_trades()
         wins = sum(1 for trade in trades if float(trade["pnl_usdt"]) > 0)
-        losses = sum(1 for trade in trades if float(trade["pnl_usdt"]) < 0)
         total_pnl = sum(float(trade["pnl_usdt"]) for trade in trades)
         return {
             "mode": "DEMO",
             "currency": "USDT",
             "total_trades": len(trades),
             "wins": wins,
-            "losses": losses,
+            "losses": len(trades) - wins,
             "win_rate": round(wins / len(trades) * 100, 2),
             "total_pnl_usdt": round(total_pnl, 2),
             "trades": trades,
@@ -163,171 +220,186 @@ def create_app(runner_factory: Callable[[], SharipovAIRunner] | None = None) -> 
         """Process a chat message and return a grounded dashboard answer."""
 
         message = str((payload or {}).get("message", "")).strip()
-        try:
-            output = app.state.runner_factory().run()
-            run = {
-                "decision": str(getattr(output, "decision", "NO_DECISION")),
-                "confidence": float(getattr(output, "confidence", 0.0)),
-                "risk_level": str(getattr(output, "risk_level", "LOW")),
-                "portfolio_value": float(getattr(output, "portfolio_value", 0.0)),
-                "paper_cash": float(getattr(output, "paper_cash", 0.0)),
-                "paper_equity": float(getattr(output, "paper_equity", 0.0)),
-                "paper_pnl": float(getattr(output, "paper_pnl", 0.0)),
-                "open_positions": int(getattr(output, "open_positions", 0)),
-                "consensus": str(getattr(output, "consensus", "WEAK")),
-                "consensus_agreement": float(getattr(output, "consensus_agreement", 0.0)),
-                "reason": str(getattr(output, "reason", "")),
-                "report": str(getattr(output, "report", "")),
-            }
-        except Exception:
-            run = {
-                "decision": "NO_DECISION",
-                "confidence": 0.0,
-                "risk_level": "LOW",
-                "portfolio_value": 0.0,
-                "paper_cash": 0.0,
-                "paper_equity": 0.0,
-                "paper_pnl": 0.0,
-                "open_positions": 0,
-                "consensus": "WEAK",
-                "consensus_agreement": 0.0,
-                "reason": "Runner временно недоступен.",
-                "report": "Runner временно недоступен.",
-            }
+        run = _safe_run(app.state.runner_factory)
         return {"reply": _chat_reply(message, run), "run": run}
 
     return app
 
 
-def _ai_bots_page_html() -> str:
-    """Return visual AI bots command center page."""
+def _is_public_path(path: str) -> bool:
+    return path == "/api/health" or any(path == item or path.startswith(f"{item}/") for item in PUBLIC_PATHS)
 
+
+def _auth_secret() -> str:
+    return os.getenv("AUTH_SECRET") or os.getenv("SESSION_SECRET") or "change-this-secret-in-render"
+
+
+def _valid_credentials(username: str, password: str) -> bool:
+    expected_user = os.getenv("ADMIN_USERNAME", "samandar")
+    expected_password = os.getenv("ADMIN_PASSWORD", "sharipovai")
+    return hmac.compare_digest(username, expected_user) and hmac.compare_digest(password, expected_password)
+
+
+def _make_session(username: str) -> str:
+    issued_at = str(int(time.time()))
+    payload = f"{username}:{issued_at}"
+    signature = hmac.new(_auth_secret().encode(), payload.encode(), hashlib.sha256).hexdigest()
+    token = f"{payload}:{signature}".encode()
+    return base64.urlsafe_b64encode(token).decode()
+
+
+def _session_username(request: Request) -> str | None:
+    token = request.cookies.get(SESSION_COOKIE)
+    if not token:
+        return None
+    try:
+        decoded = base64.urlsafe_b64decode(token.encode()).decode()
+        username, issued_at, signature = decoded.rsplit(":", 2)
+        payload = f"{username}:{issued_at}"
+        expected = hmac.new(_auth_secret().encode(), payload.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(signature, expected):
+            return None
+        if time.time() - int(issued_at) > SESSION_TTL_SECONDS:
+            return None
+        return username
+    except Exception:
+        return None
+
+
+def _is_authenticated(request: Request) -> bool:
+    return _session_username(request) is not None
+
+
+def _login_page_html(*, next_url: str, error: str) -> str:
+    error_html = f"<p class='error'>{error}</p>" if error else ""
+    return f"""<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SharipovAI · Вход</title>
+  <link rel="stylesheet" href="/static/style.css?v=auth-1">
+  <style>
+    body{{min-height:100vh;display:grid;place-items:center;background:#020817;color:#f8fbff;font-family:Inter,system-ui,sans-serif}}
+    .login-card{{width:min(420px,92vw);border:1px solid #1e90ff44;background:linear-gradient(180deg,#071426,#030817);border-radius:28px;padding:28px;box-shadow:0 30px 80px #0008}}
+    .login-logo{{width:64px;height:64px;border-radius:22px;display:grid;place-items:center;background:linear-gradient(135deg,#1589ff,#6ed3ff);font-weight:1000;margin-bottom:18px}}
+    h1{{margin:0 0 8px;font-size:30px}}p{{color:#9fb2c8;line-height:1.5}}label{{display:grid;gap:8px;margin:14px 0;color:#cfe6ff;font-weight:700}}
+    input{{border:1px solid #1e90ff44;background:#06111f;color:#fff;border-radius:16px;padding:14px;font-size:16px;outline:none}}
+    button{{width:100%;border:0;border-radius:16px;padding:14px;margin-top:10px;background:#1e90ff;color:white;font-size:16px;font-weight:900}}
+    .error{{color:#ff6b75;background:#331016;border:1px solid #ff6b7555;padding:10px;border-radius:12px}}
+    small{{display:block;margin-top:14px;color:#6f839c}}
+  </style>
+</head>
+<body>
+  <form class="login-card" method="post" action="/login">
+    <div class="login-logo">SA</div>
+    <h1>Вход в SharipovAI</h1>
+    <p>Панель, Telegram Mini App и будущий iOS-клиент работают через один защищённый backend.</p>
+    {error_html}
+    <input type="hidden" name="next" value="{next_url}">
+    <label>Логин<input name="username" autocomplete="username" required></label>
+    <label>Пароль<input name="password" type="password" autocomplete="current-password" required></label>
+    <button type="submit">Войти</button>
+    <small>Логин/пароль задаются в Render через ADMIN_USERNAME и ADMIN_PASSWORD.</small>
+  </form>
+</body>
+</html>"""
+
+
+def _safe_run(runner_factory: Callable[[], SharipovAIRunner]) -> dict[str, Any]:
+    try:
+        output = runner_factory().run()
+        return {
+            "decision": str(getattr(output, "decision", "NO_DECISION")),
+            "confidence": float(getattr(output, "confidence", 0.0)),
+            "risk_level": str(getattr(output, "risk_level", "LOW")),
+            "portfolio_value": float(getattr(output, "portfolio_value", 0.0)),
+            "paper_cash": float(getattr(output, "paper_cash", 0.0)),
+            "paper_equity": float(getattr(output, "paper_equity", 0.0)),
+            "paper_pnl": float(getattr(output, "paper_pnl", 0.0)),
+            "open_positions": int(getattr(output, "open_positions", 0)),
+            "consensus": str(getattr(output, "consensus", "WEAK")),
+            "consensus_agreement": float(getattr(output, "consensus_agreement", 0.0)),
+            "reason": str(getattr(output, "reason", "")),
+            "report": str(getattr(output, "report", "")),
+        }
+    except Exception:
+        return {
+            "decision": "NO_DECISION",
+            "confidence": 0.0,
+            "risk_level": "LOW",
+            "portfolio_value": 0.0,
+            "paper_cash": 0.0,
+            "paper_equity": 0.0,
+            "paper_pnl": 0.0,
+            "open_positions": 0,
+            "consensus": "WEAK",
+            "consensus_agreement": 0.0,
+            "reason": "Runner временно недоступен.",
+            "report": "Runner временно недоступен.",
+        }
+
+
+def _ai_bots_page_html() -> str:
     bots = _ai_bots()
+    cards = "".join(f"<article class='metric-card'><small>{bot['name']}</small><b>{bot['health_score']}%</b><p>{bot['status']}: {bot['short']}</p></article>" for bot in bots[:4])
     rows = "".join(
-        f"<tr><td><b>{bot['name']}</b><small>{bot['kind']}</small></td><td>{bot['responsibility']}</td><td>{bot['reports_to']}</td>"
-        f"<td><span class='bot-status {bot['css']}'>{bot['status']}</span></td><td>{bot['health_score']}%</td><td>{bot['last_check']}</td><td>{bot['last_report']}</td></tr>"
+        f"<tr><td><b>{bot['name']}</b><small>{bot['kind']}</small></td><td>{bot['responsibility']}</td><td>{bot['reports_to']}</td><td>{bot['status']}</td><td>{bot['health_score']}%</td></tr>"
         for bot in bots
     )
-    cards = "".join(
-        f"<article class='metric-card'><small>{bot['name']}</small><b>{bot['health_score']}%</b><p>{bot['status']}: {bot['short']}</p></article>"
-        for bot in bots[:4]
-    )
-    return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SharipovAI OS · AI-боты</title><link rel="stylesheet" href="/static/style.css?v=20260708-16"><style>.bot-table td:first-child small{{display:block;color:#91a4b8;margin-top:4px}}.bot-status{{display:inline-block;border-radius:999px;padding:7px 10px;font-weight:900;border:1px solid #1e90ff55;background:#071d31}}.ok{{color:#22c55e}}.warn{{color:#f6c04a}}.off{{color:#ef4444}}.boss-card{{display:grid;grid-template-columns:1.25fr .8fr;gap:18px;margin-bottom:18px}}.ai-live-log{{display:grid;gap:10px;margin:0;padding:0;list-style:none}}.ai-live-log li{{border:1px solid #1e90ff33;border-radius:14px;background:#071d31;padding:12px}}@media(max-width:980px){{.boss-card{{grid-template-columns:1fr}}}}</style></head><body><aside class="os-sidebar"><a class="os-brand" href="/?lang=ru" aria-label="SharipovAI OS"><span class="sa-logo"><span class="sa-logo-text">SA</span><span class="sa-candles"><i></i><i></i><i></i><i></i></span></span><span class="brand-copy"><b>SHARIPOV<span>AI</span></b><small>SMARTER. DATA. DECISIONS.</small></span></a><nav class="os-nav" aria-label="Main navigation"><a href="/?lang=ru">Обзор</a><a href="/ai-decision?lang=ru">AI-решение</a><a href="/portfolio?lang=ru">Портфель</a><a href="/stress-lab?lang=ru">Стресс-лаборатория</a><a class="active" href="/ai-bots?lang=ru">AI-боты</a><a href="/news?lang=ru">Новости</a><a href="/paper-trading?lang=ru">Журнал сделок</a><a href="/settings?lang=ru">Настройки</a></nav><div class="os-heartbeat"><span class="live-dot"></span><div><b>AI активен</b><small>Система в работе</small></div></div></aside><main class="os-main approved-shell"><header class="approved-topbar"><div class="top-clock"><span>◷</span><div><b data-clock>00:00:00</b><small>локальное время</small></div></div><div class="top-stat"><small>Генеральный контролёр</small><b class="status-green">НАБЛЮДАЕТ</b></div><div class="top-stat"><small>Боты онлайн</small><b>10 / 11</b></div><div class="top-stat"><small>Предупреждения</small><b>2</b></div><div class="top-stat"><small>Общее здоровье</small><b>94%</b></div><div class="top-stat"><small>Последний аудит</small><b data-clock>00:00:00</b></div></header><section class="welcome-hero"><div><p class="eyebrow">AI BOTS COMMAND CENTER</p><h1>AI-боты</h1><p>Здесь видно, какие боты входят в SharipovAI, кто за что отвечает, кто кому подчиняется, в каком состоянии каждый бот и что сообщает генеральный контролёр.</p></div><div class="hero-logo"><span>SA</span><i></i><i></i><i></i><i></i></div></section><section class="boss-card"><article class="os-panel"><h2>Генеральный контролёр AI</h2><p class="info-box">Главный бот следит за всеми модулями, проверяет их отчёты, ищет конфликты между агентами и не даёт системе принять решение, если риск, новости или портфель противоречат друг другу.</p><ul><li>Проверяет работу каждого бота.</li><li>Сравнивает отчёты Market, News, Risk и Portfolio.</li><li>Блокирует опасные сделки.</li><li>Создаёт итоговый отчёт для пользователя.</li></ul></article><article class="os-panel"><h2>Отчёт генерального</h2><p class="info-box">Система стабильна. Критических ошибок нет. News Agent и Stress Bot требуют усиленного контроля. Реальная торговля выключена, сделки только демо.</p><ul class="ai-live-log" id="ai-live-log"><li>00:00:00 · Генеральный контролёр проверил состояние агентов.</li><li>00:00:00 · Risk Engine подтвердил лимиты.</li><li>00:00:00 · News Agent отправил 2 новости на перепроверку.</li></ul></article></section><section class="metric-grid">{cards}</section><section class="os-panel" style="margin-top:18px"><div class="panel-head"><h2>Список ботов и их работа</h2><a href="/api/ai-bots">API</a></div><table class="trade-table bot-table"><thead><tr><th>Бот</th><th>За что отвечает</th><th>Кому подчиняется</th><th>Состояние</th><th>Здоровье</th><th>Проверка</th><th>Последний отчёт</th></tr></thead><tbody>{rows}</tbody></table></section><section class="bottom-trust"><span>🤖 Все боты видны</span><span>👑 Есть генеральный контролёр</span><span>🛡 Риск проверяется</span><span>📋 Каждый бот отчитывается</span></section></main><script>(()=>{{const $$=s=>Array.from(document.querySelectorAll(s));const time=()=>new Date().toLocaleTimeString('ru-RU',{{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}});function tick(){{$$('[data-clock]').forEach(e=>e.textContent=time());const log=document.getElementById('ai-live-log');if(log&&Math.random()>.72){{const items=['Генеральный контролёр сверил отчёты ботов.','Market Agent обновил рыночный сигнал.','Risk Engine проверил лимиты капитала.','News Agent перепроверяет новость по двум источникам.','Portfolio Engine подтвердил свободные средства.'];const li=document.createElement('li');li.textContent=time()+' · '+items[Math.floor(Math.random()*items.length)];log.prepend(li);while(log.children.length>5)log.lastChild.remove();}}}}tick();setInterval(tick,2500);}})();</script></body></html>"""
+    return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SharipovAI OS · AI-боты</title><link rel="stylesheet" href="/static/style.css?v=20260708-14"></head><body><aside class="os-sidebar"><a class="os-brand" href="/?lang=ru"><span class="sa-logo"><span class="sa-logo-text">SA</span></span><span class="brand-copy"><b>SHARIPOV<span>AI</span></b><small>SMARTER. DATA. DECISIONS.</small></span></a><nav class="os-nav"><a href="/?lang=ru">Обзор</a><a class="active" href="/ai-bots?lang=ru">AI-боты</a><a href="/logout">Выйти</a></nav></aside><main class="os-main approved-shell"><section class="welcome-hero"><div><p class="eyebrow">AI BOTS COMMAND CENTER</p><h1>AI-боты</h1><p>Генеральный контролёр следит за агентами SharipovAI.</p></div><div class="hero-logo"><span>SA</span></div></section><section class="metric-grid">{cards}</section><section class="os-panel" style="margin-top:18px"><div class="panel-head"><h2>Список ботов</h2><a href="/api/ai-bots">API</a></div><table class="trade-table"><tbody>{rows}</tbody></table></section></main></body></html>"""
 
 
 def _ai_bots() -> list[dict[str, Any]]:
-    """Return deterministic AI bot catalogue."""
-
     return [
-        {"name": "General Controller", "kind": "главный бот", "responsibility": "Следит за всеми ботами, сверяет отчёты, блокирует опасные решения.", "reports_to": "Самандар", "status": "Работает", "css": "ok", "health_score": 94, "last_check": "только что", "last_report": "Критических ошибок нет. 2 бота требуют наблюдения.", "short": "контроль системы"},
-        {"name": "Market Agent", "kind": "рыночный бот", "responsibility": "Проверяет цену, тренд, объём, импульс и рыночную структуру.", "reports_to": "General Controller", "status": "Работает", "css": "ok", "health_score": 96, "last_check": "5 сек назад", "last_report": "BTC и SOL в режиме наблюдения, импульс умеренный.", "short": "рынок"},
-        {"name": "News Agent", "kind": "новостной бот", "responsibility": "Проверяет новости, источники, доверие и влияние на рынок.", "reports_to": "General Controller", "status": "Требует внимания", "css": "warn", "health_score": 84, "last_check": "12 сек назад", "last_report": "2 новости требуют подтверждения вторым источником.", "short": "новости"},
-        {"name": "Risk Engine", "kind": "бот риска", "responsibility": "Считает риск, просадку, лимиты и блокирует опасные сделки.", "reports_to": "General Controller", "status": "Работает", "css": "ok", "health_score": 98, "last_check": "3 сек назад", "last_report": "Риск LOW, лимиты соблюдены.", "short": "риск"},
-        {"name": "Portfolio Engine", "kind": "бот портфеля", "responsibility": "Следит за виртуальными деньгами, позициями и доступными средствами.", "reports_to": "General Controller", "status": "Работает", "css": "ok", "health_score": 95, "last_check": "7 сек назад", "last_report": "Виртуальный капитал защищён, свободные средства есть.", "short": "портфель"},
-        {"name": "Paper Trading Bot", "kind": "демо-торговля", "responsibility": "Открывает и закрывает только демо-сделки, реальные деньги не трогает.", "reports_to": "Portfolio Engine", "status": "Работает", "css": "ok", "health_score": 93, "last_check": "10 сек назад", "last_report": "Открыты BTC и SOL, ETH закрыт.", "short": "сделки"},
-        {"name": "Confidence Engine", "kind": "бот уверенности", "responsibility": "Оценивает силу сигнала и вероятность ошибки.", "reports_to": "General Controller", "status": "Работает", "css": "ok", "health_score": 91, "last_check": "8 сек назад", "last_report": "Сигнал высокий, но требует сверки с новостями.", "short": "уверенность"},
-        {"name": "Consensus Engine", "kind": "бот согласия", "responsibility": "Сравнивает мнения агентов и ищет конфликт между ними.", "reports_to": "General Controller", "status": "Работает", "css": "ok", "health_score": 92, "last_check": "9 сек назад", "last_report": "Конфликтов между Market и Risk нет.", "short": "консенсус"},
-        {"name": "Stress Bot", "kind": "стресс-тест", "responsibility": "Проверяет, что будет при падении рынка и просадке капитала.", "reports_to": "Risk Engine", "status": "Требует внимания", "css": "warn", "health_score": 82, "last_check": "20 сек назад", "last_report": "Нужно улучшить визуальный отчёт по реакции AI.", "short": "стресс"},
-        {"name": "Learning Engine", "kind": "обучение", "responsibility": "Запоминает ошибки демо-сделок и предлагает улучшения.", "reports_to": "General Controller", "status": "Работает", "css": "ok", "health_score": 88, "last_check": "16 сек назад", "last_report": "ETH-сделка отправлена на анализ ошибки.", "short": "обучение"},
-        {"name": "Security Guard", "kind": "защита", "responsibility": "Следит, чтобы реальные деньги не использовались без подтверждения.", "reports_to": "General Controller", "status": "Работает", "css": "ok", "health_score": 100, "last_check": "2 сек назад", "last_report": "Реальная торговля выключена. Доступ только демо.", "short": "безопасность"},
+        {"name": "General Controller", "kind": "главный бот", "responsibility": "Следит за всеми ботами и блокирует опасные решения.", "reports_to": "Самандар", "status": "Работает", "health_score": 94, "short": "контроль системы"},
+        {"name": "Market Agent", "kind": "рыночный бот", "responsibility": "Проверяет цену, тренд, объём и импульс.", "reports_to": "General Controller", "status": "Работает", "health_score": 96, "short": "рынок"},
+        {"name": "News Agent", "kind": "новостной бот", "responsibility": "Проверяет новости и доверие источников.", "reports_to": "General Controller", "status": "Требует внимания", "health_score": 84, "short": "новости"},
+        {"name": "Risk Engine", "kind": "бот риска", "responsibility": "Считает риск, просадку и лимиты.", "reports_to": "General Controller", "status": "Работает", "health_score": 98, "short": "риск"},
+        {"name": "Portfolio Engine", "kind": "бот портфеля", "responsibility": "Следит за виртуальным капиталом и позициями.", "reports_to": "General Controller", "status": "Работает", "health_score": 95, "short": "портфель"},
+    ]
+
+
+def _intelligence_sources() -> list[dict[str, Any]]:
+    return [
+        {"name": "Reuters", "category": "global_news", "status": "ACTIVE", "trust_score": 96.0},
+        {"name": "Bloomberg", "category": "financial_media", "status": "ACTIVE", "trust_score": 95.0},
+        {"name": "Federal Reserve", "category": "official", "status": "ACTIVE", "trust_score": 99.0},
+        {"name": "SEC", "category": "official", "status": "ACTIVE", "trust_score": 98.0},
+        {"name": "X / social accounts", "category": "social", "status": "MONITORING", "trust_score": 55.0},
+    ]
+
+
+def _demo_trades() -> list[dict[str, Any]]:
+    return [
+        {"id": "BTC-20260708-001", "asset": "BTC/USDT", "side": "BUY", "status": "OPEN", "entry_price": 67214.20, "size": "0.10 BTC", "pnl_usdt": 52.40, "confidence": 88.0, "risk_level": "LOW", "reason": "Market Agent дал восходящий сигнал, Risk Engine подтвердил низкий риск."},
+        {"id": "ETH-20260708-002", "asset": "ETH/USDT", "side": "SELL", "status": "CLOSED", "entry_price": 3142.88, "size": "1.00 ETH", "pnl_usdt": -18.30, "confidence": 71.0, "risk_level": "MEDIUM", "reason": "AI закрыл ETH после ухудшения импульса."},
+        {"id": "SOL-20260708-003", "asset": "SOL/USDT", "side": "BUY", "status": "OPEN", "entry_price": 171.35, "size": "5.00 SOL", "pnl_usdt": 31.20, "confidence": 79.0, "risk_level": "LOW", "reason": "AI открыл SOL после подтверждения импульса."},
     ]
 
 
 def _chat_reply(message: str, run: dict[str, Any]) -> str:
-    """Return a clear Russian answer for the dashboard chat."""
-
     text = message.lower().strip()
     decision = str(run.get("decision", "NO_DECISION")).upper()
     confidence = float(run.get("confidence", 0.0) or 0.0)
     risk = str(run.get("risk_level", "LOW"))
     equity = float(run.get("paper_equity", 0.0) or 0.0)
-    available = float(run.get("paper_cash", 0.0) or 0.0)
+    cash = float(run.get("paper_cash", 0.0) or 0.0)
     pnl = float(run.get("paper_pnl", 0.0) or 0.0)
     positions = int(run.get("open_positions", 0) or 0)
-    consensus = str(run.get("consensus", "WEAK"))
-    agreement = float(run.get("consensus_agreement", 0.0) or 0.0)
-    reason = str(run.get("reason", "")) or "Подробная причина пока не пришла от Runner."
-    trades = _demo_trades()
-    open_buys = [trade for trade in trades if trade["side"] == "BUY" and trade["status"] == "OPEN"]
-    closed_trades = [trade for trade in trades if trade["status"] == "CLOSED"]
+    reason = str(run.get("reason", "")) or "Runner пока не дал подробную причину."
 
     if not text:
-        return "Я SharipovAI — AI-помощник внутри твоей системы. Я вижу демо-портфель, сделки, риск, новости и состояние AI-ботов. Напиши обычным языком, что проверить."
-
-    if any(phrase in text for phrase in ("какие боты", "боты работают", "состояние ботов", "список ботов", "все боты", "ai-боты", "агенты работают", "какие агенты")):
-        bots = _ai_bots()
-        active = [bot for bot in bots if bot["status"] == "Работает"]
-        warn = [bot for bot in bots if bot["status"] == "Требует внимания"]
-        lines = [f"Сейчас в SharipovAI работает {len(active)} из {len(bots)} AI-ботов."]
-        lines.append("Главный: General Controller — следит за всеми ботами и блокирует опасные решения.")
-        lines.append("Активные боты: " + ", ".join(bot["name"] for bot in active) + ".")
-        if warn:
-            lines.append("Требуют внимания: " + ", ".join(bot["name"] for bot in warn) + ".")
-        lines.append("Полный отчёт открыт в разделе AI-боты: состояние, задача, подчинение, здоровье и последний отчёт каждого бота.")
-        return "\n".join(lines)
-
-    if any(word in text for word in ("ты кто", "кто ты", "что ты", "ты ии", "ты ai", "ии", "искусственный", "бот чтоли", "что за ответ", "разве")) or text == "бот":
-        return (
-            "Я SharipovAI — AI-помощник внутри твоего торгового кабинета, а не просто кнопочный бот. "
-            "Я работаю с данными системы: вижу демо-сделки, виртуальный портфель, риск, новости, AI-решение и состояние внутренних ботов. "
-            "Моя задача — объяснять, что происходит, почему AI принял решение и какие модули сейчас работают. "
-            "Сейчас реальная торговля выключена: я показываю и анализирую только демо-действия."
-        )
-
-    if any(word in text for word in ("что куп", "купил", "покуп", "открыл", "открыто", "активы", "монеты")):
-        lines = ["В демо-режиме сейчас открыты покупки:"]
-        for index, trade in enumerate(open_buys, 1):
-            pnl_sign = "+" if float(trade["pnl_usdt"]) >= 0 else ""
-            lines.append(f"{index}) {trade['asset']} — куплено {trade['size']} по цене {float(trade['entry_price']):,.2f} USDT. Текущий результат: {pnl_sign}{float(trade['pnl_usdt']):.2f} USDT.")
-        if closed_trades:
-            lines.append("Закрытые сделки:")
-            for trade in closed_trades:
-                pnl_sign = "+" if float(trade["pnl_usdt"]) >= 0 else ""
-                lines.append(f"{trade['asset']} — закрыта, результат {pnl_sign}{float(trade['pnl_usdt']):.2f} USDT.")
-        lines.append("Это только демо-сделки. Реальные деньги не использовались.")
-        return "\n".join(lines)
-
-    if any(word in text for word in ("продал", "закрыл", "продажа", "убыток", "минус")):
-        return "Закрыта демо-сделка ETH/USDT. Вход был 3,142.88 USDT, объём 1.00 ETH, результат -18.30 USDT. AI закрыл её из-за ухудшения импульса и роста краткосрочного риска."
-    if any(word in text for word in ("портфель", "баланс", "средства", "деньги", "pnl", "позици")):
-        return f"Виртуальный портфель: общий баланс {equity:.2f} USDT, доступно для новых сделок {available:.2f} USDT, текущий результат {pnl:.2f} USDT, открытых позиций: {positions}. Это демо-режим."
+        return "Напиши вопрос про портфель, рынок, риск, новости или AI-решение."
+    if any(word in text for word in ("портфель", "баланс", "pnl", "позици")):
+        return f"Портфель в демо-режиме: equity {equity:.2f} USDT, cash {cash:.2f} USDT, PnL {pnl:.2f} USDT, открытых позиций: {positions}."
     if any(word in text for word in ("рынок", "анализ", "market", "btc", "битко")):
-        return f"По рынку сейчас: решение {decision}, уверенность {confidence:.1f}%, согласие агентов {consensus} {agreement:.1f}%. Причина: {reason}"
-    if any(word in text for word in ("риск", "опас", "просад", "безопас")):
-        return f"Риск сейчас: {risk}. Я не стал бы повышать агрессивность, пока новости и рынок не подтверждают сигнал. Лимиты защищают виртуальный капитал, реальные деньги не используются."
-    if any(word in text for word in ("новост", "источник", "довер", "слух")):
-        return "Новости проверяются в разделе Новости: AI смотрит источник, доверие, подтверждение от 2 независимых источников и только потом учитывает новость в решении. Соцсети сами по себе не используются для сделки."
-    if any(word in text for word in ("решение", "почему", "объясни", "решил")):
-        return f"AI-решение: {decision}. Уверенность {confidence:.1f}%, риск {risk}, согласие агентов {consensus} {agreement:.1f}%. Главная причина: {reason}"
-
-    return f"Я понял твой вопрос: «{message}». По текущему состоянию SharipovAI: решение {decision}, уверенность {confidence:.1f}%, риск {risk}, виртуальный баланс {equity:.2f} USDT. Я могу дальше разобрать это по портфелю, сделкам, новостям, риску или AI-ботам."
-
-
-def _intelligence_sources() -> list[dict[str, Any]]:
-    """Return deterministic source catalogue for Intelligence Center."""
-
-    return [
-        {"name": "Reuters", "category": "global_news", "status": "ACTIVE", "trust_score": 96.0, "corrections": 0, "cross_check": "Bloomberg / AP / official filings", "market_use": "major breaking news"},
-        {"name": "Bloomberg", "category": "financial_media", "status": "ACTIVE", "trust_score": 95.0, "corrections": 0, "cross_check": "Reuters / official filings", "market_use": "macro, equities, rates"},
-        {"name": "Associated Press", "category": "global_news", "status": "ACTIVE", "trust_score": 93.0, "corrections": 0, "cross_check": "Reuters / government sources", "market_use": "politics and global events"},
-        {"name": "Federal Reserve", "category": "official", "status": "ACTIVE", "trust_score": 99.0, "corrections": 0, "cross_check": "FOMC calendar / market reaction", "market_use": "rates and USD impact"},
-        {"name": "SEC", "category": "official", "status": "ACTIVE", "trust_score": 98.0, "corrections": 0, "cross_check": "EDGAR / company filings", "market_use": "regulation and listed assets"},
-        {"name": "CoinDesk", "category": "crypto_media", "status": "ACTIVE", "trust_score": 86.0, "corrections": 1, "cross_check": "Cointelegraph / on-chain / exchange data", "market_use": "crypto news"},
-        {"name": "The Block", "category": "crypto_media", "status": "ACTIVE", "trust_score": 85.0, "corrections": 0, "cross_check": "CoinDesk / official project channels", "market_use": "crypto market structure"},
-        {"name": "Binance Announcements", "category": "exchange", "status": "ACTIVE", "trust_score": 92.0, "corrections": 0, "cross_check": "exchange status / market data", "market_use": "listings and exchange events"},
-        {"name": "CoinMarketCap", "category": "market_data", "status": "ACTIVE", "trust_score": 82.0, "corrections": 0, "cross_check": "CoinGecko / exchange feeds", "market_use": "price and ranking checks"},
-        {"name": "X / social accounts", "category": "social", "status": "MONITORING", "trust_score": 55.0, "corrections": 4, "cross_check": "never used alone", "market_use": "early rumor detection only"},
-    ]
-
-
-def _demo_trades() -> list[dict[str, Any]]:
-    """Return stable demo trades with full reasoning for the dashboard."""
-
-    return [
-        {"id": "BTC-20260708-001", "asset": "BTC/USDT", "side": "BUY", "status": "OPEN", "opened_at": "2026-07-08 18:19:20", "expected_horizon": "24-72 часа", "entry_price": 67214.20, "size": "0.10 BTC", "notional_usdt": 6721.42, "pnl_usdt": 52.40, "confidence": 88.0, "risk_level": "LOW", "stop_loss": 65350.00, "take_profit": 70400.00, "reason": "AI купил BTC в демо-режиме, потому что Market Agent дал восходящий сигнал, News Agent не нашел критической паники, а Risk Engine подтвердил низкий риск.", "expected_result": "Ожидается умеренный рост при сохранении объема и отсутствии негативных новостей.", "sources": ["Market Agent", "News Agent", "Risk Engine", "Consensus Engine"], "ai_decision_link": "BUY BITCOIN / confidence 88.0% / consensus 100.0%"},
-        {"id": "ETH-20260708-002", "asset": "ETH/USDT", "side": "SELL", "status": "CLOSED", "opened_at": "2026-07-08 16:42:11", "expected_horizon": "6-24 часа", "entry_price": 3142.88, "size": "1.00 ETH", "notional_usdt": 3142.88, "pnl_usdt": -18.30, "confidence": 71.0, "risk_level": "MEDIUM", "stop_loss": 3198.00, "take_profit": 3030.00, "reason": "AI закрыл демо-сделку по ETH после ухудшения импульса и роста краткосрочного риска. Убыток ограничен правилами risk management.", "expected_result": "Сделка закрыта. Данные пойдут в Learning Engine для улучшения фильтров входа.", "sources": ["Market Agent", "Risk Engine", "Learning Engine"], "ai_decision_link": "SELL ETH / risk MEDIUM / learning update required"},
-        {"id": "SOL-20260708-003", "asset": "SOL/USDT", "side": "BUY", "status": "OPEN", "opened_at": "2026-07-08 15:10:04", "expected_horizon": "1-3 дня", "entry_price": 171.35, "size": "5.00 SOL", "notional_usdt": 856.75, "pnl_usdt": 31.20, "confidence": 79.0, "risk_level": "LOW", "stop_loss": 164.00, "take_profit": 188.00, "reason": "AI открыл демо-позицию SOL после подтверждения импульса и допустимого соотношения риск/прибыль.", "expected_result": "Ожидается продолжение движения при подтверждении рынка BTC и отсутствии негативных новостей по сектору.", "sources": ["Market Agent", "Portfolio Engine", "Consensus Engine"], "ai_decision_link": "BUY SOL / confidence 79.0% / low risk"},
-    ]
+        return f"Рыночный вывод: решение {decision}, уверенность {confidence:.1f}%. Причина: {reason}"
+    if any(word in text for word in ("риск", "просад", "опас", "risk")):
+        return f"Риск сейчас: {risk}. Я не увеличивал бы агрессивность без сильного консенсуса и подтверждения новостей."
+    if any(word in text for word in ("купил", "сделк", "актив", "монет")):
+        return "В демо-режиме открыты BTC/USDT и SOL/USDT. ETH/USDT закрыт с ограниченным убытком. Реальные деньги не использовались."
+    return f"Я понял: «{message}». Сейчас решение {decision}, уверенность {confidence:.1f}%, риск {risk}."
 
 
 app = create_app()
