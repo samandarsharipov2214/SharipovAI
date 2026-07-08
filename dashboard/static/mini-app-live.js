@@ -2,6 +2,7 @@
   const $ = (selector) => document.querySelector(selector);
   const $$ = (selector) => Array.from(document.querySelectorAll(selector));
   const fmt = (value) => Number(value || 0).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const RISK_STORAGE_KEY = 'sharipovaiRiskSettingsV2';
 
   function addMessage(role, text) {
     const log = $('#ai-chat-log');
@@ -17,6 +18,52 @@
   function setText(selector, value) {
     const el = $(selector);
     if (el) el.textContent = value;
+  }
+
+  function rangeInputs() {
+    return $$('[data-range-output]').filter((input) => input.closest('.mini-app-shell'));
+  }
+
+  function updateRangeOutput(input) {
+    const output = input.parentElement?.querySelector('output');
+    if (output) output.textContent = `${input.value}%`;
+  }
+
+  function loadRiskSettings() {
+    const inputs = rangeInputs();
+    try {
+      const saved = JSON.parse(localStorage.getItem(RISK_STORAGE_KEY) || localStorage.getItem('riskSettings') || 'null');
+      if (Array.isArray(saved)) {
+        inputs.forEach((input, index) => {
+          if (saved[index] !== undefined) input.value = saved[index];
+          updateRangeOutput(input);
+        });
+        const status = $('#save-status');
+        if (status) status.textContent = '✓ Загружены сохранённые настройки.';
+      }
+    } catch (_) {}
+  }
+
+  function saveRiskSettings() {
+    const values = rangeInputs().map((input) => input.value);
+    localStorage.setItem(RISK_STORAGE_KEY, JSON.stringify(values));
+    localStorage.setItem('riskSettings', JSON.stringify(values));
+    const status = $('#save-status');
+    if (status) status.textContent = '✓ Изменения сохранены. При повторном входе они загрузятся автоматически.';
+  }
+
+  function installRiskPersistence() {
+    const inputs = rangeInputs();
+    loadRiskSettings();
+    inputs.forEach((input) => {
+      updateRangeOutput(input);
+      input.addEventListener('input', () => updateRangeOutput(input));
+    });
+    $('#save-settings')?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      saveRiskSettings();
+    }, true);
   }
 
   function renderTrades(trades) {
@@ -124,6 +171,7 @@
 
   function installLiveHandlers() {
     installTabs();
+    installRiskPersistence();
     const form = $('#ai-command-form');
     if (form) {
       form.addEventListener('submit', (event) => {
