@@ -2,7 +2,7 @@
 name = "sharipovai"
 version = "0.1.0"
 description = "SharipovAI OS deterministic AI trading analysis system."
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 
 [tool.pytest.ini_options]
 testpaths = [
