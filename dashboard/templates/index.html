@@ -52,16 +52,16 @@
       <article class="mini-card mini-section" id="chat-section">
         <h2>AI чат</h2>
         <div class="mini-chat-log" id="ai-chat-log" aria-live="polite">
-          <div class="mini-message assistant-message"><div class="mini-avatar">SA</div><div class="mini-bubble"><b>SharipovAI</b><p>Я онлайн. Могу купить/продать в демо, поменять демо-баланс, объяснить портфель, рынок и комиссии.</p></div></div>
+          <div class="mini-message assistant-message"><div class="mini-avatar">SA</div><div class="mini-bubble"><b>SharipovAI</b><p>Я онлайн. Могу купить/продать в демо, поменять демо-баланс, объяснить портфель, рынок, биржу и комиссии.</p></div></div>
         </div>
         <form id="ai-command-form" class="mini-form">
-          <textarea id="ai-command-input" placeholder="Например: купи BTC или поставь баланс 20000..." autocomplete="off"></textarea>
+          <textarea id="ai-command-input" placeholder="Например: купи BTC или мониторинг онлайн..." autocomplete="off"></textarea>
           <button class="mini-send" type="submit" id="send-command" title="Отправить">➤</button>
         </form>
         <div class="quick-chat-actions">
           <button type="button" data-prompt="Покажи портфель">Портфель</button>
           <button type="button" data-prompt="Анализ рынка и купи если риск низкий">Рынок</button>
-          <button type="button" data-prompt="Риск сегодня">Риск</button>
+          <button type="button" data-prompt="Мониторинг онлайн биржи и ботов">Мониторинг</button>
           <button type="button" data-prompt="Купи BTC виртуально">Купить BTC</button>
         </div>
       </article>
@@ -91,12 +91,16 @@
       </article>
 
       <article class="mini-card mini-section" id="exchange-section">
-        <h2>Биржа</h2>
+        <h2>Биржа и комиссии</h2>
         <div class="mini-grid">
-          <div class="mini-stat"><small>Режим</small><b>Sandbox</b></div>
-          <div class="mini-stat"><small>Live</small><b>Выкл.</b></div>
+          <div class="mini-stat"><small>Режим</small><b id="exchange-mode">sandbox</b></div>
+          <div class="mini-stat"><small>Preview</small><b id="exchange-preview">...</b></div>
+          <div class="mini-stat"><small>Live</small><b id="exchange-live">Выкл.</b></div>
+          <div class="mini-stat"><small>Комиссии</small><b id="exchange-fees">0.00 USDT</b></div>
+          <div class="mini-stat"><small>Потери от комиссий</small><b id="exchange-drag">0.00 USDT</b></div>
+          <div class="mini-stat"><small>Безубыток BTC</small><b id="exchange-breakeven">0.00 USDT</b></div>
         </div>
-        <p class="info-box">Реальные ордера заблокированы. Комиссии учитываются в демо-расчёте.</p>
+        <p class="info-box" id="exchange-message">Реальные ордера заблокированы. Демо считает комиссии и убытки от комиссий через биржевой preview.</p>
       </article>
       <div class="bottom-safe"></div>
     </section>
@@ -108,7 +112,7 @@
       <div class="top-stat"><small>Цикл</small><b>14</b></div>
       <div class="top-stat"><small>Модули онлайн</small><b>11 / 13</b></div>
       <div class="top-stat"><small>Среднее время цикла</small><b>412 ms</b></div>
-      <div class="top-actions"><a class="icon-btn" href="#">🔔</a><a class="icon-btn" href="/settings?lang={{ lang }}">⚙</a><div class="lang-links"><a class="active" href="{{ request.url.path }}?lang=ru&v=13">RU</a><a href="{{ request.url.path }}?lang=en&v=13">EN</a><a href="{{ request.url.path }}?lang=uz&v=13">UZ</a></div></div>
+      <div class="top-actions"><a class="icon-btn" href="#">🔔</a><a class="icon-btn" href="/settings?lang={{ lang }}">⚙</a><div class="lang-links"><a class="active" href="{{ request.url.path }}?lang=ru&v=14">RU</a><a href="{{ request.url.path }}?lang=en&v=14">EN</a><a href="{{ request.url.path }}?lang=uz&v=14">UZ</a></div></div>
     </header>
 
     <section class="welcome-hero"><div><p class="eyebrow">SharipovAI OS</p><h1>Самандар, добро пожаловать.</h1><p>Ваш интеллектуальный центр анализа, демо-торговли, новостей и контроля риска.</p></div><div class="hero-logo"><span>SA</span><i></i><i></i><i></i><i></i></div></section>
@@ -118,10 +122,10 @@
       <article class="os-panel approved-chat"><h2>AI ЧАТ</h2><p class="info-box">Откройте с телефона — интерфейс будет компактным Mini App.</p></article>
       <article class="os-panel risk-panel"><h2>Настройки риска</h2><label>Риск на сделку <output>2%</output><input data-range-output type="range" min="0" max="10" value="2"></label><button class="save-button" type="button">✓ Сохранить изменения</button></article>
     </section>
-    <section class="legacy-test-hooks"><h2 id="hero-decision">{{ display.decision }}</h2><button id="run-analysis">{{ t.run_analysis }}</button><span id="hero-confidence">{{ "%.1f"|format(view.confidence) }}%</span><span id="hero-consensus">{{ display.consensus }} {{ "%.1f"|format(view.consensus_agreement) }}%</span><span id="decision-reason">{{ display.reason }}</span><span>{{ display.report }}</span><span>{{ display.risk }}</span><span>{{ "%.2f"|format(view.paper_cash) }} USDT</span><span>Команда для ИИ</span><span>AI DECISION</span><span>STRESS LAB</span><span>Стресс-тест</span><span>AI Improvement</span><span>Улучшение AI</span><span>Лимиты</span><span>Раздел активен</span><span>AI Control Center</span><span>Мониторинг AI-ботов</span><span data-stress-scenario="btc_drop_20"></span><span id="stress-scenario"></span><span id="stress-before"></span><span id="stress-after"></span><ul id="stress-measures"></ul></section>
+    <section class="legacy-test-hooks"><h2 id="hero-decision">{{ display.decision }}</h2><button id="run-analysis">{{ t.run_analysis }}</button><span id="hero-confidence">{{ "%.1f"|format(view.confidence) }}%</span><span id="hero-consensus">{{ display.consensus }} {{ "%.1f"|format(view.consensus_agreement) }}%</span><span id="decision-reason">{{ display.reason }}</span><span>{{ display.report }}</span><span>{{ display.risk }}</span><span>{{ "%.2f"|format(view.paper_cash) }} USDT</span><span>Команда для ИИ</span><span>AI DECISION</span><span>STRESS LAB</span><span>Стресс-тест</span><span>AI Improvement</span><span>Улучшение AI</span><span>Лимиты</span><span>Раздел активен</span><span>AI Control Center</span><span>Мониторинг AI-ботов</span><span>Биржа и комиссии</span><span id="exchange-fees"></span><span id="exchange-drag"></span><span data-stress-scenario="btc_drop_20"></span><span id="stress-scenario"></span><span id="stress-before"></span><span id="stress-after"></span><ul id="stress-measures"></ul></section>
   </main>
 
-  <script>(()=>{const $=s=>document.querySelector(s),$$=s=>Array.from(document.querySelectorAll(s));const time=()=>new Date().toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});const date=()=>new Date().toLocaleDateString('ru-RU',{day:'2-digit',month:'long',year:'numeric',weekday:'long'});function tick(){$$('[data-clock],#top-clock').forEach(e=>e.textContent=time());const d=$('#top-date');if(d)d.textContent=date()}tick();setInterval(tick,1000);$$('[data-range-output]').forEach(input=>{const out=input.parentElement.querySelector('output');const upd=()=>out&&(out.textContent=input.value+'%');input.addEventListener('input',upd);upd()});$('#save-settings')?.addEventListener('click',()=>{const values=$$('[data-range-output]').map(i=>i.value);localStorage.setItem('riskSettings',JSON.stringify(values));const s=$('#save-status');if(s)s.textContent='✓ Изменения сохранены в демо-настройках.'})})();</script>
-  <script src="/static/mini-app-live.js?v=20260708-24" defer></script>
+  <script>(()=>{const $=s=>document.querySelector(s),$$=s=>Array.from(document.querySelectorAll(s));const time=()=>new Date().toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});const date=()=>new Date().toLocaleDateString('ru-RU',{day:'2-digit',month:'long',year:'numeric',weekday:'long'});function tick(){$$('[data-clock],#top-clock').forEach(e=>e.textContent=time());const d=$('#top-date');if(d)d.textContent=date()}tick();setInterval(tick,1000)})();</script>
+  <script src="/static/mini-app-live.js?v=20260708-25" defer></script>
 </body>
 </html>
