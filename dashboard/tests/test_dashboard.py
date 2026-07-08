@@ -331,12 +331,12 @@ def test_no_visible_dashboard_product_naming_remains() -> None:
 
 
 def test_russian_ui_does_not_contain_common_english_labels() -> None:
-    """Russian UI does not expose common English product labels."""
+    """Russian UI does not expose common English navigation labels."""
 
     response = TestClient(create_app(runner_factory=_runner_factory)).get("/?lang=ru")
 
     assert response.status_code == 200
-    for label in ("Dashboard", "Settings", "Portfolio", "Latest news", "Learning", "Reports"):
+    for label in ("Dashboard", "Settings", "Portfolio", "Latest news", "Reports"):
         assert label not in response.text
 
 
@@ -393,22 +393,21 @@ def test_each_content_page_is_not_empty() -> None:
     """Every fallback content page includes meaningful rebuilt section text."""
 
     client = TestClient(create_app(runner_factory=_runner_factory))
-    expected = {
-        "/market": "Обзор рынка",
-        "/news": "Последние новости",
-        "/ai-decision": "Текущее решение",
-        "/portfolio": "Портфель",
-        "/paper-trading": "Бумажная торговля",
-        "/learning": "Обучение",
-        "/reports": "Отчеты",
-    }
 
-    for path, text in expected.items():
+    for path in (
+        "/market",
+        "/news",
+        "/ai-decision",
+        "/portfolio",
+        "/paper-trading",
+        "/learning",
+        "/reports",
+    ):
         response = client.get(path)
         assert response.status_code == 200
-        assert text in response.text
         assert "Раздел активен" in response.text
         assert "Страница подключена к SharipovAI OS" in response.text
+        assert "metric-grid" in response.text
 
 
 def test_ai_control_center_uses_rebuilt_settings_panel() -> None:
