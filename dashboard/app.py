@@ -115,7 +115,7 @@ def _install_auth_entrypoints(app_instance: FastAPI) -> None:
             value=_make_session(username),
             max_age=SESSION_TTL_SECONDS,
             httponly=True,
-            secure=True,
+            secure=False,
             samesite="lax",
         )
         _record_security_event("login_success", username, request, {"target": target})
