@@ -1,6 +1,24 @@
 """Dashboard package for SharipovAI OS."""
 
-from .app import create_app
-from .exceptions import DashboardError
+from __future__ import annotations
 
-__all__: tuple[str, ...] = ("DashboardError", "create_app")
+from collections.abc import Callable
+
+from runner import SharipovAIRunner
+
+from .app import create_app as _create_base_app
+from .exceptions import DashboardError
+from .exchange_api import install_exchange_api
+
+
+def create_app(runner_factory: Callable[[], SharipovAIRunner] | None = None):
+    """Create dashboard app with package-level safe exchange APIs installed."""
+
+    app_instance = _create_base_app(runner_factory=runner_factory)
+    install_exchange_api(app_instance)
+    return app_instance
+
+
+app = create_app()
+
+__all__: tuple[str, ...] = ("DashboardError", "app", "create_app")
