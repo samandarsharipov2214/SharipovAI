@@ -14,6 +14,7 @@ testpaths = [
   "dashboard/tests",
   "data_layer/tests",
   "decision/tests",
+  "exchange_connector/tests",
   "learning_engine/tests",
   "news_agent/tests",
   "paper_trading/tests",
