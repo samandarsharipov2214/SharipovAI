@@ -45,7 +45,7 @@
             <p class="decision-reason" id="decision-reason">{{ display.reason }}</p>
             <div class="confidence-line"><span style="width: {{ view.confidence }}%"></span></div>
             <div class="hero-stats"><div><small>{{ t.confidence }}</small><b id="hero-confidence">{{ "%.1f"|format(view.confidence) }}%</b></div><div><small>{{ t.risk }}</small><b id="hero-risk">{{ display.risk }}</b></div><div><small>{{ t.consensus }}</small><b id="hero-consensus">{{ display.consensus }} {{ "%.1f"|format(view.consensus_agreement) }}%</b></div></div>
-            <div class="action-row"><button id="run-analysis">▶ {{ t.run_analysis }}</button><a href="/stress-lab?lang={{ lang }}">🧪 {{ t.stress_lab }}</a></div>
+            <div class="action-row"><button id="run-analysis">▶ {{ t.run_analysis }}</button><a href="/stress-lab?lang={{ lang }}">🧪 {% if lang == 'en' %}Stress test{% elif lang == 'uz' %}Stress test{% else %}Стресс-тест{% endif %}</a></div>
           </article>
 
           <aside class="ai-command-panel chat-panel">
