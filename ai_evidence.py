@@ -15,6 +15,10 @@ REAL_DATA_WAITING_API = "waiting_api"
 REAL_DATA_DISABLED = "disabled"
 
 
+def _now_iso() -> str:
+    return datetime.now(UTC).replace(microsecond=0).isoformat()
+
+
 SYSTEM_AI_STATUS: dict[str, dict[str, Any]] = {
     "general_controller": {
         "name": "General Controller AI",
@@ -108,10 +112,6 @@ NEWS_REAL_DATA_OVERRIDES: dict[str, dict[str, Any]] = {
         "missing": ["Нужен YouTube RSS/API reader", "Нужна оценка видео/описаний"],
     },
 }
-
-
-def _now_iso() -> str:
-    return datetime.now(UTC).replace(microsecond=0).isoformat()
 
 
 def enrich_ai_status(agent: dict[str, Any]) -> dict[str, Any]:
