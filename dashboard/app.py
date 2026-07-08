@@ -26,17 +26,7 @@ from .routes import router
 LEGACY_PAGE_MARKER = "Страница подключена к SharipovAI OS"
 SESSION_COOKIE = "sharipovai_session"
 SESSION_TTL_SECONDS = 60 * 60 * 24 * 14
-PUBLIC_PATHS = (
-    "/login",
-    "/register",
-    "/logout",
-    "/health",
-    "/api/health",
-    "/api/auth/me",
-    "/static",
-    "/favicon.ico",
-    "/logo.svg",
-)
+PUBLIC_PATHS = ("/login", "/register", "/logout", "/health", "/api/health", "/api/auth/me", "/static", "/favicon.ico", "/logo.svg")
 
 
 def create_app(runner_factory: Callable[[], SharipovAIRunner] | None = None) -> FastAPI:
@@ -50,11 +40,17 @@ def create_app(runner_factory: Callable[[], SharipovAIRunner] | None = None) -> 
 
     @app.middleware("http")
     async def require_authentication(request: Request, call_next: Any) -> Response:
-        if app.state.disable_auth or _is_public_path(request.url.path) or _is_authenticated(request):
+        path = request.url.path
+        username = _session_username(request)
+        if not app.state.disable_auth and username and _must_change_password(username) and path not in {"/change-password", "/logout"} and not path.startswith("/static"):
+            if path.startswith("/api/"):
+                return Response('{"error":"password_change_required"}', status_code=403, media_type="application/json")
+            return RedirectResponse(url="/change-password", status_code=303)
+        if app.state.disable_auth or _is_public_path(path) or username:
             return await call_next(request)
-        if request.url.path.startswith("/api/"):
+        if path.startswith("/api/"):
             return Response('{"error":"authentication_required"}', status_code=401, media_type="application/json")
-        next_url = request.url.path
+        next_url = path
         if request.url.query:
             next_url = f"{next_url}?{request.url.query}"
         return RedirectResponse(url=f"/login?next={next_url}", status_code=303)
@@ -94,7 +90,34 @@ def create_app(runner_factory: Callable[[], SharipovAIRunner] | None = None) -> 
             _record_security_event("failed_login", username, request, {"reason": "bad_credentials"})
             return HTMLResponse(_login_page_html(next_url=next_url, error="Неверный логин или пароль"), status_code=401)
         _record_security_event("login_success", username, request, {})
+        if _must_change_password(username):
+            next_url = "/change-password"
         return _session_redirect(username, next_url, request)
+
+    @app.get("/change-password", response_class=HTMLResponse)
+    def change_password_page(request: Request) -> HTMLResponse:
+        username = _session_username(request) or ""
+        return HTMLResponse(_change_password_page_html(username=username, error="", success=""))
+
+    @app.post("/change-password", response_class=HTMLResponse)
+    async def change_password_submit(request: Request) -> Response:
+        username = _session_username(request)
+        if not username:
+            return RedirectResponse(url="/login", status_code=303)
+        form = parse_qs((await request.body()).decode("utf-8"))
+        current_password = (form.get("current_password") or [""])[0]
+        new_password = (form.get("new_password") or [""])[0]
+        repeat_password = (form.get("repeat_password") or [""])[0]
+        if not _valid_credentials(username, current_password):
+            _record_security_event("password_change_failed", username, request, {"reason": "bad_current_password"})
+            return HTMLResponse(_change_password_page_html(username=username, error="Текущий пароль неверный", success=""), status_code=400)
+        if len(new_password) < 8:
+            return HTMLResponse(_change_password_page_html(username=username, error="Новый пароль должен быть минимум 8 символов", success=""), status_code=400)
+        if new_password != repeat_password:
+            return HTMLResponse(_change_password_page_html(username=username, error="Новые пароли не совпадают", success=""), status_code=400)
+        _change_local_user_password(username, new_password)
+        _record_security_event("password_changed", username, request, {})
+        return RedirectResponse(url="/", status_code=303)
 
     @app.get("/register", response_class=HTMLResponse)
     def register_page(request: Request) -> HTMLResponse:
@@ -156,7 +179,7 @@ def create_app(runner_factory: Callable[[], SharipovAIRunner] | None = None) -> 
     @app.get("/api/auth/me")
     def auth_me(request: Request) -> dict[str, Any]:
         username = _session_username(request)
-        return {"authenticated": bool(username), "user": username or None, "registration_enabled": _registration_enabled()}
+        return {"authenticated": bool(username), "user": username or None, "registration_enabled": _registration_enabled(), "password_change_required": bool(username and _must_change_password(username))}
 
     @app.get("/ai-bots", response_class=HTMLResponse)
     def ai_bots_page() -> HTMLResponse:
@@ -347,6 +370,23 @@ def _create_local_user(username: str, password: str, *, role: str = "user", must
     _save_users(data)
 
 
+def _change_local_user_password(username: str, new_password: str) -> bool:
+    data = _load_users()
+    user = data.get("users", {}).get(username)
+    if not user:
+        return False
+    user["password_hash"] = _hash_password(new_password)
+    user["must_change_password"] = False
+    user["password_changed_at"] = int(time.time())
+    _save_users(data)
+    return True
+
+
+def _must_change_password(username: str) -> bool:
+    user = _load_users().get("users", {}).get(_clean_username(username))
+    return bool(user and user.get("must_change_password"))
+
+
 def _hash_password(password: str) -> str:
     iterations = 120_000
     salt = secrets.token_hex(16)
@@ -413,6 +453,12 @@ def _login_page_html(*, next_url: str, error: str) -> str:
     return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SharipovAI · Вход</title><style>{_auth_page_style()}</style></head><body><form class="login-card" method="post" action="/login"><div class="login-logo">SA</div><h1>Вход в SharipovAI</h1><p>Доступ защищён. Вход разрешён только владельцу и одобренным пользователям.</p>{error_html}<input type="hidden" name="next" value="{safe_next}"><label>Логин<input name="username" autocomplete="username" required></label><label>Пароль<input name="password" type="password" autocomplete="current-password" required></label><button type="submit">Войти</button><div class="auth-links"><a href="/register?next={safe_next}">Запросить доступ</a><a href="/login">Сбросить форму</a></div><small>Все попытки входа записываются в журнал кибер-безопасности.</small></form></body></html>"""
 
 
+def _change_password_page_html(*, username: str, error: str, success: str) -> str:
+    error_html = f"<p class='error'>{html.escape(error)}</p>" if error else ""
+    success_html = f"<p class='success'>{html.escape(success)}</p>" if success else ""
+    return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SharipovAI · Смена пароля</title><style>{_auth_page_style()}</style></head><body><form class="login-card" method="post" action="/change-password"><div class="login-logo">SA</div><h1>Смена пароля</h1><p>Пользователь: {html.escape(username)}. Временный пароль нужно заменить на личный пароль.</p>{error_html}{success_html}<label>Текущий временный пароль<input name="current_password" type="password" autocomplete="current-password" required></label><label>Новый пароль<input name="new_password" type="password" autocomplete="new-password" required minlength="8"></label><label>Повтор нового пароля<input name="repeat_password" type="password" autocomplete="new-password" required minlength="8"></label><button type="submit">Сохранить новый пароль</button><small>Новый пароль будет сохранён только в виде защищённого хэша.</small></form></body></html>"""
+
+
 def _register_page_html(*, next_url: str, error: str, success: str) -> str:
     safe_next = html.escape(_safe_next_url(next_url), quote=True)
     error_html = f"<p class='error'>{html.escape(error)}</p>" if error else ""
@@ -427,7 +473,7 @@ def _security_page_html(*, username: str, flash: str) -> str:
     flash_html = f"<p class='info-box'>{html.escape(flash)}</p>" if flash else ""
     request_rows = "".join(_security_request_row(item) for item in reversed(requests)) or "<tr><td colspan='6'>Запросов пока нет</td></tr>"
     event_rows = "".join(f"<tr><td>{html.escape(str(item.get('type','')))}</td><td>{html.escape(str(item.get('username','')))}</td><td>{html.escape(str(item.get('ip','')))}</td></tr>" for item in reversed(events)) or "<tr><td colspan='3'>Событий пока нет</td></tr>"
-    return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SharipovAI OS · Кибер-безопасность</title><link rel="stylesheet" href="/static/style.css?v=20260708-20"></head><body><aside class="os-sidebar"><a class="os-brand" href="/?lang=ru"><span class="sa-logo"><span class="sa-logo-text">SA</span></span><span class="brand-copy"><b>SHARIPOV<span>AI</span></b><small>SECURITY CENTER</small></span></a><nav class="os-nav"><a href="/?lang=ru">Обзор</a><a class="active" href="/security?lang=ru">Кибер-безопасность</a><a href="/logout">Выйти</a></nav></aside><main class="os-main approved-shell"><section class="welcome-hero"><div><p class="eyebrow">SECURITY CENTER</p><h1>Кибер-безопасность</h1><p>Пользователь: {html.escape(username)}. Здесь видны запросы доступа и события входа.</p></div></section>{flash_html}<section class="os-panel"><div class="panel-head"><h2>Запросы доступа</h2><a href="/api/security/access-requests">API</a></div><table class="trade-table"><thead><tr><th>ID</th><th>Логин</th><th>Контакт</th><th>Статус</th><th>Причина</th><th>Действие</th></tr></thead><tbody>{request_rows}</tbody></table></section><section class="os-panel" style="margin-top:18px"><h2>Журнал событий</h2><table class="trade-table"><thead><tr><th>Событие</th><th>Логин</th><th>IP</th></tr></thead><tbody>{event_rows}</tbody></table></section></main></body></html>"""
+    return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SharipovAI OS · Кибер-безопасность</title><link rel="stylesheet" href="/static/style.css?v=20260708-21"></head><body><aside class="os-sidebar"><a class="os-brand" href="/?lang=ru"><span class="sa-logo"><span class="sa-logo-text">SA</span></span><span class="brand-copy"><b>SHARIPOV<span>AI</span></b><small>SECURITY CENTER</small></span></a><nav class="os-nav"><a href="/?lang=ru">Обзор</a><a class="active" href="/security?lang=ru">Кибер-безопасность</a><a href="/logout">Выйти</a></nav></aside><main class="os-main approved-shell"><section class="welcome-hero"><div><p class="eyebrow">SECURITY CENTER</p><h1>Кибер-безопасность</h1><p>Пользователь: {html.escape(username)}. Здесь видны запросы доступа и события входа.</p></div></section>{flash_html}<section class="os-panel"><div class="panel-head"><h2>Запросы доступа</h2><a href="/api/security/access-requests">API</a></div><table class="trade-table"><thead><tr><th>ID</th><th>Логин</th><th>Контакт</th><th>Статус</th><th>Причина</th><th>Действие</th></tr></thead><tbody>{request_rows}</tbody></table></section><section class="os-panel" style="margin-top:18px"><h2>Журнал событий</h2><table class="trade-table"><thead><tr><th>Событие</th><th>Логин</th><th>IP</th></tr></thead><tbody>{event_rows}</tbody></table></section></main></body></html>"""
 
 
 def _security_request_row(item: dict[str, Any]) -> str:
@@ -451,7 +497,7 @@ def _ai_bots_page_html() -> str:
     bots = _ai_bots()
     cards = "".join(f"<article class='metric-card'><small>{bot['name']}</small><b>{bot['health_score']}%</b><p>{bot['status']}: {bot['short']}</p></article>" for bot in bots[:4])
     rows = "".join(f"<tr><td><b>{bot['name']}</b><small>{bot['kind']}</small></td><td>{bot['responsibility']}</td><td>{bot['reports_to']}</td><td>{bot['status']}</td><td>{bot['health_score']}%</td><td>{bot['last_report']}</td></tr>" for bot in bots)
-    return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SharipovAI OS · AI-боты</title><link rel="stylesheet" href="/static/style.css?v=20260708-20"></head><body><aside class="os-sidebar"><a class="os-brand" href="/?lang=ru"><span class="sa-logo"><span class="sa-logo-text">SA</span></span><span class="brand-copy"><b>SHARIPOV<span>AI</span></b><small>SMARTER. DATA. DECISIONS.</small></span></a><nav class="os-nav"><a href="/?lang=ru">Обзор</a><a href="/ai-decision?lang=ru">AI-решение</a><a href="/portfolio?lang=ru">Портфель</a><a href="/stress-lab?lang=ru">Стресс-лаборатория</a><a class="active" href="/ai-bots?lang=ru">AI-боты</a><a href="/news?lang=ru">Новости</a><a href="/paper-trading?lang=ru">Журнал сделок</a><a href="/settings?lang=ru">Настройки</a></nav><div class="os-heartbeat"><span class="live-dot"></span><div><b>AI активен</b><small>Система в работе</small></div></div></aside><main class="os-main approved-shell"><header class="approved-topbar"><div class="top-stat"><small>Генеральный контролёр</small><b class="status-green">НАБЛЮДАЕТ</b></div><div class="top-stat"><small>Боты онлайн</small><b>10 / 11</b></div><div class="top-stat"><small>Общее здоровье</small><b>94%</b></div></header><section class="welcome-hero"><div><p class="eyebrow">AI BOTS COMMAND CENTER</p><h1>AI-боты</h1><p>Здесь видно, какие боты входят в SharipovAI, кто за что отвечает, кто кому подчиняется, в каком состоянии каждый бот и что сообщает генеральный контролёр.</p></div><div class="hero-logo"><span>SA</span></div></section><section class="os-panel"><h2>Генеральный контролёр AI</h2><p class="info-box">Главный бот следит за всеми модулями, проверяет их отчёты, ищет конфликты и блокирует опасные решения.</p></section><section class="metric-grid">{cards}</section><section class="os-panel" style="margin-top:18px"><div class="panel-head"><h2>Список ботов и их работа</h2><a href="/api/ai-bots">API</a></div><table class="trade-table"><thead><tr><th>Бот</th><th>За что отвечает</th><th>Кому подчиняется</th><th>Состояние</th><th>Здоровье</th><th>Последний отчёт</th></tr></thead><tbody>{rows}</tbody></table></section><section class="bottom-trust"><span>🤖 Все боты видны</span><span>👑 Есть генеральный контролёр</span><span>🛡 Риск проверяется</span><span>📋 Каждый бот отчитывается</span></section></main></body></html>"""
+    return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SharipovAI OS · AI-боты</title><link rel="stylesheet" href="/static/style.css?v=20260708-21"></head><body><aside class="os-sidebar"><a class="os-brand" href="/?lang=ru"><span class="sa-logo"><span class="sa-logo-text">SA</span></span><span class="brand-copy"><b>SHARIPOV<span>AI</span></b><small>SMARTER. DATA. DECISIONS.</small></span></a><nav class="os-nav"><a href="/?lang=ru">Обзор</a><a href="/ai-decision?lang=ru">AI-решение</a><a href="/portfolio?lang=ru">Портфель</a><a href="/stress-lab?lang=ru">Стресс-лаборатория</a><a class="active" href="/ai-bots?lang=ru">AI-боты</a><a href="/news?lang=ru">Новости</a><a href="/paper-trading?lang=ru">Журнал сделок</a><a href="/settings?lang=ru">Настройки</a></nav><div class="os-heartbeat"><span class="live-dot"></span><div><b>AI активен</b><small>Система в работе</small></div></div></aside><main class="os-main approved-shell"><header class="approved-topbar"><div class="top-stat"><small>Генеральный контролёр</small><b class="status-green">НАБЛЮДАЕТ</b></div><div class="top-stat"><small>Боты онлайн</small><b>10 / 11</b></div><div class="top-stat"><small>Общее здоровье</small><b>94%</b></div></header><section class="welcome-hero"><div><p class="eyebrow">AI BOTS COMMAND CENTER</p><h1>AI-боты</h1><p>Здесь видно, какие боты входят в SharipovAI, кто за что отвечает, кто кому подчиняется, в каком состоянии каждый бот и что сообщает генеральный контролёр.</p></div><div class="hero-logo"><span>SA</span></div></section><section class="os-panel"><h2>Генеральный контролёр AI</h2><p class="info-box">Главный бот следит за всеми модулями, проверяет их отчёты, ищет конфликты и блокирует опасные решения.</p></section><section class="metric-grid">{cards}</section><section class="os-panel" style="margin-top:18px"><div class="panel-head"><h2>Список ботов и их работа</h2><a href="/api/ai-bots">API</a></div><table class="trade-table"><thead><tr><th>Бот</th><th>За что отвечает</th><th>Кому подчиняется</th><th>Состояние</th><th>Здоровье</th><th>Последний отчёт</th></tr></thead><tbody>{rows}</tbody></table></section><section class="bottom-trust"><span>🤖 Все боты видны</span><span>👑 Есть генеральный контролёр</span><span>🛡 Риск проверяется</span><span>📋 Каждый бот отчитывается</span></section></main></body></html>"""
 
 
 def _ai_bots() -> list[dict[str, Any]]:
