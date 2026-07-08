@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ai_evidence import enrich_ai_status, system_scoreboard
+from telegram_health import telegram_health
 
 try:
     from news_monitor.ai_auditor import audit_news_ai
@@ -32,15 +33,16 @@ SYSTEM_BOTS: tuple[SystemBot, ...] = (
     SystemBot("stress_lab_ai", "Stress Lab AI", "Проверяет портфель на падение рынка, depeg, ликвидации и стресс.", ("Есть stress scenarios.", "Есть shock simulation."), ("Нужно больше сценариев: depeg, exchange outage, funding spike.",), True),
     SystemBot("portfolio_report_ai", "Portfolio & Reports AI", "Показывает equity, PnL, комиссии, сделки и отчёты.", ("Есть demo state с equity/PnL/fees.",), ("Нет live account отчёта.", "Нужен export daily/weekly report.")),
     SystemBot("security_cyber_ai", "Security/Cyber AI", "Следит за доступами, секретами, LIVE lock и кибер-рисками.", ("LIVE trading disabled.", "Есть security news sources."), ("Нужен secret scanner.", "Нужен suspicious login alert."), True),
-    SystemBot("telegram_bot_ai", "Telegram Bot AI", "Общается с пользователем в Telegram и открывает Mini App.", ("Есть telegram_bot.py.", "Есть WEBAPP_URL architecture."), ("Нужен production bot self-test.", "Нужен capture из allowlist групп."), True),
+    SystemBot("telegram_bot_ai", "Telegram Bot AI", "Общается с пользователем в Telegram и открывает Mini App.", ("Есть telegram_bot.py.", "Есть webhook API.", "Есть Telegram self-test."), ("После деплоя нужно установить webhook.", "Нужен capture из allowlist групп."), True),
     SystemBot("mini_app_ui_ai", "Mini App UI AI", "Показывает dashboard, новости, сделки, риск и чат в Telegram Mini App.", ("Есть live pages.", "Есть Mini App JS."), ("Убрать JS-костыли.", "Добавить встроенную кнопку 'Можно ли торговать?'")),
 )
 
 
 def audit_system_ai() -> dict[str, object]:
-    """Audit all system AI bots and include News AI audit."""
+    """Audit all system AI bots and include News AI and Telegram health audit."""
 
     system_interviews = [_interview_system_bot(bot) for bot in SYSTEM_BOTS]
+    system_interviews = _apply_telegram_health(system_interviews)
     news_audit = audit_news_ai() if audit_news_ai else {"status": "error", "interviews": []}
     news_interviews = _normalize_news_interviews(news_audit)
     all_interviews = [enrich_ai_status(item) for item in system_interviews + news_interviews]
@@ -50,6 +52,7 @@ def audit_system_ai() -> dict[str, object]:
     critical_bad = [item for item in all_interviews if item.get("critical") and item["verdict"] != "работает"]
     news_agents = [item for item in all_interviews if item.get("scope") == "news"]
     scoreboard = system_scoreboard(news_agents)
+    telegram = telegram_health()
     return {
         "status": "ok",
         "auditor": {
@@ -62,14 +65,35 @@ def audit_system_ai() -> dict[str, object]:
             "critical_bad": len(critical_bad),
             "average_proof_score": scoreboard.get("average_proof_score", 0),
             "overall_grade": _grade(len(working), len(all_interviews), len(fake_like), len(critical_bad)),
-            "summary": _summary(len(working), len(all_interviews), len(fake_like), len(critical_bad), scoreboard.get("average_proof_score", 0)),
+            "summary": _summary(len(working), len(all_interviews), len(fake_like), len(critical_bad), scoreboard.get("average_proof_score", 0), telegram),
         },
         "scoreboard": scoreboard,
+        "telegram_health": telegram,
         "interviews": all_interviews,
         "system_interviews": [item for item in all_interviews if item.get("scope") == "system"],
         "news_audit": news_audit,
-        "priority_actions": _priority_actions(all_interviews),
+        "priority_actions": _priority_actions(all_interviews, telegram),
     }
+
+
+def _apply_telegram_health(items: list[dict[str, object]]) -> list[dict[str, object]]:
+    health = telegram_health()
+    out: list[dict[str, object]] = []
+    for item in items:
+        if item.get("id") != "telegram_bot_ai":
+            out.append(item)
+            continue
+        verdict = "работает" if health.get("verdict") == "working" else "частично работает"
+        updated = dict(item)
+        updated["verdict"] = verdict
+        updated["health_score"] = health.get("health_score", updated.get("health_score", 0))
+        updated["evidence"] = list(updated.get("evidence", [])) + [f"Telegram self-test verdict: {health.get('verdict')}"]
+        updated["problems"] = [str(health.get("explanation", ""))]
+        updated["missing"] = [str(health.get("next_fix", ""))]
+        updated["next_fix"] = str(health.get("next_fix", ""))
+        updated["telegram_health"] = health
+        out.append(updated)
+    return out
 
 
 def _interview_system_bot(bot: SystemBot) -> dict[str, object]:
@@ -126,14 +150,16 @@ def _next_fix(bot_id: str, verdict: str) -> str:
         "stress_lab_ai": "Добавить сценарии depeg, flash crash, exchange outage, funding spike.",
         "portfolio_report_ai": "Добавить ежедневный/недельный отчёт и экспорт в Mini App.",
         "security_cyber_ai": "Добавить секрет-сканер и security alerts по токенам/env/логинам.",
-        "telegram_bot_ai": "Добавить endpoint самопроверки Telegram bot и capture сообщений из allowlist групп.",
+        "telegram_bot_ai": "После деплоя открыть /telegram-check и /api/telegram/set-webhook.",
         "mini_app_ui_ai": "Убрать JS-костыли, закрепить разделы Новости/ИИ-аудит/Trade Gate в Mini App.",
     }
     return fixes.get(bot_id, "Добавить реальные входные данные, freshness score и журнал проверок.")
 
 
-def _priority_actions(items: list[dict[str, object]]) -> list[str]:
+def _priority_actions(items: list[dict[str, object]], telegram: dict[str, object]) -> list[str]:
     actions: list[str] = []
+    if telegram.get("verdict") != "working":
+        actions.append(str(telegram.get("next_fix", "Открыть /telegram-check.")))
     for target in ("telegram_news_ai", "x_news_ai", "youtube_news_ai", "learning_engine", "general_controller", "security_cyber_ai", "risk_engine"):
         item = next((entry for entry in items if entry.get("id") == target), None)
         if item and item.get("verdict") != "работает":
@@ -153,11 +179,13 @@ def _grade(working: int, total: int, fake_like: int, critical_bad: int) -> str:
     return "PARTIAL"
 
 
-def _summary(working: int, total: int, fake_like: int, critical_bad: int, avg_proof: object) -> str:
+def _summary(working: int, total: int, fake_like: int, critical_bad: int, avg_proof: object, telegram: dict[str, object]) -> str:
+    telegram_line = f" Telegram: {telegram.get('verdict')} ({telegram.get('explanation')})."
     return (
         f"Работают полноценно: {working}/{total}. "
         f"Делают вид/заглушки: {fake_like}. "
         f"Критичных AI с недоработками: {critical_bad}. "
         f"Средний proof score: {avg_proof}. "
         "Теперь система честно различает live/demo/waiting_api/disabled."
+        f"{telegram_line}"
     )
