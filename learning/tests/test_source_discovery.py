@@ -64,6 +64,7 @@ def test_rank_source_candidates_puts_trusted_sources_first() -> None:
 
     assert ranked[0]["title"] == "SEC guide"
     assert ranked[0]["validation"]["status"] == "accepted"
+    assert ranked[1]["validation"]["status"] == "needs_review"
 
 
 def test_source_discovery_api() -> None:
