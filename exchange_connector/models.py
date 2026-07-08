@@ -33,6 +33,22 @@ class ExchangeStatus:
     api_secret_configured: bool
     message: str
 
+    def to_dict(self) -> dict[str, object]:
+        """Return a JSON-serializable status."""
+
+        return {
+            "exchange_name": self.exchange_name,
+            "mode": self.mode,
+            "connected": self.connected,
+            "can_read_market": self.can_read_market,
+            "can_preview_orders": self.can_preview_orders,
+            "can_execute_orders": self.can_execute_orders,
+            "live_trading_enabled": self.live_trading_enabled,
+            "api_key_configured": self.api_key_configured,
+            "api_secret_configured": self.api_secret_configured,
+            "message": self.message,
+        }
+
 
 @dataclass(frozen=True)
 class ExchangeOrderPreview:
@@ -46,8 +62,14 @@ class ExchangeOrderPreview:
     price: float
     notional: float
     fee_rate: float
-    estimated_fee: float
+    entry_fee: float
+    expected_exit_price: float | None
+    expected_exit_fee: float
+    total_fees: float
     total_cost: float
+    gross_result: float | None
+    net_result_after_fees: float | None
+    commission_drag: float | None
     break_even_price: float
     commission_counted_as_loss: bool
     execution_allowed: bool
@@ -65,8 +87,14 @@ class ExchangeOrderPreview:
             "price": self.price,
             "notional": self.notional,
             "fee_rate": self.fee_rate,
-            "estimated_fee": self.estimated_fee,
+            "entry_fee": self.entry_fee,
+            "expected_exit_price": self.expected_exit_price,
+            "expected_exit_fee": self.expected_exit_fee,
+            "total_fees": self.total_fees,
             "total_cost": self.total_cost,
+            "gross_result": self.gross_result,
+            "net_result_after_fees": self.net_result_after_fees,
+            "commission_drag": self.commission_drag,
             "break_even_price": self.break_even_price,
             "commission_counted_as_loss": self.commission_counted_as_loss,
             "execution_allowed": self.execution_allowed,
