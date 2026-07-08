@@ -1,0 +1,1 @@
+"""SharipovAI learning package."""
