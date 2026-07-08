@@ -23,6 +23,7 @@ def test_social_news_api_returns_seeded_state(monkeypatch, tmp_path: Path) -> No
     assert payload["sources"]["total"] >= 10
     assert payload["news"]["summary"]["total"] > 0
     assert payload["rss_enabled"] is True
+    assert "telegram_client" in payload
 
 
 def test_social_news_sources_api(monkeypatch, tmp_path: Path) -> None:
@@ -37,6 +38,40 @@ def test_social_news_sources_api(monkeypatch, tmp_path: Path) -> None:
     assert "telegram" in payload["grouped"]
     assert "x" in payload["grouped"]
     assert "rss" in payload["grouped"]
+    assert "telegram_client" in payload
+
+
+def test_social_news_telegram_status_when_not_configured(monkeypatch, tmp_path: Path) -> None:
+    """Telegram client status should explain missing config without secrets."""
+
+    monkeypatch.setenv("NEWS_MONITOR_STATE_FILE", str(tmp_path / "news_state.json"))
+    for name in ("TELEGRAM_API_ID", "TELEGRAM_API_HASH", "TELEGRAM_SESSION_STRING", "TELEGRAM_NEWS_SOURCES"):
+        monkeypatch.delenv(name, raising=False)
+
+    response = TestClient(create_app()).get("/api/social-news/telegram/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["telegram_client"]["configured"] is False
+    assert "TELEGRAM_SESSION_STRING" in payload["telegram_client"]["missing"]
+    assert "api_hash" not in str(payload).lower()
+
+
+def test_social_news_telegram_refresh_disabled_when_not_configured(monkeypatch, tmp_path: Path) -> None:
+    """Telegram refresh should not crash when credentials are absent."""
+
+    monkeypatch.setenv("NEWS_MONITOR_STATE_FILE", str(tmp_path / "news_state.json"))
+    monkeypatch.delenv("TELEGRAM_CLIENT_ENABLED", raising=False)
+    client = TestClient(create_app())
+
+    response = client.post("/api/social-news/telegram/refresh", json={"limit_per_source": 2})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "disabled"
+    assert payload["items"] == []
+    assert "news" in payload
 
 
 def test_social_news_analyze_api_blocks_unconfirmed_social_claim(monkeypatch, tmp_path: Path) -> None:
@@ -74,3 +109,4 @@ def test_social_news_alerts_api(monkeypatch, tmp_path: Path) -> None:
     assert payload["status"] == "ok"
     assert payload["alerts"]
     assert payload["summary"]["block_buy"] >= 1
+    assert "telegram_client" in payload
