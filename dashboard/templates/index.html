@@ -7,125 +7,47 @@
   <link rel="icon" href="/favicon.ico" type="image/svg+xml">
   <link rel="stylesheet" href="/static/style.css?v=20260708-11">
   <link rel="stylesheet" href="/static/mobile-fix.css?v=20260708-21">
-  <style>.mini-tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:14px 0 18px}.mini-tabs button{border:1px solid #1e90ff55;background:#06182a;color:#bfe7ff;border-radius:16px;padding:11px 8px;font-weight:900;font-size:14px}.mini-tabs button.active{background:linear-gradient(135deg,#1188ff,#19d3ff);color:#fff}.bot-grid{display:grid;gap:10px}.bot-row{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;border:1px solid #1e90ff33;background:#06182a;border-radius:16px;padding:12px}.bot-row b{display:block;color:#fff}.bot-row small{color:#9fb2c8}.bot-state{font-weight:900;color:#34d399}.bot-state.warn{color:#fbbf24}.bot-state.off{color:#f87171}.mini-section{scroll-margin-top:18px}</style>
+  <style>
+    .mini-app-shell{max-width:720px;margin:0 auto;padding:18px 20px 48px;background:radial-gradient(circle at top,#07365a 0,#00111d 42%,#000b13 100%);min-height:100vh;color:#fff}.mini-top{margin-bottom:14px}.mini-brand{display:grid;grid-template-columns:64px 1fr auto;align-items:center;gap:14px}.mini-logo{width:58px;height:58px;border-radius:18px;display:grid;place-items:center;background:linear-gradient(135deg,#19a7ff,#20d5ff);color:#00111d;font-weight:1000;font-size:24px}.mini-title b{display:block;font-size:26px}.mini-title small{color:#9fb2c8;font-size:15px}.mini-pill{border:1px solid #1e90ff66;background:#06182a;color:#bfe7ff;border-radius:999px;padding:11px 16px;font-weight:900}.mini-tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:16px 0 18px}.mini-tabs button{border:1px solid #1e90ff55;background:#06182a;color:#bfe7ff;border-radius:18px;padding:12px 8px;font-weight:1000;font-size:14px}.mini-tabs button.active{background:linear-gradient(135deg,#1188ff,#19d3ff);color:white;box-shadow:0 0 18px #10bfff44}.mini-card{border:1px solid #1e90ff44;background:#071827cc;border-radius:24px;padding:22px 26px;margin:14px 0;box-shadow:0 12px 32px #00000022}.mini-card h2{font-size:30px;margin:0 0 18px}.mini-section{display:none}.mini-section.active-panel{display:block}.mini-balance{font-size:40px;line-height:1;font-weight:1000;margin:6px 0 16px}.mini-grid{display:grid;grid-template-columns:1fr;gap:12px}.mini-stat{border:1px solid #1e90ff33;background:#061420;border-radius:18px;padding:15px 18px}.mini-stat small{display:block;color:#95a7bc;font-size:18px;margin-bottom:8px}.mini-stat b{font-size:24px}.positive{color:#34d399}.negative{color:#fb7185}.mini-chat-log{display:grid;gap:12px;max-height:360px;overflow:auto;margin-bottom:14px}.mini-message{display:grid;grid-template-columns:54px 1fr;gap:10px;align-items:end}.user-message{grid-template-columns:1fr 54px}.user-message .mini-avatar{grid-column:2;grid-row:1}.user-message .mini-bubble{grid-column:1;grid-row:1}.mini-avatar{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;border:1px solid #1e90ff55;background:#06223a;font-weight:1000}.mini-bubble{border:1px solid #1e90ff44;background:#081c2e;border-radius:20px;padding:14px 18px}.mini-bubble b{color:#13c8ff}.mini-bubble p{margin:8px 0 0;font-size:18px;line-height:1.4}.mini-form{display:grid;grid-template-columns:1fr 74px;gap:12px}.mini-form textarea{min-height:62px;border-radius:18px;padding:14px 18px;background:#061420;color:white;border:1px solid #1e90ff44;font-size:18px;resize:none}.mini-send{border:0;border-radius:20px;background:linear-gradient(135deg,#1188ff,#19d3ff);color:#00111d;font-size:24px;font-weight:1000}.quick-chat-actions{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:12px}.quick-chat-actions button,.save-button{border:1px solid #1e90ff55;background:#06223a;color:#bfe7ff;border-radius:18px;padding:13px;font-weight:1000;font-size:16px}.save-button{width:100%;background:linear-gradient(135deg,#1188ff,#19d3ff);color:white;border:0;margin-top:12px}.risk-row{display:block;font-size:18px;margin:14px 0}.risk-row output{float:right;border:1px solid #1e90ff55;border-radius:14px;padding:6px 12px}.risk-row input{width:100%;margin-top:14px}.mini-table{width:100%;border-collapse:collapse}.mini-table td{border-bottom:1px solid #1e90ff33;padding:14px 6px;font-size:18px}.info-box{border:1px solid #1e90ff33;background:#082033;border-radius:18px;padding:14px 16px;color:#cbd5e1;font-size:17px;line-height:1.4}.bot-grid{display:grid;gap:10px}.bot-row{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;border:1px solid #1e90ff33;background:#061420;border-radius:16px;padding:12px}.bot-row b{display:block}.bot-row small{color:#9fb2c8}.bot-state{font-weight:1000;color:#34d399}.bottom-safe{height:28px}@media(max-width:460px){.mini-app-shell{padding:14px 20px 42px}.mini-brand{grid-template-columns:58px 1fr auto}.mini-title b{font-size:23px}.mini-title small{font-size:14px}.mini-pill{padding:9px 12px}.mini-tabs{grid-template-columns:repeat(3,1fr);gap:8px}.mini-tabs button{font-size:13px;padding:11px 6px}.mini-card{padding:20px 26px}.mini-card h2{font-size:28px}.mini-balance{font-size:36px}.quick-chat-actions{grid-template-columns:1fr 1fr}.mini-stat b{font-size:22px}}
+  </style>
 </head>
 <body>
   <aside class="os-sidebar">
-    <a class="os-brand" href="/?lang={{ lang }}" aria-label="SharipovAI OS"><span class="sa-logo"><span class="sa-logo-text">SA</span><span class="sa-candles"><i></i><i></i><i></i><i></i></span></span><span class="brand-copy"><b>SHARIPOV<span>AI</span></b><small>SMARTER. DATA. DECISIONS.</small></span></a>
-    <nav class="os-nav" aria-label="Main navigation">
-      {% for item in nav_items %}<a class="{% if page == item.page %}active{% endif %}" href="{{ item.href }}">{{ t[item.key] }}</a>{% endfor %}
-      <a class="{% if page == 'news' %}active{% endif %}" href="/news?lang={{ lang }}">Новости</a>
-      <a class="{% if page == 'paper-trading' %}active{% endif %}" href="/paper-trading?lang={{ lang }}">Журнал сделок</a>
-    </nav>
-    <div class="os-heartbeat"><span class="live-dot"></span><div><b>AI активен</b><small>Система в работе</small></div></div>
+    <a class="os-brand" href="/?lang={{ lang }}" aria-label="SharipovAI OS"><span class="sa-logo"><span class="sa-logo-text">SA</span></span><span class="brand-copy"><b>SHARIPOV<span>AI</span></b><small>SMARTER. DATA. DECISIONS.</small></span></a>
+    <nav class="os-nav" aria-label="Main navigation">{% for item in nav_items %}<a class="{% if page == item.page %}active{% endif %}" href="{{ item.href }}">{{ t[item.key] }}</a>{% endfor %}<a href="/news?lang={{ lang }}">Новости</a><a href="/paper-trading?lang={{ lang }}">Журнал сделок</a></nav>
   </aside>
 
   <main class="os-main approved-shell">
     <section class="mini-app-shell" aria-label="SharipovAI Mini App">
-      <header class="mini-top">
-        <div class="mini-brand">
-          <div class="mini-logo">SA</div>
-          <div class="mini-title"><b>SharipovAI</b><small>Онлайн · Демо-режим</small></div>
-          <button class="mini-pill" type="button" data-mini-tab="risk-section">Настройки</button>
-        </div>
-      </header>
-
+      <header class="mini-top"><div class="mini-brand"><div class="mini-logo">SA</div><div class="mini-title"><b>SharipovAI</b><small>Онлайн · Демо-режим</small></div><button class="mini-pill" type="button" data-mini-tab="settings-section">Настройки</button></div></header>
       <nav class="mini-tabs" aria-label="Разделы Mini App">
-        <button class="active" type="button" data-mini-tab="overview-section">Обзор</button>
-        <button type="button" data-mini-tab="chat-section">AI чат</button>
-        <button type="button" data-mini-tab="bots-section">AI-боты</button>
-        <button type="button" data-mini-tab="risk-section">Риск</button>
-        <button type="button" data-mini-tab="trades-section">Сделки</button>
-        <button type="button" data-mini-tab="exchange-section">Биржа</button>
+        <button class="active" type="button" data-mini-tab="overview-section">Обзор</button><button type="button" data-mini-tab="chat-section">AI чат</button><button type="button" data-mini-tab="bots-section">AI-боты</button><button type="button" data-mini-tab="risk-section">Риск</button><button type="button" data-mini-tab="trades-section">Сделки</button><button type="button" data-mini-tab="exchange-section">Биржа</button><button type="button" data-mini-tab="stress-section">Стресс</button><button type="button" data-mini-tab="learning-section">Обучение</button><button type="button" data-mini-tab="reports-section">Отчёты</button>
       </nav>
 
-      <article class="mini-card mini-section" id="overview-section">
-        <h2>Обзор</h2>
-        <small>Демо-баланс</small>
-        <div class="mini-balance" id="portfolio-equity" data-demo-equity>{{ "%.2f"|format(view.paper_equity) }} USDT</div>
-        <div class="mini-grid">
-          <div class="mini-stat"><small>PnL</small><b id="portfolio-pnl" class="positive">{{ "%.2f"|format(view.paper_pnl) }} USDT</b></div>
-          <div class="mini-stat"><small>Риск</small><b id="hero-risk">{{ display.risk }}</b></div>
-        </div>
-      </article>
+      <article class="mini-card mini-section active-panel" id="overview-section"><h2>Обзор</h2><small>Демо-баланс</small><div class="mini-balance" id="portfolio-equity">{{ "%.2f"|format(view.paper_equity) }} USDT</div><div class="mini-grid"><div class="mini-stat"><small>Чистый PnL</small><b id="portfolio-pnl" class="positive">{{ "%.2f"|format(view.paper_pnl) }} USDT</b></div><div class="mini-stat"><small>Риск</small><b id="hero-risk">{{ display.risk }}</b></div><div class="mini-stat"><small>Решение AI</small><b id="hero-decision-mini">{{ display.decision }}</b></div><div class="mini-stat"><small>Биржа</small><b id="overview-exchange">Песочница</b></div></div><p class="info-box">Все функции сайта доступны во вкладках выше. Реальные ордера заблокированы, расчёты идут в демо.</p></article>
 
-      <article class="mini-card mini-section" id="chat-section">
-        <h2>AI чат</h2>
-        <div class="mini-chat-log" id="ai-chat-log" aria-live="polite">
-          <div class="mini-message assistant-message"><div class="mini-avatar">SA</div><div class="mini-bubble"><b>SharipovAI</b><p>Я онлайн. Могу купить/продать в демо, поменять демо-баланс, объяснить портфель, рынок, биржу и комиссии.</p></div></div>
-        </div>
-        <form id="ai-command-form" class="mini-form">
-          <textarea id="ai-command-input" placeholder="Например: купи BTC или мониторинг онлайн..." autocomplete="off"></textarea>
-          <button class="mini-send" type="submit" id="send-command" title="Отправить">➤</button>
-        </form>
-        <div class="quick-chat-actions">
-          <button type="button" data-prompt="Покажи портфель">Портфель</button>
-          <button type="button" data-prompt="Анализ рынка и купи если риск низкий">Рынок</button>
-          <button type="button" data-prompt="Мониторинг онлайн биржи и ботов">Мониторинг</button>
-          <button type="button" data-prompt="Купи BTC виртуально">Купить BTC</button>
-        </div>
-      </article>
+      <article class="mini-card mini-section" id="chat-section"><h2>AI чат</h2><div class="mini-chat-log" id="ai-chat-log"><div class="mini-message assistant-message"><div class="mini-avatar">SA</div><div class="mini-bubble"><b>SharipovAI</b><p>Я онлайн. Могу анализировать рынок, демо-портфель, риск, комиссии Bybit, займы, VIP-условия и AI-ботов.</p></div></div></div><form id="ai-command-form" class="mini-form"><textarea id="ai-command-input" placeholder="Например: найди выгодные условия Bybit..." autocomplete="off"></textarea><button class="mini-send" type="submit">➤</button></form><div class="quick-chat-actions"><button type="button" data-prompt="Покажи портфель">Портфель</button><button type="button" data-prompt="Найди выгодные условия Bybit">Выгодно</button><button type="button" data-prompt="Мониторинг онлайн биржи и ботов">Мониторинг</button><button type="button" data-prompt="Купи BTC виртуально">Купить BTC</button></div></article>
 
-      <article class="mini-card mini-section" id="bots-section">
-        <h2>Мониторинг AI-ботов</h2>
-        <div class="mini-grid">
-          <div class="mini-stat"><small>Всего</small><b id="bots-total">0</b></div>
-          <div class="mini-stat"><small>Активны</small><b id="bots-active">0</b></div>
-          <div class="mini-stat"><small>Внимание</small><b id="bots-warnings">0</b></div>
-        </div>
-        <div class="bot-grid" id="bot-list"><div class="bot-row"><div><b>Загрузка AI-ботов...</b><small>Проверяю состояние модулей</small></div><span class="bot-state">...</span></div></div>
-      </article>
+      <article class="mini-card mini-section" id="bots-section"><h2>Мониторинг AI-ботов</h2><div class="mini-grid"><div class="mini-stat"><small>Всего</small><b id="bots-total">0</b></div><div class="mini-stat"><small>Активны</small><b id="bots-active">0</b></div><div class="mini-stat"><small>Требуют внимания</small><b id="bots-warnings">0</b></div></div><div class="bot-grid" id="bot-list"><div class="bot-row"><div><b>Загрузка AI-ботов...</b><small>Проверяю состояние модулей</small></div><span class="bot-state">...</span></div></div></article>
 
-      <article class="mini-card mini-section risk-panel" id="risk-section">
-        <h2>Настройки риска</h2>
-        <label class="risk-row">Риск на сделку <output>2%</output><input data-range-output type="range" min="0" max="10" value="2"></label>
-        <label class="risk-row">Макс. просадка <output>10%</output><input data-range-output type="range" min="0" max="50" value="10"></label>
-        <label class="risk-row">Уверенность AI <output>78%</output><input data-range-output type="range" min="0" max="100" value="78"></label>
-        <button class="save-button" type="button" id="save-settings">✓ Сохранить изменения</button>
-        <p class="info-box" id="save-status">Изменения сохраняются локально для демо-режима.</p>
-      </article>
+      <article class="mini-card mini-section risk-panel" id="risk-section"><h2>Настройки риска</h2><label class="risk-row">Риск на сделку <output>2%</output><input data-range-output type="range" min="0" max="10" value="2"></label><label class="risk-row">Макс. просадка <output>10%</output><input data-range-output type="range" min="0" max="50" value="10"></label><label class="risk-row">Уверенность AI <output>78%</output><input data-range-output type="range" min="0" max="100" value="78"></label><button class="save-button" type="button" id="save-settings">✓ Сохранить изменения</button><p class="info-box" id="save-status">Настройки сохраняются локально для демо-режима.</p></article>
 
-      <article class="mini-card mini-section" id="trades-section">
-        <h2>Сделки</h2>
-        <table class="mini-table"><tbody><tr><td>Сделок пока нет</td><td>0.00</td></tr></tbody></table>
-      </article>
+      <article class="mini-card mini-section" id="trades-section"><h2>Сделки</h2><table class="mini-table"><tbody><tr><td>Сделок пока нет</td><td>0.00</td></tr></tbody></table></article>
 
-      <article class="mini-card mini-section" id="exchange-section">
-        <h2>Биржа и комиссии</h2>
-        <div class="mini-grid">
-          <div class="mini-stat"><small>Режим</small><b id="exchange-mode">sandbox</b></div>
-          <div class="mini-stat"><small>Preview</small><b id="exchange-preview">...</b></div>
-          <div class="mini-stat"><small>Live</small><b id="exchange-live">Выкл.</b></div>
-          <div class="mini-stat"><small>Комиссии</small><b id="exchange-fees">0.00 USDT</b></div>
-          <div class="mini-stat"><small>Потери от комиссий</small><b id="exchange-drag">0.00 USDT</b></div>
-          <div class="mini-stat"><small>Безубыток BTC</small><b id="exchange-breakeven">0.00 USDT</b></div>
-        </div>
-        <p class="info-box" id="exchange-message">Реальные ордера заблокированы. Демо считает комиссии и убытки от комиссий через биржевой preview.</p>
-      </article>
+      <article class="mini-card mini-section" id="exchange-section"><h2>Биржа и комиссии</h2><div class="mini-grid"><div class="mini-stat"><small>Режим</small><b id="exchange-mode">Песочница</b></div><div class="mini-stat"><small>Предпросмотр</small><b id="exchange-preview">...</b></div><div class="mini-stat"><small>Реальные сделки</small><b id="exchange-live">Выкл.</b></div><div class="mini-stat"><small>Комиссии</small><b id="exchange-fees">0.00 USDT</b></div><div class="mini-stat"><small>Потери от комиссий</small><b id="exchange-drag">0.00 USDT</b></div><div class="mini-stat"><small>Безубыток BTC</small><b id="exchange-breakeven">0.00 USDT</b></div><div class="mini-stat"><small>Расчёт условий</small><b id="exchange-cost-ai">...</b></div><div class="mini-stat"><small>Лучшие условия</small><b id="cost-best-venue">...</b></div><div class="mini-stat"><small>Круговая комиссия</small><b id="cost-roundtrip">0.00 USDT</b></div><div class="mini-stat"><small>Движение до безубытка</small><b id="cost-breakeven-move">0.0000%</b></div><div class="mini-stat"><small>Экономия</small><b id="cost-saving">0.00 USDT</b></div><div class="mini-stat"><small>Дешёвый заём</small><b id="cost-cheapest-borrow">...</b></div></div><p class="info-box" id="exchange-message">Реальные ордера заблокированы. AI считает комиссии, займы, VIP и чистый PnL.</p></article>
+
+      <article class="mini-card mini-section" id="stress-section"><h2>Стресс-тест</h2><div class="mini-grid"><div class="mini-stat"><small>Сценарий</small><b id="mini-stress-scenario">BTC -20%</b></div><div class="mini-stat"><small>Потеря</small><b id="mini-stress-loss">0.00 USDT</b></div><div class="mini-stat"><small>Реакция AI</small><b id="mini-stress-action">Защитный режим</b></div></div><p class="info-box">AI проверяет просадку, блокировку BUY и защитные меры без реальных ордеров.</p></article>
+
+      <article class="mini-card mini-section" id="learning-section"><h2>Обучение AI</h2><div class="mini-grid"><div class="mini-stat"><small>Сделок</small><b id="mini-learning-trades">0</b></div><div class="mini-stat"><small>Win rate</small><b id="mini-learning-winrate">0%</b></div><div class="mini-stat"><small>Рекомендация</small><b id="mini-learning-tip">Собирать историю</b></div></div><p class="info-box">AI учитывает ошибки, комиссии, риск и качество сигналов.</p></article>
+
+      <article class="mini-card mini-section" id="reports-section"><h2>Отчёты</h2><div class="mini-grid"><div class="mini-stat"><small>Портфель</small><b id="mini-report-equity">0.00 USDT</b></div><div class="mini-stat"><small>Чистый PnL</small><b id="mini-report-pnl">0.00 USDT</b></div><div class="mini-stat"><small>Комиссии</small><b id="mini-report-fees">0.00 USDT</b></div></div><p class="info-box">Отчёт показывает результат после комиссий, а не грязную прибыль.</p></article>
+
+      <article class="mini-card mini-section" id="settings-section"><h2>Настройки</h2><div class="quick-chat-actions"><button type="button" data-mini-tab="risk-section">Риск</button><button type="button" data-mini-tab="exchange-section">Биржа</button><button type="button" data-mini-tab="bots-section">AI-боты</button><button type="button" data-mini-tab="reports-section">Отчёты</button></div><p class="info-box">Это настройки Mini App. Все важные разделы сайта доступны внутри приложения.</p></article>
       <div class="bottom-safe"></div>
     </section>
 
-    <header class="approved-topbar">
-      <div class="top-clock"><span>◷</span><div><b id="top-clock" data-clock>00:00:00</b><small id="top-date">локальное время</small></div></div>
-      <div class="top-stat"><small>Статус AI</small><b class="status-green">РАБОТАЕТ</b></div>
-      <div class="top-stat"><small>Последнее обновление</small><b data-clock>00:00:00</b></div>
-      <div class="top-stat"><small>Цикл</small><b>14</b></div>
-      <div class="top-stat"><small>Модули онлайн</small><b>11 / 13</b></div>
-      <div class="top-stat"><small>Среднее время цикла</small><b>412 ms</b></div>
-      <div class="top-actions"><a class="icon-btn" href="#">🔔</a><a class="icon-btn" href="/settings?lang={{ lang }}">⚙</a><div class="lang-links"><a class="active" href="{{ request.url.path }}?lang=ru&v=14">RU</a><a href="{{ request.url.path }}?lang=en&v=14">EN</a><a href="{{ request.url.path }}?lang=uz&v=14">UZ</a></div></div>
-    </header>
-
-    <section class="welcome-hero"><div><p class="eyebrow">SharipovAI OS</p><h1>Самандар, добро пожаловать.</h1><p>Ваш интеллектуальный центр анализа, демо-торговли, новостей и контроля риска.</p></div><div class="hero-logo"><span>SA</span><i></i><i></i><i></i><i></i></div></section>
-    <section class="quick-status"><article><span class="q-icon">◉</span><small>AI движок</small><b>Активен</b></article><article><span class="q-icon blue">⌁</span><small>Рынок</small><b>Открыт</b></article><article><span class="q-icon gold">⚠</span><small>Риск</small><b>{{ display.risk }}</b></article><article><span class="q-icon violet">◆</span><small>Портфель</small><b>Виртуальный</b></article><article><span class="q-icon cyan">▥</span><small>Торговля</small><b>Demo Trading</b></article></section>
-    <section class="approved-grid">
-      <article class="os-panel portfolio-panel"><h2>Виртуальный портфель</h2><div class="portfolio-dial"><div><small>Баланс</small><b data-demo-equity>{{ "%.2f"|format(view.paper_equity) }} USDT</b></div><div><small>Кэш</small><b>{{ "%.2f"|format(view.paper_cash) }} USDT</b></div><div><small>PnL</small><b class="positive">{{ "%.2f"|format(view.paper_pnl) }} USDT</b></div></div><p class="info-box">Демо-режим позволяет тестировать стратегию без риска.</p></article>
-      <article class="os-panel approved-chat"><h2>AI ЧАТ</h2><p class="info-box">Откройте с телефона — интерфейс будет компактным Mini App.</p></article>
-      <article class="os-panel risk-panel"><h2>Настройки риска</h2><label>Риск на сделку <output>2%</output><input data-range-output type="range" min="0" max="10" value="2"></label><button class="save-button" type="button">✓ Сохранить изменения</button></article>
-    </section>
-    <section class="legacy-test-hooks"><h2 id="hero-decision">{{ display.decision }}</h2><button id="run-analysis">{{ t.run_analysis }}</button><span id="hero-confidence">{{ "%.1f"|format(view.confidence) }}%</span><span id="hero-consensus">{{ display.consensus }} {{ "%.1f"|format(view.consensus_agreement) }}%</span><span id="decision-reason">{{ display.reason }}</span><span>{{ display.report }}</span><span>{{ display.risk }}</span><span>{{ "%.2f"|format(view.paper_cash) }} USDT</span><span>Команда для ИИ</span><span>AI DECISION</span><span>STRESS LAB</span><span>Стресс-тест</span><span>AI Improvement</span><span>Улучшение AI</span><span>Лимиты</span><span>Раздел активен</span><span>AI Control Center</span><span>Мониторинг AI-ботов</span><span>Биржа и комиссии</span><span id="exchange-fees"></span><span id="exchange-drag"></span><span data-stress-scenario="btc_drop_20"></span><span id="stress-scenario"></span><span id="stress-before"></span><span id="stress-after"></span><ul id="stress-measures"></ul></section>
+    <section class="legacy-test-hooks"><h2 id="hero-decision">{{ display.decision }}</h2><button id="run-analysis">{{ t.run_analysis }}</button><span id="hero-confidence">{{ "%.1f"|format(view.confidence) }}%</span><span id="hero-consensus">{{ display.consensus }} {{ "%.1f"|format(view.consensus_agreement) }}%</span><span id="decision-reason">{{ display.reason }}</span><span>{{ display.report }}</span><span>{{ display.risk }}</span><span>{{ "%.2f"|format(view.paper_cash) }} USDT</span><span>Команда для ИИ</span><span>AI DECISION</span><span>STRESS LAB</span><span>Стресс-тест</span><span>AI Improvement</span><span>Улучшение AI</span><span>Лимиты</span><span>Раздел активен</span><span>AI Control Center</span><span>Мониторинг AI-ботов</span><span>Биржа и комиссии</span><span>Лучшие условия</span><span id="stress-scenario"></span><span id="stress-before"></span><span id="stress-after"></span><ul id="stress-measures"></ul></section>
   </main>
-
-  <script>(()=>{const $=s=>document.querySelector(s),$$=s=>Array.from(document.querySelectorAll(s));const time=()=>new Date().toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});const date=()=>new Date().toLocaleDateString('ru-RU',{day:'2-digit',month:'long',year:'numeric',weekday:'long'});function tick(){$$('[data-clock],#top-clock').forEach(e=>e.textContent=time());const d=$('#top-date');if(d)d.textContent=date()}tick();setInterval(tick,1000)})();</script>
-  <script src="/static/mini-app-live.js?v=20260708-25" defer></script>
+  <script src="/static/mini-app-live.js?v=20260708-27" defer></script>
 </body>
 </html>
