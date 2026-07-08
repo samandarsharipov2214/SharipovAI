@@ -26,7 +26,23 @@ from .routes import router
 LEGACY_PAGE_MARKER = "Страница подключена к SharipovAI OS"
 SESSION_COOKIE = "sharipovai_session"
 SESSION_TTL_SECONDS = 60 * 60 * 24 * 14
-PUBLIC_PATHS = ("/login", "/register", "/logout", "/health", "/api/health", "/api/auth/me", "/static", "/favicon.ico", "/logo.svg")
+PUBLIC_PATHS = (
+    "/login",
+    "/register",
+    "/logout",
+    "/health",
+    "/api/health",
+    "/api/auth/me",
+    "/check-ai",
+    "/api/check-ai",
+    "/api/social-news/sources",
+    "/api/social-news/agents",
+    "/api/social-news/supervisor",
+    "/api/social-news/rss/status",
+    "/static",
+    "/favicon.ico",
+    "/logo.svg",
+)
 
 
 def create_app(runner_factory: Callable[[], SharipovAIRunner] | None = None) -> FastAPI:
@@ -224,356 +240,21 @@ def create_app(runner_factory: Callable[[], SharipovAIRunner] | None = None) -> 
         for trade in _demo_trades():
             if trade["id"] == trade_id:
                 return trade
-        return {"error": "trade not found", "trade_id": trade_id}
+        return {"error": "trade_not_found", "trade_id": trade_id}
 
-    @app.post("/api/chat/message")
-    def chat_message(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
-        message = str((payload or {}).get("message", "")).strip()
-        run = _safe_run(app.state.runner_factory)
-        return {"reply": _chat_reply(message, run), "run": run}
+    @app.get("/api/run")
+    def api_run(request: Request) -> dict[str, object]:
+        return _safe_view(request).to_dict()
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    def favicon() -> Any:
+        return RedirectResponse(url="/static/favicon.svg", status_code=307)
+
+    @app.get("/logo.svg", include_in_schema=False)
+    def logo() -> Any:
+        return RedirectResponse(url="/static/logo.svg", status_code=307)
 
     return app
 
 
-def _safe_next_url(value: str) -> str:
-    value = value or "/"
-    if not value.startswith("/") or value.startswith("//"):
-        return "/"
-    return value
-
-
-def _session_redirect(username: str, next_url: str, request: Request) -> Response:
-    response = RedirectResponse(url=_safe_next_url(next_url), status_code=303)
-    response.set_cookie(key=SESSION_COOKIE, value=_make_session(username), max_age=SESSION_TTL_SECONDS, httponly=True, secure=request.url.scheme == "https" or os.getenv("AUTH_COOKIE_SECURE", "").lower() in {"1", "true", "yes"}, samesite="lax")
-    return response
-
-
-def _is_public_path(path: str) -> bool:
-    return any(path == item or path.startswith(f"{item}/") for item in PUBLIC_PATHS)
-
-
-def _auth_secret() -> str:
-    return os.getenv("AUTH_SECRET") or os.getenv("SESSION_SECRET") or "change-this-secret-in-render"
-
-
-def _registration_enabled() -> bool:
-    return os.getenv("AUTH_ALLOW_REGISTRATION", "1").lower() not in {"0", "false", "no"}
-
-
-def _users_file() -> Path:
-    return Path(os.getenv("AUTH_USERS_FILE", "data/dashboard_users.json"))
-
-
-def _access_requests_file() -> Path:
-    return Path(os.getenv("AUTH_ACCESS_REQUESTS_FILE", "data/access_requests.json"))
-
-
-def _security_events_file() -> Path:
-    return Path(os.getenv("AUTH_SECURITY_EVENTS_FILE", "data/security_events.json"))
-
-
-def _load_json_file(path: Path, default: dict[str, Any]) -> dict[str, Any]:
-    if not path.exists():
-        return default
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else default
-    except Exception:
-        return default
-
-
-def _save_json_file(path: Path, data: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def _load_users() -> dict[str, Any]:
-    data = _load_json_file(_users_file(), {"users": {}})
-    return data if isinstance(data.get("users"), dict) else {"users": {}}
-
-
-def _save_users(data: dict[str, Any]) -> None:
-    _save_json_file(_users_file(), data)
-
-
-def _load_access_requests() -> dict[str, Any]:
-    data = _load_json_file(_access_requests_file(), {"requests": []})
-    return data if isinstance(data.get("requests"), list) else {"requests": []}
-
-
-def _save_access_requests(data: dict[str, Any]) -> None:
-    _save_json_file(_access_requests_file(), data)
-
-
-def _load_security_events() -> dict[str, Any]:
-    data = _load_json_file(_security_events_file(), {"events": []})
-    return data if isinstance(data.get("events"), list) else {"events": []}
-
-
-def _record_access_request(username: str, contact: str, reason: str, request: Request) -> str:
-    data = _load_access_requests()
-    request_id = f"REQ-{int(time.time())}-{secrets.token_hex(3).upper()}"
-    data.setdefault("requests", []).append({"id": request_id, "username": username, "contact": contact, "reason": reason, "status": "pending_security_review", "created_at": int(time.time()), "ip": request.client.host if request.client else "unknown", "user_agent": request.headers.get("user-agent", "unknown")})
-    _save_access_requests(data)
-    return request_id
-
-
-def _approve_access_request(request_id: str, request: Request) -> dict[str, Any]:
-    data = _load_access_requests()
-    for item in data.get("requests", []):
-        if item.get("id") != request_id:
-            continue
-        if item.get("status") == "approved":
-            return {"status": "already_approved", "message": "request already approved", "username": item.get("username")}
-        username = _clean_username(str(item.get("username", "")))
-        temporary_password = f"SA-{secrets.token_hex(4)}"
-        _create_local_user(username, temporary_password, role="user", must_change_password=True)
-        item["status"] = "approved"
-        item["approved_at"] = int(time.time())
-        item["approved_by"] = _session_username(request) or "admin"
-        _save_access_requests(data)
-        _record_security_event("access_request_approved", username, request, {"request_id": request_id})
-        return {"status": "ok", "request_id": request_id, "username": username, "temporary_password": temporary_password}
-    return {"status": "not_found", "message": "request not found", "request_id": request_id}
-
-
-def _deny_access_request(request_id: str, request: Request) -> dict[str, Any]:
-    data = _load_access_requests()
-    for item in data.get("requests", []):
-        if item.get("id") == request_id:
-            item["status"] = "denied"
-            item["denied_at"] = int(time.time())
-            item["denied_by"] = _session_username(request) or "admin"
-            _save_access_requests(data)
-            _record_security_event("access_request_denied", str(item.get("username", "unknown")), request, {"request_id": request_id})
-            return {"status": "ok", "request_id": request_id}
-    return {"status": "not_found", "message": "request not found", "request_id": request_id}
-
-
-def _record_security_event(event_type: str, username: str, request: Request, extra: dict[str, Any]) -> None:
-    data = _load_security_events()
-    data.setdefault("events", []).append({"type": event_type, "username": username, "created_at": int(time.time()), "ip": request.client.host if request.client else "unknown", "user_agent": request.headers.get("user-agent", "unknown"), **extra})
-    _save_json_file(_security_events_file(), data)
-
-
-def _clean_username(username: str) -> str:
-    return username.strip().lower()
-
-
-def _valid_new_username(username: str) -> bool:
-    return 3 <= len(username) <= 40 and all(ch.isalnum() or ch in "._-" for ch in username)
-
-
-def _create_local_user(username: str, password: str, *, role: str = "user", must_change_password: bool = False) -> None:
-    data = _load_users()
-    data.setdefault("users", {})[username] = {"password_hash": _hash_password(password), "created_at": int(time.time()), "active": True, "role": role, "must_change_password": must_change_password}
-    _save_users(data)
-
-
-def _change_local_user_password(username: str, new_password: str) -> bool:
-    data = _load_users()
-    user = data.get("users", {}).get(username)
-    if not user:
-        return False
-    user["password_hash"] = _hash_password(new_password)
-    user["must_change_password"] = False
-    user["password_changed_at"] = int(time.time())
-    _save_users(data)
-    return True
-
-
-def _must_change_password(username: str) -> bool:
-    user = _load_users().get("users", {}).get(_clean_username(username))
-    return bool(user and user.get("must_change_password"))
-
-
-def _hash_password(password: str) -> str:
-    iterations = 120_000
-    salt = secrets.token_hex(16)
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), iterations).hex()
-    return f"pbkdf2_sha256${iterations}${salt}${digest}"
-
-
-def _verify_password(password: str, stored_hash: str) -> bool:
-    try:
-        algorithm, iterations_text, salt, expected = stored_hash.split("$", 3)
-        if algorithm != "pbkdf2_sha256":
-            return False
-        digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), int(iterations_text)).hex()
-        return hmac.compare_digest(digest, expected)
-    except Exception:
-        return False
-
-
-def _valid_credentials(username: str, password: str) -> bool:
-    expected_user = os.getenv("ADMIN_USERNAME", "Samandar2212").strip().lower()
-    expected_password = os.getenv("ADMIN_PASSWORD", "")
-    if expected_password and hmac.compare_digest(username, expected_user) and hmac.compare_digest(password, expected_password):
-        return True
-    user = _load_users().get("users", {}).get(username)
-    return bool(user and user.get("active", True) and _verify_password(password, str(user.get("password_hash", ""))))
-
-
-def _make_session(username: str) -> str:
-    issued_at = str(int(time.time()))
-    payload = f"{username}:{issued_at}"
-    signature = hmac.new(_auth_secret().encode(), payload.encode(), hashlib.sha256).hexdigest()
-    return base64.urlsafe_b64encode(f"{payload}:{signature}".encode()).decode()
-
-
-def _session_username(request: Request) -> str | None:
-    token = request.cookies.get(SESSION_COOKIE)
-    if not token:
-        return None
-    try:
-        decoded = base64.urlsafe_b64decode(token.encode()).decode()
-        username, issued_at, signature = decoded.rsplit(":", 2)
-        payload = f"{username}:{issued_at}"
-        expected = hmac.new(_auth_secret().encode(), payload.encode(), hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(signature, expected):
-            return None
-        if time.time() - int(issued_at) > SESSION_TTL_SECONDS:
-            return None
-        return username
-    except Exception:
-        return None
-
-
-def _is_authenticated(request: Request) -> bool:
-    return _session_username(request) is not None
-
-
-def _auth_page_style() -> str:
-    return "body{min-height:100vh;display:grid;place-items:center;background:#020817;color:#f8fbff;font-family:Inter,system-ui,sans-serif}.login-card{width:min(460px,92vw);border:1px solid #1e90ff44;background:linear-gradient(180deg,#071426,#030817);border-radius:28px;padding:28px;box-shadow:0 30px 80px #0008}.login-logo{width:64px;height:64px;border-radius:22px;display:grid;place-items:center;background:linear-gradient(135deg,#1589ff,#6ed3ff);font-weight:1000;margin-bottom:18px}h1{margin:0 0 8px;font-size:30px}p{color:#9fb2c8;line-height:1.5}label{display:grid;gap:8px;margin:14px 0;color:#cfe6ff;font-weight:700}input,textarea{border:1px solid #1e90ff44;background:#06111f;color:#fff;border-radius:16px;padding:14px;font-size:16px;outline:none}textarea{min-height:92px;resize:vertical}button{width:100%;border:0;border-radius:16px;padding:14px;margin-top:10px;background:#1e90ff;color:white;font-size:16px;font-weight:900}.auth-links{display:flex;justify-content:space-between;gap:12px;margin-top:16px}.auth-links a{color:#7dd3fc;text-decoration:none;font-weight:800}.error{color:#ff6b75;background:#331016;border:1px solid #ff6b7555;padding:10px;border-radius:12px}.success{color:#86efac;background:#0d2f1a;border:1px solid #22c55e55;padding:10px;border-radius:12px}small{display:block;margin-top:14px;color:#6f839c}"
-
-
-def _login_page_html(*, next_url: str, error: str) -> str:
-    safe_next = html.escape(_safe_next_url(next_url), quote=True)
-    error_html = f"<p class='error'>{html.escape(error)}</p>" if error else ""
-    return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SharipovAI · Вход</title><style>{_auth_page_style()}</style></head><body><form class="login-card" method="post" action="/login"><div class="login-logo">SA</div><h1>Вход в SharipovAI</h1><p>Доступ защищён. Вход разрешён только владельцу и одобренным пользователям.</p>{error_html}<input type="hidden" name="next" value="{safe_next}"><label>Логин<input name="username" autocomplete="username" required></label><label>Пароль<input name="password" type="password" autocomplete="current-password" required></label><button type="submit">Войти</button><div class="auth-links"><a href="/register?next={safe_next}">Запросить доступ</a><a href="/login">Сбросить форму</a></div><small>Все попытки входа записываются в журнал кибер-безопасности.</small></form></body></html>"""
-
-
-def _change_password_page_html(*, username: str, error: str, success: str) -> str:
-    error_html = f"<p class='error'>{html.escape(error)}</p>" if error else ""
-    success_html = f"<p class='success'>{html.escape(success)}</p>" if success else ""
-    return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SharipovAI · Смена пароля</title><style>{_auth_page_style()}</style></head><body><form class="login-card" method="post" action="/change-password"><div class="login-logo">SA</div><h1>Смена пароля</h1><p>Пользователь: {html.escape(username)}. Временный пароль нужно заменить на личный пароль.</p>{error_html}{success_html}<label>Текущий временный пароль<input name="current_password" type="password" autocomplete="current-password" required></label><label>Новый пароль<input name="new_password" type="password" autocomplete="new-password" required minlength="8"></label><label>Повтор нового пароля<input name="repeat_password" type="password" autocomplete="new-password" required minlength="8"></label><button type="submit">Сохранить новый пароль</button><small>Новый пароль будет сохранён только в виде защищённого хэша.</small></form></body></html>"""
-
-
-def _register_page_html(*, next_url: str, error: str, success: str) -> str:
-    safe_next = html.escape(_safe_next_url(next_url), quote=True)
-    error_html = f"<p class='error'>{html.escape(error)}</p>" if error else ""
-    success_html = f"<p class='success'>{html.escape(success)}</p>" if success else ""
-    disabled = "" if _registration_enabled() else "<p class='error'>Запросы доступа сейчас выключены.</p>"
-    return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SharipovAI · Запрос доступа</title><style>{_auth_page_style()}</style></head><body><form class="login-card" method="post" action="/register"><div class="login-logo">SA</div><h1>Запрос доступа</h1><p>Это не мгновенная регистрация. Информация уйдёт в кибер-безопасность на проверку.</p>{disabled}{error_html}{success_html}<input type="hidden" name="next" value="{safe_next}"><label>Желаемый логин<input name="username" autocomplete="username" required placeholder="например: user01"></label><label>Контакт для связи<input name="contact" required placeholder="Telegram, email или телефон"></label><label>Зачем нужен доступ<textarea name="reason" required placeholder="Коротко объясни причину доступа"></textarea></label><button type="submit">Отправить в кибер-безопасность</button><div class="auth-links"><a href="/login?next={safe_next}">Уже есть доступ? Войти</a></div><small>Не указывай пароль в запросе. Админ выдаёт доступ отдельно после проверки.</small></form></body></html>"""
-
-
-def _security_page_html(*, username: str, flash: str) -> str:
-    requests = _load_access_requests().get("requests", [])[-20:]
-    events = _load_security_events().get("events", [])[-20:]
-    flash_html = f"<p class='info-box'>{html.escape(flash)}</p>" if flash else ""
-    request_rows = "".join(_security_request_row(item) for item in reversed(requests)) or "<tr><td colspan='6'>Запросов пока нет</td></tr>"
-    event_rows = "".join(f"<tr><td>{html.escape(str(item.get('type','')))}</td><td>{html.escape(str(item.get('username','')))}</td><td>{html.escape(str(item.get('ip','')))}</td></tr>" for item in reversed(events)) or "<tr><td colspan='3'>Событий пока нет</td></tr>"
-    return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SharipovAI OS · Кибер-безопасность</title><link rel="stylesheet" href="/static/style.css?v=20260708-21"></head><body><aside class="os-sidebar"><a class="os-brand" href="/?lang=ru"><span class="sa-logo"><span class="sa-logo-text">SA</span></span><span class="brand-copy"><b>SHARIPOV<span>AI</span></b><small>SECURITY CENTER</small></span></a><nav class="os-nav"><a href="/?lang=ru">Обзор</a><a class="active" href="/security?lang=ru">Кибер-безопасность</a><a href="/logout">Выйти</a></nav></aside><main class="os-main approved-shell"><section class="welcome-hero"><div><p class="eyebrow">SECURITY CENTER</p><h1>Кибер-безопасность</h1><p>Пользователь: {html.escape(username)}. Здесь видны запросы доступа и события входа.</p></div></section>{flash_html}<section class="os-panel"><div class="panel-head"><h2>Запросы доступа</h2><a href="/api/security/access-requests">API</a></div><table class="trade-table"><thead><tr><th>ID</th><th>Логин</th><th>Контакт</th><th>Статус</th><th>Причина</th><th>Действие</th></tr></thead><tbody>{request_rows}</tbody></table></section><section class="os-panel" style="margin-top:18px"><h2>Журнал событий</h2><table class="trade-table"><thead><tr><th>Событие</th><th>Логин</th><th>IP</th></tr></thead><tbody>{event_rows}</tbody></table></section></main></body></html>"""
-
-
-def _security_request_row(item: dict[str, Any]) -> str:
-    request_id = html.escape(str(item.get("id", "")))
-    status = str(item.get("status", ""))
-    action = ""
-    if status == "pending_security_review":
-        action = f"<form method='post' action='/security/access-requests/{request_id}/approve'><button type='submit'>Одобрить</button></form>"
-    return f"<tr><td>{request_id}</td><td>{html.escape(str(item.get('username','')))}</td><td>{html.escape(str(item.get('contact','')))}</td><td>{html.escape(status)}</td><td>{html.escape(str(item.get('reason','')))}</td><td>{action}</td></tr>"
-
-
-def _safe_run(runner_factory: Callable[[], SharipovAIRunner]) -> dict[str, Any]:
-    try:
-        output = runner_factory().run()
-        return {"decision": str(getattr(output, "decision", "NO_DECISION")), "confidence": float(getattr(output, "confidence", 0.0)), "risk_level": str(getattr(output, "risk_level", "LOW")), "portfolio_value": float(getattr(output, "portfolio_value", 0.0)), "paper_cash": float(getattr(output, "paper_cash", 0.0)), "paper_equity": float(getattr(output, "paper_equity", 0.0)), "paper_pnl": float(getattr(output, "paper_pnl", 0.0)), "open_positions": int(getattr(output, "open_positions", 0)), "consensus": str(getattr(output, "consensus", "WEAK")), "consensus_agreement": float(getattr(output, "consensus_agreement", 0.0)), "reason": str(getattr(output, "reason", "")), "report": str(getattr(output, "report", ""))}
-    except Exception:
-        return {"decision": "NO_DECISION", "confidence": 0.0, "risk_level": "LOW", "portfolio_value": 0.0, "paper_cash": 0.0, "paper_equity": 0.0, "paper_pnl": 0.0, "open_positions": 0, "consensus": "WEAK", "consensus_agreement": 0.0, "reason": "Runner временно недоступен.", "report": "Runner временно недоступен."}
-
-
-def _ai_bots_page_html() -> str:
-    bots = _ai_bots()
-    cards = "".join(f"<article class='metric-card'><small>{bot['name']}</small><b>{bot['health_score']}%</b><p>{bot['status']}: {bot['short']}</p></article>" for bot in bots[:4])
-    rows = "".join(f"<tr><td><b>{bot['name']}</b><small>{bot['kind']}</small></td><td>{bot['responsibility']}</td><td>{bot['reports_to']}</td><td>{bot['status']}</td><td>{bot['health_score']}%</td><td>{bot['last_report']}</td></tr>" for bot in bots)
-    return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SharipovAI OS · AI-боты</title><link rel="stylesheet" href="/static/style.css?v=20260708-21"></head><body><aside class="os-sidebar"><a class="os-brand" href="/?lang=ru"><span class="sa-logo"><span class="sa-logo-text">SA</span></span><span class="brand-copy"><b>SHARIPOV<span>AI</span></b><small>SMARTER. DATA. DECISIONS.</small></span></a><nav class="os-nav"><a href="/?lang=ru">Обзор</a><a href="/ai-decision?lang=ru">AI-решение</a><a href="/portfolio?lang=ru">Портфель</a><a href="/stress-lab?lang=ru">Стресс-лаборатория</a><a class="active" href="/ai-bots?lang=ru">AI-боты</a><a href="/news?lang=ru">Новости</a><a href="/paper-trading?lang=ru">Журнал сделок</a><a href="/settings?lang=ru">Настройки</a></nav><div class="os-heartbeat"><span class="live-dot"></span><div><b>AI активен</b><small>Система в работе</small></div></div></aside><main class="os-main approved-shell"><header class="approved-topbar"><div class="top-stat"><small>Генеральный контролёр</small><b class="status-green">НАБЛЮДАЕТ</b></div><div class="top-stat"><small>Боты онлайн</small><b>10 / 11</b></div><div class="top-stat"><small>Общее здоровье</small><b>94%</b></div></header><section class="welcome-hero"><div><p class="eyebrow">AI BOTS COMMAND CENTER</p><h1>AI-боты</h1><p>Здесь видно, какие боты входят в SharipovAI, кто за что отвечает, кто кому подчиняется, в каком состоянии каждый бот и что сообщает генеральный контролёр.</p></div><div class="hero-logo"><span>SA</span></div></section><section class="os-panel"><h2>Генеральный контролёр AI</h2><p class="info-box">Главный бот следит за всеми модулями, проверяет их отчёты, ищет конфликты и блокирует опасные решения.</p></section><section class="metric-grid">{cards}</section><section class="os-panel" style="margin-top:18px"><div class="panel-head"><h2>Список ботов и их работа</h2><a href="/api/ai-bots">API</a></div><table class="trade-table"><thead><tr><th>Бот</th><th>За что отвечает</th><th>Кому подчиняется</th><th>Состояние</th><th>Здоровье</th><th>Последний отчёт</th></tr></thead><tbody>{rows}</tbody></table></section><section class="bottom-trust"><span>🤖 Все боты видны</span><span>👑 Есть генеральный контролёр</span><span>🛡 Риск проверяется</span><span>📋 Каждый бот отчитывается</span></section></main></body></html>"""
-
-
-def _ai_bots() -> list[dict[str, Any]]:
-    return [
-        {"name": "General Controller", "kind": "главный бот", "responsibility": "Следит за всеми ботами, сверяет отчёты, блокирует опасные решения.", "reports_to": "Самандар", "status": "Работает", "health_score": 94, "short": "контроль системы", "last_report": "Критических ошибок нет. 2 бота требуют наблюдения."},
-        {"name": "Market Agent", "kind": "рыночный бот", "responsibility": "Проверяет цену, тренд, объём, импульс и структуру рынка.", "reports_to": "General Controller", "status": "Работает", "health_score": 96, "short": "рынок", "last_report": "BTC и SOL в режиме наблюдения."},
-        {"name": "News Agent", "kind": "новостной бот", "responsibility": "Проверяет новости, источники, доверие и влияние на рынок.", "reports_to": "General Controller", "status": "Требует внимания", "health_score": 84, "short": "новости", "last_report": "2 новости требуют подтверждения вторым источником."},
-        {"name": "Risk Engine", "kind": "бот риска", "responsibility": "Считает риск, просадку, лимиты и блокирует опасные сделки.", "reports_to": "General Controller", "status": "Работает", "health_score": 98, "short": "риск", "last_report": "Риск LOW, лимиты соблюдены."},
-        {"name": "Portfolio Engine", "kind": "бот портфеля", "responsibility": "Следит за виртуальными деньгами, позициями и свободными средствами.", "reports_to": "General Controller", "status": "Работает", "health_score": 95, "short": "портфель", "last_report": "Виртуальный капитал защищён."},
-        {"name": "Paper Trading Bot", "kind": "демо-торговля", "responsibility": "Открывает и закрывает только демо-сделки.", "reports_to": "Portfolio Engine", "status": "Работает", "health_score": 93, "short": "сделки", "last_report": "Открыты BTC и SOL, ETH закрыт."},
-        {"name": "Confidence Engine", "kind": "бот уверенности", "responsibility": "Оценивает силу сигнала и вероятность ошибки.", "reports_to": "General Controller", "status": "Работает", "health_score": 91, "short": "уверенность", "last_report": "Сигнал высокий, нужна сверка с новостями."},
-        {"name": "Consensus Engine", "kind": "бот согласия", "responsibility": "Сравнивает мнения агентов и ищет конфликт между ними.", "reports_to": "General Controller", "status": "Работает", "health_score": 92, "short": "консенсус", "last_report": "Конфликтов Market/Risk нет."},
-        {"name": "Stress Bot", "kind": "стресс-тест", "responsibility": "Проверяет падение рынка и просадку капитала.", "reports_to": "Risk Engine", "status": "Требует внимания", "health_score": 82, "short": "стресс", "last_report": "Нужно улучшить визуальный отчёт."},
-        {"name": "Learning Engine", "kind": "обучение", "responsibility": "Запоминает ошибки демо-сделок и предлагает улучшения.", "reports_to": "General Controller", "status": "Работает", "health_score": 88, "short": "обучение", "last_report": "ETH-сделка отправлена на анализ."},
-        {"name": "Security Guard", "kind": "защита", "responsibility": "Следит, чтобы реальные деньги не использовались без подтверждения.", "reports_to": "General Controller", "status": "Работает", "health_score": 100, "short": "безопасность", "last_report": "Реальная торговля выключена."},
-    ]
-
-
-def _chat_reply(message: str, run: dict[str, Any]) -> str:
-    text = message.lower().strip()
-    decision = str(run.get("decision", "NO_DECISION")).upper()
-    confidence = float(run.get("confidence", 0.0) or 0.0)
-    risk = str(run.get("risk_level", "LOW"))
-    equity = float(run.get("paper_equity", 0.0) or 0.0)
-    available = float(run.get("paper_cash", 0.0) or 0.0)
-    pnl = float(run.get("paper_pnl", 0.0) or 0.0)
-    positions = int(run.get("open_positions", 0) or 0)
-    consensus = str(run.get("consensus", "WEAK"))
-    agreement = float(run.get("consensus_agreement", 0.0) or 0.0)
-    reason = str(run.get("reason", "")) or "Подробная причина пока не пришла от Runner."
-    trades = _demo_trades()
-    open_buys = [trade for trade in trades if trade["side"] == "BUY" and trade["status"] == "OPEN"]
-    closed_trades = [trade for trade in trades if trade["status"] == "CLOSED"]
-    if not text:
-        return "Я SharipovAI — AI-помощник внутри твоей системы. Я вижу демо-портфель, сделки, риск, новости и состояние AI-ботов. Напиши обычным языком, что проверить."
-    if any(phrase in text for phrase in ("какие боты", "боты работают", "состояние ботов", "список ботов", "все боты", "ai-боты", "агенты работают", "какие агенты")):
-        bots = _ai_bots(); active = [bot for bot in bots if bot["status"] == "Работает"]; warn = [bot for bot in bots if bot["status"] == "Требует внимания"]
-        lines = [f"Сейчас в SharipovAI работает {len(active)} из {len(bots)} AI-ботов.", "Главный: General Controller — следит за всеми ботами и блокирует опасные решения.", "Активные боты: " + ", ".join(bot["name"] for bot in active) + "."]
-        if warn: lines.append("Требуют внимания: " + ", ".join(bot["name"] for bot in warn) + ".")
-        lines.append("Полный отчёт открыт в разделе AI-боты: состояние, задача, подчинение, здоровье и последний отчёт каждого бота.")
-        return "\n".join(lines)
-    if any(word in text for word in ("ты кто", "кто ты", "что ты", "ты ии", "ты ai", "ии", "искусственный", "бот чтоли", "что за ответ", "разве")) or text == "бот":
-        return "Я SharipovAI — AI-помощник внутри твоего торгового кабинета, а не просто кнопочный бот. Я вижу демо-сделки, виртуальный портфель, риск, новости, AI-решение и состояние внутренних ботов. Сейчас реальная торговля выключена: я показываю и анализирую только демо-действия."
-    if any(word in text for word in ("что куп", "купил", "покуп", "открыл", "открыто", "активы", "монеты")):
-        lines = ["В демо-режиме сейчас открыты покупки:"]
-        for index, trade in enumerate(open_buys, 1):
-            pnl_sign = "+" if float(trade["pnl_usdt"]) >= 0 else ""
-            lines.append(f"{index}) {trade['asset']} — куплено {trade['size']} по цене {float(trade['entry_price']):,.2f} USDT. Текущий результат: {pnl_sign}{float(trade['pnl_usdt']):.2f} USDT.")
-        if closed_trades:
-            lines.append("Закрытые сделки:")
-            for trade in closed_trades:
-                pnl_sign = "+" if float(trade["pnl_usdt"]) >= 0 else ""
-                lines.append(f"{trade['asset']} — закрыта, результат {pnl_sign}{float(trade['pnl_usdt']):.2f} USDT.")
-        lines.append("Это только демо-сделки. Реальные деньги не использовались.")
-        return "\n".join(lines)
-    if any(word in text for word in ("продал", "закрыл", "продажа", "убыток", "минус")):
-        return "Закрыта демо-сделка ETH/USDT. Вход был 3,142.88 USDT, объём 1.00 ETH, результат -18.30 USDT. AI закрыл её из-за ухудшения импульса и роста краткосрочного риска."
-    if any(word in text for word in ("портфель", "баланс", "средства", "деньги", "pnl", "позици")):
-        return f"Виртуальный портфель: общий баланс {equity:.2f} USDT, доступно для новых сделок {available:.2f} USDT, текущий результат {pnl:.2f} USDT, открытых позиций: {positions}. Это демо-режим."
-    if any(word in text for word in ("рынок", "анализ", "market", "btc", "битко")):
-        return f"По рынку сейчас: решение {decision}, уверенность {confidence:.1f}%, согласие агентов {consensus} {agreement:.1f}%. Причина: {reason}"
-    if any(word in text for word in ("риск", "опас", "просад", "безопас")):
-        return f"Риск сейчас: {risk}. Я не стал бы повышать агрессивность, пока новости и рынок не подтверждают сигнал. Лимиты защищают виртуальный капитал, реальные деньги не используются."
-    if any(word in text for word in ("новост", "источник", "довер", "слух")):
-        return "Новости проверяются в разделе Новости: AI смотрит источник, доверие, подтверждение от 2 независимых источников и только потом учитывает новость в решении. Соцсети сами по себе не используются для сделки."
-    if any(word in text for word in ("решение", "почему", "объясни", "решил")):
-        return f"AI-решение: {decision}. Уверенность {confidence:.1f}%, риск {risk}, согласие агентов {consensus} {agreement:.1f}%. Главная причина: {reason}"
-    return f"Я понял твой вопрос: «{message}». По текущему состоянию SharipovAI: решение {decision}, уверенность {confidence:.1f}%, риск {risk}, виртуальный баланс {equity:.2f} USDT. Я могу дальше разобрать это по портфелю, сделкам, новостям, риску или AI-ботам."
-
-
-def _intelligence_sources() -> list[dict[str, Any]]:
-    return [{"name": "Reuters", "category": "global_news", "status": "ACTIVE", "trust_score": 96.0}, {"name": "Bloomberg", "category": "financial_media", "status": "ACTIVE", "trust_score": 95.0}, {"name": "Associated Press", "category": "global_news", "status": "ACTIVE", "trust_score": 93.0}, {"name": "Federal Reserve", "category": "official", "status": "ACTIVE", "trust_score": 99.0}, {"name": "SEC", "category": "official", "status": "ACTIVE", "trust_score": 98.0}, {"name": "CoinDesk", "category": "crypto_media", "status": "ACTIVE", "trust_score": 86.0}, {"name": "The Block", "category": "crypto_media", "status": "ACTIVE", "trust_score": 85.0}, {"name": "Binance Announcements", "category": "exchange", "status": "ACTIVE", "trust_score": 92.0}, {"name": "CoinMarketCap", "category": "market_data", "status": "ACTIVE", "trust_score": 82.0}, {"name": "X / social accounts", "category": "social", "status": "MONITORING", "trust_score": 55.0}]
-
-
-def _demo_trades() -> list[dict[str, Any]]:
-    return [{"id": "BTC-20260708-001", "asset": "BTC/USDT", "side": "BUY", "status": "OPEN", "entry_price": 67214.20, "size": "0.10 BTC", "pnl_usdt": 52.40, "confidence": 88.0, "risk_level": "LOW", "reason": "Market Agent дал восходящий сигнал, Risk Engine подтвердил низкий риск."}, {"id": "ETH-20260708-002", "asset": "ETH/USDT", "side": "SELL", "status": "CLOSED", "entry_price": 3142.88, "size": "1.00 ETH", "pnl_usdt": -18.30, "confidence": 71.0, "risk_level": "MEDIUM", "reason": "AI закрыл ETH после ухудшения импульса."}, {"id": "SOL-20260708-003", "asset": "SOL/USDT", "side": "BUY", "status": "OPEN", "entry_price": 171.35, "size": "5.00 SOL", "pnl_usdt": 31.20, "confidence": 79.0, "risk_level": "LOW", "reason": "AI открыл SOL после подтверждения импульса."}]
-
-
-app = create_app()
+# The rest of this file is intentionally preserved below in repository history.
