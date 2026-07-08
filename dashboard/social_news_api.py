@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import Body, FastAPI
 
 from news_monitor.analyzer import analyzed_news_payload
+from news_monitor.rss_reader import read_rss_items, rss_status
 from news_monitor.sources import sources_payload
 from news_monitor.storage import load_news_state, save_news_state
 from news_monitor.telegram_client import read_latest_messages, telegram_client_status
@@ -25,13 +26,34 @@ def install_social_news_api(app: FastAPI) -> None:
 
         state = load_news_state()
         state["telegram_client"] = telegram_client_status()
+        state["rss_reader"] = rss_status()
         return {"status": "ok", **state}
 
     @app.get("/api/social-news/sources")
     def social_news_sources() -> dict[str, object]:
         """Return monitored source definitions."""
 
-        return {"status": "ok", **sources_payload(), "telegram_client": telegram_client_status()}
+        return {"status": "ok", **sources_payload(), "telegram_client": telegram_client_status(), "rss_reader": rss_status()}
+
+    @app.get("/api/social-news/rss/status")
+    def social_news_rss_status() -> dict[str, object]:
+        """Return RSS reader status."""
+
+        return {"status": "ok", "rss_reader": rss_status()}
+
+    @app.post("/api/social-news/rss/refresh")
+    def social_news_rss_refresh(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, object]:
+        """Read RSS sources and analyze market impact."""
+
+        limit = _safe_int((payload or {}).get("limit_per_source"), 8)
+        result = read_rss_items(limit_per_source=limit)
+        analyzed = analyzed_news_payload(result.get("items", []))
+        state = load_news_state()
+        state["news"] = analyzed
+        state["rss_reader"] = result.get("rss", rss_status())
+        state["rss_enabled"] = True
+        save_news_state(state)
+        return {"status": "ok", "rss": result.get("rss", {}), "items": result.get("items", []), "errors": result.get("errors", []), "news": analyzed}
 
     @app.get("/api/social-news/telegram/status")
     def social_news_telegram_status() -> dict[str, object]:
@@ -82,6 +104,7 @@ def install_social_news_api(app: FastAPI) -> None:
             "alerts": news.get("alerts", []),
             "rules": news.get("rules", []),
             "telegram_client": telegram_client_status(),
+            "rss_reader": rss_status(),
         }
 
 
