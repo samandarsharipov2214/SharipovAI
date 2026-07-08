@@ -18,6 +18,7 @@ from .models import DashboardView
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+DAILY_GROWTH_TARGET_PERCENT = 1.0
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -75,29 +76,37 @@ def reports(request: Request) -> HTMLResponse:
     return _render_page(request=request, page="reports")
 
 
-@router.get("/ai-control-center", response_class=HTMLResponse)
-def ai_control_center(request: Request) -> HTMLResponse:
-    return _render_page(request=request, page="ai-control-center")
-
-
 @router.get("/settings", response_class=HTMLResponse)
 def settings_page(request: Request) -> HTMLResponse:
     return _render_page(request=request, page="settings")
+
+
+@router.get("/ai-control-center", response_class=HTMLResponse)
+def ai_control_center() -> HTMLResponse:
+    report = _daily_supervisor_report()
+    bots = _ai_bots()
+    rows = "".join(
+        f"<tr><td><b>{bot['name']}</b><small>{bot['kind']}</small></td><td>{bot['daily_goal']}</td><td>{bot['quality_score']}%</td><td>{bot['activity_status']}</td><td>{bot['error_rate']}%</td><td>{bot['supervisor_action']}</td></tr>"
+        for bot in bots
+    )
+    return HTMLResponse(
+        f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SharipovAI OS · AI Control Center</title><link rel="stylesheet" href="/static/style.css?v=20260708-25"></head><body><aside class="os-sidebar"><a class="os-brand" href="/?lang=ru"><span class="sa-logo"><span class="sa-logo-text">SA</span></span><span class="brand-copy"><b>SHARIPOV<span>AI</span></b><small>CONTROL CENTER</small></span></a><nav class="os-nav"><a href="/?lang=ru">Обзор</a><a href="/ai-bots?lang=ru">AI-боты</a><a class="active" href="/ai-control-center?lang=ru">Ген. контроль</a><a href="/news?lang=ru">Новости</a><a href="/stress-lab?lang=ru">Стресс</a></nav></aside><main class="os-main approved-shell"><header class="approved-topbar"><div class="top-stat"><small>Цель дня</small><b>+{report['target_growth_percent']}%</b></div><div class="top-stat"><small>Текущий прирост</small><b>{report['actual_growth_percent']}%</b></div><div class="top-stat"><small>Выполнение</small><b>{report['goal_status']}</b></div><div class="top-stat"><small>Боты активны</small><b>{report['active_bots']} / {report['total_bots']}</b></div></header><section class="welcome-hero"><div><p class="eyebrow">GENERAL AI SUPERVISOR</p><h1>Генеральный бот</h1><p>Он следит, чтобы боты не простаивали, минимизировали ошибки, выполняли дневные цели и давали отчёт в конце дня.</p></div><div class="hero-logo"><span>SA</span></div></section><section class="os-panel"><h2>Отчёт генерального бота за день</h2><p class="info-box"><b>Статус цели:</b> {report['goal_status']}. <b>Причина:</b> {report['reason']}</p><p class="info-box"><b>Что делает ген. бот:</b> {report['supervisor_policy']}</p><p class="info-box"><b>Следующее действие:</b> {report['next_action']}</p></section><section class="os-panel" style="margin-top:18px"><div class="panel-head"><h2>Контроль качества каждого AI-бота</h2><a href="/api/ai-control-center/daily-report">API отчёт</a></div><table class="trade-table"><thead><tr><th>Бот</th><th>Цель</th><th>Качество</th><th>Активность</th><th>Ошибки</th><th>Действие ген. бота</th></tr></thead><tbody>{rows}</tbody></table></section></main></body></html>"""
+    )
 
 
 @router.get("/ai-bots", response_class=HTMLResponse)
 def ai_bots_page() -> HTMLResponse:
     bots = _ai_bots()
     rows = "".join(
-        f"<tr><td><b>{bot['name']}</b><small>{bot['kind']}</small></td><td>{bot['responsibility']}</td><td>{bot['reports_to']}</td><td>{bot['status']}</td><td>{bot['health_score']}%</td><td>{bot['last_report']}</td></tr>"
+        f"<tr><td><b>{bot['name']}</b><small>{bot['kind']}</small></td><td>{bot['responsibility']}</td><td>{bot['daily_goal']}</td><td>{bot['quality_score']}%</td><td>{bot['status']}</td><td>{bot['last_report']}</td></tr>"
         for bot in bots
     )
     cards = "".join(
-        f"<article class='metric-card'><small>{bot['name']}</small><b>{bot['health_score']}%</b><p>{bot['status']}: {bot['short']}</p></article>"
+        f"<article class='metric-card'><small>{bot['name']}</small><b>{bot['quality_score']}%</b><p>{bot['status']}: {bot['short']}</p></article>"
         for bot in bots[:4]
     )
     return HTMLResponse(
-        f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SharipovAI OS · AI-боты</title><link rel="stylesheet" href="/static/style.css?v=20260708-24"></head><body><aside class="os-sidebar"><a class="os-brand" href="/?lang=ru"><span class="sa-logo"><span class="sa-logo-text">SA</span></span><span class="brand-copy"><b>SHARIPOV<span>AI</span></b><small>SMARTER. DATA. DECISIONS.</small></span></a><nav class="os-nav"><a href="/?lang=ru">Обзор</a><a class="active" href="/ai-bots?lang=ru">AI-боты</a><a href="/news?lang=ru">Новости</a><a href="/stress-lab?lang=ru">Стресс-лаборатория</a><a href="/settings?lang=ru">Настройки</a></nav></aside><main class="os-main approved-shell"><header class="approved-topbar"><div class="top-stat"><small>Генеральный контролёр</small><b class="status-green">НАБЛЮДАЕТ</b></div><div class="top-stat"><small>Боты онлайн</small><b>11 / 11</b></div><div class="top-stat"><small>Требуют внимания</small><b>0</b></div><div class="top-stat"><small>Общее здоровье</small><b>96%</b></div></header><section class="welcome-hero"><div><p class="eyebrow">AI BOTS COMMAND CENTER</p><h1>AI-боты</h1><p>News Agent и Stress Bot доработаны: проверка источников и стресс-отчёты теперь считаются рабочими.</p></div><div class="hero-logo"><span>SA</span></div></section><section class="os-panel"><h2>Почему раньше 2 требовали внимания</h2><p class="info-box">News Agent ждал второе подтверждение источников. Stress Bot имел неполный визуальный отчёт. Теперь оба модуля переведены в рабочий статус: новости сверяются по правилу 2+ источника, стресс-тест формирует отчёт по капиталу, просадке, реакции AI и защитным действиям.</p></section><section class="metric-grid">{cards}</section><section class="os-panel" style="margin-top:18px"><div class="panel-head"><h2>Список ботов и их работа</h2><a href="/api/ai-bots">API</a></div><table class="trade-table"><thead><tr><th>Бот</th><th>За что отвечает</th><th>Кому подчиняется</th><th>Состояние</th><th>Здоровье</th><th>Последний отчёт</th></tr></thead><tbody>{rows}</tbody></table></section></main></body></html>"""
+        f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SharipovAI OS · AI-боты</title><link rel="stylesheet" href="/static/style.css?v=20260708-25"></head><body><aside class="os-sidebar"><a class="os-brand" href="/?lang=ru"><span class="sa-logo"><span class="sa-logo-text">SA</span></span><span class="brand-copy"><b>SHARIPOV<span>AI</span></b><small>SMARTER. DATA. DECISIONS.</small></span></a><nav class="os-nav"><a href="/?lang=ru">Обзор</a><a class="active" href="/ai-bots?lang=ru">AI-боты</a><a href="/ai-control-center?lang=ru">Ген. контроль</a><a href="/news?lang=ru">Новости</a><a href="/stress-lab?lang=ru">Стресс</a></nav></aside><main class="os-main approved-shell"><header class="approved-topbar"><div class="top-stat"><small>Боты онлайн</small><b>11 / 11</b></div><div class="top-stat"><small>Требуют внимания</small><b>0</b></div><div class="top-stat"><small>Среднее качество</small><b>{_average_quality()}%</b></div><div class="top-stat"><small>Цель дня</small><b>+{DAILY_GROWTH_TARGET_PERCENT}%</b></div></header><section class="welcome-hero"><div><p class="eyebrow">AI BOTS COMMAND CENTER</p><h1>AI-боты</h1><p>Здесь видно, кто за что отвечает, качество работы, цель на день, активность и последний отчёт каждого бота.</p></div><div class="hero-logo"><span>SA</span></div></section><section class="metric-grid">{cards}</section><section class="os-panel" style="margin-top:18px"><div class="panel-head"><h2>Список ботов и качество работы</h2><a href="/api/ai-bots">API</a></div><table class="trade-table"><thead><tr><th>Бот</th><th>За что отвечает</th><th>Цель</th><th>Качество</th><th>Состояние</th><th>Последний отчёт</th></tr></thead><tbody>{rows}</tbody></table></section><section class="os-panel" style="margin-top:18px"><h2>Роль генерального бота</h2><p class="info-box">General Controller каждые циклы проверяет активность, качество, ошибки, простои, конфликт между агентами и выполнение дневной цели. Если бот просиживается или ошибается, он получает корректирующее действие: перепроверка, снижение веса сигнала, блокировка рискованной сделки или отправка в Learning Engine.</p></section></main></body></html>"""
     )
 
 
@@ -124,19 +133,15 @@ def ai_bots_api() -> dict[str, Any]:
     offline = sum(1 for bot in bots if bot["status"] == "Выключен")
     return {
         "status": "ok",
-        "supervisor": {
-            "name": "Генеральный контролёр AI",
-            "state": "Наблюдает за всеми ботами",
-            "health_score": 96,
-            "last_report": "Система стабильна. Все 11 AI-ботов в рабочем состоянии.",
-        },
-        "summary": {"total_bots": len(bots), "active": active, "warnings": warnings, "offline": offline, "overall_health": 96},
+        "supervisor": _supervisor_profile(),
+        "summary": {"total_bots": len(bots), "active": active, "warnings": warnings, "offline": offline, "average_quality": _average_quality(), "daily_growth_target_percent": DAILY_GROWTH_TARGET_PERCENT},
         "bots": bots,
-        "fixed": [
-            "News Agent: добавлена логика 2+ источников и итоговый verified-сигнал.",
-            "Stress Bot: добавлен отчёт по капиталу, просадке, защитным мерам и уведомлению пользователя.",
-        ],
     }
+
+
+@router.get("/api/ai-control-center/daily-report")
+def daily_supervisor_report() -> dict[str, Any]:
+    return _daily_supervisor_report()
 
 
 @router.get("/api/translations/{lang}")
@@ -270,6 +275,48 @@ def _display_values(view: DashboardView, translations: dict[str, str]) -> dict[s
     }
 
 
+def _supervisor_profile() -> dict[str, Any]:
+    return {
+        "name": "General Controller",
+        "state": "Контролирует ботов, цели, ошибки и дневной отчёт",
+        "health_score": 97,
+        "daily_growth_target_percent": DAILY_GROWTH_TARGET_PERCENT,
+        "duties": [
+            "проверять, что каждый бот активен и не простаивает",
+            "сверять сигналы между Market, News, Risk и Consensus",
+            "снижать вес бота, если его качество падает",
+            "отправлять ошибки в Learning Engine",
+            "блокировать сделки, если риск выше лимита",
+            "делать дневной отчёт: цель выполнена или нет, причина, план исправления",
+        ],
+        "last_report": "Все боты активны. Цель дня контролируется. Реальная торговля выключена, demo/sandbox активен.",
+    }
+
+
+def _daily_supervisor_report() -> dict[str, Any]:
+    bots = _ai_bots()
+    actual_growth = 0.42
+    goal_done = actual_growth >= DAILY_GROWTH_TARGET_PERCENT
+    return {
+        "date_mode": "demo_daily_report",
+        "target_growth_percent": DAILY_GROWTH_TARGET_PERCENT,
+        "actual_growth_percent": actual_growth,
+        "goal_status": "Выполнено" if goal_done else "Не выполнено",
+        "reason": "Цель +1% не выполнена, потому что General Controller не разрешил повышать риск без полного подтверждения Market + News + Risk. Это безопасное поведение: лучше сохранить капитал, чем гнаться за целью любой ценой.",
+        "next_action": "Усилить поиск низкорисковых сетапов, не увеличивать риск на сделку, перепроверить новости и комиссии перед входом.",
+        "supervisor_policy": "Цель дня важна, но не выше безопасности. Генеральный бот должен добиваться прироста только при допустимом риске и подтверждении минимум несколькими агентами.",
+        "total_bots": len(bots),
+        "active_bots": sum(1 for bot in bots if bot["status"] == "Работает"),
+        "average_quality": _average_quality(),
+        "bot_reports": bots,
+    }
+
+
+def _average_quality() -> int:
+    bots = _ai_bots()
+    return round(sum(int(bot["quality_score"]) for bot in bots) / len(bots))
+
+
 def _evaluate_stress_lab(payload: dict[str, Any]) -> dict[str, object]:
     scenario = str(payload.get("scenario", "btc_drop_20")).strip().lower().replace("-", "_")
     starting_capital = _safe_float(payload.get("starting_virtual_capital"), 10_000.0)
@@ -338,23 +385,24 @@ def _classification_from_loss(loss_percent: float, max_drawdown: float) -> str:
 
 def _improvement_recommendations() -> list[dict[str, object]]:
     return [
+        {"title": "Daily General Controller report", "priority": "DONE", "expected_benefit": "Понятно, выполнена ли цель дня и почему.", "status": "implemented"},
+        {"title": "Bot quality tracking", "priority": "DONE", "expected_benefit": "Видно качество, ошибки и простои каждого бота.", "status": "implemented"},
         {"title": "Add Macro Agent", "priority": "HIGH", "expected_benefit": "Better CPI, rates, and central bank awareness.", "status": "recommended"},
         {"title": "Add Sentiment Agent", "priority": "HIGH", "expected_benefit": "Earlier detection of news panic and false signals.", "status": "recommended"},
-        {"title": "Add Telegram Bot", "priority": "DONE", "expected_benefit": "Faster user notification and approvals.", "status": "implemented"},
     ]
 
 
 def _ai_bots() -> list[dict[str, Any]]:
     return [
-        {"name": "General Controller", "kind": "главный бот", "responsibility": "Следит за всеми ботами, сверяет отчёты, блокирует опасные решения.", "reports_to": "Самандар", "status": "Работает", "health_score": 96, "short": "контроль системы", "last_report": "Все 11 ботов работают. Конфликтов нет."},
-        {"name": "Market Agent", "kind": "рыночный бот", "responsibility": "Проверяет цену, тренд, объём, импульс и структуру рынка.", "reports_to": "General Controller", "status": "Работает", "health_score": 96, "short": "рынок", "last_report": "BTC и SOL в режиме наблюдения."},
-        {"name": "News Agent", "kind": "новостной бот", "responsibility": "Проверяет новости, источники, доверие и влияние на рынок по правилу 2+ подтверждений.", "reports_to": "General Controller", "status": "Работает", "health_score": 92, "short": "новости", "last_report": "Доработан: новости проходят двойное подтверждение, слухи не допускаются к сделкам."},
-        {"name": "Risk Engine", "kind": "бот риска", "responsibility": "Считает риск, просадку, лимиты и блокирует опасные сделки.", "reports_to": "General Controller", "status": "Работает", "health_score": 98, "short": "риск", "last_report": "Риск LOW, лимиты соблюдены."},
-        {"name": "Portfolio Engine", "kind": "бот портфеля", "responsibility": "Следит за виртуальными деньгами, позициями и свободными средствами.", "reports_to": "General Controller", "status": "Работает", "health_score": 95, "short": "портфель", "last_report": "Виртуальный капитал защищён."},
-        {"name": "Paper Trading Bot", "kind": "демо-торговля", "responsibility": "Открывает и закрывает только демо-сделки.", "reports_to": "Portfolio Engine", "status": "Работает", "health_score": 93, "short": "сделки", "last_report": "Демо-сделки работают без реальных денег."},
-        {"name": "Confidence Engine", "kind": "бот уверенности", "responsibility": "Оценивает силу сигнала и вероятность ошибки.", "reports_to": "General Controller", "status": "Работает", "health_score": 91, "short": "уверенность", "last_report": "Сигнал сверяется с Risk и News."},
-        {"name": "Consensus Engine", "kind": "бот согласия", "responsibility": "Сравнивает мнения агентов и ищет конфликт между ними.", "reports_to": "General Controller", "status": "Работает", "health_score": 92, "short": "консенсус", "last_report": "Конфликтов Market/Risk/News нет."},
-        {"name": "Stress Bot", "kind": "стресс-тест", "responsibility": "Проверяет падение рынка, просадку капитала, реакцию AI и защитные меры.", "reports_to": "Risk Engine", "status": "Работает", "health_score": 91, "short": "стресс", "last_report": "Доработан: формирует полный отчёт по капиталу, просадке, защите и уведомлениям."},
-        {"name": "Learning Engine", "kind": "обучение", "responsibility": "Запоминает ошибки демо-сделок и предлагает улучшения.", "reports_to": "General Controller", "status": "Работает", "health_score": 88, "short": "обучение", "last_report": "ETH-сделка отправлена на анализ."},
-        {"name": "Security Guard", "kind": "защита", "responsibility": "Следит, чтобы реальные деньги не использовались без подтверждения.", "reports_to": "General Controller", "status": "Работает", "health_score": 100, "short": "безопасность", "last_report": "Реальная торговля выключена."},
+        {"name": "General Controller", "kind": "главный бот", "responsibility": "Контролирует всех AI-ботов, цели дня, простои, ошибки, конфликт сигналов и итоговый дневной отчёт.", "reports_to": "Самандар", "status": "Работает", "health_score": 97, "quality_score": 97, "error_rate": 0.8, "activity_status": "Активен", "daily_goal": f"Проверить 11/11 ботов и цель +{DAILY_GROWTH_TARGET_PERCENT}%", "supervisor_action": "Контролирует, снижает риск, отправляет ошибки в обучение", "short": "генеральный контроль", "last_report": "Боты активны. Цель дня контролируется. Риск не повышен без подтверждения."},
+        {"name": "Market Agent", "kind": "рыночный бот", "responsibility": "Проверяет цену, тренд, объём, импульс и структуру рынка.", "reports_to": "General Controller", "status": "Работает", "health_score": 96, "quality_score": 96, "error_rate": 1.2, "activity_status": "Активен", "daily_goal": "Найти низкорисковые рыночные сетапы", "supervisor_action": "Сигналы сверяются с News и Risk", "short": "рынок", "last_report": "BTC и SOL в наблюдении; агрессивный вход не подтверждён."},
+        {"name": "News Agent", "kind": "новостной бот", "responsibility": "Проверяет новости, источники, доверие и влияние на рынок по правилу 2+ подтверждений.", "reports_to": "General Controller", "status": "Работает", "health_score": 92, "quality_score": 92, "error_rate": 2.5, "activity_status": "Активен", "daily_goal": "Не допускать сделки по слухам", "supervisor_action": "Слухи блокируются до 2 независимых подтверждений", "short": "новости", "last_report": "Новости проходят двойное подтверждение; соцсети не используются отдельно."},
+        {"name": "Risk Engine", "kind": "бот риска", "responsibility": "Считает риск, просадку, лимиты и блокирует опасные сделки.", "reports_to": "General Controller", "status": "Работает", "health_score": 98, "quality_score": 98, "error_rate": 0.5, "activity_status": "Активен", "daily_goal": "Не допустить превышение лимита просадки", "supervisor_action": "Может заблокировать BUY даже при хорошем сигнале", "short": "риск", "last_report": "Риск LOW, лимиты соблюдены."},
+        {"name": "Portfolio Engine", "kind": "бот портфеля", "responsibility": "Следит за виртуальными деньгами, позициями, свободными средствами и PnL.", "reports_to": "General Controller", "status": "Работает", "health_score": 95, "quality_score": 95, "error_rate": 1.0, "activity_status": "Активен", "daily_goal": "Сохранять капитал и считать PnL", "supervisor_action": "Сверяет баланс с Paper Trading Bot", "short": "портфель", "last_report": "Виртуальный капитал защищён."},
+        {"name": "Paper Trading Bot", "kind": "демо-торговля", "responsibility": "Открывает и закрывает только демо-сделки, без реальных денег.", "reports_to": "Portfolio Engine", "status": "Работает", "health_score": 93, "quality_score": 93, "error_rate": 1.8, "activity_status": "Активен", "daily_goal": "Тестировать сделки без риска", "supervisor_action": "Все действия остаются в sandbox", "short": "сделки", "last_report": "Демо-сделки работают, реальные ордера отключены."},
+        {"name": "Confidence Engine", "kind": "бот уверенности", "responsibility": "Оценивает силу сигнала и вероятность ошибки.", "reports_to": "General Controller", "status": "Работает", "health_score": 91, "quality_score": 91, "error_rate": 2.2, "activity_status": "Активен", "daily_goal": "Не давать завышенную уверенность", "supervisor_action": "Уверенность понижается при конфликте агентов", "short": "уверенность", "last_report": "Сигнал сверяется с Risk и News."},
+        {"name": "Consensus Engine", "kind": "бот согласия", "responsibility": "Сравнивает мнения агентов и ищет конфликт между ними.", "reports_to": "General Controller", "status": "Работает", "health_score": 92, "quality_score": 92, "error_rate": 1.7, "activity_status": "Активен", "daily_goal": "Не пропускать конфликт Market/News/Risk", "supervisor_action": "При конфликте переводит систему в WATCH", "short": "консенсус", "last_report": "Конфликтов Market/Risk/News нет."},
+        {"name": "Stress Bot", "kind": "стресс-тест", "responsibility": "Проверяет падение рынка, просадку капитала, реакцию AI и защитные меры.", "reports_to": "Risk Engine", "status": "Работает", "health_score": 91, "quality_score": 91, "error_rate": 2.0, "activity_status": "Активен", "daily_goal": "Проверить защиту капитала при падении рынка", "supervisor_action": "Отчёт попадает в Risk и Learning", "short": "стресс", "last_report": "Формирует отчёт по капиталу, просадке, защите и уведомлениям."},
+        {"name": "Learning Engine", "kind": "обучение", "responsibility": "Запоминает ошибки демо-сделок и предлагает улучшения.", "reports_to": "General Controller", "status": "Работает", "health_score": 88, "quality_score": 88, "error_rate": 3.1, "activity_status": "Активен", "daily_goal": "Разобрать ошибки и улучшить правила", "supervisor_action": "Получает ошибки от всех ботов", "short": "обучение", "last_report": "ETH-сделка отправлена на анализ."},
+        {"name": "Security Guard", "kind": "защита", "responsibility": "Следит, чтобы реальные деньги не использовались без подтверждения.", "reports_to": "General Controller", "status": "Работает", "health_score": 100, "quality_score": 100, "error_rate": 0.0, "activity_status": "Активен", "daily_goal": "Не допустить реальную торговлю без разрешения", "supervisor_action": "Имеет право заблокировать любую LIVE-команду", "short": "безопасность", "last_report": "Реальная торговля выключена."},
     ]
