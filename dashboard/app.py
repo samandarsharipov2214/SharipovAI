@@ -34,10 +34,7 @@ def create_app(
 
         sources = _intelligence_sources()
         active = sum(1 for source in sources if source["status"] == "ACTIVE")
-        average_trust = round(
-            sum(float(source["trust_score"]) for source in sources) / len(sources),
-            2,
-        )
+        average_trust = round(sum(float(source["trust_score"]) for source in sources) / len(sources), 2)
         return {
             "status": "monitoring",
             "live_monitoring": True,
@@ -56,10 +53,7 @@ def create_app(
 
         sources = _intelligence_sources()
         active = sum(1 for source in sources if source["status"] == "ACTIVE")
-        average_trust = round(
-            sum(float(source["trust_score"]) for source in sources) / len(sources),
-            2,
-        )
+        average_trust = round(sum(float(source["trust_score"]) for source in sources) / len(sources), 2)
         return {
             "status": "ok",
             "active_sources": active,
@@ -158,50 +152,83 @@ def create_app(
 
 
 def _chat_reply(message: str, run: dict[str, Any]) -> str:
-    """Return a contextual Russian reply for the dashboard chat."""
+    """Return a clear Russian reply for the dashboard chat."""
 
     text = message.lower().strip()
     decision = str(run.get("decision", "NO_DECISION")).upper()
     confidence = float(run.get("confidence", 0.0) or 0.0)
     risk = str(run.get("risk_level", "LOW"))
     equity = float(run.get("paper_equity", 0.0) or 0.0)
-    cash = float(run.get("paper_cash", 0.0) or 0.0)
+    available = float(run.get("paper_cash", 0.0) or 0.0)
     pnl = float(run.get("paper_pnl", 0.0) or 0.0)
     positions = int(run.get("open_positions", 0) or 0)
     consensus = str(run.get("consensus", "WEAK"))
     agreement = float(run.get("consensus_agreement", 0.0) or 0.0)
-    reason = str(run.get("reason", "")) or "Runner пока не дал подробную причину."
+    reason = str(run.get("reason", "")) or "Подробная причина пока не пришла от Runner."
+    trades = _demo_trades()
+    open_buys = [trade for trade in trades if trade["side"] == "BUY" and trade["status"] == "OPEN"]
+    closed_trades = [trade for trade in trades if trade["status"] == "CLOSED"]
 
     if not text:
-        return "Напиши вопрос про портфель, рынок, риск, новости или AI-решение. Я отвечу по данным SharipovAI OS."
-    if any(word in text for word in ("портфель", "баланс", "pnl", "позици")):
+        return "Напиши вопрос обычными словами: что купил, что продал, какой риск, какой баланс, почему AI принял решение."
+
+    if any(word in text for word in ("что куп", "купил", "покуп", "открыл", "открыто", "активы", "монеты")):
+        lines = ["В демо-режиме сейчас открыты покупки:"]
+        for index, trade in enumerate(open_buys, 1):
+            pnl_sign = "+" if float(trade["pnl_usdt"]) >= 0 else ""
+            lines.append(
+                f"{index}) {trade['asset']} — куплено {trade['size']} по цене {float(trade['entry_price']):,.2f} USDT. "
+                f"Текущий результат: {pnl_sign}{float(trade['pnl_usdt']):.2f} USDT."
+            )
+        if closed_trades:
+            lines.append("Закрытые сделки:")
+            for trade in closed_trades:
+                pnl_sign = "+" if float(trade["pnl_usdt"]) >= 0 else ""
+                lines.append(
+                    f"{trade['asset']} — закрыта, результат {pnl_sign}{float(trade['pnl_usdt']):.2f} USDT."
+                )
+        lines.append("Это только демо-сделки. Реальные деньги не использовались.")
+        return "\n".join(lines)
+
+    if any(word in text for word in ("продал", "закрыл", "продажа", "убыток", "минус")):
         return (
-            f"Портфель сейчас в демо-режиме: equity {equity:.2f} USDT, cash {cash:.2f} USDT, "
-            f"PnL {pnl:.2f} USDT, открытых позиций: {positions}. Реальные деньги не используются."
+            "Закрыта демо-сделка ETH/USDT. Вход был 3,142.88 USDT, объем 1.00 ETH, результат -18.30 USDT. "
+            "AI закрыл её из-за ухудшения импульса и роста краткосрочного риска."
         )
+
+    if any(word in text for word in ("портфель", "баланс", "средства", "деньги", "pnl", "позици")):
+        return (
+            f"Виртуальный портфель: общий баланс {equity:.2f} USDT, доступно для новых сделок {available:.2f} USDT, "
+            f"текущий результат {pnl:.2f} USDT, открытых позиций: {positions}. Это демо-режим."
+        )
+
     if any(word in text for word in ("рынок", "анализ", "market", "btc", "битко")):
         return (
-            f"Рыночный вывод: решение {decision}, уверенность {confidence:.1f}%, консенсус {consensus} "
-            f"({agreement:.1f}%). Причина: {reason}"
+            f"По рынку сейчас: решение {decision}, уверенность {confidence:.1f}%, согласие агентов {consensus} {agreement:.1f}%. "
+            f"Причина: {reason}"
         )
-    if any(word in text for word in ("риск", "просад", "опас", "risk")):
+
+    if any(word in text for word in ("риск", "опас", "просад", "безопас")):
         return (
-            f"Риск сейчас: {risk}. Я бы не увеличивал агрессивность, пока нет сильного консенсуса и подтверждения новостей. "
-            "Сделки остаются только демо, лимиты защищают капитал."
+            f"Риск сейчас: {risk}. Я не стал бы повышать агрессивность, пока новости и рынок не подтверждают сигнал. "
+            "Лимиты защищают виртуальный капитал, реальные деньги не используются."
         )
-    if any(word in text for word in ("новост", "источник", "довер", "news")):
+
+    if any(word in text for word in ("новост", "источник", "довер", "слух")):
         return (
-            "Новости проверяются через Intelligence Center: минимум 2 независимых подтверждения, рейтинг доверия источников, "
-            "соцсети только как ранний сигнал. Открой раздел Новости для ленты и источников."
+            "Новости проверяются в разделе Новости: AI смотрит источник, доверие, подтверждение от 2 независимых источников "
+            "и только потом учитывает новость в решении. Соцсети сами по себе не используются для сделки."
         )
-    if any(word in text for word in ("решение", "почему", "объясни", "ai")):
+
+    if any(word in text for word in ("решение", "почему", "объясни", "решил")):
         return (
-            f"AI-решение: {decision}. Уверенность {confidence:.1f}%, риск {risk}, консенсус {consensus} {agreement:.1f}%. "
+            f"AI-решение: {decision}. Уверенность {confidence:.1f}%, риск {risk}, согласие агентов {consensus} {agreement:.1f}%. "
             f"Главная причина: {reason}"
         )
+
     return (
-        f"Я понял: «{message}». Сейчас по данным Runner решение {decision}, уверенность {confidence:.1f}%, риск {risk}. "
-        "Можешь спросить: покажи портфель, анализ рынка, риск сегодня или проверь новости."
+        "Я могу ответить конкретно по торговле. Например спроси: «что купил», «что продал», "
+        "«почему купил BTC», «какой риск», «сколько доступно для сделок»."
     )
 
 
