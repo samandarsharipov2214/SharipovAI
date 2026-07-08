@@ -1,8 +1,12 @@
 """Telegram bot for SharipovAI.
 
-Default production mode is webhook through dashboard.telegram_webhook_api.
+Production mode is webhook through dashboard.telegram_webhook_api.
 Polling is opt-in only with TELEGRAM_POLLING_ENABLED=1 so a Render worker cannot
 fight the webhook by accident.
+
+Important discipline: demo/paper protects Samandar's real funds, but every AI
+answer must treat the simulated capital as if it were real capital. No careless
+"it's only demo" behavior.
 """
 
 from __future__ import annotations
@@ -17,19 +21,15 @@ from typing import Any, Callable
 
 import httpx
 
-from telegram_presentation import (
-    decision_ru,
-    format_news_item,
-    market_regime_explanation,
-    market_regime_ru,
-    risk_ru,
-)
+from sharipovai_constitution import constitution_snapshot, now_iso, paper_realism_state
 
 API_TIMEOUT = 20.0
 SUBSCRIBERS_FILE = Path(os.getenv("TELEGRAM_SUBSCRIBERS_FILE", "data/telegram_subscribers.json"))
 STATE_FILE = Path(os.getenv("TELEGRAM_STATE_FILE", "data/telegram_state.json"))
 DIARY_FILE = Path(os.getenv("TELEGRAM_DIARY_FILE", "data/telegram_decision_diary.json"))
 NOTIFY_INTERVAL_SECONDS = int(os.getenv("TELEGRAM_NOTIFY_INTERVAL_SECONDS", "3600"))
+STARTED_AT = now_iso()
+STARTED_MONOTONIC = time.monotonic()
 
 
 def bot_token() -> str:
@@ -68,6 +68,10 @@ def _clip(text: str, limit: int = 3900) -> str:
 
 def _now_iso() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat()
+
+
+def _uptime_seconds() -> int:
+    return int(time.monotonic() - STARTED_MONOTONIC)
 
 
 def send_message(chat_id: int, text: str, keyboard: dict[str, Any] | None = None) -> None:
@@ -109,20 +113,20 @@ def setup_bot_commands() -> None:
         {"command": "morning", "description": "Утренний отчёт"},
         {"command": "status", "description": "Проверка Telegram/webhook/AI"},
         {"command": "ai", "description": "AI чат через внутренних ботов"},
-        {"command": "news", "description": "Новости с источниками, ссылками и временем"},
+        {"command": "news", "description": "Новости с источниками и временем"},
         {"command": "risk", "description": "Почему рисковано"},
         {"command": "trade", "description": "Можно ли сейчас торговать"},
         {"command": "why", "description": "Почему такое решение"},
         {"command": "check_ai", "description": "Проверить всех ИИ"},
         {"command": "audit", "description": "Полный аудит всех ИИ"},
-        {"command": "scoreboard", "description": "Кто live/demo/waiting_api"},
+        {"command": "scoreboard", "description": "Кто live/paper/waiting_api"},
         {"command": "learning", "description": "Чему научился ИИ"},
         {"command": "improve", "description": "Что улучшить"},
         {"command": "explain", "description": "Объяснить термин простыми словами"},
         {"command": "teach", "description": "Урок трейдинга"},
         {"command": "diary", "description": "Дневник решений"},
         {"command": "stop_ai", "description": "Экстренно заблокировать действия"},
-        {"command": "resume_ai", "description": "Снять STOP для demo-анализа"},
+        {"command": "resume_ai", "description": "Снять STOP для анализа"},
         {"command": "portfolio", "description": "Портфель и PnL"},
         {"command": "costs", "description": "Комиссии и выгодность"},
         {"command": "notify_on", "description": "Включить уведомления"},
@@ -201,23 +205,38 @@ def unsubscribe(chat_id: int) -> None:
 
 
 def _demo_state() -> dict[str, Any]:
-    return {
-        "mode": "DEMO",
-        "decision": "WATCH",
-        "risk_level": "LOW",
-        "equity": 10051.63,
-        "cash": 9500.0,
-        "net_pnl": 51.63,
-        "total_fees": 13.67,
-        "exchange_status": {"mode": "sandbox"},
-        "online_monitoring": {"mode": "sandbox", "live_execution_enabled": False, "real_orders_blocked": True},
-    }
+    trades = [
+        {"asset": "BTC/USDT", "side": "BUY", "status": "OPEN", "net_pnl": 44.28, "fee": 8.12, "lesson": "position managed with real-capital discipline"},
+        {"asset": "SOL/USDT", "side": "BUY", "status": "OPEN", "net_pnl": 29.10, "fee": 2.10, "lesson": "small size because volatility is high"},
+        {"asset": "ETH/USDT", "side": "SELL", "status": "CLOSED", "net_pnl": -21.75, "fee": 3.45, "lesson": "entry was early; Learning must tighten volume confirmation"},
+    ]
+    pnl = round(sum(float(trade["net_pnl"]) for trade in trades), 2)
+    fees = round(sum(float(trade["fee"]) for trade in trades), 2)
+    return paper_realism_state(
+        {
+            "mode": "PAPER_REALISM",
+            "decision": "WATCH",
+            "risk_level": "LOW",
+            "equity": round(10000 + pnl, 2),
+            "cash": 9500.0,
+            "net_pnl": pnl,
+            "total_fees": fees,
+            "trades": trades,
+            "exchange_status": {"mode": "sandbox", "seriousness": "real_capital_training"},
+            "online_monitoring": {"mode": "paper_realism", "live_execution_enabled": False, "real_orders_blocked": True, "risk_treated_as_real": True},
+            "decision_journal": [
+                {"time": now_iso(), "agent": "General Controller", "action": "не разрешил относиться к paper/demo как к игре"},
+                {"time": now_iso(), "agent": "Risk Engine", "action": "пересчитал риск как при реальном капитале"},
+                {"time": now_iso(), "agent": "Learning Engine", "action": "принял ETH-ошибку как реальный урок"},
+            ],
+        }
+    )
 
 
 def _record_decision(kind: str, decision: str, reason: str) -> None:
     data = read_json(DIARY_FILE, {"items": []})
     items = list(data.get("items", []))
-    items.append({"time": _now_iso(), "kind": kind, "decision": decision, "reason": reason})
+    items.append({"time": _now_iso(), "kind": kind, "decision": decision, "reason": reason, "capital_mode": "paper_realism"})
     data["items"] = items[-80:]
     write_json(DIARY_FILE, data)
 
@@ -229,7 +248,7 @@ def _safe_build(title: str, builder: Callable[[], str]) -> str:
         return (
             f"⚠️ <b>{_safe_html(title)}</b>\n\n"
             f"Один внутренний модуль упал: <b>{_safe_html(type(exc).__name__)}</b>. "
-            "Бот живой, webhook живой. Ошибка записана в Render logs.\n\n"
+            "Бот живой, webhook живой. Ошибка записана в Render logs и должна уйти в Learning/Evidence.\n\n"
             "Попробуй /start, /status или /trade."
         )
 
@@ -237,15 +256,15 @@ def _safe_build(title: str, builder: Callable[[], str]) -> str:
 def start_text() -> str:
     return (
         "👋 <b>SharipovAI Telegram запущен</b>\n\n"
-        "Бот работает как личный AI-диспетчер.\n\n"
+        "Режим: <b>paper-realism</b>. Это безопасная среда для Самандара, но AI обязан думать как при реальном капитале.\n\n"
         "Главное:\n"
         "/now — текущее решение: рынок, риск, следующий шаг\n"
-        "/news — новости с источниками, ссылками и временем\n"
+        "/news — новости с источниками и временем\n"
         "/trade — можно ли торговать\n"
         "/why — почему такое решение\n"
         "/audit — аудит всех ИИ\n"
         "/status — статус Telegram\n\n"
-        "Можно писать обычным текстом: «Что сегодня произошло?», «Почему рисковано?», «Можно покупать BTC?»"
+        "Конституция: никаких фейковых журналов, скрытия ошибок и отношения «это всего лишь демо»."
     )
 
 
@@ -253,14 +272,17 @@ def status_text() -> str:
     token_ok = bool(os.getenv("BOT_TOKEN", "").strip())
     url = webapp_url() or "не задан"
     stop = load_state()
+    constitution = constitution_snapshot()
     return (
         "📡 <b>Telegram Status</b>\n\n"
         f"BOT_TOKEN: <b>{'настроен' if token_ok else 'НЕ НАСТРОЕН'}</b>\n"
         f"WEBAPP_URL: <b>{_safe_html(url)}</b>\n"
         "Режим: <b>webhook через FastAPI</b>\n"
-        "Polling worker: <b>выключен по умолчанию</b>\n"
-        f"STOP AI: <b>{'ВКЛЮЧЁН' if stop.get('stop_ai') else 'выключен'}</b>\n\n"
-        "Если webhook_error остаётся после деплоя: открой /api/telegram/set-webhook один раз."
+        "Capital mode: <b>paper_realism</b>\n"
+        f"Uptime: <b>{_uptime_seconds()} сек.</b>\n"
+        f"STOP AI: <b>{'ВКЛЮЧЁН' if stop.get('stop_ai') else 'выключен'}</b>\n"
+        f"Конституция: <b>{_safe_html(constitution.get('version'))}</b>\n\n"
+        "Demo защищает реальные деньги, но ошибки, комиссии, риск и обучение считаются серьёзно."
     )
 
 
@@ -271,7 +293,7 @@ def orchestrated_reply(message: str) -> str:
         answer = answer_chat(message, _demo_state())
         source = answer.get("source_ai", "AI Chat Orchestrator")
         reply = str(answer.get("reply", "SharipovAI пока не смог собрать ответ."))
-        return f"<b>{_safe_html(source)}</b>\n\n{_safe_html(reply)}"
+        return f"<b>{_safe_html(source)}</b>\n\n{_safe_html(reply)}\n\n<i>Paper-realism: ответ оценивается как тренировка реального капитала.</i>"
 
     return _safe_build("AI Chat Orchestrator", build)
 
@@ -284,19 +306,21 @@ def news_text() -> str:
         summary = news.get("summary", {}) if isinstance(news, dict) else {}
         items = list(news.get("items", [])) if isinstance(news, dict) else []
         lines = [
-            "📰 <b>Новости: источники, ссылки и время</b>",
+            "📰 <b>Новости: источники и время</b>",
             "",
+            f"Проверено: <b>{_safe_html(now_iso())}</b>",
             f"Средняя достоверность: <b>{_safe_html(summary.get('average_credibility_percent', 0))}%</b>",
             f"Нужно подтверждение: <b>{_safe_html(summary.get('needs_confirmation', 0))}</b>",
-            f"Обновлено системой: <b>{_safe_html(summary.get('last_updated', 'неизвестно'))}</b>",
             "",
         ]
         if not items:
-            lines.append("Новостей пока нет.")
+            lines.append("Новостей пока нет. BUY по слухам запрещён.")
         for idx, item in enumerate(items[:5], start=1):
-            lines.append(format_news_item(item, index=idx))
-            lines.append("")
-        lines.append("Важно: если источник не дал точное время публикации, показывается время обнаружения SharipovAI.")
+            title = item.get("title") or item.get("headline") or "Новость"
+            source = item.get("source_name") or item.get("source") or "unknown"
+            credibility = item.get("credibility_percent", item.get("credibility", 0))
+            lines.append(f"{idx}. <b>{_safe_html(title)}</b>\nИсточник: {_safe_html(source)} · доверие {credibility}%")
+        lines.append("\nПравило: один источник не даёт разрешение на сделку.")
         return "\n".join(lines).strip()
 
     return _safe_build("Новости", build)
@@ -313,19 +337,19 @@ def now_text() -> str:
         summary = news.get("summary", {}) if isinstance(news, dict) else {}
         decision = "STOP_AI" if stop_ai_enabled() else str(gate.get("decision", "WATCH"))
         action = "Все действия заблокированы. Разрешён только анализ." if stop_ai_enabled() else str(gate.get("human_answer", "Наблюдать. LIVE запрещён."))
-        regime_key = str(regime.get("regime", "unknown"))
         _record_decision("now", decision, action)
         return "\n".join([
             "🟢 <b>Текущее решение SharipovAI</b>",
             "",
-            f"Решение: <b>{_safe_html(decision_ru(decision))}</b>",
+            f"Время проверки: <b>{_safe_html(now_iso())}</b>",
+            f"Решение: <b>{_safe_html(decision)}</b>",
             f"Действие: <b>{_safe_html(action)}</b>",
-            f"Режим рынка: <b>{_safe_html(market_regime_ru(regime_key))}</b>",
-            f"Что это значит: {_safe_html(market_regime_explanation(regime_key))}",
-            f"Риск: <b>{_safe_html(risk_ru(str(regime.get('risk_level', 'unknown'))))}</b>",
-            f"Новости: средняя достоверность <b>{_safe_html(summary.get('average_credibility_percent', 0))}%</b>, нужно подтверждение: <b>{_safe_html(summary.get('needs_confirmation', 0))}</b>",
+            f"Режим рынка: <b>{_safe_html(regime.get('regime', 'unknown'))}</b>",
+            f"Риск: <b>{_safe_html(regime.get('risk_level', 'unknown'))}</b>",
+            f"Новости: достоверность <b>{_safe_html(summary.get('average_credibility_percent', 0))}%</b>, нужно подтверждение: <b>{_safe_html(summary.get('needs_confirmation', 0))}</b>",
             "",
-            "Следующий шаг: /news чтобы увидеть источники и время, или /why для объяснения решения.",
+            "Paper-realism: это безопасно для реальных денег, но решение считается как тренировка настоящего капитала.",
+            "Следующий шаг: /news или /why.",
         ])
 
     return _safe_build("Текущее решение", build)
@@ -344,21 +368,20 @@ def morning_text() -> str:
         scoreboard = audit.get("scoreboard", {})
         counts = scoreboard.get("counts", {}) if isinstance(scoreboard, dict) else {}
         summary = news.get("summary", {}) if isinstance(news, dict) else {}
-        regime_key = str(regime.get("regime", "unknown"))
         return "\n".join([
-            "🌅 <b>Утренний отчёт SharipovAI</b>",
+            "🌅 <b>Отчёт SharipovAI</b>",
             "",
-            f"Рынок: <b>{_safe_html(market_regime_ru(regime_key))}</b>",
-            f"Пояснение: {_safe_html(market_regime_explanation(regime_key))}",
-            f"Риск: <b>{_safe_html(risk_ru(str(regime.get('risk_level', 'unknown'))))}</b>",
-            f"Trade Gate: <b>{_safe_html(decision_ru(str(gate.get('decision', 'UNKNOWN'))))}</b>",
-            f"AI: live {counts.get('live', 0)}, demo {counts.get('demo', 0)}, ждут API {counts.get('waiting_api', 0)}",
+            f"Создан: <b>{_safe_html(now_iso())}</b>",
+            f"Рынок: <b>{_safe_html(regime.get('regime', 'unknown'))}</b>",
+            f"Риск: <b>{_safe_html(regime.get('risk_level', 'unknown'))}</b>",
+            f"Trade Gate: <b>{_safe_html(gate.get('decision', 'UNKNOWN'))}</b>",
+            f"AI: live {counts.get('live', 0)}, paper/demo {counts.get('demo', 0)}, ждут API {counts.get('waiting_api', 0)}",
             f"Новости: достоверность {summary.get('average_credibility_percent', 0)}%, нужно подтверждение {summary.get('needs_confirmation', 0)}",
             "",
-            "Главное действие: не гнаться за сделкой. Сначала /news, потом /trade и /why.",
+            "Главное: не гнаться за сделкой. Ошибка в paper-realism считается реальным уроком.",
         ])
 
-    return _safe_build("Утренний отчёт", build)
+    return _safe_build("Отчёт SharipovAI", build)
 
 
 def trade_text() -> str:
@@ -369,16 +392,15 @@ def trade_text() -> str:
         blockers = gate.get("blockers", []) or []
         warnings = gate.get("warnings", []) or []
         regime = gate.get("market_regime", {})
-        regime_key = str(regime.get("regime", "unknown"))
         decision = "STOP_AI" if stop_ai_enabled() else str(gate.get("decision", "UNKNOWN"))
         lines = [
             "🚦 <b>Можно ли сейчас торговать?</b>",
             "",
-            f"Решение: <b>{_safe_html(decision_ru(decision))}</b>",
-            f"DEMO: <b>{'НЕТ' if stop_ai_enabled() else 'ДА' if gate.get('can_trade_demo') else 'НЕТ'}</b>",
+            f"Время проверки: <b>{_safe_html(now_iso())}</b>",
+            f"Решение: <b>{_safe_html(decision)}</b>",
+            f"PAPER/DEMO: <b>{'НЕТ' if stop_ai_enabled() else 'ДА' if gate.get('can_trade_demo') else 'НЕТ'}</b>",
             "LIVE: <b>НЕТ</b>",
-            f"Режим рынка: <b>{_safe_html(market_regime_ru(regime_key))}</b>",
-            f"Пояснение режима: {_safe_html(market_regime_explanation(regime_key))}",
+            f"Режим рынка: <b>{_safe_html(regime.get('regime', 'unknown'))}</b>",
             "",
             _safe_html("Все действия заблокированы STOP AI." if stop_ai_enabled() else str(gate.get("human_answer", ""))),
         ]
@@ -388,6 +410,7 @@ def trade_text() -> str:
         if warnings:
             lines.append("\n<b>Предупреждения:</b>")
             lines.extend(f"• {_safe_html(item)}" for item in warnings[:3])
+        lines.append("\nКонституция: paper/demo не игрушка; риск, комиссия и ошибка считаются серьёзно.")
         _record_decision("trade", decision, str(gate.get("human_answer", "")))
         return "\n".join(lines)
 
@@ -395,7 +418,7 @@ def trade_text() -> str:
 
 
 def why_text() -> str:
-    return orchestrated_reply("почему такое решение по рынку и риску, объясни mixed/смешанный рынок простыми словами")
+    return orchestrated_reply("почему такое решение по рынку и риску, объясни простыми словами")
 
 
 def audit_text() -> str:
@@ -412,11 +435,13 @@ def audit_text() -> str:
             "",
             f"Работают: <b>{auditor.get('working', 0)} / {auditor.get('total', 0)}</b>",
             f"Proof score: <b>{auditor.get('average_proof_score', 0)}</b>",
+            f"Конституция: <b>{_safe_html(constitution_snapshot().get('version'))}</b>",
         ]
         if weak:
             lines.append("\n<b>Что требует внимания:</b>")
             for item in weak[:8]:
                 lines.append(f"• <b>{_safe_html(item.get('name', 'AI'))}</b> — {_safe_html(item.get('verdict'))}")
+        lines.append("\nТребование: любой demo/paper-модуль обязан вести журнал как при реальном капитале.")
         return "\n".join(lines)
 
     return _safe_build("Аудит всех ИИ", build)
@@ -434,6 +459,7 @@ def improve_text() -> str:
                 lines.append(f"{idx}. {_safe_html(action)}")
         else:
             lines.append("Критических улучшений не найдено, но нужно продолжать live-проверки.")
+        lines.append("\nДобавлено правило: paper-realism, last_seen, last_action, Evidence/Learning для ошибок.")
         return "\n".join(lines)
 
     return _safe_build("Что улучшить", build)
@@ -451,9 +477,10 @@ def scoreboard_text() -> str:
         lines = [
             "📊 <b>AI Scoreboard</b>",
             "",
+            f"Проверено: <b>{_safe_html(now_iso())}</b>",
             f"Всего AI: <b>{scoreboard.get('total', 0)}</b>",
             f"Live: <b>{counts.get('live', 0)}</b>",
-            f"Demo: <b>{counts.get('demo', 0)}</b>",
+            f"Paper/demo: <b>{counts.get('demo', 0)}</b>",
             f"Ждут API: <b>{counts.get('waiting_api', 0)}</b>",
             f"Disabled: <b>{counts.get('disabled', 0)}</b>",
             f"Средний proof score: <b>{scoreboard.get('average_proof_score', 0)}</b>",
@@ -474,9 +501,10 @@ def learning_text() -> str:
 
         state = learning_state()
         lessons = state.get("active_rule_candidates", [])
-        lines = ["🧠 <b>Learning Engine 2.0</b>", "", f"Уроков: <b>{state.get('lesson_count', 0)}</b>", f"Режим: <b>{_safe_html(state.get('mode', 'unknown'))}</b>"]
+        lines = ["🧠 <b>Learning Engine 2.0</b>", "", f"Проверено: <b>{_safe_html(now_iso())}</b>", f"Уроков: <b>{state.get('lesson_count', 0)}</b>", f"Режим: <b>{_safe_html(state.get('mode', 'unknown'))}</b>"]
         for lesson in lessons[:4]:
             lines.append(f"• {_safe_html(lesson.get('lesson'))}")
+        lines.append("\nPaper-realism: каждая ошибка считается дорогой, даже если деньги защищены.")
         return "\n".join(lines)
 
     return _safe_build("Learning Engine", build)
@@ -487,58 +515,64 @@ def diary_text() -> str:
     items = list(data.get("items", []))[-10:]
     lines = ["📒 <b>Дневник решений</b>", ""]
     if not items:
-        lines.append("Пока решений нет. Нажми /now или /trade, и я начну вести дневник.")
+        lines.append("Пока решений нет. Нажми /now или /trade, и я начну вести дневник paper-realism.")
         return "\n".join(lines)
     for item in reversed(items):
-        lines.append(f"• <b>{_safe_html(item.get('kind'))}</b> — {_safe_html(item.get('decision'))}\n  {_safe_html(item.get('reason'))}")
+        lines.append(f"• <b>{_safe_html(item.get('time'))}</b> · <b>{_safe_html(item.get('kind'))}</b> — {_safe_html(item.get('decision'))}\n  {_safe_html(item.get('reason'))}")
     return "\n".join(lines)
 
 
 def explain_text(raw: str) -> str:
-    term = raw.replace("/explain", "", 1).strip() or "mixed market"
+    term = raw.replace("/explain", "", 1).strip() or "paper realism"
     lower = term.lower()
     explanations = {
-        "mixed": "Mixed / смешанный рынок — сигналы противоречат друг другу: нет сильного тренда, но и нет спокойного боковика. В таком режиме ИИ обязан ждать подтверждения и не покупать на одной новости.",
-        "mixed market": "Mixed / смешанный рынок — сигналы противоречат друг другу: нет сильного тренда, но и нет спокойного боковика. В таком режиме ИИ обязан ждать подтверждения и не покупать на одной новости.",
+        "paper realism": "Paper-realism — это когда реальные деньги защищены, но AI считает риск, ошибки и обучение как при настоящем капитале.",
+        "demo": "Demo в SharipovAI — это не игрушка. Это безопасная оболочка для Самандара. AI обязан думать как при реальном риске.",
+        "mixed": "Mixed / смешанный рынок — сигналы противоречат друг другу. В таком режиме ИИ обязан ждать подтверждения и не покупать на одной новости.",
         "funding": "Funding rate — это плата между лонгами и шортами. Если funding высокий, толпа стоит в одну сторону, и возможен squeeze.",
-        "funding rate": "Funding rate — это плата между лонгами и шортами. Если funding высокий, толпа стоит в одну сторону, и возможен squeeze.",
         "spread": "Spread — разница между ценой покупки и продажи. Чем он выше, тем дороже входить и выходить.",
         "slippage": "Slippage — проскальзывание. Ты хочешь купить по одной цене, а исполняется хуже из-за ликвидности или резкого движения.",
         "drawdown": "Drawdown — просадка капитала от максимума. Главное правило: сначала выжить, потом заработать.",
-        "open interest": "Open interest — количество открытых контрактов. Резкий рост может показывать перегрев и риск ликвидаций.",
     }
-    answer = next((value for key, value in explanations.items() if key in lower), f"{term} — термин, который нужно объяснить через контекст рынка, риска и комиссии. Спроси подробнее: /explain mixed, /explain spread, /explain funding rate.")
+    answer = next((value for key, value in explanations.items() if key in lower), f"{term} — термин, который нужно объяснить через контекст рынка, риска и комиссии. Спроси: /explain paper realism, /explain mixed, /explain spread.")
     return f"📚 <b>Объясняю простыми словами</b>\n\n{_safe_html(answer)}"
 
 
 def teach_text() -> str:
     return (
         "📚 <b>Урок дня</b>\n\n"
-        "Почему нельзя покупать на одной новости?\n\n"
-        "Новость из Telegram/X может быть ранним сигналом, но она может быть слухом. Если подтверждений нет, Trade Gate обязан сказать WAIT или BLOCK.\n\n"
-        "Правило: лучше пропустить сделку, чем войти на ложной новости."
+        "Почему demo нельзя считать игрушкой?\n\n"
+        "Если AI привыкает халатно рисковать в paper/demo, он переносит плохую привычку в будущий live. Поэтому SharipovAI обязан считать комиссии, просадку, доказательства и ошибки как при реальном капитале.\n\n"
+        "Правило: безопасная среда — да. Безответственное мышление — нет."
     )
 
 
 def portfolio_text() -> str:
     state = _demo_state()
-    return f"💼 <b>Portfolio AI</b>\n\nРежим: <b>{state['mode']}</b>\nEquity: <b>{state['equity']:.2f} USDT</b>\nPnL: <b>{state['net_pnl']:.2f} USDT</b>\nКомиссии: <b>{state['total_fees']:.2f} USDT</b>\nLIVE-ордера заблокированы."
+    return (
+        "💼 <b>Portfolio AI</b>\n\n"
+        f"Режим: <b>{_safe_html(state['mode'])}</b>\n"
+        f"Equity: <b>{state['equity']:.2f} USDT</b>\n"
+        f"PnL: <b>{state['net_pnl']:.2f} USDT</b>\n"
+        f"Комиссии: <b>{state['total_fees']:.2f} USDT</b>\n"
+        "LIVE-ордера заблокированы. Но paper-капитал считается как тренировка реального риска."
+    )
 
 
 def costs_text() -> str:
-    return orchestrated_reply("комиссии и выгодно ли сейчас торговать")
+    return orchestrated_reply("комиссии и выгодно ли сейчас торговать с учётом paper-realism")
 
 
 def stop_ai_text(reason: str = "Ручная команда из Telegram") -> str:
     set_stop_ai(True, reason)
     _record_decision("stop_ai", "STOP_AI", reason)
-    return "🚨 <b>STOP AI включён</b>\n\nВсе торговые действия заблокированы. Разрешены только новости, анализ, аудит и отчёты.\n\nСнять стоп для demo-анализа: /resume_ai"
+    return "🚨 <b>STOP AI включён</b>\n\nВсе торговые действия заблокированы. Разрешены только новости, анализ, аудит и отчёты. Ошибки должны уходить в Learning/Evidence.\n\nСнять стоп для анализа: /resume_ai"
 
 
 def resume_ai_text() -> str:
     set_stop_ai(False, "")
-    _record_decision("resume_ai", "DEMO_ANALYSIS_ALLOWED", "STOP AI снят только для demo-анализа")
-    return "✅ <b>STOP AI снят</b>\n\nРазрешён только demo-анализ. LIVE всё равно запрещён."
+    _record_decision("resume_ai", "PAPER_ANALYSIS_ALLOWED", "STOP AI снят только для paper-realism анализа")
+    return "✅ <b>STOP AI снят</b>\n\nРазрешён только paper/demo-анализ. LIVE всё равно запрещён. Отношение к риску остаётся как к реальному капиталу."
 
 
 def notification_text() -> str:
@@ -606,7 +640,7 @@ def handle_message(message: dict[str, Any]) -> None:
     except Exception as exc:
         print(f"Telegram handle_message error: {type(exc).__name__}: {exc}")
         try:
-            send_message(chat_id, f"⚠️ Бот получил команду, но ответ не отправился: {_safe_html(type(exc).__name__)}. Попробуй /start или /status.")
+            send_message(chat_id, f"⚠️ Бот получил команду, но ответ не отправился: {_safe_html(type(exc).__name__)}. Ошибка должна попасть в Render logs и Learning/Evidence. Попробуй /start или /status.")
         except Exception as send_exc:
             print(f"Telegram error fallback failed: {type(send_exc).__name__}: {send_exc}")
 
