@@ -1,8 +1,8 @@
 """Telegram bot for SharipovAI.
 
-Supports webhook mode through dashboard.telegram_webhook_api on Render and
-optional local polling when run directly. Secrets must come from environment
-variables only: BOT_TOKEN and WEBAPP_URL.
+Default production mode is webhook through dashboard.telegram_webhook_api.
+Polling is opt-in only with TELEGRAM_POLLING_ENABLED=1 so a Render worker cannot
+fight the webhook by accident.
 """
 
 from __future__ import annotations
@@ -13,19 +13,11 @@ import os
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 
-from ai_chat_orchestrator import answer_chat
-from ai_evidence import system_scoreboard
-from learning_engine_v2 import learning_state
-from news_monitor.agents import run_news_agents
-from news_monitor.analyzer import analyzed_news_payload
-from system_ai_auditor import audit_system_ai
-from trading_intelligence import market_regime, trade_gate
-
-API_TIMEOUT = 35.0
+API_TIMEOUT = 20.0
 SUBSCRIBERS_FILE = Path(os.getenv("TELEGRAM_SUBSCRIBERS_FILE", "data/telegram_subscribers.json"))
 STATE_FILE = Path(os.getenv("TELEGRAM_STATE_FILE", "data/telegram_state.json"))
 DIARY_FILE = Path(os.getenv("TELEGRAM_DIARY_FILE", "data/telegram_decision_diary.json"))
@@ -71,7 +63,12 @@ def _now_iso() -> str:
 
 
 def send_message(chat_id: int, text: str, keyboard: dict[str, Any] | None = None) -> None:
-    payload: dict[str, Any] = {"chat_id": chat_id, "text": _clip(text), "parse_mode": "HTML", "disable_web_page_preview": True}
+    payload: dict[str, Any] = {
+        "chat_id": int(chat_id),
+        "text": _clip(text),
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    }
     if keyboard:
         payload["reply_markup"] = keyboard
     telegram("sendMessage", payload)
@@ -170,10 +167,6 @@ def set_mode(chat_id: int, mode: str) -> None:
     save_state(data)
 
 
-def get_mode(chat_id: int) -> str:
-    return str(load_state().get("modes", {}).get(str(chat_id), "ai"))
-
-
 def set_stop_ai(enabled: bool, reason: str = "") -> None:
     data = load_state()
     data["stop_ai"] = bool(enabled)
@@ -206,19 +199,10 @@ def _demo_state() -> dict[str, Any]:
         "risk_level": "LOW",
         "equity": 10051.63,
         "cash": 9500.0,
-        "pnl": 51.63,
         "net_pnl": 51.63,
         "total_fees": 13.67,
-        "commission_drag": 13.67,
-        "break_even_price": 67295.4,
         "exchange_status": {"mode": "sandbox"},
         "online_monitoring": {"mode": "sandbox", "live_execution_enabled": False, "real_orders_blocked": True},
-        "bybit_costs": {"best_trade_venue": {"best": {"product": "spot", "liquidity": "maker", "round_trip_fee": 2.0, "break_even_move_percent": 0.02}}, "estimated_saving_vs_worst": 18.4},
-        "trades": [
-            {"asset": "BTC/USDT", "side": "BUY", "status": "OPEN", "net_pnl": 44.28},
-            {"asset": "SOL/USDT", "side": "BUY", "status": "OPEN", "net_pnl": 29.1},
-            {"asset": "ETH/USDT", "side": "SELL", "status": "CLOSED", "net_pnl": -21.75},
-        ],
     }
 
 
@@ -230,17 +214,29 @@ def _record_decision(kind: str, decision: str, reason: str) -> None:
     write_json(DIARY_FILE, data)
 
 
+def _safe_build(title: str, builder: Callable[[], str]) -> str:
+    try:
+        return builder()
+    except Exception as exc:
+        return (
+            f"⚠️ <b>{_safe_html(title)}</b>\n\n"
+            f"Один внутренний модуль упал: <b>{_safe_html(type(exc).__name__)}</b>. "
+            "Бот живой, webhook живой. Ошибка записана в Render logs.\n\n"
+            "Попробуй /start, /status или /trade."
+        )
+
+
 def start_text() -> str:
     return (
         "👋 <b>SharipovAI Telegram запущен</b>\n\n"
-        "Бот теперь работает как личный AI-диспетчер. Он спрашивает внутренних ботов, а не отвечает заглушкой.\n\n"
+        "Бот работает как личный AI-диспетчер.\n\n"
         "Главное:\n"
         "/now — что делать сейчас\n"
         "/morning — утренний отчёт\n"
         "/trade — можно ли торговать\n"
         "/why — почему такое решение\n"
-        "/improve — что улучшить\n"
-        "/stop_ai — экстренно всё остановить\n\n"
+        "/audit — аудит всех ИИ\n"
+        "/status — статус Telegram\n\n"
         "Можно писать обычным текстом: «Что сегодня произошло?», «Почему рисковано?», «Можно покупать BTC?»"
     )
 
@@ -254,168 +250,194 @@ def status_text() -> str:
         f"BOT_TOKEN: <b>{'настроен' if token_ok else 'НЕ НАСТРОЕН'}</b>\n"
         f"WEBAPP_URL: <b>{_safe_html(url)}</b>\n"
         "Режим: <b>webhook через FastAPI</b>\n"
-        "AI Chat Orchestrator: <b>подключён</b>\n"
+        "Polling worker: <b>выключен по умолчанию</b>\n"
         f"STOP AI: <b>{'ВКЛЮЧЁН' if stop.get('stop_ai') else 'выключен'}</b>\n\n"
-        "После финального деплоя: /telegram-check → Set webhook → /start."
+        "Если webhook_error остаётся после деплоя: открой /api/telegram/set-webhook один раз."
     )
 
 
 def orchestrated_reply(message: str) -> str:
-    answer = answer_chat(message, _demo_state())
-    source = answer.get("source_ai", "AI Chat Orchestrator")
-    reply = str(answer.get("reply", "SharipovAI пока не смог собрать ответ."))
-    return f"<b>{_safe_html(source)}</b>\n\n{_safe_html(reply)}"
+    def build() -> str:
+        from ai_chat_orchestrator import answer_chat
+
+        answer = answer_chat(message, _demo_state())
+        source = answer.get("source_ai", "AI Chat Orchestrator")
+        reply = str(answer.get("reply", "SharipovAI пока не смог собрать ответ."))
+        return f"<b>{_safe_html(source)}</b>\n\n{_safe_html(reply)}"
+
+    return _safe_build("AI Chat Orchestrator", build)
 
 
 def now_text() -> str:
-    gate = trade_gate()
-    regime = gate.get("market_regime", {})
-    news = analyzed_news_payload()
-    summary = news.get("summary", {}) if isinstance(news, dict) else {}
-    decision = str(gate.get("decision", "WATCH"))
-    action = "НЕ входить. Наблюдать." if decision == "BLOCK" else "Только DEMO. LIVE запрещён." if decision == "DEMO_ONLY" else "DEMO можно, LIVE запрещён."
-    if stop_ai_enabled():
-        decision = "STOP_AI"
-        action = "Все действия заблокированы. Разрешён только анализ."
-    _record_decision("now", decision, action)
-    lines = [
-        "🟢 <b>Что делать сейчас?</b>",
-        "",
-        f"Решение: <b>{_safe_html(decision)}</b>",
-        f"Действие: <b>{_safe_html(action)}</b>",
-        f"Режим рынка: <b>{_safe_html(regime.get('regime', 'unknown'))}</b>",
-        f"Риск: <b>{_safe_html(regime.get('risk_level', 'unknown'))}</b>",
-        f"Новости: средняя достоверность <b>{summary.get('average_credibility_percent', 0)}%</b>",
-    ]
-    blockers = gate.get("blockers", []) or []
-    if blockers:
-        lines.append("\n<b>Почему осторожно:</b>")
-        lines.extend(f"• {_safe_html(item)}" for item in blockers[:4])
-    lines.append("\nСледующий шаг: /why или /trade")
-    return "\n".join(lines)
+    def build() -> str:
+        from news_monitor.analyzer import analyzed_news_payload
+        from trading_intelligence import trade_gate
+
+        gate = trade_gate()
+        regime = gate.get("market_regime", {})
+        news = analyzed_news_payload()
+        summary = news.get("summary", {}) if isinstance(news, dict) else {}
+        decision = "STOP_AI" if stop_ai_enabled() else str(gate.get("decision", "WATCH"))
+        action = "Все действия заблокированы. Разрешён только анализ." if stop_ai_enabled() else str(gate.get("human_answer", "Наблюдать. LIVE запрещён."))
+        _record_decision("now", decision, action)
+        return "\n".join([
+            "🟢 <b>Что делать сейчас?</b>",
+            "",
+            f"Решение: <b>{_safe_html(decision)}</b>",
+            f"Действие: <b>{_safe_html(action)}</b>",
+            f"Режим рынка: <b>{_safe_html(regime.get('regime', 'unknown'))}</b>",
+            f"Риск: <b>{_safe_html(regime.get('risk_level', 'unknown'))}</b>",
+            f"Новости: достоверность <b>{summary.get('average_credibility_percent', 0)}%</b>",
+            "",
+            "Следующий шаг: /why или /trade",
+        ])
+
+    return _safe_build("Что делать сейчас", build)
 
 
 def morning_text() -> str:
-    gate = trade_gate()
-    regime = market_regime()
-    news = analyzed_news_payload()
-    audit = audit_system_ai()
-    scoreboard = audit.get("scoreboard", {})
-    counts = scoreboard.get("counts", {}) if isinstance(scoreboard, dict) else {}
-    summary = news.get("summary", {}) if isinstance(news, dict) else {}
-    items = list(news.get("items", []))[:3] if isinstance(news, dict) else []
-    lines = [
-        "🌅 <b>Утренний отчёт SharipovAI</b>",
-        "",
-        f"Рынок: <b>{_safe_html(regime.get('regime', 'unknown'))}</b>",
-        f"Риск: <b>{_safe_html(regime.get('risk_level', 'unknown'))}</b>",
-        f"Trade Gate: <b>{_safe_html(gate.get('decision', 'UNKNOWN'))}</b>",
-        f"AI: live {counts.get('live', 0)}, demo {counts.get('demo', 0)}, ждут API {counts.get('waiting_api', 0)}",
-        f"Новости: достоверность {summary.get('average_credibility_percent', 0)}%, нужно подтвердить {summary.get('needs_confirmation', 0)}",
-    ]
-    if items:
-        lines.append("\n<b>Главные новости:</b>")
-        for item in items:
-            lines.append(f"• {_safe_html(item.get('title', 'Новость'))}")
-    lines.append("\nГлавное действие: не гнаться за сделкой. Сначала /trade и /why.")
-    _record_decision("morning", str(gate.get("decision", "UNKNOWN")), "Утренний отчёт сформирован")
-    return "\n".join(lines)
+    def build() -> str:
+        from news_monitor.analyzer import analyzed_news_payload
+        from system_ai_auditor import audit_system_ai
+        from trading_intelligence import market_regime, trade_gate
+
+        gate = trade_gate()
+        regime = market_regime()
+        news = analyzed_news_payload()
+        audit = audit_system_ai()
+        scoreboard = audit.get("scoreboard", {})
+        counts = scoreboard.get("counts", {}) if isinstance(scoreboard, dict) else {}
+        summary = news.get("summary", {}) if isinstance(news, dict) else {}
+        return "\n".join([
+            "🌅 <b>Утренний отчёт SharipovAI</b>",
+            "",
+            f"Рынок: <b>{_safe_html(regime.get('regime', 'unknown'))}</b>",
+            f"Риск: <b>{_safe_html(regime.get('risk_level', 'unknown'))}</b>",
+            f"Trade Gate: <b>{_safe_html(gate.get('decision', 'UNKNOWN'))}</b>",
+            f"AI: live {counts.get('live', 0)}, demo {counts.get('demo', 0)}, ждут API {counts.get('waiting_api', 0)}",
+            f"Новости: достоверность {summary.get('average_credibility_percent', 0)}%",
+            "",
+            "Главное действие: не гнаться за сделкой. Сначала /trade и /why.",
+        ])
+
+    return _safe_build("Утренний отчёт", build)
 
 
 def trade_text() -> str:
-    gate = trade_gate()
-    blockers = gate.get("blockers", []) or []
-    warnings = gate.get("warnings", []) or []
-    decision = "STOP_AI" if stop_ai_enabled() else str(gate.get("decision", "UNKNOWN"))
-    lines = [
-        "🚦 <b>Можно ли сейчас торговать?</b>",
-        "",
-        f"Решение: <b>{_safe_html(decision)}</b>",
-        f"DEMO: <b>{'НЕТ' if stop_ai_enabled() else 'ДА' if gate.get('can_trade_demo') else 'НЕТ'}</b>",
-        "LIVE: <b>НЕТ</b>",
-        "",
-        _safe_html("Все действия заблокированы STOP AI." if stop_ai_enabled() else str(gate.get("human_answer", ""))),
-    ]
-    if blockers:
-        lines.append("\n<b>Блокеры:</b>")
-        lines.extend(f"• {_safe_html(item)}" for item in blockers[:5])
-    if warnings:
-        lines.append("\n<b>Предупреждения:</b>")
-        lines.extend(f"• {_safe_html(item)}" for item in warnings[:3])
-    _record_decision("trade", decision, str(gate.get("human_answer", "")))
-    return "\n".join(lines)
+    def build() -> str:
+        from trading_intelligence import trade_gate
+
+        gate = trade_gate()
+        blockers = gate.get("blockers", []) or []
+        warnings = gate.get("warnings", []) or []
+        decision = "STOP_AI" if stop_ai_enabled() else str(gate.get("decision", "UNKNOWN"))
+        lines = [
+            "🚦 <b>Можно ли сейчас торговать?</b>",
+            "",
+            f"Решение: <b>{_safe_html(decision)}</b>",
+            f"DEMO: <b>{'НЕТ' if stop_ai_enabled() else 'ДА' if gate.get('can_trade_demo') else 'НЕТ'}</b>",
+            "LIVE: <b>НЕТ</b>",
+            "",
+            _safe_html("Все действия заблокированы STOP AI." if stop_ai_enabled() else str(gate.get("human_answer", ""))),
+        ]
+        if blockers:
+            lines.append("\n<b>Блокеры:</b>")
+            lines.extend(f"• {_safe_html(item)}" for item in blockers[:5])
+        if warnings:
+            lines.append("\n<b>Предупреждения:</b>")
+            lines.extend(f"• {_safe_html(item)}" for item in warnings[:3])
+        _record_decision("trade", decision, str(gate.get("human_answer", "")))
+        return "\n".join(lines)
+
+    return _safe_build("Trade Gate", build)
 
 
 def why_text() -> str:
-    gate = trade_gate()
-    regime = gate.get("market_regime", {})
-    blockers = gate.get("blockers", []) or []
-    warnings = gate.get("warnings", []) or []
-    lines = [
-        "❓ <b>Почему такое решение?</b>",
-        "",
-        f"Trade Gate: <b>{_safe_html(gate.get('decision', 'UNKNOWN'))}</b>",
-        f"Market Regime AI: <b>{_safe_html(regime.get('regime', 'unknown'))}</b>",
-        f"Risk level: <b>{_safe_html(regime.get('risk_level', 'unknown'))}</b>",
-    ]
-    if stop_ai_enabled():
-        lines.append("• STOP AI включён: любые действия заблокированы.")
-    if blockers:
-        lines.append("\n<b>Главные причины:</b>")
-        lines.extend(f"• {_safe_html(item)}" for item in blockers[:5])
-    if warnings:
-        lines.append("\n<b>Предупреждения:</b>")
-        lines.extend(f"• {_safe_html(item)}" for item in warnings[:3])
-    lines.append("\nИтог: SharipovAI должен чаще говорить WAIT/BLOCK, чем рисковать ради красивой сделки.")
-    return "\n".join(lines)
+    return orchestrated_reply("почему такое решение по рынку и риску")
 
 
 def audit_text() -> str:
-    audit = audit_system_ai()
-    auditor = audit.get("auditor", {})
-    weak = [item for item in audit.get("interviews", []) if item.get("verdict") in {"делает вид", "заглушка", "недоработан", "частично работает"}]
-    lines = ["🤖 <b>Аудит всех ИИ</b>", "", _safe_html(str(auditor.get("summary", ""))), "", f"Работают: <b>{auditor.get('working', 0)} / {auditor.get('total', 0)}</b>", f"Proof score: <b>{auditor.get('average_proof_score', 0)}</b>"]
-    if weak:
-        lines.append("\n<b>Что требует внимания:</b>")
-        for item in weak[:8]:
-            lines.append(f"• <b>{_safe_html(item.get('name', 'AI'))}</b> — {_safe_html(item.get('verdict'))}")
-    return "\n".join(lines)
+    def build() -> str:
+        from system_ai_auditor import audit_system_ai
+
+        audit = audit_system_ai()
+        auditor = audit.get("auditor", {})
+        weak = [item for item in audit.get("interviews", []) if item.get("verdict") in {"делает вид", "заглушка", "недоработан", "частично работает"}]
+        lines = [
+            "🤖 <b>Аудит всех ИИ</b>",
+            "",
+            _safe_html(str(auditor.get("summary", ""))),
+            "",
+            f"Работают: <b>{auditor.get('working', 0)} / {auditor.get('total', 0)}</b>",
+            f"Proof score: <b>{auditor.get('average_proof_score', 0)}</b>",
+        ]
+        if weak:
+            lines.append("\n<b>Что требует внимания:</b>")
+            for item in weak[:8]:
+                lines.append(f"• <b>{_safe_html(item.get('name', 'AI'))}</b> — {_safe_html(item.get('verdict'))}")
+        return "\n".join(lines)
+
+    return _safe_build("Аудит всех ИИ", build)
 
 
 def improve_text() -> str:
-    audit = audit_system_ai()
-    actions = list(audit.get("priority_actions", []))[:7]
-    lines = ["🛠 <b>Что улучшить в SharipovAI</b>", ""]
-    if actions:
-        for idx, action in enumerate(actions, start=1):
-            lines.append(f"{idx}. {_safe_html(action)}")
-    else:
-        lines.append("Критических улучшений не найдено, но нужно продолжать live-проверки.")
-    lines.append("\nМой приоритет: Telegram webhook → live data status → Learning Engine → Backtest/Paper pipeline.")
-    return "\n".join(lines)
+    def build() -> str:
+        from system_ai_auditor import audit_system_ai
+
+        audit = audit_system_ai()
+        actions = list(audit.get("priority_actions", []))[:7]
+        lines = ["🛠 <b>Что улучшить в SharipovAI</b>", ""]
+        if actions:
+            for idx, action in enumerate(actions, start=1):
+                lines.append(f"{idx}. {_safe_html(action)}")
+        else:
+            lines.append("Критических улучшений не найдено, но нужно продолжать live-проверки.")
+        return "\n".join(lines)
+
+    return _safe_build("Что улучшить", build)
 
 
 def scoreboard_text() -> str:
-    news_report = run_news_agents()
-    scoreboard = system_scoreboard(list(news_report.get("agents", [])))
-    counts = scoreboard.get("counts", {})
-    agents = scoreboard.get("agents", [])
-    lines = ["📊 <b>AI Scoreboard</b>", "", f"Всего AI: <b>{scoreboard.get('total', 0)}</b>", f"Live: <b>{counts.get('live', 0)}</b>", f"Demo: <b>{counts.get('demo', 0)}</b>", f"Ждут API: <b>{counts.get('waiting_api', 0)}</b>", f"Disabled: <b>{counts.get('disabled', 0)}</b>", f"Средний proof score: <b>{scoreboard.get('average_proof_score', 0)}</b>", "", "<b>Главные слабые места:</b>"]
-    weak = [item for item in agents if item.get("real_data_status") in {"waiting_api", "disabled"} or int(item.get("proof_score", 0)) < 55]
-    for item in weak[:8]:
-        lines.append(f"• <b>{_safe_html(item.get('name'))}</b> — {_safe_html(item.get('honesty_label'))}, proof {item.get('proof_score')}")
-    return "\n".join(lines)
+    def build() -> str:
+        from ai_evidence import system_scoreboard
+        from news_monitor.agents import run_news_agents
+
+        news_report = run_news_agents()
+        scoreboard = system_scoreboard(list(news_report.get("agents", [])))
+        counts = scoreboard.get("counts", {})
+        agents = scoreboard.get("agents", [])
+        lines = [
+            "📊 <b>AI Scoreboard</b>",
+            "",
+            f"Всего AI: <b>{scoreboard.get('total', 0)}</b>",
+            f"Live: <b>{counts.get('live', 0)}</b>",
+            f"Demo: <b>{counts.get('demo', 0)}</b>",
+            f"Ждут API: <b>{counts.get('waiting_api', 0)}</b>",
+            f"Disabled: <b>{counts.get('disabled', 0)}</b>",
+            f"Средний proof score: <b>{scoreboard.get('average_proof_score', 0)}</b>",
+        ]
+        weak = [item for item in agents if item.get("real_data_status") in {"waiting_api", "disabled"} or int(item.get("proof_score", 0)) < 55]
+        if weak:
+            lines.append("\n<b>Главные слабые места:</b>")
+            for item in weak[:8]:
+                lines.append(f"• <b>{_safe_html(item.get('name'))}</b> — {_safe_html(item.get('honesty_label'))}, proof {item.get('proof_score')}")
+        return "\n".join(lines)
+
+    return _safe_build("AI Scoreboard", build)
 
 
 def learning_text() -> str:
-    state = learning_state()
-    lessons = state.get("active_rule_candidates", [])
-    lines = ["🧠 <b>Learning Engine 2.0</b>", "", f"Уроков: <b>{state.get('lesson_count', 0)}</b>", f"Режим: <b>{_safe_html(state.get('mode', 'unknown'))}</b>"]
-    if lessons:
-        lines.append("\n<b>Активные уроки:</b>")
+    def build() -> str:
+        from learning_engine_v2 import learning_state
+
+        state = learning_state()
+        lessons = state.get("active_rule_candidates", [])
+        lines = ["🧠 <b>Learning Engine 2.0</b>", "", f"Уроков: <b>{state.get('lesson_count', 0)}</b>", f"Режим: <b>{_safe_html(state.get('mode', 'unknown'))}</b>"]
         for lesson in lessons[:4]:
             lines.append(f"• {_safe_html(lesson.get('lesson'))}")
-    return "\n".join(lines)
+        return "\n".join(lines)
+
+    return _safe_build("Learning Engine", build)
 
 
 def diary_text() -> str:
@@ -449,7 +471,7 @@ def teach_text() -> str:
     return (
         "📚 <b>Урок дня</b>\n\n"
         "Почему нельзя покупать на одной новости?\n\n"
-        "Новость из Telegram/X может быть ранним сигналом, но она может быть слухом. Поэтому News Supervisor требует подтверждение. Если подтверждений нет, Trade Gate обязан сказать WAIT или BLOCK.\n\n"
+        "Новость из Telegram/X может быть ранним сигналом, но она может быть слухом. Если подтверждений нет, Trade Gate обязан сказать WAIT или BLOCK.\n\n"
         "Правило: лучше пропустить сделку, чем войти на ложной новости."
     )
 
@@ -476,8 +498,7 @@ def resume_ai_text() -> str:
 
 
 def notification_text() -> str:
-    gate = trade_gate()
-    return f"🔔 <b>SharipovAI уведомление</b>\n\nTrade Gate: <b>{_safe_html(gate.get('decision', 'UNKNOWN'))}</b>\nDemo: <b>{'разрешён' if gate.get('can_trade_demo') else 'запрещён'}</b>\nLIVE: <b>запрещён</b>\n\nДля деталей: /now /trade /why"
+    return trade_text()
 
 
 def handle_message(message: dict[str, Any]) -> None:
@@ -487,57 +508,63 @@ def handle_message(message: dict[str, Any]) -> None:
         return
     chat_id = int(chat_id)
     command = text.split()[0].lower() if text.startswith("/") else ""
-
-    if command in {"/start", "/help"}:
-        set_mode(chat_id, "ai")
-        send_message(chat_id, start_text(), main_keyboard())
-    elif command == "/now":
-        send_message(chat_id, now_text(), main_keyboard())
-    elif command == "/morning":
-        send_message(chat_id, morning_text(), main_keyboard())
-    elif command == "/status":
-        send_message(chat_id, status_text(), main_keyboard())
-    elif command == "/ai":
-        set_mode(chat_id, "ai")
-        send_message(chat_id, "🤖 AI-чат включён. Пиши вопрос: новости, риск, сделка, портфель, комиссии, аудит.", main_keyboard())
-    elif command == "/news":
-        send_message(chat_id, orchestrated_reply("что сегодня произошло"), main_keyboard())
-    elif command == "/risk":
-        send_message(chat_id, orchestrated_reply("почему рисковано"), main_keyboard())
-    elif command == "/trade":
-        send_message(chat_id, trade_text(), main_keyboard())
-    elif command == "/why":
-        send_message(chat_id, why_text(), main_keyboard())
-    elif command in {"/audit", "/check_ai"}:
-        send_message(chat_id, audit_text(), main_keyboard())
-    elif command == "/scoreboard":
-        send_message(chat_id, scoreboard_text(), main_keyboard())
-    elif command == "/learning":
-        send_message(chat_id, learning_text(), main_keyboard())
-    elif command == "/improve":
-        send_message(chat_id, improve_text(), main_keyboard())
-    elif command == "/diary":
-        send_message(chat_id, diary_text(), main_keyboard())
-    elif command == "/explain":
-        send_message(chat_id, explain_text(text), main_keyboard())
-    elif command == "/teach":
-        send_message(chat_id, teach_text(), main_keyboard())
-    elif command == "/stop_ai":
-        send_message(chat_id, stop_ai_text(), main_keyboard())
-    elif command == "/resume_ai":
-        send_message(chat_id, resume_ai_text(), main_keyboard())
-    elif command == "/portfolio":
-        send_message(chat_id, portfolio_text(), main_keyboard())
-    elif command == "/costs":
-        send_message(chat_id, costs_text(), main_keyboard())
-    elif command == "/notify_on":
-        subscribe(chat_id)
-        send_message(chat_id, "🔔 Уведомления включены.", main_keyboard())
-    elif command == "/notify_off":
-        unsubscribe(chat_id)
-        send_message(chat_id, "🔕 Уведомления выключены.", main_keyboard())
-    else:
-        send_message(chat_id, orchestrated_reply(text), main_keyboard())
+    try:
+        if command in {"/start", "/help"}:
+            set_mode(chat_id, "ai")
+            send_message(chat_id, start_text(), main_keyboard())
+        elif command == "/now":
+            send_message(chat_id, now_text(), main_keyboard())
+        elif command == "/morning":
+            send_message(chat_id, morning_text(), main_keyboard())
+        elif command == "/status":
+            send_message(chat_id, status_text(), main_keyboard())
+        elif command == "/ai":
+            set_mode(chat_id, "ai")
+            send_message(chat_id, "🤖 AI-чат включён. Пиши вопрос: новости, риск, сделка, портфель, комиссии, аудит.", main_keyboard())
+        elif command == "/news":
+            send_message(chat_id, orchestrated_reply("что сегодня произошло"), main_keyboard())
+        elif command == "/risk":
+            send_message(chat_id, orchestrated_reply("почему рисковано"), main_keyboard())
+        elif command == "/trade":
+            send_message(chat_id, trade_text(), main_keyboard())
+        elif command == "/why":
+            send_message(chat_id, why_text(), main_keyboard())
+        elif command in {"/audit", "/check_ai"}:
+            send_message(chat_id, audit_text(), main_keyboard())
+        elif command == "/scoreboard":
+            send_message(chat_id, scoreboard_text(), main_keyboard())
+        elif command == "/learning":
+            send_message(chat_id, learning_text(), main_keyboard())
+        elif command == "/improve":
+            send_message(chat_id, improve_text(), main_keyboard())
+        elif command == "/diary":
+            send_message(chat_id, diary_text(), main_keyboard())
+        elif command == "/explain":
+            send_message(chat_id, explain_text(text), main_keyboard())
+        elif command == "/teach":
+            send_message(chat_id, teach_text(), main_keyboard())
+        elif command == "/stop_ai":
+            send_message(chat_id, stop_ai_text(), main_keyboard())
+        elif command == "/resume_ai":
+            send_message(chat_id, resume_ai_text(), main_keyboard())
+        elif command == "/portfolio":
+            send_message(chat_id, portfolio_text(), main_keyboard())
+        elif command == "/costs":
+            send_message(chat_id, costs_text(), main_keyboard())
+        elif command == "/notify_on":
+            subscribe(chat_id)
+            send_message(chat_id, "🔔 Уведомления включены.", main_keyboard())
+        elif command == "/notify_off":
+            unsubscribe(chat_id)
+            send_message(chat_id, "🔕 Уведомления выключены.", main_keyboard())
+        else:
+            send_message(chat_id, orchestrated_reply(text), main_keyboard())
+    except Exception as exc:
+        print(f"Telegram handle_message error: {type(exc).__name__}: {exc}")
+        try:
+            send_message(chat_id, f"⚠️ Бот получил команду, но ответ не отправился: {_safe_html(type(exc).__name__)}. Попробуй /start или /status.")
+        except Exception as send_exc:
+            print(f"Telegram error fallback failed: {type(send_exc).__name__}: {send_exc}")
 
 
 def handle_callback(callback: dict[str, Any]) -> None:
@@ -546,11 +573,14 @@ def handle_callback(callback: dict[str, Any]) -> None:
     chat_id = message.get("chat", {}).get("id")
     data = str(callback.get("data") or "")
     if callback_id:
-        answer_callback(callback_id)
+        try:
+            answer_callback(callback_id)
+        except Exception as exc:
+            print(f"Telegram callback ack error: {type(exc).__name__}: {exc}")
     if not chat_id:
         return
     chat_id = int(chat_id)
-    mapping = {
+    mapping: dict[str, Callable[[], str]] = {
         "now": now_text,
         "morning": morning_text,
         "status": status_text,
@@ -596,7 +626,12 @@ def maybe_send_notifications() -> None:
 
 
 def poll() -> None:
-    telegram("deleteWebhook", {"drop_pending_updates": True})
+    if os.getenv("TELEGRAM_POLLING_ENABLED", "0").strip().lower() not in {"1", "true", "yes", "on"}:
+        print("SharipovAI Telegram polling disabled; webhook mode is expected.")
+        while True:
+            time.sleep(3600)
+    if os.getenv("TELEGRAM_POLLING_DELETE_WEBHOOK", "1").strip().lower() not in {"0", "false", "no", "off"}:
+        telegram("deleteWebhook", {"drop_pending_updates": True})
     setup_bot_commands()
     offset = 0
     print("SharipovAI Telegram polling started")
