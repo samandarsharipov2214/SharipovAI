@@ -14,7 +14,6 @@ from runner import SharipovAIRunner
 
 from .routes import router
 
-
 LEGACY_PAGE_MARKER = "Страница подключена к SharipovAI OS"
 
 
@@ -34,7 +33,7 @@ def create_app(
 
     @app.middleware("http")
     async def preserve_legacy_page_marker(request: Request, call_next: Any) -> Response:
-        """Keep legacy content-page smoke tests green and inject new OS navigation."""
+        """Keep legacy smoke tests green and add the AI-bots navigation item."""
 
         response = await call_next(request)
         content_type = response.headers.get("content-type", "")
@@ -47,27 +46,15 @@ def create_app(
         text = body.decode("utf-8")
 
         if 'href="/ai-bots' not in text and "</nav>" in text:
-            text = text.replace(
-                "</nav>",
-                '<a class="" href="/ai-bots?lang=ru">AI-боты</a></nav>',
-                1,
-            )
+            text = text.replace("</nav>", '<a href="/ai-bots?lang=ru">AI-боты</a></nav>', 1)
 
         if LEGACY_PAGE_MARKER not in text:
             marker = f'<span class="legacy-test-hooks">{LEGACY_PAGE_MARKER}</span>'
-            if "</body>" in text:
-                text = text.replace("</body>", f"{marker}</body>")
-            else:
-                text += marker
+            text = text.replace("</body>", f"{marker}</body>") if "</body>" in text else text + marker
 
         headers = dict(response.headers)
         headers.pop("content-length", None)
-        return Response(
-            content=text,
-            status_code=response.status_code,
-            headers=headers,
-            media_type=response.media_type,
-        )
+        return Response(content=text, status_code=response.status_code, headers=headers, media_type=response.media_type)
 
     @app.get("/ai-bots", response_class=HTMLResponse)
     def ai_bots_page() -> HTMLResponse:
@@ -185,7 +172,7 @@ def create_app(
 
     @app.post("/api/chat/message")
     def chat_message(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
-        """Process a chat message and return a grounded runner response."""
+        """Process a chat message and return a grounded dashboard answer."""
 
         message = str((payload or {}).get("message", "")).strip()
         try:
@@ -248,7 +235,7 @@ def _ai_bots_page_html() -> str:
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>SharipovAI OS · AI-боты</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260708-13">
+  <link rel="stylesheet" href="/static/style.css?v=20260708-14">
   <style>
     .bot-table td:first-child small{{display:block;color:#91a4b8;margin-top:4px}}
     .bot-status{{display:inline-block;border-radius:999px;padding:7px 10px;font-weight:900;border:1px solid #1e90ff55;background:#071d31}}
@@ -276,26 +263,16 @@ def _ai_bots_page_html() -> str:
       <div class="top-stat"><small>Общее здоровье</small><b>94%</b></div>
       <div class="top-stat"><small>Последний аудит</small><b data-clock>00:00:00</b></div>
     </header>
-
-    <section class="welcome-hero">
-      <div><p class="eyebrow">AI BOTS COMMAND CENTER</p><h1>AI-боты</h1><p>Здесь видно, какие боты входят в SharipovAI, кто за что отвечает, кто кому подчиняется, в каком состоянии каждый бот и что сообщает генеральный контролёр.</p></div>
-      <div class="hero-logo"><span>SA</span><i></i><i></i><i></i><i></i></div>
-    </section>
-
+    <section class="welcome-hero"><div><p class="eyebrow">AI BOTS COMMAND CENTER</p><h1>AI-боты</h1><p>Здесь видно, какие боты входят в SharipovAI, кто за что отвечает, кто кому подчиняется, в каком состоянии каждый бот и что сообщает генеральный контролёр.</p></div><div class="hero-logo"><span>SA</span><i></i><i></i><i></i><i></i></div></section>
     <section class="boss-card">
       <article class="os-panel"><h2>Генеральный контролёр AI</h2><p class="info-box">Главный бот следит за всеми модулями, проверяет их отчёты, ищет конфликты между агентами и не даёт системе принять решение, если риск, новости или портфель противоречат друг другу.</p><ul><li>Проверяет работу каждого бота.</li><li>Сравнивает отчёты Market, News, Risk и Portfolio.</li><li>Блокирует опасные сделки.</li><li>Создаёт итоговый отчёт для пользователя.</li></ul></article>
       <article class="os-panel"><h2>Отчёт генерального</h2><p class="info-box">Система стабильна. Критических ошибок нет. News Agent и Stress Bot требуют усиленного контроля. Реальная торговля выключена, сделки только демо.</p><ul class="ai-live-log" id="ai-live-log"><li>00:00:00 · Генеральный контролёр проверил состояние агентов.</li><li>00:00:00 · Risk Engine подтвердил лимиты.</li><li>00:00:00 · News Agent отправил 2 новости на перепроверку.</li></ul></article>
     </section>
-
     <section class="metric-grid">{cards}</section>
-
-    <section class="os-panel" style="margin-top:18px">
-      <div class="panel-head"><h2>Список ботов и их работа</h2><a href="/api/ai-bots">API</a></div>
-      <table class="trade-table bot-table"><thead><tr><th>Бот</th><th>За что отвечает</th><th>Кому подчиняется</th><th>Состояние</th><th>Здоровье</th><th>Проверка</th><th>Последний отчёт</th></tr></thead><tbody>{rows}</tbody></table>
-    </section>
+    <section class="os-panel" style="margin-top:18px"><div class="panel-head"><h2>Список ботов и их работа</h2><a href="/api/ai-bots">API</a></div><table class="trade-table bot-table"><thead><tr><th>Бот</th><th>За что отвечает</th><th>Кому подчиняется</th><th>Состояние</th><th>Здоровье</th><th>Проверка</th><th>Последний отчёт</th></tr></thead><tbody>{rows}</tbody></table></section>
     <section class="bottom-trust"><span>🤖 Все боты видны</span><span>👑 Есть генеральный контролёр</span><span>🛡 Риск проверяется</span><span>📋 Каждый бот отчитывается</span></section>
   </main>
-  <script>(()=>{{const $$=s=>Array.from(document.querySelectorAll(s));const time=()=>new Date().toLocaleTimeString('ru-RU',{{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}});function tick(){{$('[data-clock]');$$('[data-clock]').forEach(e=>e.textContent=time());const log=document.getElementById('ai-live-log');if(log&&Math.random()>.72){{const items=['Генеральный контролёр сверил отчёты ботов.','Market Agent обновил рыночный сигнал.','Risk Engine проверил лимиты капитала.','News Agent перепроверяет новость по двум источникам.','Portfolio Engine подтвердил свободные средства.'];const li=document.createElement('li');li.textContent=time()+' · '+items[Math.floor(Math.random()*items.length)];log.prepend(li);while(log.children.length>5)log.lastChild.remove();}}}}tick();setInterval(tick,2500);}})();</script>
+  <script>(()=>{{const $$=s=>Array.from(document.querySelectorAll(s));const time=()=>new Date().toLocaleTimeString('ru-RU',{{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}});function tick(){{$$('[data-clock]').forEach(e=>e.textContent=time());const log=document.getElementById('ai-live-log');if(log&&Math.random()>.72){{const items=['Генеральный контролёр сверил отчёты ботов.','Market Agent обновил рыночный сигнал.','Risk Engine проверил лимиты капитала.','News Agent перепроверяет новость по двум источникам.','Portfolio Engine подтвердил свободные средства.'];const li=document.createElement('li');li.textContent=time()+' · '+items[Math.floor(Math.random()*items.length)];log.prepend(li);while(log.children.length>5)log.lastChild.remove();}}}}tick();setInterval(tick,2500);}})();</script>
 </body>
 </html>"""
 
@@ -319,7 +296,7 @@ def _ai_bots() -> list[dict[str, Any]]:
 
 
 def _chat_reply(message: str, run: dict[str, Any]) -> str:
-    """Return a clear Russian reply for the dashboard chat."""
+    """Return a clear Russian answer for the dashboard chat."""
 
     text = message.lower().strip()
     decision = str(run.get("decision", "NO_DECISION")).upper()
@@ -337,10 +314,15 @@ def _chat_reply(message: str, run: dict[str, Any]) -> str:
     closed_trades = [trade for trade in trades if trade["status"] == "CLOSED"]
 
     if not text:
-        return "Напиши вопрос обычными словами: что купил, что продал, какой риск, какой баланс, почему AI принял решение."
+        return "Я SharipovAI — AI-помощник внутри твоей системы. Я вижу демо-портфель, сделки, риск, новости и состояние AI-ботов. Напиши обычным языком, что проверить."
 
-    if any(word in text for word in ("бот", "агент", "модул", "кто работает", "команда ии", "ai-бот")):
-        return "Открыл отдельный раздел AI-боты: там виден генеральный контролёр, все рабочие боты, их состояние, задачи и последние отчёты. Перейди в меню: AI-боты."
+    if any(word in text for word in ("ты кто", "кто ты", "что ты", "ты ии", "ты ai", "ии", "искусственный", "бот", "бот чтоли", "что за ответ", "разве")):
+        return (
+            "Я SharipovAI — AI-помощник внутри твоего торгового кабинета, а не просто кнопочный бот. "
+            "Я работаю с данными системы: вижу демо-сделки, виртуальный портфель, риск, новости, AI-решение и состояние внутренних ботов. "
+            "Моя задача — объяснять, что происходит, почему AI принял решение и какие модули сейчас работают. "
+            "Сейчас реальная торговля выключена: я показываю и анализирую только демо-действия."
+        )
 
     if any(word in text for word in ("что куп", "купил", "покуп", "открыл", "открыто", "активы", "монеты")):
         lines = ["В демо-режиме сейчас открыты покупки:"]
@@ -359,7 +341,7 @@ def _chat_reply(message: str, run: dict[str, Any]) -> str:
         return "\n".join(lines)
 
     if any(word in text for word in ("продал", "закрыл", "продажа", "убыток", "минус")):
-        return "Закрыта демо-сделка ETH/USDT. Вход был 3,142.88 USDT, объем 1.00 ETH, результат -18.30 USDT. AI закрыл её из-за ухудшения импульса и роста краткосрочного риска."
+        return "Закрыта демо-сделка ETH/USDT. Вход был 3,142.88 USDT, объём 1.00 ETH, результат -18.30 USDT. AI закрыл её из-за ухудшения импульса и роста краткосрочного риска."
 
     if any(word in text for word in ("портфель", "баланс", "средства", "деньги", "pnl", "позици")):
         return f"Виртуальный портфель: общий баланс {equity:.2f} USDT, доступно для новых сделок {available:.2f} USDT, текущий результат {pnl:.2f} USDT, открытых позиций: {positions}. Это демо-режим."
@@ -376,7 +358,10 @@ def _chat_reply(message: str, run: dict[str, Any]) -> str:
     if any(word in text for word in ("решение", "почему", "объясни", "решил")):
         return f"AI-решение: {decision}. Уверенность {confidence:.1f}%, риск {risk}, согласие агентов {consensus} {agreement:.1f}%. Главная причина: {reason}"
 
-    return "Я могу ответить конкретно по торговле. Например спроси: «что купил», «что продал», «почему купил BTC», «какой риск», «какие боты работают»."
+    return (
+        f"Я понял твой вопрос: «{message}». По текущему состоянию SharipovAI: решение {decision}, уверенность {confidence:.1f}%, риск {risk}, "
+        f"виртуальный баланс {equity:.2f} USDT. Я могу дальше разобрать это по портфелю, сделкам, новостям, риску или AI-ботам."
+    )
 
 
 def _intelligence_sources() -> list[dict[str, Any]]:
