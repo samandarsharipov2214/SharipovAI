@@ -58,7 +58,8 @@ def test_overview_page_renders_rebuilt_live_interface() -> None:
     assert "id=\"hero-confidence\"" in response.text
     assert "id=\"portfolio-equity\"" in response.text
     assert "id=\"run-analysis\"" in response.text
-    assert "Стресс-лаборатория" in response.text
+    assert "Команда для ИИ" in response.text
+    assert "Самандар, добро пожаловать." in response.text
 
 
 def test_overview_page_displays_runner_values() -> None:
@@ -278,38 +279,39 @@ def test_logo_and_favicon_routes_work() -> None:
 
 
 def test_russian_translation_is_complete_for_core_labels() -> None:
-    """Russian UI appears when lang is ru."""
+    """Russian cockpit UI appears when lang is ru."""
 
     response = TestClient(create_app(runner_factory=_runner_factory)).get("/?lang=ru")
 
     assert response.status_code == 200
     assert "Обзор" in response.text
-    assert "Умнее. Данные. Решения." in response.text
+    assert "Самандар, добро пожаловать." in response.text
     assert "ПОКУПАТЬ БИТКОЙН" in response.text
     assert "НИЗКИЙ" in response.text
     assert "ЕДИНОГЛАСНО" in response.text
+    assert "Команда для ИИ" in response.text
 
 
 def test_english_translation_appears() -> None:
-    """English UI appears when lang is en."""
+    """English decision UI appears when lang is en."""
 
     response = TestClient(create_app(runner_factory=_runner_factory)).get("/?lang=en")
 
     assert response.status_code == 200
     assert "Overview" in response.text
-    assert "Smarter. Data. Decisions." in response.text
     assert "BUY BITCOIN" in response.text
+    assert "AI DECISION" in response.text
 
 
 def test_uzbek_translation_appears() -> None:
-    """Uzbek UI appears when lang is uz."""
+    """Uzbek decision UI appears when lang is uz."""
 
     response = TestClient(create_app(runner_factory=_runner_factory)).get("/?lang=uz")
 
     assert response.status_code == 200
     assert "Umumiy ko&#39;rinish" in response.text
-    assert "Aqlliroq. Ma&#39;lumot. Qarorlar." in response.text
     assert "BITCOIN SOTIB OLISH" in response.text
+    assert "AI DECISION" in response.text
 
 
 def test_invalid_language_falls_back_to_russian() -> None:
@@ -431,7 +433,7 @@ def test_crash_test_panel_was_replaced_by_stress_lab_link() -> None:
     assert response.status_code == 200
     assert "Панель краш-теста" not in response.text
     assert "href=\"/stress-lab?lang=ru\"" in response.text
-    assert "Стресс-лаборатория" in response.text
+    assert "Стресс-тест" in response.text
 
 
 class _FakeRunner:
