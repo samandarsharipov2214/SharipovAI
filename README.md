@@ -1,16 +1,16 @@
 # SharipovAI OS
 
-SharipovAI OS — demo-first AI trading analysis system with a FastAPI dashboard, deterministic runner, paper trading, risk checks, intelligence APIs, Telegram worker, and a safety-first exchange connector.
+SharipovAI OS — demo-first AI trading analysis system with a FastAPI dashboard, deterministic runner, paper trading, risk checks, intelligence APIs, safe exchange previews, and a Telegram worker.
 
-> Safety rule: real trading is disabled. The current system is designed for demo analysis, paper trading, and safe order previews only.
+> Safety rule: real trading is disabled. The current system is designed for demo analysis, paper trading, and safe exchange previews only.
 
 ## Main parts
 
 - `dashboard/` — FastAPI web dashboard and HTML UI.
 - `runner/` — integrated SharipovAI pipeline runner.
 - `paper_trading/` — virtual paper trading engine.
+- `exchange_connector/` — safety-first exchange connector with commission-aware order previews.
 - `risk_engine/`, `portfolio_engine/`, `confidence/`, `consensus/` — decision support modules.
-- `exchange_connector/` — safe exchange connector with commission-aware order previews.
 - `telegram_bot.py` — Telegram long-polling worker using the Telegram Bot HTTP API directly.
 - `config/default.toml` — default demo configuration.
 
@@ -31,7 +31,7 @@ python -m pytest
 ## Run dashboard locally
 
 ```bash
-uvicorn dashboard.app:app --reload
+uvicorn dashboard:app --reload
 ```
 
 Open:
@@ -63,9 +63,29 @@ The exchange connector is safety-first. It can read environment configuration an
 
 Commissions are always counted as cost/loss:
 
-- BUY preview: `total_cost = quantity * price + estimated_fee`.
-- SELL preview: `total_cost = quantity * price - estimated_fee`.
-- Break-even price includes the estimated fee.
+- BUY preview: entry fee is added to the position cost.
+- SELL preview: commission is subtracted from the result.
+- If `expected_exit_price` is provided, the API returns gross result and net result after entry/exit fees.
+- Break-even price includes estimated round-trip commission.
+
+Safe exchange API endpoints:
+
+```text
+GET  /api/exchange/status
+POST /api/exchange/preview-order
+```
+
+Preview example:
+
+```json
+{
+  "symbol": "BTCUSDT",
+  "side": "BUY",
+  "quantity": 0.1,
+  "price": 60000,
+  "expected_exit_price": 60600
+}
+```
 
 Example environment values:
 
@@ -100,7 +120,7 @@ Never commit real secrets, exchange API keys, or Telegram tokens to GitHub.
 Web service:
 
 ```bash
-uvicorn dashboard.app:app --host 0.0.0.0 --port $PORT
+uvicorn dashboard:app --host 0.0.0.0 --port $PORT
 ```
 
 Telegram worker:
