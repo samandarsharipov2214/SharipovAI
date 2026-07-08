@@ -26,7 +26,7 @@ class FakeRunner:
         )
 
 
-def test_admin_can_open_security_center(tmp_path: Path, monkeypatch) -> None:
+def _set_auth_env(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("ADMIN_USERNAME", "Samandar2212")
     monkeypatch.setenv("ADMIN_PASSWORD", "AdminPassword2026!")
     monkeypatch.setenv("AUTH_SECRET", "test-secret")
@@ -35,15 +35,22 @@ def test_admin_can_open_security_center(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AUTH_SECURITY_EVENTS_FILE", str(tmp_path / "security_events.json"))
     monkeypatch.setenv("AUTH_LOGIN_ATTEMPTS_FILE", str(tmp_path / "login_attempts.json"))
 
-    app = create_admin_secure_app(runner_factory=FakeRunner)
-    client = TestClient(app)
 
+def _login_admin(client: TestClient) -> None:
     login = client.post(
         "/login",
         data={"username": "Samandar2212", "password": "AdminPassword2026!"},
         follow_redirects=False,
     )
     assert login.status_code == 303
+
+
+def test_admin_can_open_security_center(tmp_path: Path, monkeypatch) -> None:
+    _set_auth_env(tmp_path, monkeypatch)
+    app = create_admin_secure_app(runner_factory=FakeRunner)
+    client = TestClient(app)
+
+    _login_admin(client)
 
     security = client.get("/security")
     assert security.status_code == 200
@@ -55,33 +62,30 @@ def test_admin_can_open_security_center(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_regular_user_cannot_open_security_center(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("ADMIN_USERNAME", "Samandar2212")
-    monkeypatch.setenv("ADMIN_PASSWORD", "AdminPassword2026!")
-    monkeypatch.setenv("AUTH_SECRET", "test-secret")
-    monkeypatch.setenv("AUTH_USERS_FILE", str(tmp_path / "users.json"))
-    monkeypatch.setenv("AUTH_ACCESS_REQUESTS_FILE", str(tmp_path / "access_requests.json"))
-    monkeypatch.setenv("AUTH_SECURITY_EVENTS_FILE", str(tmp_path / "security_events.json"))
-    monkeypatch.setenv("AUTH_LOGIN_ATTEMPTS_FILE", str(tmp_path / "login_attempts.json"))
-
+    _set_auth_env(tmp_path, monkeypatch)
     app = create_admin_secure_app(runner_factory=FakeRunner)
-    client = TestClient(app)
 
-    client.post(
+    admin_client = TestClient(app)
+    user_client = TestClient(app)
+
+    user_client.post(
         "/register",
         data={"username": "pilot03", "contact": "@pilot03", "reason": "Need access"},
     )
-    request_id = client.get("/api/security/access-requests").json()["requests"][0]["id"]
-    approved = client.post(f"/api/security/access-requests/{request_id}/approve").json()
+
+    _login_admin(admin_client)
+    request_id = admin_client.get("/api/security/access-requests").json()["requests"][0]["id"]
+    approved = admin_client.post(f"/api/security/access-requests/{request_id}/approve").json()
     temporary_password = approved["temporary_password"]
 
-    login = client.post(
+    login = user_client.post(
         "/login",
         data={"username": "pilot03", "password": temporary_password},
         follow_redirects=False,
     )
     assert login.status_code == 303
 
-    changed = client.post(
+    changed = user_client.post(
         "/change-password",
         data={
             "current_password": temporary_password,
@@ -92,17 +96,17 @@ def test_regular_user_cannot_open_security_center(tmp_path: Path, monkeypatch) -
     )
     assert changed.status_code == 303
 
-    security = client.get("/security")
+    security = user_client.get("/security")
     assert security.status_code == 403
     assert "Доступ запрещён" in security.text
 
-    api_security = client.get("/api/security/access-requests")
+    api_security = user_client.get("/api/security/access-requests")
     assert api_security.status_code == 403
     assert api_security.json()["error"] == "admin_required"
 
-    home = client.get("/")
+    home = user_client.get("/")
     assert home.status_code == 200
 
-    role = client.get("/api/auth/role").json()
+    role = user_client.get("/api/auth/role").json()
     assert role["role"] == "user"
     assert role["admin"] is False
