@@ -18,7 +18,7 @@ def test_communication_matrix_is_full_mesh(tmp_path) -> None:
     assert len(matrix["bots"]) == len(BOT_NAMES)
     for sender in BOT_NAMES:
         for recipient in BOT_NAMES:
-            assert matrix["matrix"][sender][recipient] is (sender != recipient)
+            assert matrix["matrix"][sender][recipient] == (sender != recipient)
 
 
 def test_send_message_inbox_outbox_thread_and_read(tmp_path) -> None:
