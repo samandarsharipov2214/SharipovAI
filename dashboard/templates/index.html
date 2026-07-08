@@ -42,17 +42,17 @@
       <article class="mini-card">
         <h2>AI чат</h2>
         <div class="mini-chat-log" id="ai-chat-log" aria-live="polite">
-          <div class="mini-message assistant-message"><div class="mini-avatar">SA</div><div class="mini-bubble"><b>SharipovAI</b><p>Я онлайн. Могу объяснить портфель, рынок, риск, новости или AI-решение.</p></div></div>
+          <div class="mini-message assistant-message"><div class="mini-avatar">SA</div><div class="mini-bubble"><b>SharipovAI</b><p>Я онлайн. Могу купить/продать в demo, поменять demo balance, объяснить портфель, рынок и комиссии.</p></div></div>
         </div>
         <form id="ai-command-form" class="mini-form">
-          <textarea id="ai-command-input" placeholder="Например: объясни риск сегодня..." autocomplete="off"></textarea>
+          <textarea id="ai-command-input" placeholder="Например: купи BTC или поставь баланс 20000..." autocomplete="off"></textarea>
           <button class="mini-send" type="submit" id="send-command" title="Отправить">➤</button>
         </form>
         <div class="quick-chat-actions">
           <button type="button" data-prompt="Покажи портфель">Портфель</button>
-          <button type="button" data-prompt="Анализ рынка">Рынок</button>
+          <button type="button" data-prompt="Анализ рынка и купи если риск низкий">Рынок</button>
           <button type="button" data-prompt="Риск сегодня">Риск</button>
-          <button type="button" data-prompt="Проверь новости">Новости</button>
+          <button type="button" data-prompt="Купи BTC виртуально">Купить BTC</button>
         </div>
       </article>
 
@@ -67,7 +67,7 @@
 
       <article class="mini-card">
         <h2>Сделки</h2>
-        <table class="mini-table"><tbody><tr><td>BTC/USDT</td><td class="positive">+52.40</td></tr><tr><td>ETH/USDT</td><td class="negative">-18.30</td></tr><tr><td>SOL/USDT</td><td class="positive">+31.20</td></tr></tbody></table>
+        <table class="mini-table"><tbody><tr><td>Сделок пока нет</td><td>0.00</td></tr></tbody></table>
       </article>
       <div class="bottom-safe"></div>
     </section>
@@ -79,7 +79,7 @@
       <div class="top-stat"><small>Цикл</small><b>14</b></div>
       <div class="top-stat"><small>Модули онлайн</small><b>11 / 13</b></div>
       <div class="top-stat"><small>Среднее время цикла</small><b>412 ms</b></div>
-      <div class="top-actions"><a class="icon-btn" href="#">🔔</a><a class="icon-btn" href="/settings?lang={{ lang }}">⚙</a><div class="lang-links"><a class="active" href="{{ request.url.path }}?lang=ru&v=11">RU</a><a href="{{ request.url.path }}?lang=en&v=11">EN</a><a href="{{ request.url.path }}?lang=uz&v=11">UZ</a></div></div>
+      <div class="top-actions"><a class="icon-btn" href="#">🔔</a><a class="icon-btn" href="/settings?lang={{ lang }}">⚙</a><div class="lang-links"><a class="active" href="{{ request.url.path }}?lang=ru&v=12">RU</a><a href="{{ request.url.path }}?lang=en&v=12">EN</a><a href="{{ request.url.path }}?lang=uz&v=12">UZ</a></div></div>
     </header>
 
     <section class="welcome-hero"><div><p class="eyebrow">SharipovAI OS</p><h1>Самандар, добро пожаловать.</h1><p>Ваш интеллектуальный центр анализа, демо-торговли, новостей и контроля риска.</p></div><div class="hero-logo"><span>SA</span><i></i><i></i><i></i><i></i></div></section>
@@ -92,6 +92,7 @@
     <section class="legacy-test-hooks"><h2 id="hero-decision">{{ display.decision }}</h2><button id="run-analysis">{{ t.run_analysis }}</button><span id="hero-confidence">{{ "%.1f"|format(view.confidence) }}%</span><span id="hero-consensus">{{ display.consensus }} {{ "%.1f"|format(view.consensus_agreement) }}%</span><span id="decision-reason">{{ display.reason }}</span><span>{{ display.report }}</span><span>{{ display.risk }}</span><span>{{ "%.2f"|format(view.paper_cash) }} USDT</span><span>AI DECISION</span><span>Стресс-тест</span><span>AI Improvement</span><span>Улучшение AI</span><span>Лимиты</span><span>Раздел активен</span><span>AI Control Center</span></section>
   </main>
 
-  <script>(()=>{const $=s=>document.querySelector(s),$$=s=>Array.from(document.querySelectorAll(s));const time=()=>new Date().toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});const date=()=>new Date().toLocaleDateString('ru-RU',{day:'2-digit',month:'long',year:'numeric',weekday:'long'});function tick(){$$('[data-clock],#top-clock').forEach(e=>e.textContent=time());const d=$('#top-date');if(d)d.textContent=date()}tick();setInterval(tick,1000);const fmt=n=>Number(n||0).toLocaleString('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2});const log=$('#ai-chat-log');function msg(role,text){if(!log)return;const item=document.createElement('div');item.className='mini-message '+(role==='user'?'user-message':'assistant-message');item.innerHTML='<div class="mini-avatar">'+(role==='user'?'Вы':'SA')+'</div><div class="mini-bubble"><b>'+(role==='user'?'Самандар':'SharipovAI')+'</b><p></p></div>';item.querySelector('p').textContent=text;log.appendChild(item);log.scrollTop=log.scrollHeight}async function ask(text){const input=$('#ai-command-input');const value=(text||input?.value||'').trim();if(!value){msg('ai','Напиши вопрос про портфель, рынок, риск или новости.');return}msg('user',value);if(input)input.value='';msg('ai','Анализирую...');try{const r=await fetch('/api/chat/message',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:value}),cache:'no-store'});const p=await r.json();const bubbles=log?.querySelectorAll('.assistant-message .mini-bubble p');if(bubbles?.length)bubbles[bubbles.length-1].textContent=p.reply||'Команда выполнена.';if(p.run){$('#hero-risk')&&($('#hero-risk').textContent=p.run.risk_level||'LOW');$('#portfolio-equity')&&($('#portfolio-equity').textContent=fmt(p.run.paper_equity)+' USDT');$('#portfolio-pnl')&&($('#portfolio-pnl').textContent=fmt(p.run.paper_pnl)+' USDT')}}catch(err){const bubbles=log?.querySelectorAll('.assistant-message .mini-bubble p');if(bubbles?.length)bubbles[bubbles.length-1].textContent='Не получил ответ от сервера.'}}$('#ai-command-form')?.addEventListener('submit',e=>{e.preventDefault();ask()});$$('[data-prompt]').forEach(b=>b.addEventListener('click',()=>ask(b.dataset.prompt||b.textContent)));$$('[data-range-output]').forEach(input=>{const out=input.parentElement.querySelector('output');const upd=()=>out&&(out.textContent=input.value+'%');input.addEventListener('input',upd);upd()});$('#save-settings')?.addEventListener('click',()=>{const values=$$('[data-range-output]').map(i=>i.value);localStorage.setItem('riskSettings',JSON.stringify(values));const s=$('#save-status');if(s)s.textContent='✓ Изменения сохранены в демо-настройках.'})})();</script>
+  <script>(()=>{const $=s=>document.querySelector(s),$$=s=>Array.from(document.querySelectorAll(s));const time=()=>new Date().toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});const date=()=>new Date().toLocaleDateString('ru-RU',{day:'2-digit',month:'long',year:'numeric',weekday:'long'});function tick(){$$('[data-clock],#top-clock').forEach(e=>e.textContent=time());const d=$('#top-date');if(d)d.textContent=date()}tick();setInterval(tick,1000);$$('[data-range-output]').forEach(input=>{const out=input.parentElement.querySelector('output');const upd=()=>out&&(out.textContent=input.value+'%');input.addEventListener('input',upd);upd()});$('#save-settings')?.addEventListener('click',()=>{const values=$$('[data-range-output]').map(i=>i.value);localStorage.setItem('riskSettings',JSON.stringify(values));const s=$('#save-status');if(s)s.textContent='✓ Изменения сохранены в демо-настройках.'})})();</script>
+  <script src="/static/mini-app-live.js?v=20260708-23" defer></script>
 </body>
 </html>
