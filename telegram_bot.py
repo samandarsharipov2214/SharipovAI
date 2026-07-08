@@ -55,11 +55,17 @@ def main_keyboard() -> dict[str, Any]:
     rows: list[list[dict[str, Any]]] = []
     url = webapp_url()
     if url:
-        rows.append([{"text": "🚀 Открыть SharipovAI", "web_app": {"url": url}}])
-    rows.append(
+        rows.append([{"text": "🚀 Открыть Mini App", "web_app": {"url": url}}])
+    rows.extend(
         [
-            {"text": "📊 Обзор", "callback_data": "overview"},
-            {"text": "🤖 AI чат", "callback_data": "ai_chat"},
+            [
+                {"text": "📊 Обзор", "callback_data": "overview"},
+                {"text": "💼 Портфель", "callback_data": "portfolio"},
+            ],
+            [
+                {"text": "⚠️ Риск", "callback_data": "risk"},
+                {"text": "🤖 AI чат тут", "callback_data": "ai_chat"},
+            ],
         ]
     )
     return {"inline_keyboard": rows}
@@ -80,6 +86,56 @@ def answer_callback(callback_id: str, text: str = "") -> None:
     telegram("answerCallbackQuery", {"callback_query_id": callback_id, "text": text})
 
 
+def bot_ai_reply(message: str) -> str:
+    """Return a useful in-Telegram AI reply without forcing Mini App navigation."""
+
+    text = message.strip().lower()
+    if not text:
+        return "Напиши вопрос прямо сюда: портфель, рынок, риск, новости, комиссии или почему AI принял решение."
+    if any(word in text for word in ("портфель", "баланс", "сумма", "деньги", "pnl", "позици")):
+        return (
+            "💼 Демо-портфель SharipovAI:\n"
+            "Баланс: 10,000.00 USDT\n"
+            "Кэш: 9,500.00 USDT\n"
+            "PnL: 0.00 USDT\n"
+            "Открытых позиций: 1\n\n"
+            "Это Paper Trading/sandbox. Реальные деньги не используются."
+        )
+    if any(word in text for word in ("рынок", "btc", "битко", "анализ", "куп")):
+        return (
+            "📊 Рыночный режим: WATCH/DEMO.\n"
+            "AI смотрит цену, новости, риск, согласие агентов и комиссии. "
+            "Покупка не должна считаться прибыльной, пока прибыль после комиссии не положительная."
+        )
+    if any(word in text for word in ("риск", "опас", "просад", "безопас", "лимит")):
+        return (
+            "⚠️ Риск сейчас: LOW в демо-режиме.\n"
+            "Лимиты: риск на сделку 2%, максимальная просадка 10%. "
+            "Если риск растёт, AI блокирует BUY и переходит в WATCH."
+        )
+    if any(word in text for word in ("комисс", "fee", "доход", "прибыл", "убыт")):
+        return (
+            "🧾 Комиссии учитываются как расход/убыток.\n"
+            "AI считает entry fee + exit fee, gross result и net result after fees. "
+            "Если комиссия съедает прибыль, сделка помечается как Do not trade."
+        )
+    if any(word in text for word in ("новост", "источник", "слух", "довер")):
+        return (
+            "📰 Новости учитываются только после проверки источников. "
+            "Соцсети не используются отдельно: нужен минимум 2 независимых подтверждения."
+        )
+    if any(word in text for word in ("почему", "решение", "объясни", "ии", "ai")):
+        return (
+            "🤖 AI-логика: сначала рынок и новости, потом риск, затем комиссии и только после этого решение. "
+            "Сейчас режим безопасный: demo/sandbox, реальные ордера заблокированы."
+        )
+    return (
+        f"Я понял: «{message}».\n\n"
+        "Можешь писать прямо сюда без Mini App. Спроси: «портфель», «риск», «рынок», "
+        "«комиссии», «новости» или «почему решение»."
+    )
+
+
 def handle_message(message: dict[str, Any]) -> None:
     """Handle an incoming Telegram message update."""
 
@@ -92,16 +148,17 @@ def handle_message(message: dict[str, Any]) -> None:
     if text.startswith("/start"):
         send_message(
             chat_id,
-            "👋 Добро пожаловать в SharipovAI!\n\nЯ AI-помощник для анализа рынка, сделок и контроля риска.",
+            "👋 Добро пожаловать в SharipovAI!\n\nТеперь со мной можно общаться прямо в Telegram. Mini App — это дополнительный экран, не обязательный.",
             main_keyboard(),
         )
     elif text.startswith("/help"):
         send_message(
             chat_id,
-            "Команды: /start, /help\n\nСайт, Telegram и будущий iOS-клиент работают через один backend.",
+            "Команды: /start, /help\n\nПиши прямо сюда: портфель, рынок, риск, комиссии, новости или почему AI принял решение.",
+            main_keyboard(),
         )
     else:
-        send_message(chat_id, "Принял. Напиши /start, чтобы открыть меню SharipovAI.", main_keyboard())
+        send_message(chat_id, bot_ai_reply(text), main_keyboard())
 
 
 def handle_callback(callback: dict[str, Any]) -> None:
@@ -117,9 +174,13 @@ def handle_callback(callback: dict[str, Any]) -> None:
     if not chat_id:
         return
     if data == "overview":
-        send_message(chat_id, "📊 Обзор доступен в SharipovAI Dashboard. Открой кнопку Mini App.", main_keyboard())
+        send_message(chat_id, bot_ai_reply("портфель"), main_keyboard())
+    elif data == "portfolio":
+        send_message(chat_id, bot_ai_reply("портфель баланс pnl"), main_keyboard())
+    elif data == "risk":
+        send_message(chat_id, bot_ai_reply("риск"), main_keyboard())
     elif data == "ai_chat":
-        send_message(chat_id, "🤖 AI чат скоро будет связан с основным backend.", main_keyboard())
+        send_message(chat_id, "🤖 AI чат работает прямо здесь. Напиши мне вопрос сообщением — Mini App открывать не обязательно.", main_keyboard())
 
 
 def poll() -> None:
