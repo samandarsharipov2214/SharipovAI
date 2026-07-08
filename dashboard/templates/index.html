@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>SharipovAI OS</title>
     <link rel="icon" href="/favicon.ico" type="image/svg+xml">
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v=20260708-2">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"></script>
-    <script src="/static/app.js" defer></script>
+    <script src="/static/app.js?v=20260708-2" defer></script>
   </head>
   <body>
     <aside class="os-sidebar">
@@ -31,9 +31,9 @@
           <p class="top-subtitle"><span>{{ t.subtitle }}</span> Я проверяю рынок, новости, риск и виртуальный портфель. Реальные деньги не используются.</p>
         </div>
         <div class="top-metrics">
-          <div class="top-time"><span class="time-icon">◷</span><div><b id="top-clock" data-clock>--:--:--</b><small id="top-date">--</small></div></div>
+          <div class="top-time"><span class="time-icon">◷</span><div><b id="top-clock" data-clock>загрузка...</b><small id="top-date">локальное время</small></div></div>
           <div><small>AI Status</small><b class="status-green" id="top-ai-status">РАБОТАЕТ</b></div>
-          <div><small>Последнее обновление</small><b id="top-last-update" data-clock>--:--:--</b></div>
+          <div><small>Последнее обновление</small><b id="top-last-update" data-clock>загрузка...</b></div>
           <div><small>Цикл</small><b id="top-cycle">14</b></div>
           <div><small>Модули онлайн</small><b>11 / 13</b></div>
           <div><small>Среднее время цикла</small><b id="top-cycle-ms">412 ms</b></div>
@@ -65,8 +65,8 @@
               <div class="ai-message assistant-message"><div class="message-avatar">SA</div><div class="message-bubble"><div class="message-meta"><b>SharipovAI</b><time data-message-time>--:--:--</time></div><p>Привет, Самандар. Я онлайн. Нажми «Запустить AI» или дай команду текстом/голосом.</p></div></div>
             </div>
             <form id="ai-command-form" class="ai-command-form chat-input-form">
-              <textarea id="ai-command-input" placeholder="Напишите сообщение..."></textarea>
-              <div class="command-actions"><button type="button" id="voice-command">🎙</button><button type="submit">➤</button></div>
+              <textarea id="ai-command-input" placeholder="Напишите сообщение..." autocomplete="off"></textarea>
+              <div class="command-actions"><button type="button" id="voice-command">🎙</button><button type="submit" id="send-command">➤</button></div>
             </form>
             <small class="chat-disclaimer">AI может ошибаться. Проверяйте важную информацию.</small>
           </aside>
@@ -76,7 +76,7 @@
           <article class="metric-card trade-card"><small>Paper Trading действие</small><b id="trade-action">{% if view.decision == "BUY" and view.open_positions > 0 %}Куплено 0.0100 BTC{% else %}Ожидаю сигнала{% endif %}</b><p id="trade-details">{% if view.decision == "BUY" and view.open_positions > 0 %}Виртуальная покупка BTCUSDT по 50 000 USDT. Это учебная сделка без реальных денег.{% else %}AI пока не открыл виртуальную позицию.{% endif %}</p></article>
           <article class="metric-card"><small>{{ t.portfolio }}</small><b id="portfolio-equity">{{ "%.2f"|format(view.paper_equity) }} USDT</b><p>{{ t.cash }}: <span id="portfolio-cash">{{ "%.2f"|format(view.paper_cash) }} USDT</span></p><p class="{% if view.paper_pnl >= 0 %}positive{% else %}negative{% endif %}">PnL: <span id="portfolio-pnl">{{ "%.2f"|format(view.paper_pnl) }} USDT</span></p></article>
           <article class="metric-card"><small>Открытые позиции</small><b id="open-positions">{{ view.open_positions }}</b><p>Режим: только виртуальная торговля</p></article>
-          <article class="metric-card"><small>Последнее обновление</small><b id="last-update" data-clock>--:--:--</b><p id="last-action">AI готов к анализу</p></article>
+          <article class="metric-card"><small>Последнее обновление</small><b id="last-update" data-clock>загрузка...</b><p id="last-action">AI готов к анализу</p></article>
         </section>
 
         <section class="system-strip">
