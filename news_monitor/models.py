@@ -50,6 +50,9 @@ class NewsItem:
     symbols: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
     trust_score: int = 50
+    credibility_percent: int = 50
+    error_risk: str = "повышенный"
+    verification_status: str = "нужно подтверждение"
     urgency: str = "low"
     impact: str = "neutral"
     impact_score: int = 0
@@ -72,6 +75,9 @@ class NewsItem:
             "symbols": self.symbols,
             "tags": self.tags,
             "trust_score": self.trust_score,
+            "credibility_percent": self.credibility_percent,
+            "error_risk": self.error_risk,
+            "verification_status": self.verification_status,
             "urgency": self.urgency,
             "impact": self.impact,
             "impact_score": self.impact_score,
