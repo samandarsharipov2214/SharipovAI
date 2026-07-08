@@ -12,35 +12,62 @@ from typing import Any
 
 import httpx
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-WEBAPP_URL = os.getenv("WEBAPP_URL", "").strip()
 API_TIMEOUT = 35.0
 
-if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN is not set in Render Environment Variables")
 
-BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
+def bot_token() -> str:
+    """Return the Telegram bot token from environment variables.
+
+    The token is validated at runtime instead of import time so tests and tooling
+    can safely import this module without a real secret.
+    """
+
+    token = os.getenv("BOT_TOKEN", "").strip()
+    if not token:
+        raise RuntimeError("BOT_TOKEN is not set in Render Environment Variables")
+    return token
+
+
+def webapp_url() -> str:
+    """Return the configured Mini App URL, if available."""
+
+    return os.getenv("WEBAPP_URL", "").strip()
+
+
+def base_url() -> str:
+    """Return the Telegram Bot API base URL."""
+
+    return f"https://api.telegram.org/bot{bot_token()}"
 
 
 def telegram(method: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Call a Telegram Bot API method."""
+
     with httpx.Client(timeout=API_TIMEOUT) as client:
-        response = client.post(f"{BASE_URL}/{method}", json=payload or {})
+        response = client.post(f"{base_url()}/{method}", json=payload or {})
         response.raise_for_status()
         return response.json()
 
 
 def main_keyboard() -> dict[str, Any]:
+    """Build the main inline keyboard."""
+
     rows: list[list[dict[str, Any]]] = []
-    if WEBAPP_URL:
-        rows.append([{"text": "🚀 Открыть SharipovAI", "web_app": {"url": WEBAPP_URL}}])
-    rows.append([
-        {"text": "📊 Обзор", "callback_data": "overview"},
-        {"text": "🤖 AI чат", "callback_data": "ai_chat"},
-    ])
+    url = webapp_url()
+    if url:
+        rows.append([{"text": "🚀 Открыть SharipovAI", "web_app": {"url": url}}])
+    rows.append(
+        [
+            {"text": "📊 Обзор", "callback_data": "overview"},
+            {"text": "🤖 AI чат", "callback_data": "ai_chat"},
+        ]
+    )
     return {"inline_keyboard": rows}
 
 
 def send_message(chat_id: int, text: str, keyboard: dict[str, Any] | None = None) -> None:
+    """Send a Telegram message."""
+
     payload: dict[str, Any] = {"chat_id": chat_id, "text": text}
     if keyboard:
         payload["reply_markup"] = keyboard
@@ -48,10 +75,14 @@ def send_message(chat_id: int, text: str, keyboard: dict[str, Any] | None = None
 
 
 def answer_callback(callback_id: str, text: str = "") -> None:
+    """Acknowledge a Telegram callback query."""
+
     telegram("answerCallbackQuery", {"callback_query_id": callback_id, "text": text})
 
 
 def handle_message(message: dict[str, Any]) -> None:
+    """Handle an incoming Telegram message update."""
+
     chat = message.get("chat") or {}
     chat_id = chat.get("id")
     text = str(message.get("text") or "").strip()
@@ -65,12 +96,17 @@ def handle_message(message: dict[str, Any]) -> None:
             main_keyboard(),
         )
     elif text.startswith("/help"):
-        send_message(chat_id, "Команды: /start, /help\n\nСайт, Telegram и будущий iOS-клиент работают через один backend.")
+        send_message(
+            chat_id,
+            "Команды: /start, /help\n\nСайт, Telegram и будущий iOS-клиент работают через один backend.",
+        )
     else:
         send_message(chat_id, "Принял. Напиши /start, чтобы открыть меню SharipovAI.", main_keyboard())
 
 
 def handle_callback(callback: dict[str, Any]) -> None:
+    """Handle an incoming Telegram callback query update."""
+
     callback_id = callback.get("id")
     message = callback.get("message") or {}
     chat = message.get("chat") or {}
@@ -87,6 +123,8 @@ def handle_callback(callback: dict[str, Any]) -> None:
 
 
 def poll() -> None:
+    """Run Telegram long polling."""
+
     telegram("deleteWebhook", {"drop_pending_updates": True})
     offset = 0
     print("SharipovAI Telegram bot worker started")
