@@ -12,8 +12,8 @@
   <body>
     <aside class="os-sidebar">
       <a class="os-brand" href="/?lang={{ lang }}" aria-label="SharipovAI OS">
-        <span class="brand-mark">SA</span>
-        <span><b>SharipovAI</b><small>Trading AI cockpit</small></span>
+        <span class="brand-mark"><span class="brand-crown">♛</span><span class="brand-letter">S</span><span class="brand-letter alt">A</span></span>
+        <span><b>SHARIPOVAI OS</b><small>TRADING AI COCKPIT</small></span>
       </a>
       <nav class="os-nav" aria-label="Main navigation">
         {% for item in nav_items %}
@@ -24,16 +24,23 @@
     </aside>
 
     <main class="os-main">
-      <header class="os-topbar">
-        <div>
+      <header class="os-topbar cockpit-topbar">
+        <div class="top-welcome">
           <p class="eyebrow">SharipovAI OS</p>
           <h1>Самандар, добро пожаловать.</h1>
           <p class="top-subtitle"><span>{{ t.subtitle }}</span> Я проверяю рынок, новости, риск и виртуальный портфель. Реальные деньги не используются.</p>
         </div>
-        <div class="top-controls">
-          <span class="mode-pill">{{ display.run_mode }}</span>
-          <label>{{ t.language }}<select id="language-select"><option value="ru" {% if lang == "ru" %}selected{% endif %}>RU</option><option value="en" {% if lang == "en" %}selected{% endif %}>EN</option><option value="uz" {% if lang == "uz" %}selected{% endif %}>UZ</option></select></label>
-          <span class="clock" data-clock>--:--:--</span>
+        <div class="top-metrics">
+          <div class="top-time"><span class="time-icon">◷</span><div><b id="top-clock" data-clock>--:--:--</b><small id="top-date">--</small></div></div>
+          <div><small>AI Status</small><b class="status-green" id="top-ai-status">РАБОТАЕТ</b></div>
+          <div><small>Последнее обновление</small><b id="top-last-update" data-clock>--:--:--</b></div>
+          <div><small>Цикл</small><b id="top-cycle">14</b></div>
+          <div><small>Модули онлайн</small><b>11 / 13</b></div>
+          <div><small>Среднее время цикла</small><b id="top-cycle-ms">412 ms</b></div>
+          <div class="top-controls compact-controls">
+            <span class="mode-pill">{{ display.run_mode }}</span>
+            <label>{{ t.language }}<select id="language-select"><option value="ru" {% if lang == "ru" %}selected{% endif %}>RU</option><option value="en" {% if lang == "en" %}selected{% endif %}>EN</option><option value="uz" {% if lang == "uz" %}selected{% endif %}>UZ</option></select></label>
+          </div>
         </div>
       </header>
 
@@ -52,16 +59,16 @@
             <div class="action-row"><button id="run-analysis">▶ Запустить AI</button><a href="/stress-lab?lang={{ lang }}">🧪 Стресс-тест</a></div>
           </article>
 
-          <aside class="ai-command-panel">
-            <h2>Команда для ИИ</h2>
-            <p>Напиши задачу или нажми микрофон. Сейчас команды выполняются в безопасном Paper Trading.</p>
-            <form id="ai-command-form" class="ai-command-form">
-              <textarea id="ai-command-input" placeholder="Например: проанализируй BTC и купи виртуально, если риск низкий"></textarea>
-              <div class="command-actions"><button type="submit">Отправить ИИ</button><button type="button" id="voice-command">🎙 Голос</button></div>
-            </form>
-            <div class="ai-chat" id="ai-chat-log">
-              <div class="ai-message"><b>SharipovAI:</b><span>Привет, Самандар. Я онлайн. Нажми «Запустить AI» или дай команду текстом/голосом.</span></div>
+          <aside class="ai-command-panel chat-panel">
+            <div class="chat-header"><div><h2>AI ЧАТ</h2><small><span class="live-dot mini-dot"></span> Онлайн</small></div><button type="button" id="clear-chat">Очистить</button></div>
+            <div class="ai-chat" id="ai-chat-log" aria-live="polite">
+              <div class="ai-message assistant-message"><div class="message-avatar">SA</div><div class="message-bubble"><div class="message-meta"><b>SharipovAI</b><time data-message-time>--:--:--</time></div><p>Привет, Самандар. Я онлайн. Нажми «Запустить AI» или дай команду текстом/голосом.</p></div></div>
             </div>
+            <form id="ai-command-form" class="ai-command-form chat-input-form">
+              <textarea id="ai-command-input" placeholder="Напишите сообщение..."></textarea>
+              <div class="command-actions"><button type="button" id="voice-command">🎙</button><button type="submit">➤</button></div>
+            </form>
+            <small class="chat-disclaimer">AI может ошибаться. Проверяйте важную информацию.</small>
           </aside>
         </section>
 
@@ -92,7 +99,7 @@
         </section>
         <section class="stress-grid">
           <article class="os-panel scenario-panel"><h3>Сценарии</h3><button data-stress-scenario="btc_drop_10">BTC −10%</button><button data-stress-scenario="btc_drop_20">BTC −20%</button><button data-stress-scenario="market_crash_50">Рынок −50%</button><button data-stress-scenario="capital_loss_10">Капитал −10%</button></article>
-          <article class="os-panel result-panel"><h3>Результат теста</h3><dl><dt>Сценарий</dt><dd id="stress-scenario">{{ stress.scenario }}</dd><dt>Капитал до</dt><dd id="stress-before">{{ stress.capital_before }} USDT</dd><dt>Капитал после</dt><dd id="stress-after">{{ stress.capital_after }} USDT</dd><dt>Потеря</dt><dd id="stress-loss" class="negative">-{{ stress.loss_amount }} USDT ({{ stress.loss_percent }}%)</dd><dt>Статус</dt><dd id="stress-result">{{ stress.result }}</dd></dl></article>
+          <article class="os-panel result-panel"><h3>Результат теста</h3><dl><dt>Валюта</dt><dd>USDT</dd><dt>Сценарий</dt><dd id="stress-scenario">{{ stress.scenario }}</dd><dt>Капитал до</dt><dd id="stress-before">{{ stress.capital_before }} USDT</dd><dt>Капитал после</dt><dd id="stress-after">{{ stress.capital_after }} USDT</dd><dt>Потеряно</dt><dd id="stress-loss" class="negative">-{{ stress.loss_amount }} USDT ({{ stress.loss_percent }}%)</dd><dt>Сохранено</dt><dd id="stress-saved" class="positive">{{ stress.capital_after }} USDT</dd><dt>Статус</dt><dd id="stress-result">{{ stress.result }}</dd></dl></article>
           <article class="os-panel protection-panel"><h3>Защитные меры AI</h3><ul id="stress-measures">{% for item in stress.protective_measures %}<li>{{ item }}</li>{% endfor %}</ul></article>
         </section>
 
