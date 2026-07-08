@@ -76,21 +76,35 @@
       return;
     }
     rows.forEach((trade) => {
-      const pnl = Number(trade.pnl_usdt || 0);
+      const pnl = Number(trade.net_pnl ?? trade.pnl_usdt ?? 0);
+      const fee = Number(trade.fee || 0);
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${trade.asset || trade.symbol || 'BTC/USDT'} ${trade.side || ''}</td><td class="${pnl >= 0 ? 'positive' : 'negative'}">${pnl >= 0 ? '+' : ''}${fmt(pnl)}</td>`;
+      tr.innerHTML = `<td>${trade.asset || trade.symbol || 'BTC/USDT'} ${trade.side || ''}<br><small>комиссия ${fmt(fee)}</small></td><td class="${pnl >= 0 ? 'positive' : 'negative'}">${pnl >= 0 ? '+' : ''}${fmt(pnl)}</td>`;
       table.appendChild(tr);
     });
   }
 
+  function renderExchangeMonitor(state) {
+    const exchange = state.exchange_status || {};
+    const monitor = state.online_monitoring || {};
+    setText('#exchange-mode', String(exchange.mode || monitor.mode || 'sandbox'));
+    setText('#exchange-preview', monitor.order_preview_online ? 'Онлайн' : 'Ограничен');
+    setText('#exchange-live', monitor.live_execution_enabled ? 'Включено' : 'Выкл.');
+    setText('#exchange-fees', `${fmt(state.total_fees)} USDT`);
+    setText('#exchange-drag', `${fmt(state.commission_drag)} USDT`);
+    setText('#exchange-breakeven', `${fmt(state.break_even_price)} USDT`);
+    setText('#exchange-message', monitor.real_orders_blocked ? 'Реальные ордера заблокированы. Демо считает комиссии и net PnL через биржевой preview.' : 'Live gates открыты. Нужна ручная проверка риска перед каждым ордером.');
+  }
+
   function renderState(state) {
     if (!state) return;
-    const pnl = Number(state.pnl || 0);
+    const pnl = Number(state.pnl || state.net_pnl || 0);
     setText('#portfolio-equity', `${fmt(state.equity)} USDT`);
     setText('#portfolio-pnl', `${fmt(pnl)} USDT`);
     setText('#hero-risk', String(state.risk_level || 'LOW'));
     setText('#hero-decision', String(state.decision || 'WATCH'));
     renderTrades(state.trades || []);
+    renderExchangeMonitor(state);
   }
 
   async function loadDemoState() {
@@ -142,7 +156,7 @@
     const input = $('#ai-command-input');
     const value = String(command || input?.value || '').trim();
     if (!value) {
-      addMessage('ai', 'Напиши команду: «купи BTC», «продай», «поставь баланс 20000», «покажи портфель» или «анализ рынка».');
+      addMessage('ai', 'Напиши команду: «купи BTC», «продай», «поставь баланс 20000», «мониторинг онлайн» или «анализ рынка».');
       return;
     }
     addMessage('user', value);
@@ -205,5 +219,7 @@
     installLiveHandlers();
     loadDemoState();
     loadBots();
+    setInterval(loadDemoState, 15000);
+    setInterval(loadBots, 30000);
   });
 })();
