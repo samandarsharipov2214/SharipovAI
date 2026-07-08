@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SharipovAI Intelligence Center</title>
+  <link rel="stylesheet" href="/static/style.css?v=20260708-8">
+  <style>
+    body{padding:24px}.intel-shell{max-width:1500px;margin:0 auto}.intel-table{width:100%;border-collapse:collapse}.intel-table th,.intel-table td{padding:13px;border-bottom:1px solid #17344e;text-align:left;vertical-align:top}.intel-table th{color:#8fd5ff}.intel-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}.intel-actions a{border:1px solid #1e90ff55;border-radius:12px;background:#071d31;color:#8fd5ff;padding:10px 14px;font-weight:900}.trust-high{color:#22c55e}.trust-mid{color:#f6c04a}.trust-low{color:#ef4444}
+  </style>
+</head>
+<body>
+  <main class="intel-shell">
+    <section class="welcome-hero">
+      <div>
+        <p class="eyebrow">SharipovAI Intelligence Center</p>
+        <h1>Центр источников и доверия</h1>
+        <p>AI следит за источниками, сверяет новости между собой, снижает рейтинг при исправлениях и не использует соцсети как единственный источник для решения.</p>
+        <div class="intel-actions"><a href="/">Главная</a><a href="/api/intelligence/sources">API источников</a><a href="/api/intelligence/summary">API сводки</a></div>
+      </div>
+      <div class="hero-logo"><span>SA</span><i></i><i></i><i></i><i></i></div>
+    </section>
+    <section class="metric-grid">
+      <article class="metric-card"><small>Источники</small><b>10</b><p>Всего в мониторинге</p></article>
+      <article class="metric-card"><small>Активные</small><b>9</b><p>Проверяются сейчас</p></article>
+      <article class="metric-card"><small>Сверка</small><b>2+</b><p>Минимум независимых подтверждения</p></article>
+      <article class="metric-card"><small>Соцсети</small><b>Только сигнал</b><p>Не источник решения</p></article>
+    </section>
+    <section class="os-panel" style="margin-top:18px">
+      <h2>Рейтинг источников</h2>
+      <table class="intel-table">
+        <thead><tr><th>Источник</th><th>Категория</th><th>Статус</th><th>Доверие</th><th>Исправления</th><th>Сверка</th><th>Зачем нужен</th></tr></thead>
+        <tbody>
+          <tr><td>Reuters</td><td>global_news</td><td>ACTIVE</td><td class="trust-high">96%</td><td>0</td><td>Bloomberg / AP / official filings</td><td>Главные мировые новости</td></tr>
+          <tr><td>Bloomberg</td><td>financial_media</td><td>ACTIVE</td><td class="trust-high">95%</td><td>0</td><td>Reuters / official filings</td><td>Макро, акции, ставки</td></tr>
+          <tr><td>Associated Press</td><td>global_news</td><td>ACTIVE</td><td class="trust-high">93%</td><td>0</td><td>Reuters / government sources</td><td>Политика и мировые события</td></tr>
+          <tr><td>Federal Reserve</td><td>official</td><td>ACTIVE</td><td class="trust-high">99%</td><td>0</td><td>FOMC calendar / market reaction</td><td>Ставки и USD</td></tr>
+          <tr><td>SEC</td><td>official</td><td>ACTIVE</td><td class="trust-high">98%</td><td>0</td><td>EDGAR / company filings</td><td>Регулирование</td></tr>
+          <tr><td>CoinDesk</td><td>crypto_media</td><td>ACTIVE</td><td class="trust-mid">86%</td><td>1</td><td>Cointelegraph / on-chain / exchange data</td><td>Крипто-новости</td></tr>
+          <tr><td>The Block</td><td>crypto_media</td><td>ACTIVE</td><td class="trust-mid">85%</td><td>0</td><td>CoinDesk / official channels</td><td>Крипто-рынок</td></tr>
+          <tr><td>Binance Announcements</td><td>exchange</td><td>ACTIVE</td><td class="trust-high">92%</td><td>0</td><td>Exchange status / market data</td><td>Листинги и события биржи</td></tr>
+          <tr><td>CoinMarketCap</td><td>market_data</td><td>ACTIVE</td><td class="trust-mid">82%</td><td>0</td><td>CoinGecko / exchange feeds</td><td>Цены и рейтинги</td></tr>
+          <tr><td>Social signals</td><td>social</td><td>MONITORING</td><td class="trust-low">55%</td><td>4</td><td>never used alone</td><td>Раннее обнаружение слухов</td></tr>
+        </tbody>
+      </table>
+    </section>
+    <section class="bottom-trust"><span>🛡 Проверка фактов</span><span>🔁 Сверка источников</span><span>📉 Понижение рейтинга за исправления</span><span>🚫 Соцсети не решают сами</span></section>
+  </main>
+</body>
+</html>
