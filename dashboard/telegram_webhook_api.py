@@ -12,7 +12,7 @@ import os
 from typing import Any
 
 import httpx
-from fastapi import Body, FastAPI, Header
+from fastapi import BackgroundTasks, Body, FastAPI, Header
 from fastapi.responses import HTMLResponse
 
 from telegram_bot import handle_callback, handle_message, main_keyboard, send_message, setup_bot_commands
@@ -50,19 +50,17 @@ def install_telegram_webhook_api(app: FastAPI) -> None:
 
     @app.post("/telegram/webhook")
     async def telegram_webhook(
+        background_tasks: BackgroundTasks,
         update: dict[str, Any] = Body(default_factory=dict),
         x_telegram_bot_api_secret_token: str | None = Header(default=None),
     ) -> dict[str, Any]:
-        """Receive one Telegram update."""
+        """Receive one Telegram update and acknowledge it before heavy AI work."""
 
         expected_secret = _webhook_secret()
         if expected_secret and x_telegram_bot_api_secret_token != expected_secret:
             return {"ok": False, "error": "invalid_webhook_secret"}
-        if "message" in update:
-            handle_message(update["message"])
-        if "callback_query" in update:
-            handle_callback(update["callback_query"])
-        return {"ok": True}
+        background_tasks.add_task(_process_update_safely, update)
+        return {"ok": True, "queued": True}
 
     @app.get("/api/telegram/set-webhook")
     def set_webhook_get() -> dict[str, Any]:
@@ -92,6 +90,50 @@ def install_telegram_webhook_api(app: FastAPI) -> None:
             return {"status": "error", "error": "chat_id_required"}
         send_message(int(chat_id), "✅ SharipovAI Telegram webhook работает. AI Chat Orchestrator подключён.", main_keyboard())
         return {"status": "ok", "sent": True}
+
+
+def _process_update_safely(update: dict[str, Any]) -> None:
+    """Process a Telegram update without letting failures become webhook 502/500."""
+
+    try:
+        if "message" in update:
+            handle_message(update["message"])
+        if "callback_query" in update:
+            handle_callback(update["callback_query"])
+    except Exception as exc:  # pragma: no cover - production safety net
+        print(f"Telegram webhook update processing error: {type(exc).__name__}: {exc}")
+        _send_fallback_error(update, exc)
+
+
+def _send_fallback_error(update: dict[str, Any], exc: Exception) -> None:
+    chat_id = _chat_id_from_update(update)
+    if not chat_id:
+        return
+    try:
+        send_message(
+            int(chat_id),
+            "⚠️ SharipovAI получил команду, но один внутренний модуль упал. "
+            f"Webhook не сломан; ошибка передана в лог Render: {html.escape(type(exc).__name__)}. "
+            "Попробуй /start или /status.",
+        )
+    except Exception as send_exc:  # pragma: no cover
+        print(f"Telegram fallback send failed: {type(send_exc).__name__}: {send_exc}")
+
+
+def _chat_id_from_update(update: dict[str, Any]) -> int | None:
+    message = update.get("message") or {}
+    if isinstance(message, dict):
+        chat = message.get("chat") or {}
+        if isinstance(chat, dict) and chat.get("id"):
+            return int(chat["id"])
+    callback = update.get("callback_query") or {}
+    if isinstance(callback, dict):
+        callback_message = callback.get("message") or {}
+        if isinstance(callback_message, dict):
+            chat = callback_message.get("chat") or {}
+            if isinstance(chat, dict) and chat.get("id"):
+                return int(chat["id"])
+    return None
 
 
 def _auto_configure_webhook() -> dict[str, Any]:
