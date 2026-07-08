@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -24,6 +25,7 @@ def test_social_news_api_returns_seeded_state(monkeypatch, tmp_path: Path) -> No
     assert payload["news"]["summary"]["total"] > 0
     assert payload["rss_enabled"] is True
     assert "telegram_client" in payload
+    assert "rss_reader" in payload
 
 
 def test_social_news_sources_api(monkeypatch, tmp_path: Path) -> None:
@@ -39,6 +41,51 @@ def test_social_news_sources_api(monkeypatch, tmp_path: Path) -> None:
     assert "x" in payload["grouped"]
     assert "rss" in payload["grouped"]
     assert "telegram_client" in payload
+    assert "rss_reader" in payload
+
+
+def test_social_news_rss_status_api(monkeypatch, tmp_path: Path) -> None:
+    """RSS status endpoint should expose allowlisted RSS sources."""
+
+    monkeypatch.setenv("NEWS_MONITOR_STATE_FILE", str(tmp_path / "news_state.json"))
+    response = TestClient(create_app()).get("/api/social-news/rss/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["rss_reader"]["enabled"] is True
+    assert payload["rss_reader"]["source_count"] >= 1
+
+
+def test_social_news_rss_refresh_api(monkeypatch, tmp_path: Path) -> None:
+    """RSS refresh endpoint should read and analyze RSS items."""
+
+    import news_monitor.rss_reader as rss_reader
+
+    def fake_parse(_url: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            bozo=False,
+            entries=[
+                SimpleNamespace(
+                    title="BTC ETF inflow update",
+                    summary="Bitcoin market inflow summary",
+                    link="https://example.com/btc",
+                    published_parsed=(2026, 1, 2, 3, 4, 5, 0, 0, 0),
+                )
+            ],
+        )
+
+    monkeypatch.setenv("NEWS_MONITOR_STATE_FILE", str(tmp_path / "news_state.json"))
+    monkeypatch.setattr(rss_reader.feedparser, "parse", fake_parse)
+    client = TestClient(create_app())
+
+    response = client.post("/api/social-news/rss/refresh", json={"limit_per_source": 1})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["items"]
+    assert payload["news"]["summary"]["total"] >= 1
 
 
 def test_social_news_telegram_status_when_not_configured(monkeypatch, tmp_path: Path) -> None:
@@ -110,3 +157,4 @@ def test_social_news_alerts_api(monkeypatch, tmp_path: Path) -> None:
     assert payload["alerts"]
     assert payload["summary"]["block_buy"] >= 1
     assert "telegram_client" in payload
+    assert "rss_reader" in payload
