@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: sharipovai-web
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn dashboard.app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: AUTH_SECRET
+        sync: false
+      - key: ADMIN_USERNAME
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: SHARIPOVAI_DISABLE_AUTH
+        value: "0"
+
+  - type: worker
+    name: sharipovai-telegram-worker
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python telegram_bot.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: WEBAPP_URL
+        sync: false
