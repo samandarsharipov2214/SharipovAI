@@ -11,20 +11,24 @@
   </head>
   <body>
     <aside class="os-sidebar">
-      <a class="os-logo" href="/?lang={{ lang }}"><img src="/static/logo.svg" alt="SharipovAI OS"></a>
-      <nav class="os-nav">
+      <a class="os-brand" href="/?lang={{ lang }}" aria-label="SharipovAI OS">
+        <span class="brand-mark">SA</span>
+        <span><b>SharipovAI</b><small>Trading AI cockpit</small></span>
+      </a>
+      <nav class="os-nav" aria-label="Main navigation">
         {% for item in nav_items %}
           <a class="{% if page == item.page %}active{% endif %}" href="{{ item.href }}">{{ t[item.key] }}</a>
         {% endfor %}
       </nav>
-      <div class="os-heartbeat"><span id="heartbeat-dot" class="live-dot"></span><div><b>{{ t.system_active }}</b><small id="system-message">Система готова к анализу</small></div></div>
+      <div class="os-heartbeat"><span id="heartbeat-dot" class="live-dot"></span><div><b id="ai-status-title">AI активен</b><small id="system-message">Готов принять команду</small></div></div>
     </aside>
 
     <main class="os-main">
       <header class="os-topbar">
         <div>
           <p class="eyebrow">SharipovAI OS</p>
-          <h1>{{ t.subtitle }}</h1>
+          <h1>Самандар, добро пожаловать.</h1>
+          <p class="top-subtitle">Я проверяю рынок, новости, риск и виртуальный портфель. Реальные деньги не используются.</p>
         </div>
         <div class="top-controls">
           <span class="mode-pill">{{ display.run_mode }}</span>
@@ -34,40 +38,51 @@
       </header>
 
       {% if page == "overview" %}
-        <section class="os-layout">
+        <section class="cockpit-grid">
           <article class="hero-decision">
-            <div class="hero-header"><span>AI DECISION</span><span class="thinking"><i></i>AI THINKING</span></div>
+            <div class="hero-header"><span>AI DECISION</span><span class="thinking"><i></i><b id="ai-live-label">AI работает</b></span></div>
             <strong id="hero-decision">{{ display.decision }}</strong>
-            <p class="decision-reason">{{ display.reason }}</p>
+            <p class="decision-reason" id="decision-reason">{{ display.reason }}</p>
             <div class="confidence-line"><span style="width: {{ view.confidence }}%"></span></div>
             <div class="hero-stats">
               <div><small>{{ t.confidence }}</small><b id="hero-confidence">{{ "%.1f"|format(view.confidence) }}%</b></div>
               <div><small>{{ t.risk }}</small><b id="hero-risk">{{ display.risk }}</b></div>
-              <div><small>{{ t.consensus }}</small><b>{{ display.consensus }} {{ "%.1f"|format(view.consensus_agreement) }}%</b></div>
+              <div><small>{{ t.consensus }}</small><b id="hero-consensus">{{ display.consensus }} {{ "%.1f"|format(view.consensus_agreement) }}%</b></div>
             </div>
-            <div class="action-row"><button id="run-analysis">▶ Запустить анализ</button><a href="/stress-lab?lang={{ lang }}">🧪 Стресс-лаборатория</a></div>
+            <div class="action-row"><button id="run-analysis">▶ Запустить AI</button><a href="/stress-lab?lang={{ lang }}">🧪 Стресс-тест</a></div>
           </article>
 
-          <aside class="agent-grid">
-            <div><span></span><b>Market Agent</b><small>онлайн</small></div>
-            <div><span></span><b>News Agent</b><small>онлайн</small></div>
-            <div><span></span><b>AI Core</b><small>готов</small></div>
-            <div><span class="warn"></span><b>Risk Engine</b><small>контроль</small></div>
-            <div><span></span><b>Paper Trading</b><small>виртуально</small></div>
-            <div><span class="idle"></span><b>Learning</b><small>ожидает данных</small></div>
+          <aside class="ai-command-panel">
+            <h2>Команда для ИИ</h2>
+            <p>Напиши задачу или нажми микрофон. Сейчас команды выполняются в безопасном Paper Trading.</p>
+            <form id="ai-command-form" class="ai-command-form">
+              <textarea id="ai-command-input" placeholder="Например: проанализируй BTC и купи виртуально, если риск низкий"></textarea>
+              <div class="command-actions"><button type="submit">Отправить ИИ</button><button type="button" id="voice-command">🎙 Голос</button></div>
+            </form>
+            <div class="ai-chat" id="ai-chat-log">
+              <div class="ai-message"><b>SharipovAI:</b><span>Привет, Самандар. Я онлайн. Нажми «Запустить AI» или дай команду текстом/голосом.</span></div>
+            </div>
           </aside>
         </section>
 
-        <section class="metric-grid">
+        <section class="metric-grid main-metrics">
+          <article class="metric-card trade-card"><small>Paper Trading действие</small><b id="trade-action">{% if view.decision == "BUY" and view.open_positions > 0 %}Куплено 0.0100 BTC{% else %}Ожидаю сигнала{% endif %}</b><p id="trade-details">{% if view.decision == "BUY" and view.open_positions > 0 %}Виртуальная покупка BTCUSDT по 50 000 USDT. Это учебная сделка без реальных денег.{% else %}AI пока не открыл виртуальную позицию.{% endif %}</p></article>
           <article class="metric-card"><small>{{ t.portfolio }}</small><b id="portfolio-equity">{{ "%.2f"|format(view.paper_equity) }} USDT</b><p>{{ t.cash }}: <span id="portfolio-cash">{{ "%.2f"|format(view.paper_cash) }} USDT</span></p><p class="{% if view.paper_pnl >= 0 %}positive{% else %}negative{% endif %}">PnL: <span id="portfolio-pnl">{{ "%.2f"|format(view.paper_pnl) }} USDT</span></p></article>
-          <article class="metric-card"><small>{{ t.paper_trading }}</small><b>Виртуальный кошелек</b><p>Позиции: {{ view.open_positions }}</p><p>Реальные деньги не используются</p></article>
-          <article class="metric-card"><small>{{ t.latest_news }}</small><b>Новости и импакт</b><p>CoinDesk · Cointelegraph · RSS</p><p>Оценка влияния: 72</p></article>
-          <article class="metric-card"><small>{{ t.learning }}</small><b>{{ "%.1f"|format(view.learning_summary.win_rate) }}%</b><p>Сделок: {{ view.learning_summary.total_trades }}</p><p>Последнее обновление: <span id="last-update" data-clock>--:--:--</span></p></article>
+          <article class="metric-card"><small>Открытые позиции</small><b id="open-positions">{{ view.open_positions }}</b><p>Режим: только виртуальная торговля</p></article>
+          <article class="metric-card"><small>Последнее обновление</small><b id="last-update" data-clock>--:--:--</b><p id="last-action">AI готов к анализу</p></article>
+        </section>
+
+        <section class="system-strip">
+          <div><span></span><b>Market Agent</b><small>онлайн</small></div>
+          <div><span></span><b>News Agent</b><small>онлайн</small></div>
+          <div><span></span><b>AI Core</b><small>готов</small></div>
+          <div><span class="warn"></span><b>Risk Engine</b><small>контроль</small></div>
+          <div><span></span><b>Paper Trading</b><small>виртуально</small></div>
         </section>
 
         <section class="deep-grid">
-          <article class="os-panel"><h2>{{ t.ai_timeline }}</h2><ol class="timeline"><li><b>{{ display.decision }}</b><span>{{ display.report }}</span></li><li><b>{{ display.risk }}</b><span>Риск проверен перед виртуальным действием</span></li><li><b>{{ display.consensus }}</b><span>Консенсус агентов: {{ "%.1f"|format(view.consensus_agreement) }}%</span></li></ol></article>
-          <article class="os-panel"><h2>{{ t.explain_ai }}</h2><details open><summary>Факторы рынка</summary><p>Momentum, объем, тренд и волатильность учитываются перед решением.</p></details><details><summary>Факторы риска</summary><p>Лимит просадки, размер позиции, риск-score и exposure.</p></details></article>
+          <article class="os-panel"><h2>{{ t.ai_timeline }}</h2><ol class="timeline"><li><b>{{ display.decision }}</b><span>{{ display.report }}</span></li><li><b>{{ display.risk }}</b><span>Риск проверен перед виртуальным действием.</span></li><li><b>{{ display.consensus }}</b><span>Консенсус агентов: {{ "%.1f"|format(view.consensus_agreement) }}%</span></li></ol></article>
+          <article class="os-panel"><h2>{{ t.explain_ai }}</h2><details open><summary>Почему такое решение?</summary><p>AI объединяет Market Agent, News Agent, Risk Engine и Paper Trading. Если решение BUY и риск низкий, открывается только виртуальная позиция.</p></details><details><summary>Почему не реальные деньги?</summary><p>До отдельного подтверждения пользователя система не имеет права исполнять реальные сделки.</p></details></article>
         </section>
 
       {% elif page == "stress-lab" %}
