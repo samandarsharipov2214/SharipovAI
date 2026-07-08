@@ -85,7 +85,29 @@
     });
   }
 
+  function injectCostFields() {
+    if ($('#cost-best-venue')) return;
+    const exchangeSection = $('#exchange-section');
+    const grid = exchangeSection?.querySelector('.mini-grid');
+    if (!grid) return;
+    const fields = [
+      ['Cost AI', 'exchange-cost-ai', '...'],
+      ['Лучшие условия', 'cost-best-venue', '...'],
+      ['Круговая комиссия', 'cost-roundtrip', '0.00 USDT'],
+      ['Break-even move', 'cost-breakeven-move', '0.0000%'],
+      ['Экономия', 'cost-saving', '0.00 USDT'],
+      ['Дешёвый заём', 'cost-cheapest-borrow', '...']
+    ];
+    fields.forEach(([label, id, value]) => {
+      const item = document.createElement('div');
+      item.className = 'mini-stat';
+      item.innerHTML = `<small>${label}</small><b id="${id}">${value}</b>`;
+      grid.appendChild(item);
+    });
+  }
+
   function renderCostIntelligence(state) {
+    injectCostFields();
     const costs = state.bybit_costs || {};
     const venue = costs.best_trade_venue || {};
     const best = venue.best || {};
@@ -99,6 +121,7 @@
   }
 
   function renderExchangeMonitor(state) {
+    injectCostFields();
     const exchange = state.exchange_status || {};
     const monitor = state.online_monitoring || {};
     setText('#exchange-mode', String(exchange.mode || monitor.mode || 'sandbox'));
@@ -202,6 +225,7 @@
   function installLiveHandlers() {
     installTabs();
     installRiskPersistence();
+    injectCostFields();
     const form = $('#ai-command-form');
     if (form) {
       form.addEventListener('submit', (event) => {
