@@ -11,41 +11,43 @@ from datetime import UTC, datetime
 from typing import Any
 
 
-DEFAULT_LESSONS: list[dict[str, Any]] = [
-    {
-        "id": "lesson-news-confirmation",
-        "created_at": _now_iso(),
-        "source": "News Supervisor",
-        "error_type": "unconfirmed_news",
-        "lesson": "Социальная новость не должна влиять на сделку без 2+ независимых подтверждений.",
-        "new_rule": "Если source_kind=social и confirmations<2, Trade Gate обязан вернуть WAIT/BLOCK.",
-        "status": "active_rule_candidate",
-    },
-    {
-        "id": "lesson-live-lock",
-        "created_at": _now_iso(),
-        "source": "Security/Cyber AI",
-        "error_type": "live_safety",
-        "lesson": "LIVE торговля не должна включаться автоматически даже при хорошем demo-сигнале.",
-        "new_rule": "can_trade_live всегда false без ручного unlock и отдельного security checklist.",
-        "status": "active_rule_candidate",
-    },
-]
-
-
 def _now_iso() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat()
+
+
+def _default_lessons() -> list[dict[str, Any]]:
+    return [
+        {
+            "id": "lesson-news-confirmation",
+            "created_at": _now_iso(),
+            "source": "News Supervisor",
+            "error_type": "unconfirmed_news",
+            "lesson": "Социальная новость не должна влиять на сделку без 2+ независимых подтверждений.",
+            "new_rule": "Если source_kind=social и confirmations<2, Trade Gate обязан вернуть WAIT/BLOCK.",
+            "status": "active_rule_candidate",
+        },
+        {
+            "id": "lesson-live-lock",
+            "created_at": _now_iso(),
+            "source": "Security/Cyber AI",
+            "error_type": "live_safety",
+            "lesson": "LIVE торговля не должна включаться автоматически даже при хорошем demo-сигнале.",
+            "new_rule": "can_trade_live всегда false без ручного unlock и отдельного security checklist.",
+            "status": "active_rule_candidate",
+        },
+    ]
 
 
 def learning_state() -> dict[str, Any]:
     """Return current learning engine demo state."""
 
+    lessons = _default_lessons()
     return {
         "status": "ok",
         "engine": "Learning Engine 2.0",
         "mode": "demo_memory",
-        "lesson_count": len(DEFAULT_LESSONS),
-        "active_rule_candidates": [lesson for lesson in DEFAULT_LESSONS if lesson.get("status") == "active_rule_candidate"],
+        "lesson_count": len(lessons),
+        "active_rule_candidates": [lesson for lesson in lessons if lesson.get("status") == "active_rule_candidate"],
         "missing": [
             "Нужна постоянная база данных уроков.",
             "Нужна автоматическая привязка урока к конкретной сделке/новости/ошибке.",
