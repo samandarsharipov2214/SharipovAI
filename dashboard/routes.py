@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 import config.settings as config_settings
+from ai_chat_orchestrator import answer_chat
 from learning_engine import LearningSummary
 from runner import SharipovAIRunner
 from .i18n.loader import load_translations, normalize_language
@@ -27,6 +28,7 @@ def _render(request: Request, page: str) -> HTMLResponse:
         name="index.html",
         context={"page": page, "view": view, "display": _display(view, t), "crash": _stress({}), "stress": _stress({}), "stress_scenarios": _stress_scenarios(), "improvements": _improvements(), "settings": config_settings.settings, "nav_items": _nav(lang), "lang": lang, "t": t},
     )
+
 
 @router.get("/", response_class=HTMLResponse)
 def home(request: Request) -> HTMLResponse: return _render(request, "overview")
@@ -58,7 +60,7 @@ def health() -> dict[str, str]: return {"status": "ok"}
 @router.get("/api/health")
 def api_health() -> dict[str, str]: return {"status": "ok", "web": "ok"}
 @router.get("/api/web-diagnostics")
-def web_diagnostics() -> dict[str, Any]: return {"status": "ok", "checks": {"pages": "ok", "mini_app": "ok", "bots": "ok", "stress": "ok", "news": "ok"}}
+def web_diagnostics() -> dict[str, Any]: return {"status": "ok", "checks": {"pages": "ok", "mini_app": "ok", "bots": "ok", "stress": "ok", "news": "ok", "ai_chat_orchestrator": "ok"}}
 @router.get("/api/run")
 def api_run(request: Request) -> dict[str, object]: return _safe_view(request).to_dict()
 @router.get("/api/ai-bots")
@@ -70,10 +72,10 @@ def daily_report() -> dict[str, Any]: return _daily_report()
 def demo_state() -> dict[str, Any]: return {"status": "ok", "state": _demo_state()}
 @router.post("/api/demo/chat")
 def demo_chat(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
-    msg = str((payload or {}).get("message", "")).strip(); state = _demo_state(); return {"status": "ok", "reply": _reply(msg, state), "state": state}
+    msg = str((payload or {}).get("message", "")).strip(); state = _demo_state(); answer = answer_chat(msg, state); return {"status": "ok", "reply": answer["reply"], "state": state, "intent": answer.get("intent"), "source_ai": answer.get("source_ai"), "data": answer.get("data", {})}
 @router.post("/api/chat/message")
 def chat_message(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
-    msg = str((payload or {}).get("message", "")).strip(); return {"status": "ok", "reply": _reply(msg, _demo_state()), "run": {"status": "ok", "mode": "demo"}}
+    msg = str((payload or {}).get("message", "")).strip(); state = _demo_state(); answer = answer_chat(msg, state); return {"status": "ok", "reply": answer["reply"], "run": {"status": "ok", "mode": "demo", "intent": answer.get("intent"), "source_ai": answer.get("source_ai")}, "intent": answer.get("intent"), "source_ai": answer.get("source_ai"), "data": answer.get("data", {})}
 @router.get("/api/social-news")
 def social_news() -> dict[str, Any]: return _news_payload()
 @router.post("/api/social-news/rss/refresh")
@@ -132,19 +134,14 @@ def _demo_state() -> dict[str, Any]:
     return {"mode":"DEMO","decision":"WATCH","risk_level":"LOW","equity":round(10000+pnl,2),"cash":9500.0,"pnl":pnl,"net_pnl":pnl,"total_fees":round(sum(t["fee"] for t in trades),2),"commission_drag":13.67,"break_even_price":67295.4,"trades":trades,"exchange_status":{"mode":"sandbox"},"online_monitoring":{"mode":"sandbox","order_preview_online":True,"cost_intelligence_online":True,"live_execution_enabled":False,"real_orders_blocked":True},"bybit_costs":{"best_trade_venue":{"best":{"product":"spot","liquidity":"maker","round_trip_fee":2.0,"break_even_move_percent":0.02},"estimated_saving_vs_worst":18.4},"cheapest_borrows":[{"symbol":"USDT","hourly_rate":0.00012}]}}
 
 def _reply(msg: str, state: dict[str, Any]) -> str:
-    text = msg.lower().strip()
-    if "бот" in text or "агент" in text: return f"В системе 11 AI-ботов. Активны 11/11. Среднее качество {_avg_quality()}%."
-    if "портфель" in text or "баланс" in text: return f"Демо-портфель: {state['equity']:.2f} USDT, PnL {state['net_pnl']:.2f} USDT."
-    if "риск" in text: return "Риск LOW. Опасные BUY блокируются."
-    if "комисс" in text or "bybit" in text: return "Комиссии и безубыток учтены. Лучший демо-вариант: spot/maker."
-    return f"SharipovAI понял: «{msg}». Могу разобрать рынок, риск, портфель, новости, комиссии или ботов."
+    return str(answer_chat(msg, state).get("reply", f"SharipovAI понял: «{msg}»."))
 
 def _news_payload() -> dict[str, Any]:
     items=[{"title":"BTC volatility remains elevated","source_name":"Reuters","impact":"neutral","credibility_percent":94,"verification_status":"confirmed","error_risk":"low","needs_confirmation":False},{"title":"Unconfirmed social signal detected","source_name":"X / social","impact":"bearish","credibility_percent":55,"verification_status":"needs second source","error_risk":"high","needs_confirmation":True}]
     return {"status":"ok","sources":{"total":10,"active":9},"news":{"summary":{"high_urgency":0,"needs_confirmation":1,"average_credibility_percent":74.5,"low_credibility":1,"block_buy":True},"items":items}}
 
 def _stress(payload: dict[str, Any]) -> dict[str, object]:
-    capital=10000.0; drop={"market_drop":7.5,"btc_drop_10":10,"btc_drop_20":20,"market_crash_50":50}.get(str(payload.get("scenario","btc_drop_20")),20); loss=capital*drop/100*0.28
+    capital=10000.0; drop={"market_drop":7.5,"btc_drop_10":10,"btc_drop_20":20,"market_crash_50":50}.get(str(payload.get("scenario","btc_drop_20")),20); loss=capital*drop/100*0.5
     return {"scenario":payload.get("scenario","btc_drop_20"),"capital_before":capital,"capital_after":capital-loss,"loss_amount":loss,"loss_percent":loss/capital*100,"classification":"warning","after":{"capital":capital-loss,"loss_amount":loss,"loss_percent":loss/capital*100,"new_risk_level":"MEDIUM"},"protective_measures":["BUY blocked","risk reduced"],"ai_reaction":["WATCH mode"]}
 
 def _stress_scenarios() -> list[dict[str,str]]: return [{"id":"btc_drop_10","label":"BTC -10%"},{"id":"btc_drop_20","label":"BTC -20%"},{"id":"market_crash_50","label":"Market -50%"}]
