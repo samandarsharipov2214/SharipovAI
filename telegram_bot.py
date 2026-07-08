@@ -17,6 +17,14 @@ from typing import Any, Callable
 
 import httpx
 
+from telegram_presentation import (
+    decision_ru,
+    format_news_item,
+    market_regime_explanation,
+    market_regime_ru,
+    risk_ru,
+)
+
 API_TIMEOUT = 20.0
 SUBSCRIBERS_FILE = Path(os.getenv("TELEGRAM_SUBSCRIBERS_FILE", "data/telegram_subscribers.json"))
 STATE_FILE = Path(os.getenv("TELEGRAM_STATE_FILE", "data/telegram_state.json"))
@@ -80,9 +88,9 @@ def answer_callback(callback_id: str, text: str = "") -> None:
 
 def main_keyboard() -> dict[str, Any]:
     rows: list[list[dict[str, Any]]] = [
-        [{"text": "🟢 Что сейчас?", "callback_data": "now"}, {"text": "🌅 Утро", "callback_data": "morning"}],
-        [{"text": "📰 Новости", "callback_data": "news"}, {"text": "⚠️ Риск", "callback_data": "risk"}],
-        [{"text": "🚦 Можно торговать?", "callback_data": "trade"}, {"text": "❓ Почему?", "callback_data": "why"}],
+        [{"text": "🟢 Сейчас: решение", "callback_data": "now"}, {"text": "🌅 Утро", "callback_data": "morning"}],
+        [{"text": "📰 Новости + источники", "callback_data": "news"}, {"text": "⚠️ Риск", "callback_data": "risk"}],
+        [{"text": "🚦 Торговать?", "callback_data": "trade"}, {"text": "❓ Почему?", "callback_data": "why"}],
         [{"text": "🤖 Все ИИ", "callback_data": "audit"}, {"text": "📊 AI Scoreboard", "callback_data": "scoreboard"}],
         [{"text": "🛠 Что улучшить", "callback_data": "improve"}, {"text": "📒 Дневник", "callback_data": "diary"}],
         [{"text": "🧠 Learning", "callback_data": "learning"}, {"text": "📚 Научи", "callback_data": "teach"}],
@@ -97,11 +105,11 @@ def main_keyboard() -> dict[str, Any]:
 def setup_bot_commands() -> None:
     commands = [
         {"command": "start", "description": "Главное меню SharipovAI"},
-        {"command": "now", "description": "Что делать сейчас"},
+        {"command": "now", "description": "Текущее решение: рынок, риск, следующий шаг"},
         {"command": "morning", "description": "Утренний отчёт"},
         {"command": "status", "description": "Проверка Telegram/webhook/AI"},
         {"command": "ai", "description": "AI чат через внутренних ботов"},
-        {"command": "news", "description": "Что сегодня произошло"},
+        {"command": "news", "description": "Новости с источниками, ссылками и временем"},
         {"command": "risk", "description": "Почему рисковано"},
         {"command": "trade", "description": "Можно ли сейчас торговать"},
         {"command": "why", "description": "Почему такое решение"},
@@ -231,8 +239,8 @@ def start_text() -> str:
         "👋 <b>SharipovAI Telegram запущен</b>\n\n"
         "Бот работает как личный AI-диспетчер.\n\n"
         "Главное:\n"
-        "/now — что делать сейчас\n"
-        "/morning — утренний отчёт\n"
+        "/now — текущее решение: рынок, риск, следующий шаг\n"
+        "/news — новости с источниками, ссылками и временем\n"
         "/trade — можно ли торговать\n"
         "/why — почему такое решение\n"
         "/audit — аудит всех ИИ\n"
@@ -268,6 +276,32 @@ def orchestrated_reply(message: str) -> str:
     return _safe_build("AI Chat Orchestrator", build)
 
 
+def news_text() -> str:
+    def build() -> str:
+        from news_monitor.analyzer import analyzed_news_payload
+
+        news = analyzed_news_payload()
+        summary = news.get("summary", {}) if isinstance(news, dict) else {}
+        items = list(news.get("items", [])) if isinstance(news, dict) else []
+        lines = [
+            "📰 <b>Новости: источники, ссылки и время</b>",
+            "",
+            f"Средняя достоверность: <b>{_safe_html(summary.get('average_credibility_percent', 0))}%</b>",
+            f"Нужно подтверждение: <b>{_safe_html(summary.get('needs_confirmation', 0))}</b>",
+            f"Обновлено системой: <b>{_safe_html(summary.get('last_updated', 'неизвестно'))}</b>",
+            "",
+        ]
+        if not items:
+            lines.append("Новостей пока нет.")
+        for idx, item in enumerate(items[:5], start=1):
+            lines.append(format_news_item(item, index=idx))
+            lines.append("")
+        lines.append("Важно: если источник не дал точное время публикации, показывается время обнаружения SharipovAI.")
+        return "\n".join(lines).strip()
+
+    return _safe_build("Новости", build)
+
+
 def now_text() -> str:
     def build() -> str:
         from news_monitor.analyzer import analyzed_news_payload
@@ -279,20 +313,22 @@ def now_text() -> str:
         summary = news.get("summary", {}) if isinstance(news, dict) else {}
         decision = "STOP_AI" if stop_ai_enabled() else str(gate.get("decision", "WATCH"))
         action = "Все действия заблокированы. Разрешён только анализ." if stop_ai_enabled() else str(gate.get("human_answer", "Наблюдать. LIVE запрещён."))
+        regime_key = str(regime.get("regime", "unknown"))
         _record_decision("now", decision, action)
         return "\n".join([
-            "🟢 <b>Что делать сейчас?</b>",
+            "🟢 <b>Текущее решение SharipovAI</b>",
             "",
-            f"Решение: <b>{_safe_html(decision)}</b>",
+            f"Решение: <b>{_safe_html(decision_ru(decision))}</b>",
             f"Действие: <b>{_safe_html(action)}</b>",
-            f"Режим рынка: <b>{_safe_html(regime.get('regime', 'unknown'))}</b>",
-            f"Риск: <b>{_safe_html(regime.get('risk_level', 'unknown'))}</b>",
-            f"Новости: достоверность <b>{summary.get('average_credibility_percent', 0)}%</b>",
+            f"Режим рынка: <b>{_safe_html(market_regime_ru(regime_key))}</b>",
+            f"Что это значит: {_safe_html(market_regime_explanation(regime_key))}",
+            f"Риск: <b>{_safe_html(risk_ru(str(regime.get('risk_level', 'unknown'))))}</b>",
+            f"Новости: средняя достоверность <b>{_safe_html(summary.get('average_credibility_percent', 0))}%</b>, нужно подтверждение: <b>{_safe_html(summary.get('needs_confirmation', 0))}</b>",
             "",
-            "Следующий шаг: /why или /trade",
+            "Следующий шаг: /news чтобы увидеть источники и время, или /why для объяснения решения.",
         ])
 
-    return _safe_build("Что делать сейчас", build)
+    return _safe_build("Текущее решение", build)
 
 
 def morning_text() -> str:
@@ -308,16 +344,18 @@ def morning_text() -> str:
         scoreboard = audit.get("scoreboard", {})
         counts = scoreboard.get("counts", {}) if isinstance(scoreboard, dict) else {}
         summary = news.get("summary", {}) if isinstance(news, dict) else {}
+        regime_key = str(regime.get("regime", "unknown"))
         return "\n".join([
             "🌅 <b>Утренний отчёт SharipovAI</b>",
             "",
-            f"Рынок: <b>{_safe_html(regime.get('regime', 'unknown'))}</b>",
-            f"Риск: <b>{_safe_html(regime.get('risk_level', 'unknown'))}</b>",
-            f"Trade Gate: <b>{_safe_html(gate.get('decision', 'UNKNOWN'))}</b>",
+            f"Рынок: <b>{_safe_html(market_regime_ru(regime_key))}</b>",
+            f"Пояснение: {_safe_html(market_regime_explanation(regime_key))}",
+            f"Риск: <b>{_safe_html(risk_ru(str(regime.get('risk_level', 'unknown'))))}</b>",
+            f"Trade Gate: <b>{_safe_html(decision_ru(str(gate.get('decision', 'UNKNOWN'))))}</b>",
             f"AI: live {counts.get('live', 0)}, demo {counts.get('demo', 0)}, ждут API {counts.get('waiting_api', 0)}",
-            f"Новости: достоверность {summary.get('average_credibility_percent', 0)}%",
+            f"Новости: достоверность {summary.get('average_credibility_percent', 0)}%, нужно подтверждение {summary.get('needs_confirmation', 0)}",
             "",
-            "Главное действие: не гнаться за сделкой. Сначала /trade и /why.",
+            "Главное действие: не гнаться за сделкой. Сначала /news, потом /trade и /why.",
         ])
 
     return _safe_build("Утренний отчёт", build)
@@ -330,13 +368,17 @@ def trade_text() -> str:
         gate = trade_gate()
         blockers = gate.get("blockers", []) or []
         warnings = gate.get("warnings", []) or []
+        regime = gate.get("market_regime", {})
+        regime_key = str(regime.get("regime", "unknown"))
         decision = "STOP_AI" if stop_ai_enabled() else str(gate.get("decision", "UNKNOWN"))
         lines = [
             "🚦 <b>Можно ли сейчас торговать?</b>",
             "",
-            f"Решение: <b>{_safe_html(decision)}</b>",
+            f"Решение: <b>{_safe_html(decision_ru(decision))}</b>",
             f"DEMO: <b>{'НЕТ' if stop_ai_enabled() else 'ДА' if gate.get('can_trade_demo') else 'НЕТ'}</b>",
             "LIVE: <b>НЕТ</b>",
+            f"Режим рынка: <b>{_safe_html(market_regime_ru(regime_key))}</b>",
+            f"Пояснение режима: {_safe_html(market_regime_explanation(regime_key))}",
             "",
             _safe_html("Все действия заблокированы STOP AI." if stop_ai_enabled() else str(gate.get("human_answer", ""))),
         ]
@@ -353,7 +395,7 @@ def trade_text() -> str:
 
 
 def why_text() -> str:
-    return orchestrated_reply("почему такое решение по рынку и риску")
+    return orchestrated_reply("почему такое решение по рынку и риску, объясни mixed/смешанный рынок простыми словами")
 
 
 def audit_text() -> str:
@@ -453,9 +495,11 @@ def diary_text() -> str:
 
 
 def explain_text(raw: str) -> str:
-    term = raw.replace("/explain", "", 1).strip() or "funding rate"
+    term = raw.replace("/explain", "", 1).strip() or "mixed market"
     lower = term.lower()
     explanations = {
+        "mixed": "Mixed / смешанный рынок — сигналы противоречат друг другу: нет сильного тренда, но и нет спокойного боковика. В таком режиме ИИ обязан ждать подтверждения и не покупать на одной новости.",
+        "mixed market": "Mixed / смешанный рынок — сигналы противоречат друг другу: нет сильного тренда, но и нет спокойного боковика. В таком режиме ИИ обязан ждать подтверждения и не покупать на одной новости.",
         "funding": "Funding rate — это плата между лонгами и шортами. Если funding высокий, толпа стоит в одну сторону, и возможен squeeze.",
         "funding rate": "Funding rate — это плата между лонгами и шортами. Если funding высокий, толпа стоит в одну сторону, и возможен squeeze.",
         "spread": "Spread — разница между ценой покупки и продажи. Чем он выше, тем дороже входить и выходить.",
@@ -463,7 +507,7 @@ def explain_text(raw: str) -> str:
         "drawdown": "Drawdown — просадка капитала от максимума. Главное правило: сначала выжить, потом заработать.",
         "open interest": "Open interest — количество открытых контрактов. Резкий рост может показывать перегрев и риск ликвидаций.",
     }
-    answer = next((value for key, value in explanations.items() if key in lower), f"{term} — термин, который нужно объяснить через контекст рынка, риска и комиссии. Спроси подробнее: /explain spread, /explain funding rate, /explain slippage.")
+    answer = next((value for key, value in explanations.items() if key in lower), f"{term} — термин, который нужно объяснить через контекст рынка, риска и комиссии. Спроси подробнее: /explain mixed, /explain spread, /explain funding rate.")
     return f"📚 <b>Объясняю простыми словами</b>\n\n{_safe_html(answer)}"
 
 
@@ -522,7 +566,7 @@ def handle_message(message: dict[str, Any]) -> None:
             set_mode(chat_id, "ai")
             send_message(chat_id, "🤖 AI-чат включён. Пиши вопрос: новости, риск, сделка, портфель, комиссии, аудит.", main_keyboard())
         elif command == "/news":
-            send_message(chat_id, orchestrated_reply("что сегодня произошло"), main_keyboard())
+            send_message(chat_id, news_text(), main_keyboard())
         elif command == "/risk":
             send_message(chat_id, orchestrated_reply("почему рисковано"), main_keyboard())
         elif command == "/trade":
@@ -584,7 +628,7 @@ def handle_callback(callback: dict[str, Any]) -> None:
         "now": now_text,
         "morning": morning_text,
         "status": status_text,
-        "news": lambda: orchestrated_reply("что сегодня произошло"),
+        "news": news_text,
         "risk": lambda: orchestrated_reply("почему рисковано"),
         "trade": trade_text,
         "why": why_text,
