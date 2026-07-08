@@ -13,6 +13,12 @@ services:
         sync: false
       - key: SHARIPOVAI_DISABLE_AUTH
         value: "0"
+      - key: BOT_TOKEN
+        sync: false
+      - key: WEBAPP_URL
+        sync: false
+      - key: TELEGRAM_WEBHOOK_SECRET
+        sync: false
       - key: EXCHANGE_NAME
         value: bybit
       - key: EXCHANGE_MODE
