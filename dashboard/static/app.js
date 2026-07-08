@@ -1,6 +1,6 @@
 const qs = (selector) => document.querySelector(selector);
 const qsa = (selector) => Array.from(document.querySelectorAll(selector));
-const CHAT_KEY = 'sharipovai_chat_history_v1';
+const CHAT_KEY = 'sharipovai_chat_history_v2';
 
 function fmt(value) {
   const number = Number(value || 0);
@@ -8,16 +8,11 @@ function fmt(value) {
 }
 
 function clockText() {
-  return new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  return new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 }
 
 function dateText() {
-  return new Date().toLocaleDateString('ru-RU', {
-    day: '2-digit',
-    month: 'long',
-    year: 'numeric',
-    weekday: 'long'
-  });
+  return new Date().toLocaleDateString('ru-RU', { day: '2-digit', month: 'long', year: 'numeric', weekday: 'long' });
 }
 
 function setText(selector, value) {
@@ -30,20 +25,14 @@ function setState(message, title = 'AI активен') {
   setText('#system-message', message);
   setText('#top-ai-status', title.replace('AI ', '').toUpperCase());
   setText('#top-last-update', clockText());
-  const dot = qs('#heartbeat-dot');
-  if (dot) dot.classList.add('pulse-fast');
 }
 
 function loadMessages() {
-  try {
-    return JSON.parse(localStorage.getItem(CHAT_KEY) || '[]');
-  } catch (_) {
-    return [];
-  }
+  try { return JSON.parse(localStorage.getItem(CHAT_KEY) || '[]'); } catch (_) { return []; }
 }
 
 function saveMessages(messages) {
-  localStorage.setItem(CHAT_KEY, JSON.stringify(messages.slice(-80)));
+  try { localStorage.setItem(CHAT_KEY, JSON.stringify(messages.slice(-80))); } catch (_) {}
 }
 
 function createMessage(author, text, time = clockText()) {
@@ -68,7 +57,7 @@ function renderChat() {
   if (!log) return;
   let messages = loadMessages();
   if (!messages.length) {
-    messages = [{ author: 'ai', text: 'Привет, Самандар. Я онлайн. Нажми «Запустить AI» или дай команду текстом/голосом.', time: clockText() }];
+    messages = [{ author: 'ai', text: 'Привет, Самандар. Я онлайн. Напиши команду, и я отвечу прямо здесь.', time: clockText() }];
     saveMessages(messages);
   }
   log.innerHTML = '';
@@ -116,6 +105,26 @@ function setModuleActivity(state) {
   });
 }
 
+function updateDashboardFromRun(data) {
+  const decision = String(data.decision || 'NO_DECISION');
+  const translated = { BUY: 'ПОКУПАТЬ БИТКОЙН', SELL: 'ПРОДАВАТЬ', WATCH: 'НАБЛЮДАТЬ', IGNORE: 'ИГНОРИРОВАТЬ', NO_DECISION: 'НЕТ РЕШЕНИЯ' }[decision] || decision;
+  const trade = tradeText(data);
+  setText('#hero-decision', translated);
+  setText('#hero-confidence', `${Number(data.confidence || 0).toFixed(1)}%`);
+  setText('#hero-risk', String(data.risk_level || 'LOW'));
+  setText('#hero-consensus', `${String(data.consensus || 'WEAK')} ${Number(data.consensus_agreement || 0).toFixed(1)}%`);
+  setText('#portfolio-equity', `${fmt(data.paper_equity)} USDT`);
+  setText('#portfolio-cash', `${fmt(data.paper_cash)} USDT`);
+  setText('#portfolio-pnl', `${fmt(data.paper_pnl)} USDT`);
+  setText('#open-positions', String(data.open_positions || 0));
+  setText('#trade-action', trade.action);
+  setText('#trade-details', trade.details);
+  setText('#last-update', clockText());
+  setText('#last-action', 'Анализ завершен');
+  setText('#decision-reason', data.reason || 'AI сформировал решение на основе сигналов агентов.');
+  return trade;
+}
+
 async function runAnalysis(source = 'button') {
   const button = qs('#run-analysis');
   if (button) button.disabled = true;
@@ -123,34 +132,33 @@ async function runAnalysis(source = 'button') {
   setState('AI анализирует рынок, новости, риск и виртуальный портфель...', 'AI думает');
   setText('#ai-live-label', 'AI анализирует');
   try {
-    const response = await fetch('/api/run');
+    const response = await fetch('/api/run', { cache: 'no-store' });
     const data = await response.json();
-    const decision = String(data.decision || 'NO_DECISION');
-    const translated = { BUY: 'ПОКУПАТЬ БИТКОЙН', SELL: 'ПРОДАВАТЬ', WATCH: 'НАБЛЮДАТЬ', IGNORE: 'ИГНОРИРОВАТЬ', NO_DECISION: 'НЕТ РЕШЕНИЯ' }[decision] || decision;
-    const trade = tradeText(data);
-    setText('#hero-decision', translated);
-    setText('#hero-confidence', `${Number(data.confidence || 0).toFixed(1)}%`);
-    setText('#hero-risk', String(data.risk_level || 'LOW'));
-    setText('#hero-consensus', `${String(data.consensus || 'WEAK')} ${Number(data.consensus_agreement || 0).toFixed(1)}%`);
-    setText('#portfolio-equity', `${fmt(data.paper_equity)} USDT`);
-    setText('#portfolio-cash', `${fmt(data.paper_cash)} USDT`);
-    setText('#portfolio-pnl', `${fmt(data.paper_pnl)} USDT`);
-    setText('#open-positions', String(data.open_positions || 0));
-    setText('#trade-action', trade.action);
-    setText('#trade-details', trade.details);
-    setText('#last-update', clockText());
-    setText('#last-action', 'Анализ завершен');
-    setText('#decision-reason', data.reason || 'AI сформировал решение на основе сигналов агентов.');
+    const trade = updateDashboardFromRun(data);
     setState('Анализ завершен. Paper Trading обновлен.', 'AI работает');
     setText('#ai-live-label', 'AI работает');
     setModuleActivity('success');
     if (source !== 'silent') addMessage('ai', trade.reply);
+    return data;
   } catch (_) {
     setState('Ошибка анализа. Система сохранила безопасное состояние.', 'AI защита');
     addMessage('ai', 'Не смог выполнить анализ. Проверь сервер и перезапусти команду.');
+    return null;
   } finally {
     if (button) button.disabled = false;
   }
+}
+
+async function sendChatMessage(command) {
+  setState('AI обрабатывает сообщение...', 'AI думает');
+  const response = await fetch('/api/chat/message', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    cache: 'no-store',
+    body: JSON.stringify({ message: command })
+  });
+  if (!response.ok) throw new Error('chat failed');
+  return response.json();
 }
 
 async function runStressLab(scenario = 'btc_drop_20') {
@@ -159,6 +167,7 @@ async function runStressLab(scenario = 'btc_drop_20') {
     const response = await fetch('/api/stress-lab/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      cache: 'no-store',
       body: JSON.stringify({ scenario })
     });
     const data = await response.json();
@@ -188,7 +197,7 @@ async function runStressLab(scenario = 'btc_drop_20') {
   }
 }
 
-function handleCommand(event) {
+async function handleCommand(event) {
   event.preventDefault();
   const input = qs('#ai-command-input');
   const command = String(input?.value || '').trim();
@@ -204,8 +213,16 @@ function handleCommand(event) {
     runStressLab('btc_drop_20');
     return;
   }
-  addMessage('ai', 'Принял команду. Запускаю анализ и безопасное Paper Trading действие.');
-  runAnalysis('command');
+  addMessage('ai', 'Принял команду. Запускаю анализ...');
+  try {
+    const payload = await sendChatMessage(command);
+    if (payload.run) updateDashboardFromRun(payload.run);
+    addMessage('ai', payload.reply || 'Я выполнил команду.');
+    setState('Ответ готов.', 'AI работает');
+  } catch (_) {
+    const run = await runAnalysis('command');
+    if (run) addMessage('ai', 'Я ответил через базовый Runner, потому что chat API временно недоступен.');
+  }
 }
 
 function startVoiceCommand() {
@@ -223,9 +240,7 @@ function startVoiceCommand() {
     const text = event.results[0][0].transcript;
     const input = qs('#ai-command-input');
     if (input) input.value = text;
-    addMessage('user', text);
-    addMessage('ai', 'Голосовая команда принята. Запускаю анализ.');
-    runAnalysis('voice');
+    qs('#ai-command-form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
   };
   recognition.onerror = () => {
     addMessage('ai', 'Не смог распознать голос. Попробуй еще раз или напиши команду текстом.');
@@ -236,23 +251,26 @@ function startVoiceCommand() {
 
 function updateClock() {
   const time = clockText();
-  qsa('[data-clock]').forEach((el) => { el.textContent = time; });
+  qsa('[data-clock], #top-clock').forEach((el) => { el.textContent = time; });
   setText('#top-date', dateText());
 }
 
 window.addEventListener('DOMContentLoaded', () => {
   renderChat();
+  updateClock();
+  setInterval(updateClock, 1000);
   qs('#run-analysis')?.addEventListener('click', () => runAnalysis('button'));
   qs('#ai-command-form')?.addEventListener('submit', handleCommand);
+  qs('#send-command')?.addEventListener('click', (event) => {
+    event.preventDefault();
+    qs('#ai-command-form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  });
   qs('#voice-command')?.addEventListener('click', startVoiceCommand);
   qs('#clear-chat')?.addEventListener('click', clearChat);
   qsa('[data-stress-scenario]').forEach((button) => {
     button.addEventListener('click', () => runStressLab(button.dataset.stressScenario));
   });
   qs('#language-select')?.addEventListener('change', (event) => {
-    const lang = event.target.value;
-    window.location.href = `${window.location.pathname}?lang=${lang}`;
+    window.location.href = `${window.location.pathname}?lang=${event.target.value}`;
   });
-  updateClock();
-  setInterval(updateClock, 1000);
 });
