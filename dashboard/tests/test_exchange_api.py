@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 from dashboard import create_app
@@ -46,11 +47,11 @@ def test_exchange_preview_order_counts_commissions(monkeypatch) -> None:
     payload = response.json()
     assert payload["status"] == "ok"
     preview = payload["preview"]
-    assert preview["entry_fee"] == 0.1
-    assert preview["expected_exit_fee"] == 0.101
-    assert preview["total_fees"] == 0.201
-    assert preview["gross_result"] == 1.0
-    assert preview["net_result_after_fees"] == 0.799
+    assert preview["entry_fee"] == pytest.approx(0.1)
+    assert preview["expected_exit_fee"] == pytest.approx(0.101)
+    assert preview["total_fees"] == pytest.approx(0.201)
+    assert preview["gross_result"] == pytest.approx(1.0)
+    assert preview["net_result_after_fees"] == pytest.approx(0.799)
     assert preview["commission_counted_as_loss"] is True
     assert preview["execution_allowed"] is False
 
