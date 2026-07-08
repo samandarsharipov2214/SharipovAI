@@ -48,6 +48,39 @@ def test_mini_app_has_exchange_commission_monitor() -> None:
     assert "Потери от комиссий" in text
 
 
+def test_mini_app_live_js_uses_real_tabs_and_no_scroll_anchors() -> None:
+    """Mini App tabs should switch panels instead of scrolling down the page."""
+
+    response = TestClient(create_app(runner_factory=_runner_factory)).get("/static/mini-app-live.js")
+
+    assert response.status_code == 200
+    text = response.text
+    assert "showPanel" in text
+    assert "active-panel" in text
+    assert "scrollIntoView" not in text
+    assert "ensureAllSiteFunctions" in text
+    assert "stress-section" in text
+    assert "learning-section" in text
+    assert "reports-section" in text
+    assert "settings-section" in text
+
+
+def test_mini_app_live_js_is_russian_only_for_exchange_labels() -> None:
+    """Mini App exchange labels should be Russian-facing."""
+
+    response = TestClient(create_app(runner_factory=_runner_factory)).get("/static/mini-app-live.js")
+
+    assert response.status_code == 200
+    text = response.text
+    assert "Предпросмотр" in text
+    assert "Реальные сделки" in text
+    assert "Песочница" in text
+    assert "Расчёт условий" in text
+    assert "Движение до безубытка" in text
+    assert "Cost AI" not in text
+    assert "Break-even move" not in text
+
+
 def test_mini_app_live_js_loads_ai_bots_demo_state_and_exchange_monitor() -> None:
     """Mini App controller must load demo, bots, and exchange monitoring APIs."""
 
@@ -58,6 +91,7 @@ def test_mini_app_live_js_loads_ai_bots_demo_state_and_exchange_monitor() -> Non
     assert "/api/demo/state" in text
     assert "/api/demo/chat" in text
     assert "/api/ai-bots" in text
+    assert "/api/stress-lab/run" in text
     assert "renderExchangeMonitor" in text
     assert "exchange_status" in text
     assert "online_monitoring" in text
