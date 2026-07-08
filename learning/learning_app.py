@@ -11,6 +11,7 @@ from typing import Any
 from fastapi import Body, FastAPI
 
 from .ai_learning_core import evaluate_exam, learning_manifest, training_pack
+from .financial_knowledge_library import bot_curriculum, knowledge_manifest
 
 
 app = FastAPI(title="SharipovAI Learning Core")
@@ -38,3 +39,17 @@ def bot_exam(bot_name: str, payload: dict[str, Any] = Body(default_factory=dict)
     if not isinstance(answers, dict):
         return {"status": "invalid_answers"}
     return evaluate_exam(bot_name, {str(key): str(value) for key, value in answers.items()})
+
+
+@app.get("/api/learning/finance/manifest")
+def finance_manifest() -> dict[str, Any]:
+    """Return the financial knowledge manifest."""
+
+    return knowledge_manifest()
+
+
+@app.get("/api/learning/finance/bots/{bot_name}")
+def finance_bot_curriculum(bot_name: str) -> dict[str, Any]:
+    """Return finance curriculum for one AI-bot."""
+
+    return bot_curriculum(bot_name)
