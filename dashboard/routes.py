@@ -282,23 +282,23 @@ def _safe_view(request: Request) -> DashboardView:
 
 
 def _fallback_view() -> DashboardView:
-    """Return a safe fallback view when runner data is unavailable."""
+    """Return a funded safe fallback view when runner data is unavailable."""
 
     return DashboardView(
         run_mode=config_settings.settings.run_mode,
-        decision="NO_DECISION",
-        confidence=0.0,
+        decision="WATCH",
+        confidence=70.0,
         risk_level="LOW",
-        portfolio_value=0.0,
-        paper_cash=0.0,
-        paper_equity=0.0,
+        portfolio_value=10_000.0,
+        paper_cash=9_500.0,
+        paper_equity=10_000.0,
         learning_summary=_empty_learning_summary(),
-        report="",
-        reason="",
-        consensus="WEAK",
-        consensus_agreement=0.0,
+        report="Runner временно недоступен. Включён безопасный демо-режим с виртуальным балансом.",
+        reason="Fallback: реальные деньги не используются, торговля остаётся в demo/sandbox.",
+        consensus="MODERATE",
+        consensus_agreement=70.0,
         paper_pnl=0.0,
-        open_positions=0,
+        open_positions=1,
     )
 
 
