@@ -29,6 +29,7 @@ class NewsAgentConfig:
 
 AGENT_CONFIGS: tuple[NewsAgentConfig, ...] = (
     NewsAgentConfig("world_news_ai", "World News AI", "Следит за мировыми новостями и геополитикой.", ("world_news", "world_finance")),
+    NewsAgentConfig("politics_government_ai", "Politics & Government News AI", "Следит за официальными заявлениями правительств, парламентов, лидеров, МИД и международных организаций.", ("politics_official", "international_official", "regulation_official"), max_items_per_cycle=50),
     NewsAgentConfig("finance_crypto_ai", "Finance & Crypto News AI", "Следит за криптой, биржами, рынками и регуляторами.", ("crypto_news", "exchange", "macro_official", "regulation_official", "world_finance")),
     NewsAgentConfig("sports_news_ai", "Sports News AI", "Следит за спортивными новостями.", ("sports",)),
     NewsAgentConfig("weather_news_ai", "Weather & Disaster News AI", "Следит за погодой, штормами, катастрофами и землетрясениями.", ("weather", "weather_disaster")),
