@@ -1,0 +1,25 @@
+[project]
+name = "sharipovai"
+version = "0.1.0"
+description = "SharipovAI OS deterministic AI trading analysis system."
+requires-python = ">=3.14"
+
+[tool.pytest.ini_options]
+testpaths = [
+  "agents/tests",
+  "ai_core/tests",
+  "confidence/tests",
+  "config/tests",
+  "consensus/tests",
+  "dashboard/tests",
+  "data_layer/tests",
+  "decision/tests",
+  "learning_engine/tests",
+  "news_agent/tests",
+  "paper_trading/tests",
+  "portfolio_engine/tests",
+  "risk_engine/tests",
+  "runner/tests",
+]
+pythonpath = ["."]
+addopts = "-ra"
