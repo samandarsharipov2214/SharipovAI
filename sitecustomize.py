@@ -1,9 +1,9 @@
 """Startup helpers for SharipovAI.
 
 Python imports sitecustomize automatically when this file is on sys.path.
-It loads local .env values. Telegram autostart is deliberately conservative:
-the dedicated Render worker already runs ``python telegram_bot.py``, so this file
-must not start a second polling loop inside that same process.
+It loads local .env values only. Telegram polling is started by the dedicated
+worker command ``python telegram_bot.py`` or by explicitly setting
+``TELEGRAM_AUTOSTART_ENABLED=1``.
 """
 
 from __future__ import annotations
@@ -34,14 +34,14 @@ def _load_dotenv() -> None:
 def _should_start_telegram_bot() -> bool:
     if os.getenv("TELEGRAM_AUTOSTART_DISABLED", "").lower() in {"1", "true", "yes"}:
         return False
+    if os.getenv("TELEGRAM_AUTOSTART_ENABLED", "").lower() not in {"1", "true", "yes"}:
+        return False
     if not os.getenv("BOT_TOKEN", "").strip():
         return False
     command = " ".join(sys.argv).lower()
     if "telegram_bot.py" in command or "telegram_bot" in command:
         return False
-    if os.getenv("TELEGRAM_AUTOSTART_ENABLED", "").lower() in {"1", "true", "yes"}:
-        return True
-    return "uvicorn" in command and not bool(os.getenv("RENDER_WORKER_ID"))
+    return True
 
 
 def _start_telegram_bot_once() -> None:
