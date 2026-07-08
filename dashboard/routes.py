@@ -24,14 +24,7 @@ templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
 @router.get("/", response_class=HTMLResponse)
 def home(request: Request) -> HTMLResponse:
-    """Render the overview page.
-
-    Args:
-        request: FastAPI request.
-
-    Returns:
-        Rendered HTML response.
-    """
+    """Render the overview page."""
 
     view = _safe_view(request)
     return _render_page(request=request, page="overview", view=view)
@@ -56,11 +49,7 @@ def ai_decision(request: Request) -> HTMLResponse:
     """Render the AI Decision page."""
 
     view = _safe_view(request)
-    return _render_page(
-        request=request,
-        page="ai-decision",
-        view=view,
-    )
+    return _render_page(request=request, page="ai-decision", view=view)
 
 
 @router.get("/portfolio", response_class=HTMLResponse)
@@ -68,11 +57,7 @@ def portfolio(request: Request) -> HTMLResponse:
     """Render the Portfolio page."""
 
     view = _safe_view(request)
-    return _render_page(
-        request=request,
-        page="portfolio",
-        view=view,
-    )
+    return _render_page(request=request, page="portfolio", view=view)
 
 
 @router.get("/paper-trading", response_class=HTMLResponse)
@@ -80,11 +65,7 @@ def paper_trading(request: Request) -> HTMLResponse:
     """Render the Paper Trading page."""
 
     view = _safe_view(request)
-    return _render_page(
-        request=request,
-        page="paper-trading",
-        view=view,
-    )
+    return _render_page(request=request, page="paper-trading", view=view)
 
 
 @router.get("/learning", response_class=HTMLResponse)
@@ -92,11 +73,7 @@ def learning(request: Request) -> HTMLResponse:
     """Render the Learning page."""
 
     view = _safe_view(request)
-    return _render_page(
-        request=request,
-        page="learning",
-        view=view,
-    )
+    return _render_page(request=request, page="learning", view=view)
 
 
 @router.get("/self-analysis", response_class=HTMLResponse)
@@ -125,11 +102,7 @@ def reports(request: Request) -> HTMLResponse:
     """Render the Reports page."""
 
     view = _safe_view(request)
-    return _render_page(
-        request=request,
-        page="reports",
-        view=view,
-    )
+    return _render_page(request=request, page="reports", view=view)
 
 
 @router.get("/ai-control-center", response_class=HTMLResponse)
@@ -137,11 +110,7 @@ def ai_control_center(request: Request) -> HTMLResponse:
     """Render the AI Control Center page."""
 
     view = _safe_view(request)
-    return _render_page(
-        request=request,
-        page="ai-control-center",
-        view=view,
-    )
+    return _render_page(request=request, page="ai-control-center", view=view)
 
 
 @router.get("/settings", response_class=HTMLResponse)
@@ -153,75 +122,42 @@ def settings_page(request: Request) -> HTMLResponse:
 
 @router.get("/health")
 def health() -> dict[str, str]:
-    """Return health status.
-
-    Returns:
-        Health status dictionary.
-    """
+    """Return health status."""
 
     return {"status": "ok"}
 
 
 @router.get("/api/health")
 def api_health() -> dict[str, str]:
-    """Return API health status.
-
-    Returns:
-        Health status dictionary.
-    """
+    """Return API health status."""
 
     return {"status": "ok"}
 
 
 @router.get("/api/run")
 def api_run(request: Request) -> dict[str, object]:
-    """Run the SharipovAI runner and return JSON output.
-
-    Args:
-        request: FastAPI request.
-
-    Returns:
-        JSON-compatible dashboard data.
-    """
+    """Run the SharipovAI runner and return JSON output."""
 
     return _safe_view(request).to_dict()
 
 
 @router.get("/api/translations/{lang}")
 def translations(lang: str) -> dict[str, str]:
-    """Return translations for a requested language.
-
-    Args:
-        lang: Requested language code.
-
-    Returns:
-        Translation dictionary.
-    """
+    """Return translations for a requested language."""
 
     return load_translations(lang)
 
 
 @router.get("/api/crash-test")
 def get_crash_test() -> dict[str, object]:
-    """Return a deterministic default crash-test simulation.
-
-    Returns:
-        JSON-compatible crash-test result.
-    """
+    """Return a deterministic default crash-test simulation."""
 
     return _evaluate_crash_test("market_drop").to_dict()
 
 
 @router.post("/api/crash-test")
 def post_crash_test(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, object]:
-    """Return a deterministic crash-test simulation for a requested scenario.
-
-    Args:
-        payload: Request body containing an optional scenario.
-
-    Returns:
-        JSON-compatible crash-test result.
-    """
+    """Return a deterministic crash-test simulation for a requested scenario."""
 
     data = payload or {}
     scenario = str(data.get("scenario", "market_drop"))
@@ -230,36 +166,21 @@ def post_crash_test(payload: dict[str, Any] | None = Body(default=None)) -> dict
 
 @router.get("/api/stress-lab/scenarios")
 def stress_lab_scenarios() -> dict[str, object]:
-    """Return deterministic Stress Lab scenario definitions.
-
-    Returns:
-        JSON-compatible scenario list.
-    """
+    """Return deterministic Stress Lab scenario definitions."""
 
     return {"scenarios": _stress_scenarios()}
 
 
 @router.post("/api/stress-lab/run")
 def run_stress_lab(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, object]:
-    """Run a deterministic Stress Lab simulation.
-
-    Args:
-        payload: Optional scenario parameters.
-
-    Returns:
-        JSON-compatible simulation result.
-    """
+    """Run a deterministic Stress Lab simulation."""
 
     return _evaluate_stress_lab(payload or {})
 
 
 @router.get("/api/ai-improvement")
 def ai_improvement_api() -> dict[str, object]:
-    """Return deterministic AI improvement recommendations.
-
-    Returns:
-        JSON-compatible recommendation list.
-    """
+    """Return deterministic AI improvement recommendations."""
 
     return {"recommendations": _improvement_recommendations()}
 
@@ -279,14 +200,7 @@ def logo() -> FileResponse:
 
 
 def _runner_factory(request: Request) -> Callable[[], SharipovAIRunner]:
-    """Return the configured runner factory.
-
-    Args:
-        request: FastAPI request.
-
-    Returns:
-        Runner factory callable.
-    """
+    """Return the configured runner factory."""
 
     factory = getattr(request.app.state, "runner_factory", None)
     if callable(factory):
@@ -300,16 +214,7 @@ def _render_page(
     page: str,
     view: DashboardView | None = None,
 ) -> HTMLResponse:
-    """Render a web interface page.
-
-    Args:
-        request: FastAPI request.
-        page: Active page identifier.
-        view: Optional dashboard view model.
-
-    Returns:
-        Rendered HTML response.
-    """
+    """Render a web interface page."""
 
     language = normalize_language(request.query_params.get("lang"))
     translations = load_translations(language)
@@ -334,41 +239,19 @@ def _render_page(
 
 
 def _nav_items(language: str) -> list[dict[str, str]]:
-    """Return navigation items.
-
-    Args:
-        language: Active language code.
-
-    Returns:
-        Navigation item dictionaries.
-    """
+    """Return simplified primary navigation items."""
 
     return [
         {"key": "overview", "href": f"/?lang={language}", "page": "overview"},
         {"key": "ai_decision", "href": f"/ai-decision?lang={language}", "page": "ai-decision"},
-        {"key": "market", "href": f"/market?lang={language}", "page": "market"},
-        {"key": "news", "href": f"/news?lang={language}", "page": "news"},
         {"key": "portfolio", "href": f"/portfolio?lang={language}", "page": "portfolio"},
-        {"key": "paper_trading", "href": f"/paper-trading?lang={language}", "page": "paper-trading"},
-        {"key": "learning", "href": f"/learning?lang={language}", "page": "learning"},
-        {"key": "self_analysis", "href": f"/self-analysis?lang={language}", "page": "self-analysis"},
         {"key": "stress_lab", "href": f"/stress-lab?lang={language}", "page": "stress-lab"},
-        {"key": "ai_improvement", "href": f"/ai-improvement?lang={language}", "page": "ai-improvement"},
-        {"key": "reports", "href": f"/reports?lang={language}", "page": "reports"},
-        {"key": "ai_control_center", "href": f"/ai-control-center?lang={language}", "page": "ai-control-center"},
         {"key": "settings", "href": f"/settings?lang={language}", "page": "settings"},
     ]
 
 
 def _view_from_output(output: RunnerOutput) -> DashboardView:
-    """Convert runner output to dashboard view model.
-
-    Args:
-        output: Runner output.
-
-    Returns:
-        Dashboard view model.
-    """
+    """Convert runner output to dashboard view model."""
 
     return DashboardView(
         run_mode=config_settings.settings.run_mode,
@@ -389,14 +272,7 @@ def _view_from_output(output: RunnerOutput) -> DashboardView:
 
 
 def _safe_view(request: Request) -> DashboardView:
-    """Run the configured runner and return a fallback view on failure.
-
-    Args:
-        request: FastAPI request.
-
-    Returns:
-        Dashboard view from runner output or safe fallback data.
-    """
+    """Run the configured runner and return a fallback view on failure."""
 
     try:
         output = _runner_factory(request)().run()
@@ -406,11 +282,7 @@ def _safe_view(request: Request) -> DashboardView:
 
 
 def _fallback_view() -> DashboardView:
-    """Return a safe fallback view when runner data is unavailable.
-
-    Returns:
-        Dashboard fallback view model.
-    """
+    """Return a safe fallback view when runner data is unavailable."""
 
     return DashboardView(
         run_mode=config_settings.settings.run_mode,
@@ -431,11 +303,7 @@ def _fallback_view() -> DashboardView:
 
 
 def _empty_learning_summary() -> LearningSummary:
-    """Return an empty learning summary.
-
-    Returns:
-        Empty learning summary.
-    """
+    """Return an empty learning summary."""
 
     return LearningSummary(
         total_trades=0,
@@ -451,15 +319,7 @@ def _empty_learning_summary() -> LearningSummary:
 
 
 def _display_values(view: DashboardView, translations: dict[str, str]) -> dict[str, str]:
-    """Return translated display labels for dynamic values.
-
-    Args:
-        view: View model.
-        translations: Active translation dictionary.
-
-    Returns:
-        Translated dynamic display values.
-    """
+    """Return translated display labels for dynamic values."""
 
     decision = _translate_enum(
         view.decision,
@@ -512,16 +372,7 @@ def _translate_enum(
     mapping: dict[str, str],
     translations: dict[str, str],
 ) -> str:
-    """Translate an enum-like string value.
-
-    Args:
-        value: Raw value.
-        mapping: Raw value to translation key mapping.
-        translations: Active translation dictionary.
-
-    Returns:
-        Translated display text.
-    """
+    """Translate an enum-like string value."""
 
     key = mapping.get(value.upper())
     if key is None:
@@ -530,14 +381,7 @@ def _translate_enum(
 
 
 def _evaluate_crash_test(scenario: str) -> CrashTestResult:
-    """Evaluate a deterministic crash-test scenario.
-
-    Args:
-        scenario: Scenario identifier.
-
-    Returns:
-        Crash-test result.
-    """
+    """Evaluate a deterministic crash-test scenario."""
 
     normalized = scenario.strip().lower().replace("-", "_")
     losses = {
@@ -577,11 +421,7 @@ def _evaluate_crash_test(scenario: str) -> CrashTestResult:
 
 
 def _stress_scenarios() -> list[dict[str, str]]:
-    """Return deterministic Stress Lab scenarios.
-
-    Returns:
-        Scenario dictionaries.
-    """
+    """Return deterministic Stress Lab scenarios."""
 
     return [
         {"id": "btc_drop_10", "label": "BTC price drop 10%"},
@@ -596,14 +436,7 @@ def _stress_scenarios() -> list[dict[str, str]]:
 
 
 def _evaluate_stress_lab(payload: dict[str, Any]) -> dict[str, object]:
-    """Evaluate a deterministic Stress Lab simulation.
-
-    Args:
-        payload: Scenario parameters.
-
-    Returns:
-        JSON-compatible simulation result.
-    """
+    """Evaluate a deterministic Stress Lab simulation."""
 
     scenario = str(payload.get("scenario", "btc_drop_20")).strip().lower().replace("-", "_")
     starting_capital = _safe_float(payload.get("starting_virtual_capital"), 10_000.0)
@@ -692,15 +525,7 @@ def _evaluate_stress_lab(payload: dict[str, Any]) -> dict[str, object]:
 
 
 def _safe_float(value: Any, default: float) -> float:
-    """Convert a value to float with a safe default.
-
-    Args:
-        value: Candidate value.
-        default: Fallback value.
-
-    Returns:
-        Parsed float.
-    """
+    """Convert a value to float with a safe default."""
 
     try:
         parsed = float(value)
@@ -710,15 +535,7 @@ def _safe_float(value: Any, default: float) -> float:
 
 
 def _scenario_loss_percent(scenario: str, payload: dict[str, Any]) -> float:
-    """Resolve the deterministic loss percent for a scenario.
-
-    Args:
-        scenario: Scenario identifier.
-        payload: Scenario parameters.
-
-    Returns:
-        Loss percent.
-    """
+    """Resolve the deterministic loss percent for a scenario."""
 
     mapping = {
         "btc_drop_10": 10.0,
@@ -734,15 +551,7 @@ def _scenario_loss_percent(scenario: str, payload: dict[str, Any]) -> float:
 
 
 def _risk_level_from_loss(loss_percent: float, max_drawdown: float) -> str:
-    """Return a deterministic risk level from simulated loss.
-
-    Args:
-        loss_percent: Loss percentage.
-        max_drawdown: Maximum acceptable drawdown.
-
-    Returns:
-        Risk level label.
-    """
+    """Return a deterministic risk level from simulated loss."""
 
     if loss_percent >= max_drawdown:
         return "CRITICAL"
@@ -754,15 +563,7 @@ def _risk_level_from_loss(loss_percent: float, max_drawdown: float) -> str:
 
 
 def _classification_from_loss(loss_percent: float, max_drawdown: float) -> str:
-    """Return deterministic Stress Lab classification.
-
-    Args:
-        loss_percent: Loss percentage.
-        max_drawdown: Maximum acceptable drawdown.
-
-    Returns:
-        Classification text.
-    """
+    """Return deterministic Stress Lab classification."""
 
     if loss_percent >= max_drawdown:
         return "capital protection triggered"
@@ -774,24 +575,13 @@ def _classification_from_loss(loss_percent: float, max_drawdown: float) -> str:
 
 
 def _risk_score_from_level(level: str) -> int:
-    """Map risk level to chart score.
-
-    Args:
-        level: Risk level.
-
-    Returns:
-        Numeric risk score.
-    """
+    """Map risk level to chart score."""
 
     return {"LOW": 20, "MEDIUM": 50, "HIGH": 75, "CRITICAL": 95}.get(level, 20)
 
 
 def _improvement_recommendations() -> list[dict[str, object]]:
-    """Return deterministic AI Improvement recommendations.
-
-    Returns:
-        Recommendation dictionaries.
-    """
+    """Return deterministic AI Improvement recommendations."""
 
     return [
         {
@@ -874,32 +664,5 @@ def _improvement_recommendations() -> list[dict[str, object]]:
             "affected_modules": ["api", "dashboard"],
             "reason": "Supports future mobile ecosystem.",
             "status": "future",
-        },
-        {
-            "title": "Add Android App",
-            "priority": "LOW",
-            "expected_benefit": "Mobile access to decisions and reports.",
-            "difficulty": "HIGH",
-            "affected_modules": ["api", "dashboard"],
-            "reason": "Supports future mobile ecosystem.",
-            "status": "future",
-        },
-        {
-            "title": "Add Scheduler",
-            "priority": "MEDIUM",
-            "expected_benefit": "Repeatable analysis cadence.",
-            "difficulty": "MEDIUM",
-            "affected_modules": ["runner", "ai_core"],
-            "reason": "Reduces missed opportunities by running timely analysis.",
-            "status": "recommended",
-        },
-        {
-            "title": "Add SharipovAI OS alerts",
-            "priority": "MEDIUM",
-            "expected_benefit": "Clearer risk and stress notifications.",
-            "difficulty": "LOW",
-            "affected_modules": ["dashboard"],
-            "reason": "Connects drawdown, agent conflicts, and crash-test events to user action.",
-            "status": "recommended",
         },
     ]
