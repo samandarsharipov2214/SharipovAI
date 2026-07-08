@@ -59,17 +59,15 @@ def _record_blocked_action(decision: dict[str, Any], *, request: Request | None 
     """Best-effort audit event for policy blocked dashboard actions."""
 
     try:
-        from dashboard.app_security import _record_security_event  # type: ignore
+        from dashboard.app import _record_security_event
     except Exception:
-        try:
-            from dashboard.auth import _record_security_event  # type: ignore
-        except Exception:
-            return
+        return
     try:
         _record_security_event(
             "policy_guard_blocked_action",
-            username=_session_username(request),
-            details={
+            _session_username(request) or "anonymous",
+            request,
+            {
                 "decision": decision.get("decision"),
                 "reason": decision.get("reason"),
                 "action_type": decision.get("action_type"),
@@ -85,10 +83,8 @@ def _session_username(request: Request | None) -> str | None:
     if request is None:
         return None
     try:
-        session = getattr(request.state, "session", None)
-        if isinstance(session, dict):
-            username = session.get("username")
-            return str(username) if username else None
+        from dashboard.app import _session_username as app_session_username
+
+        return app_session_username(request)
     except Exception:
         return None
-    return None
