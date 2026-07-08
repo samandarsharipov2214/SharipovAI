@@ -3,7 +3,7 @@ services:
     name: sharipovai-web
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn dashboard.app:app --host 0.0.0.0 --port $PORT
+    startCommand: uvicorn dashboard:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: AUTH_SECRET
         sync: false
@@ -12,6 +12,16 @@ services:
       - key: ADMIN_PASSWORD
         sync: false
       - key: SHARIPOVAI_DISABLE_AUTH
+        value: "0"
+      - key: EXCHANGE_NAME
+        value: bybit
+      - key: EXCHANGE_MODE
+        value: sandbox
+      - key: EXCHANGE_BASE_URL
+        value: https://api-testnet.bybit.com
+      - key: EXCHANGE_DEFAULT_FEE_RATE
+        value: "0.001"
+      - key: EXCHANGE_LIVE_TRADING_ENABLED
         value: "0"
 
   - type: worker
