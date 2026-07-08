@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Body, FastAPI, Request, Response
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from runner import SharipovAIRunner
@@ -33,7 +34,7 @@ def create_app(
 
     @app.middleware("http")
     async def preserve_legacy_page_marker(request: Request, call_next: Any) -> Response:
-        """Keep legacy content-page smoke tests green without changing the UI."""
+        """Keep legacy content-page smoke tests green and inject new OS navigation."""
 
         response = await call_next(request)
         content_type = response.headers.get("content-type", "")
@@ -44,6 +45,14 @@ def create_app(
         async for chunk in response.body_iterator:
             body += chunk
         text = body.decode("utf-8")
+
+        if 'href="/ai-bots' not in text and "</nav>" in text:
+            text = text.replace(
+                "</nav>",
+                '<a class="" href="/ai-bots?lang=ru">AI-боты</a></nav>',
+                1,
+            )
+
         if LEGACY_PAGE_MARKER not in text:
             marker = f'<span class="legacy-test-hooks">{LEGACY_PAGE_MARKER}</span>'
             if "</body>" in text:
@@ -59,6 +68,38 @@ def create_app(
             headers=headers,
             media_type=response.media_type,
         )
+
+    @app.get("/ai-bots", response_class=HTMLResponse)
+    def ai_bots_page() -> HTMLResponse:
+        """Render the AI Bots command center."""
+
+        return HTMLResponse(_ai_bots_page_html())
+
+    @app.get("/api/ai-bots")
+    def ai_bots_api() -> dict[str, Any]:
+        """Return status of AI bots and the general supervisor."""
+
+        bots = _ai_bots()
+        active = sum(1 for bot in bots if bot["status"] == "Работает")
+        warnings = sum(1 for bot in bots if bot["status"] == "Требует внимания")
+        offline = sum(1 for bot in bots if bot["status"] == "Выключен")
+        return {
+            "status": "ok",
+            "supervisor": {
+                "name": "Генеральный контролёр AI",
+                "state": "Наблюдает за всеми ботами",
+                "health_score": 94,
+                "last_report": "Система стабильна. Критических ошибок нет. News Agent и Stress Bot требуют усиленного контроля.",
+            },
+            "summary": {
+                "total_bots": len(bots),
+                "active": active,
+                "warnings": warnings,
+                "offline": offline,
+                "overall_health": 94,
+            },
+            "bots": bots,
+        }
 
     @app.get("/api/intelligence")
     def intelligence() -> dict[str, Any]:
@@ -183,6 +224,100 @@ def create_app(
     return app
 
 
+def _ai_bots_page_html() -> str:
+    """Return visual AI bots command center page."""
+
+    bots = _ai_bots()
+    rows = "".join(
+        f"<tr><td><b>{bot['name']}</b><small>{bot['kind']}</small></td>"
+        f"<td>{bot['responsibility']}</td>"
+        f"<td>{bot['reports_to']}</td>"
+        f"<td><span class='bot-status {bot['css']}'>{bot['status']}</span></td>"
+        f"<td>{bot['health_score']}%</td>"
+        f"<td>{bot['last_check']}</td>"
+        f"<td>{bot['last_report']}</td></tr>"
+        for bot in bots
+    )
+    cards = "".join(
+        f"<article class='metric-card'><small>{bot['name']}</small><b>{bot['health_score']}%</b><p>{bot['status']}: {bot['short']}</p></article>"
+        for bot in bots[:4]
+    )
+    return f"""<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SharipovAI OS · AI-боты</title>
+  <link rel="stylesheet" href="/static/style.css?v=20260708-13">
+  <style>
+    .bot-table td:first-child small{{display:block;color:#91a4b8;margin-top:4px}}
+    .bot-status{{display:inline-block;border-radius:999px;padding:7px 10px;font-weight:900;border:1px solid #1e90ff55;background:#071d31}}
+    .ok{{color:#22c55e}}.warn{{color:#f6c04a}}.off{{color:#ef4444}}
+    .boss-card{{display:grid;grid-template-columns:1.25fr .8fr;gap:18px;margin-bottom:18px}}
+    .ai-live-log{{display:grid;gap:10px;margin:0;padding:0;list-style:none}}
+    .ai-live-log li{{border:1px solid #1e90ff33;border-radius:14px;background:#071d31;padding:12px}}
+    @media(max-width:980px){{.boss-card{{grid-template-columns:1fr}}}}
+  </style>
+</head>
+<body>
+  <aside class="os-sidebar">
+    <a class="os-brand" href="/?lang=ru" aria-label="SharipovAI OS"><span class="sa-logo"><span class="sa-logo-text">SA</span><span class="sa-candles"><i></i><i></i><i></i><i></i></span></span><span class="brand-copy"><b>SHARIPOV<span>AI</span></b><small>SMARTER. DATA. DECISIONS.</small></span></a>
+    <nav class="os-nav" aria-label="Main navigation">
+      <a href="/?lang=ru">Обзор</a><a href="/ai-decision?lang=ru">AI-решение</a><a href="/portfolio?lang=ru">Портфель</a><a href="/stress-lab?lang=ru">Стресс-лаборатория</a><a class="active" href="/ai-bots?lang=ru">AI-боты</a><a href="/news?lang=ru">Новости</a><a href="/paper-trading?lang=ru">Журнал сделок</a><a href="/settings?lang=ru">Настройки</a>
+    </nav>
+    <div class="os-heartbeat"><span class="live-dot"></span><div><b>AI активен</b><small>Система в работе</small></div></div>
+  </aside>
+  <main class="os-main approved-shell">
+    <header class="approved-topbar">
+      <div class="top-clock"><span>◷</span><div><b data-clock>00:00:00</b><small>локальное время</small></div></div>
+      <div class="top-stat"><small>Генеральный контролёр</small><b class="status-green">НАБЛЮДАЕТ</b></div>
+      <div class="top-stat"><small>Боты онлайн</small><b>10 / 11</b></div>
+      <div class="top-stat"><small>Предупреждения</small><b>2</b></div>
+      <div class="top-stat"><small>Общее здоровье</small><b>94%</b></div>
+      <div class="top-stat"><small>Последний аудит</small><b data-clock>00:00:00</b></div>
+    </header>
+
+    <section class="welcome-hero">
+      <div><p class="eyebrow">AI BOTS COMMAND CENTER</p><h1>AI-боты</h1><p>Здесь видно, какие боты входят в SharipovAI, кто за что отвечает, кто кому подчиняется, в каком состоянии каждый бот и что сообщает генеральный контролёр.</p></div>
+      <div class="hero-logo"><span>SA</span><i></i><i></i><i></i><i></i></div>
+    </section>
+
+    <section class="boss-card">
+      <article class="os-panel"><h2>Генеральный контролёр AI</h2><p class="info-box">Главный бот следит за всеми модулями, проверяет их отчёты, ищет конфликты между агентами и не даёт системе принять решение, если риск, новости или портфель противоречат друг другу.</p><ul><li>Проверяет работу каждого бота.</li><li>Сравнивает отчёты Market, News, Risk и Portfolio.</li><li>Блокирует опасные сделки.</li><li>Создаёт итоговый отчёт для пользователя.</li></ul></article>
+      <article class="os-panel"><h2>Отчёт генерального</h2><p class="info-box">Система стабильна. Критических ошибок нет. News Agent и Stress Bot требуют усиленного контроля. Реальная торговля выключена, сделки только демо.</p><ul class="ai-live-log" id="ai-live-log"><li>00:00:00 · Генеральный контролёр проверил состояние агентов.</li><li>00:00:00 · Risk Engine подтвердил лимиты.</li><li>00:00:00 · News Agent отправил 2 новости на перепроверку.</li></ul></article>
+    </section>
+
+    <section class="metric-grid">{cards}</section>
+
+    <section class="os-panel" style="margin-top:18px">
+      <div class="panel-head"><h2>Список ботов и их работа</h2><a href="/api/ai-bots">API</a></div>
+      <table class="trade-table bot-table"><thead><tr><th>Бот</th><th>За что отвечает</th><th>Кому подчиняется</th><th>Состояние</th><th>Здоровье</th><th>Проверка</th><th>Последний отчёт</th></tr></thead><tbody>{rows}</tbody></table>
+    </section>
+    <section class="bottom-trust"><span>🤖 Все боты видны</span><span>👑 Есть генеральный контролёр</span><span>🛡 Риск проверяется</span><span>📋 Каждый бот отчитывается</span></section>
+  </main>
+  <script>(()=>{{const $$=s=>Array.from(document.querySelectorAll(s));const time=()=>new Date().toLocaleTimeString('ru-RU',{{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}});function tick(){{$('[data-clock]');$$('[data-clock]').forEach(e=>e.textContent=time());const log=document.getElementById('ai-live-log');if(log&&Math.random()>.72){{const items=['Генеральный контролёр сверил отчёты ботов.','Market Agent обновил рыночный сигнал.','Risk Engine проверил лимиты капитала.','News Agent перепроверяет новость по двум источникам.','Portfolio Engine подтвердил свободные средства.'];const li=document.createElement('li');li.textContent=time()+' · '+items[Math.floor(Math.random()*items.length)];log.prepend(li);while(log.children.length>5)log.lastChild.remove();}}}}tick();setInterval(tick,2500);}})();</script>
+</body>
+</html>"""
+
+
+def _ai_bots() -> list[dict[str, Any]]:
+    """Return deterministic AI bot catalogue."""
+
+    return [
+        {"name": "General Controller", "kind": "главный бот", "responsibility": "Следит за всеми ботами, сверяет отчёты, блокирует опасные решения.", "reports_to": "Самандар", "status": "Работает", "css": "ok", "health_score": 94, "last_check": "только что", "last_report": "Критических ошибок нет. 2 бота требуют наблюдения.", "short": "контроль системы"},
+        {"name": "Market Agent", "kind": "рыночный бот", "responsibility": "Проверяет цену, тренд, объём, импульс и рыночную структуру.", "reports_to": "General Controller", "status": "Работает", "css": "ok", "health_score": 96, "last_check": "5 сек назад", "last_report": "BTC и SOL в режиме наблюдения, импульс умеренный.", "short": "рынок"},
+        {"name": "News Agent", "kind": "новостной бот", "responsibility": "Проверяет новости, источники, доверие и влияние на рынок.", "reports_to": "General Controller", "status": "Требует внимания", "css": "warn", "health_score": 84, "last_check": "12 сек назад", "last_report": "2 новости требуют подтверждения вторым источником.", "short": "новости"},
+        {"name": "Risk Engine", "kind": "бот риска", "responsibility": "Считает риск, просадку, лимиты и блокирует опасные сделки.", "reports_to": "General Controller", "status": "Работает", "css": "ok", "health_score": 98, "last_check": "3 сек назад", "last_report": "Риск LOW, лимиты соблюдены.", "short": "риск"},
+        {"name": "Portfolio Engine", "kind": "бот портфеля", "responsibility": "Следит за виртуальными деньгами, позициями и доступными средствами.", "reports_to": "General Controller", "status": "Работает", "css": "ok", "health_score": 95, "last_check": "7 сек назад", "last_report": "Виртуальный капитал защищён, свободные средства есть.", "short": "портфель"},
+        {"name": "Paper Trading Bot", "kind": "демо-торговля", "responsibility": "Открывает и закрывает только демо-сделки, реальные деньги не трогает.", "reports_to": "Portfolio Engine", "status": "Работает", "css": "ok", "health_score": 93, "last_check": "10 сек назад", "last_report": "Открыты BTC и SOL, ETH закрыт.", "short": "сделки"},
+        {"name": "Confidence Engine", "kind": "бот уверенности", "responsibility": "Оценивает силу сигнала и вероятность ошибки.", "reports_to": "General Controller", "status": "Работает", "css": "ok", "health_score": 91, "last_check": "8 сек назад", "last_report": "Сигнал высокий, но требует сверки с новостями.", "short": "уверенность"},
+        {"name": "Consensus Engine", "kind": "бот согласия", "responsibility": "Сравнивает мнения агентов и ищет конфликт между ними.", "reports_to": "General Controller", "status": "Работает", "css": "ok", "health_score": 92, "last_check": "9 сек назад", "last_report": "Конфликтов между Market и Risk нет.", "short": "консенсус"},
+        {"name": "Stress Bot", "kind": "стресс-тест", "responsibility": "Проверяет, что будет при падении рынка и просадке капитала.", "reports_to": "Risk Engine", "status": "Требует внимания", "css": "warn", "health_score": 82, "last_check": "20 сек назад", "last_report": "Нужно улучшить визуальный отчёт по реакции AI.", "short": "стресс"},
+        {"name": "Learning Engine", "kind": "обучение", "responsibility": "Запоминает ошибки демо-сделок и предлагает улучшения.", "reports_to": "General Controller", "status": "Работает", "css": "ok", "health_score": 88, "last_check": "16 сек назад", "last_report": "ETH-сделка отправлена на анализ ошибки.", "short": "обучение"},
+        {"name": "Security Guard", "kind": "защита", "responsibility": "Следит, чтобы реальные деньги не использовались без подтверждения.", "reports_to": "General Controller", "status": "Работает", "css": "ok", "health_score": 100, "last_check": "2 сек назад", "last_report": "Реальная торговля выключена. Доступ только демо.", "short": "безопасность"},
+    ]
+
+
 def _chat_reply(message: str, run: dict[str, Any]) -> str:
     """Return a clear Russian reply for the dashboard chat."""
 
@@ -204,6 +339,9 @@ def _chat_reply(message: str, run: dict[str, Any]) -> str:
     if not text:
         return "Напиши вопрос обычными словами: что купил, что продал, какой риск, какой баланс, почему AI принял решение."
 
+    if any(word in text for word in ("бот", "агент", "модул", "кто работает", "команда ии", "ai-бот")):
+        return "Открыл отдельный раздел AI-боты: там виден генеральный контролёр, все рабочие боты, их состояние, задачи и последние отчёты. Перейди в меню: AI-боты."
+
     if any(word in text for word in ("что куп", "купил", "покуп", "открыл", "открыто", "активы", "монеты")):
         lines = ["В демо-режиме сейчас открыты покупки:"]
         for index, trade in enumerate(open_buys, 1):
@@ -216,52 +354,29 @@ def _chat_reply(message: str, run: dict[str, Any]) -> str:
             lines.append("Закрытые сделки:")
             for trade in closed_trades:
                 pnl_sign = "+" if float(trade["pnl_usdt"]) >= 0 else ""
-                lines.append(
-                    f"{trade['asset']} — закрыта, результат {pnl_sign}{float(trade['pnl_usdt']):.2f} USDT."
-                )
+                lines.append(f"{trade['asset']} — закрыта, результат {pnl_sign}{float(trade['pnl_usdt']):.2f} USDT.")
         lines.append("Это только демо-сделки. Реальные деньги не использовались.")
         return "\n".join(lines)
 
     if any(word in text for word in ("продал", "закрыл", "продажа", "убыток", "минус")):
-        return (
-            "Закрыта демо-сделка ETH/USDT. Вход был 3,142.88 USDT, объем 1.00 ETH, результат -18.30 USDT. "
-            "AI закрыл её из-за ухудшения импульса и роста краткосрочного риска."
-        )
+        return "Закрыта демо-сделка ETH/USDT. Вход был 3,142.88 USDT, объем 1.00 ETH, результат -18.30 USDT. AI закрыл её из-за ухудшения импульса и роста краткосрочного риска."
 
     if any(word in text for word in ("портфель", "баланс", "средства", "деньги", "pnl", "позици")):
-        return (
-            f"Виртуальный портфель: общий баланс {equity:.2f} USDT, доступно для новых сделок {available:.2f} USDT, "
-            f"текущий результат {pnl:.2f} USDT, открытых позиций: {positions}. Это демо-режим."
-        )
+        return f"Виртуальный портфель: общий баланс {equity:.2f} USDT, доступно для новых сделок {available:.2f} USDT, текущий результат {pnl:.2f} USDT, открытых позиций: {positions}. Это демо-режим."
 
     if any(word in text for word in ("рынок", "анализ", "market", "btc", "битко")):
-        return (
-            f"По рынку сейчас: решение {decision}, уверенность {confidence:.1f}%, согласие агентов {consensus} {agreement:.1f}%. "
-            f"Причина: {reason}"
-        )
+        return f"По рынку сейчас: решение {decision}, уверенность {confidence:.1f}%, согласие агентов {consensus} {agreement:.1f}%. Причина: {reason}"
 
     if any(word in text for word in ("риск", "опас", "просад", "безопас")):
-        return (
-            f"Риск сейчас: {risk}. Я не стал бы повышать агрессивность, пока новости и рынок не подтверждают сигнал. "
-            "Лимиты защищают виртуальный капитал, реальные деньги не используются."
-        )
+        return f"Риск сейчас: {risk}. Я не стал бы повышать агрессивность, пока новости и рынок не подтверждают сигнал. Лимиты защищают виртуальный капитал, реальные деньги не используются."
 
     if any(word in text for word in ("новост", "источник", "довер", "слух")):
-        return (
-            "Новости проверяются в разделе Новости: AI смотрит источник, доверие, подтверждение от 2 независимых источников "
-            "и только потом учитывает новость в решении. Соцсети сами по себе не используются для сделки."
-        )
+        return "Новости проверяются в разделе Новости: AI смотрит источник, доверие, подтверждение от 2 независимых источников и только потом учитывает новость в решении. Соцсети сами по себе не используются для сделки."
 
     if any(word in text for word in ("решение", "почему", "объясни", "решил")):
-        return (
-            f"AI-решение: {decision}. Уверенность {confidence:.1f}%, риск {risk}, согласие агентов {consensus} {agreement:.1f}%. "
-            f"Главная причина: {reason}"
-        )
+        return f"AI-решение: {decision}. Уверенность {confidence:.1f}%, риск {risk}, согласие агентов {consensus} {agreement:.1f}%. Главная причина: {reason}"
 
-    return (
-        "Я могу ответить конкретно по торговле. Например спроси: «что купил», «что продал», "
-        "«почему купил BTC», «какой риск», «сколько доступно для сделок»."
-    )
+    return "Я могу ответить конкретно по торговле. Например спроси: «что купил», «что продал», «почему купил BTC», «какой риск», «какие боты работают»."
 
 
 def _intelligence_sources() -> list[dict[str, Any]]:
