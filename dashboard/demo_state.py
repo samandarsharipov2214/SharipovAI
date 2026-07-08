@@ -263,7 +263,7 @@ def sell_demo_position(state: dict[str, Any], symbol: str = "BTCUSDT") -> tuple[
     state["gross_pnl"] = float(state.get("gross_pnl", 0.0)) + gross_pnl
     state["net_pnl"] = float(state.get("net_pnl", 0.0)) + net_pnl
     state["total_fees"] = float(state.get("total_fees", 0.0)) + exit_fee
-    state["commission_drag"] = float(state.get("commission_drag", 0.0)) + entry_fee + exit_fee
+    state["commission_drag"] = float(state.get("commission_drag", 0.0)) + exit_fee
     state["positions"] = [item for item in positions if item is not position]
     state.setdefault("trades", []).append(
         _trade(
@@ -321,7 +321,7 @@ def recalculate_state(state: dict[str, Any]) -> dict[str, Any]:
         unrealized_net += gross - entry_fee - exit_fee
     state["positions"] = positions
     state["unrealized_pnl"] = unrealized_net
-    state["gross_pnl"] = float(state.get("gross_pnl", 0.0)) + unrealized_gross
+    state["gross_pnl"] = float(state.get("realized_gross_pnl", state.get("gross_pnl", 0.0))) + unrealized_gross
     state["net_pnl"] = float(state.get("realized_pnl", 0.0)) + unrealized_net
     state["equity"] = float(state.get("cash", DEFAULT_BALANCE)) + positions_value
     state["exchange_status"] = exchange_connector().status().to_dict()
