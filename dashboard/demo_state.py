@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from exchange_connector import SafeExchangeConnector
+from exchange_connector import SafeExchangeConnector, ai_cost_report, best_trade_venue, estimate_borrow_cost
 
 DEFAULT_BALANCE = 10_000.0
 DEFAULT_PRICE = 50_000.0
@@ -59,6 +59,7 @@ def default_state() -> dict[str, Any]:
         "positions": [],
         "trades": [],
         "exchange_status": exchange.status().to_dict(),
+        "bybit_costs": ai_cost_report(notional=DEFAULT_PRICE * DEFAULT_QUANTITY),
         "online_monitoring": online_monitoring_snapshot(),
         "message": "Демо-счёт готов. Реальные деньги не используются.",
     }
@@ -73,6 +74,7 @@ def online_monitoring_snapshot() -> dict[str, Any]:
         "exchange_connector_online": bool(status.get("connected")),
         "market_reading_online": bool(status.get("can_read_market")),
         "order_preview_online": bool(status.get("can_preview_orders")),
+        "cost_intelligence_online": True,
         "live_execution_enabled": bool(status.get("can_execute_orders")),
         "real_orders_blocked": not bool(status.get("can_execute_orders")),
         "mode": status.get("mode", "disabled"),
@@ -141,6 +143,8 @@ def run_ai_command(command: str) -> dict[str, Any]:
             state = set_balance(amount)
             return {"reply": f"Готово. Демо-баланс установлен на {amount:.2f} USDT.", "state": state}
         return {"reply": "Напиши сумму, например: «поставь баланс 20000». Это изменит только демо-счёт.", "state": state}
+    if any(word in text for word in ("выгод", "услов", "комисс", "займ", "процент", "ставк", "vip", "дешев")):
+        return {"reply": cost_intelligence_reply(state), "state": public_state()}
     if any(word in text for word in ("монитор", "онлайн", "боты", "состояние", "биржа")):
         return {"reply": monitoring_reply(state), "state": public_state()}
     if any(word in text for word in ("продай", "sell", "закрой", "зафикс")):
@@ -159,33 +163,68 @@ def run_ai_command(command: str) -> dict[str, Any]:
     return {"reply": portfolio_reply(state), "state": public_state()}
 
 
+def cost_intelligence_reply(state: dict[str, Any]) -> str:
+    """Return AI cost intelligence based on Bybit fee/borrow screenshots."""
+
+    state = recalculate_state(state)
+    notional = DEFAULT_PRICE * DEFAULT_QUANTITY
+    report = ai_cost_report(notional=notional)
+    best = report["best_trade_venue"]["best"]
+    worst = report["best_trade_venue"]["worst"]
+    saving = float(report["best_trade_venue"]["estimated_saving_vs_worst"])
+    usdt_borrow = estimate_borrow_cost("USDT", notional, 24)
+    btc_borrow = estimate_borrow_cost("BTC", DEFAULT_QUANTITY, 24)
+    state["bybit_costs"] = report
+    save_state(state)
+    return (
+        "🧮 Bybit cost intelligence:\n"
+        f"Объём расчёта: {notional:.2f} USDT\n"
+        f"Самый дешёвый известный вариант: {best['product']} / {best['liquidity']} "
+        f"≈ {float(best['round_trip_fee']):.4f} USDT за круг.\n"
+        f"Самый дорогой вариант: {worst['product']} / {worst['liquidity']} "
+        f"≈ {float(worst['round_trip_fee']):.4f} USDT за круг.\n"
+        f"Потенциальная экономия: {saving:.4f} USDT.\n"
+        f"USDT займ на 24ч для {notional:.2f}: {float(usdt_borrow['estimated_interest']):.4f} USDT.\n"
+        f"BTC займ на 24ч для {DEFAULT_QUANTITY:.4f}: {float(btc_borrow['estimated_interest']):.8f} BTC.\n"
+        "AI будет избегать сделок, где ожидаемое движение меньше комиссии + процентов займа."
+    )
+
+
 def analyze_demo_market(state: dict[str, Any]) -> tuple[dict[str, Any], str]:
     """Refresh deterministic market analysis and optionally buy safely."""
 
     state = recalculate_state(state)
     cash = float(state.get("cash", 0.0))
+    cost_report = ai_cost_report(notional=DEFAULT_PRICE * DEFAULT_QUANTITY)
+    best = cost_report["best_trade_venue"]["best"]
+    fee_rate = float(best["fee_rate"])
     preview = exchange_connector().preview_order(
         symbol="BTCUSDT",
         side="BUY",
         quantity=DEFAULT_QUANTITY,
         price=float(state.get("last_price", DEFAULT_PRICE)),
+        fee_rate=fee_rate,
     )
     if cash >= float(preview.total_cost) and not state.get("positions"):
-        state, reply = buy_demo_position(state)
-        return state, "AI проанализировал рынок, проверил комиссию через биржевой preview и открыл виртуальную BTC позицию. " + reply
+        state, reply = buy_demo_position(state, fee_rate=fee_rate)
+        return state, "AI проанализировал Bybit комиссии/займы, выбрал более дешёвый fee preview и открыл виртуальную BTC позицию. " + reply
     state["decision"] = "WATCH"
     state["confidence"] = 76.0
-    state["message"] = "AI проанализировал рынок и биржевой preview. Сейчас безопаснее наблюдать или уже есть открытая позиция."
+    state["bybit_costs"] = cost_report
+    state["message"] = "AI проверил Bybit комиссии, займы и биржевой preview. Сейчас безопаснее наблюдать или уже есть открытая позиция."
     return save_state(state), state["message"]
 
 
-def buy_demo_position(state: dict[str, Any], symbol: str = "BTCUSDT") -> tuple[dict[str, Any], str]:
+def buy_demo_position(state: dict[str, Any], symbol: str = "BTCUSDT", fee_rate: float | None = None) -> tuple[dict[str, Any], str]:
     """Open or add a virtual BTC position with exchange-preview commission math."""
 
     state = recalculate_state(state)
     price = float(state.get("last_price", DEFAULT_PRICE))
     quantity = DEFAULT_QUANTITY
-    preview = exchange_connector().preview_order(symbol=symbol, side="BUY", quantity=quantity, price=price)
+    if fee_rate is None:
+        best = best_trade_venue(notional=price * quantity)["best"]
+        fee_rate = float(best["fee_rate"])
+    preview = exchange_connector().preview_order(symbol=symbol, side="BUY", quantity=quantity, price=price, fee_rate=fee_rate)
     total_cost = float(preview.total_cost)
     cash = float(state.get("cash", 0.0))
     if total_cost > cash:
@@ -204,6 +243,7 @@ def buy_demo_position(state: dict[str, Any], symbol: str = "BTCUSDT") -> tuple[d
         existing["current_price"] = price
         existing["entry_fee"] = float(existing.get("entry_fee", 0.0)) + float(preview.entry_fee)
         existing["break_even_price"] = float(preview.break_even_price)
+        existing["fee_rate"] = float(preview.fee_rate)
     else:
         positions.append(
             {
@@ -213,6 +253,7 @@ def buy_demo_position(state: dict[str, Any], symbol: str = "BTCUSDT") -> tuple[d
                 "current_price": price,
                 "entry_fee": float(preview.entry_fee),
                 "break_even_price": float(preview.break_even_price),
+                "fee_rate": float(preview.fee_rate),
             }
         )
     state["positions"] = positions
@@ -220,13 +261,15 @@ def buy_demo_position(state: dict[str, Any], symbol: str = "BTCUSDT") -> tuple[d
     state["total_fees"] = float(state.get("total_fees", 0.0)) + float(preview.entry_fee)
     state["commission_drag"] = float(state.get("commission_drag", 0.0)) + float(preview.entry_fee)
     state["break_even_price"] = float(preview.break_even_price)
+    state["bybit_costs"] = ai_cost_report(notional=price * quantity)
     trade = _trade_from_preview(preview=preview, side="BUY", pnl=0.0, status="OPEN")
     state.setdefault("trades", []).append(trade)
     state["decision"] = "BUY"
     state["confidence"] = 82.0
     state["message"] = (
         f"AI купил виртуально {quantity:.4f} BTC по {price:.2f} USDT. "
-        f"Комиссия входа {float(preview.entry_fee):.2f} USDT учтена как расход. "
+        f"Комиссия входа {float(preview.entry_fee):.4f} USDT учтена как расход. "
+        f"Fee rate: {float(preview.fee_rate) * 100:.4f}%. "
         f"Безубыток после комиссии: {float(preview.break_even_price):.2f} USDT."
     )
     return save_state(state), state["message"]
@@ -247,12 +290,14 @@ def sell_demo_position(state: dict[str, Any], symbol: str = "BTCUSDT") -> tuple[
     quantity = float(position.get("quantity", 0.0))
     entry = float(position.get("entry_price", price))
     entry_fee = float(position.get("entry_fee", 0.0))
+    fee_rate = float(position.get("fee_rate", best_trade_venue(notional=price * quantity)["best"]["fee_rate"]))
     preview = exchange_connector().preview_order(
         symbol=symbol,
         side="BUY",
         quantity=quantity,
         price=entry,
         expected_exit_price=price,
+        fee_rate=fee_rate,
     )
     exit_fee = float(preview.expected_exit_fee)
     gross_pnl = float(preview.gross_result or 0.0)
@@ -284,7 +329,7 @@ def sell_demo_position(state: dict[str, Any], symbol: str = "BTCUSDT") -> tuple[
     state["confidence"] = 78.0
     state["message"] = (
         f"AI закрыл виртуальную BTC позицию. Gross PnL: {gross_pnl:.2f} USDT, "
-        f"комиссии: {entry_fee + exit_fee:.2f} USDT, net PnL после комиссий: {net_pnl:.2f} USDT."
+        f"комиссии: {entry_fee + exit_fee:.4f} USDT, net PnL после комиссий: {net_pnl:.2f} USDT."
     )
     return save_state(state), state["message"]
 
@@ -302,6 +347,7 @@ def recalculate_state(state: dict[str, Any]) -> dict[str, Any]:
         entry = float(position.get("entry_price", last_price))
         current = float(position.get("current_price", last_price) or last_price)
         entry_fee = float(position.get("entry_fee", 0.0))
+        fee_rate = float(position.get("fee_rate", best_trade_venue(notional=entry * quantity)["best"]["fee_rate"]))
         position["current_price"] = current
         positions_value += quantity * current
         gross = (current - entry) * quantity
@@ -311,6 +357,7 @@ def recalculate_state(state: dict[str, Any]) -> dict[str, Any]:
             quantity=quantity,
             price=entry,
             expected_exit_price=current,
+            fee_rate=fee_rate,
         )
         exit_fee = float(exit_preview.expected_exit_fee)
         position["gross_pnl"] = gross
@@ -326,6 +373,7 @@ def recalculate_state(state: dict[str, Any]) -> dict[str, Any]:
     state["equity"] = float(state.get("cash", DEFAULT_BALANCE)) + positions_value
     state["exchange_status"] = exchange_connector().status().to_dict()
     state["online_monitoring"] = online_monitoring_snapshot()
+    state["bybit_costs"] = ai_cost_report(notional=max(positions_value, DEFAULT_PRICE * DEFAULT_QUANTITY))
     state["updated_at"] = int(time.time())
     return state
 
@@ -370,6 +418,7 @@ def monitoring_reply(state: dict[str, Any]) -> str:
         "🟢 Онлайн-мониторинг:\n"
         f"Демо-счёт: {'онлайн' if monitor.get('demo_account_online') else 'оффлайн'}\n"
         f"Биржевой connector: {'онлайн' if monitor.get('exchange_connector_online') else 'ограничен'}\n"
+        f"Cost intelligence: {'онлайн' if monitor.get('cost_intelligence_online') else 'недоступен'}\n"
         f"Preview ордеров: {'онлайн' if monitor.get('order_preview_online') else 'недоступен'}\n"
         f"Live-исполнение: {'включено' if monitor.get('live_execution_enabled') else 'выключено'}\n"
         f"Режим биржи: {exchange.get('mode', 'disabled')}\n"
