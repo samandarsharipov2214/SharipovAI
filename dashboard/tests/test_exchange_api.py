@@ -25,6 +25,57 @@ def test_exchange_status_endpoint_defaults_to_disabled(monkeypatch) -> None:
     assert "api_secret" not in payload["exchange"]
 
 
+def test_exchange_costs_endpoint_returns_ai_cost_report() -> None:
+    """Cost endpoint should expose fee, borrow, VIP, and best venue data."""
+
+    response = TestClient(create_app()).get("/api/exchange/costs")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    costs = payload["costs"]
+    assert costs["fees"]["spot"]
+    assert costs["borrow_rates"]
+    assert costs["best_trade_venue"]["best"]["round_trip_fee"] >= 0
+    assert costs["vip_progress"]["requirements"]
+
+
+def test_exchange_cost_estimate_endpoint_counts_trade_and_borrow_cost() -> None:
+    """Estimate endpoint should combine trading fees, borrow interest, and best venue."""
+
+    response = TestClient(create_app()).post(
+        "/api/exchange/costs/estimate",
+        json={
+            "notional": 500,
+            "product": "futures",
+            "liquidity": "maker",
+            "borrow_symbol": "USDT",
+            "borrow_amount": 500,
+            "borrow_hours": 24,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["trade_cost"]["round_trip_fee"] == pytest.approx(0.36)
+    assert payload["borrow_cost"]["estimated_interest"] == pytest.approx(500 * 0.0000042903 * 24)
+    assert payload["best_trade_venue"]["best"]["round_trip_fee"] >= 0
+
+
+def test_exchange_fees_and_borrow_rates_endpoints() -> None:
+    """Separate fee and borrow endpoints should be available for Mini App."""
+
+    client = TestClient(create_app())
+    fees = client.get("/api/exchange/fees").json()
+    borrows = client.get("/api/exchange/borrow-rates").json()
+
+    assert fees["status"] == "ok"
+    assert fees["fees"]["futures"][0]["maker"] == pytest.approx(0.00036)
+    assert borrows["status"] == "ok"
+    assert any(item["symbol"] == "BTC" for item in borrows["borrow_rates"])
+
+
 def test_exchange_preview_order_counts_commissions(monkeypatch) -> None:
     """Preview endpoint should return net result after commissions."""
 
