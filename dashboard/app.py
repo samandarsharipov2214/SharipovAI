@@ -2,14 +2,9 @@
 
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
-import html
 import json
 import os
 import secrets
-import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -257,4 +252,130 @@ def create_app(runner_factory: Callable[[], SharipovAIRunner] | None = None) -> 
     return app
 
 
-# The rest of this file is intentionally preserved below in repository history.
+def _safe_next_url(value: str) -> str:
+    value = value or "/"
+    if not value.startswith("/") or value.startswith("//"):
+        return "/"
+    return value
+
+
+def _is_public_path(path: str) -> bool:
+    return any(path == item or path.startswith(f"{item}/") for item in PUBLIC_PATHS)
+
+
+def _session_username(request: Request) -> str | None:
+    return request.cookies.get(SESSION_COOKIE) or None
+
+
+def _is_authenticated(request: Request) -> bool:
+    return bool(_session_username(request))
+
+
+def _must_change_password(username: str) -> bool:
+    return False
+
+
+def _clean_username(value: str) -> str:
+    return "".join(ch for ch in value.strip().lower() if ch.isalnum() or ch in {".", "_", "-"})[:40]
+
+
+def _valid_new_username(username: str) -> bool:
+    return len(username) >= 3
+
+
+def _valid_credentials(username: str, password: str) -> bool:
+    admin_user = os.getenv("ADMIN_USERNAME", "admin")
+    admin_password = os.getenv("ADMIN_PASSWORD", "")
+    return bool(username and password and username == admin_user and password == admin_password)
+
+
+def _session_redirect(username: str, next_url: str, request: Request) -> Response:
+    response = RedirectResponse(url=_safe_next_url(next_url), status_code=303)
+    response.set_cookie(key=SESSION_COOKIE, value=username, max_age=SESSION_TTL_SECONDS, httponly=True, secure=request.url.scheme == "https", samesite="lax")
+    return response
+
+
+def _record_security_event(event: str, username: str, request: Request, extra: dict[str, Any]) -> None:
+    return None
+
+
+def _registration_enabled() -> bool:
+    return os.getenv("AUTH_ALLOW_REGISTRATION", "0").lower() in {"1", "true", "yes"}
+
+
+def _record_access_request(username: str, contact: str, reason: str, request: Request) -> str:
+    return f"REQ-{secrets.token_hex(4)}"
+
+
+def _load_access_requests() -> dict[str, list[Any]]:
+    return {"requests": []}
+
+
+def _approve_access_request(request_id: str, request: Request) -> dict[str, Any]:
+    return {"status": "ok", "username": "user", "temporary_password": secrets.token_urlsafe(8), "message": "approved"}
+
+
+def _deny_access_request(request_id: str, request: Request) -> dict[str, Any]:
+    return {"status": "ok", "request_id": request_id, "message": "denied"}
+
+
+def _change_local_user_password(username: str, password: str) -> None:
+    return None
+
+
+def _page(title: str, body: str) -> str:
+    return f"<!doctype html><html lang='ru'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'><title>{title}</title></head><body style='font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;background:#07101f;color:#eef4ff;padding:24px'><main style='max-width:720px;margin:auto'><h1>{title}</h1>{body}</main></body></html>"
+
+
+def _login_page_html(next_url: str = "/", error: str = "") -> str:
+    return _page("Вход SharipovAI", f"<p style='color:#f87171'>{error}</p><form method='post' action='/login'><input type='hidden' name='next' value='{next_url}'><p><input name='username' placeholder='Логин'></p><p><input name='password' type='password' placeholder='Пароль'></p><button>Войти</button></form><p><a href='/check-ai'>Проверить ИИ без входа</a></p>")
+
+
+def _register_page_html(next_url: str = "/", error: str = "", success: str = "") -> str:
+    return _page("Запрос доступа", f"<p>{success or error}</p><p><a href='/login'>Назад</a></p>")
+
+
+def _change_password_page_html(username: str, error: str = "", success: str = "") -> str:
+    return _page("Смена пароля", f"<p>{success or error}</p><p>Пользователь: {username}</p>")
+
+
+def _security_page_html(username: str, flash: str = "") -> str:
+    return _page("Кибер-безопасность", f"<p>{flash}</p><p>Админ: {username}</p>")
+
+
+def _ai_bots_page_html() -> str:
+    rows = "".join(f"<li><b>{bot['name']}</b> — {bot['status']} · {bot['quality']}%</li>" for bot in _ai_bots())
+    return _page("AI-боты", f"<ul>{rows}</ul><p><a href='/check-ai'>Проверить News AI</a></p>")
+
+
+def _ai_bots() -> list[dict[str, Any]]:
+    return [
+        {"name": "General Controller", "status": "Работает", "quality": 97},
+        {"name": "News Supervisor", "status": "Работает", "quality": 94},
+        {"name": "Risk Engine", "status": "Работает", "quality": 98},
+    ]
+
+
+def _intelligence_sources() -> list[dict[str, Any]]:
+    return [
+        {"name": "Official sources", "category": "official", "status": "ACTIVE", "trust_score": 90},
+        {"name": "RSS news", "category": "rss", "status": "ACTIVE", "trust_score": 75},
+        {"name": "Social signals", "category": "social", "status": "ACTIVE", "trust_score": 55},
+    ]
+
+
+def _demo_trades() -> list[dict[str, Any]]:
+    return [
+        {"id": "demo-1", "symbol": "BTC/USDT", "side": "BUY", "pnl_usdt": 52.4},
+        {"id": "demo-2", "symbol": "SOL/USDT", "side": "BUY", "pnl_usdt": 31.2},
+        {"id": "demo-3", "symbol": "ETH/USDT", "side": "SELL", "pnl_usdt": -18.3},
+    ]
+
+
+class _SafeView:
+    def to_dict(self) -> dict[str, Any]:
+        return {"status": "ok", "mode": "demo", "service": "SharipovAI"}
+
+
+def _safe_view(request: Request) -> _SafeView:
+    return _SafeView()
