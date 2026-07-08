@@ -21,6 +21,7 @@ from pathlib import Path
 
 from runner import SharipovAIRunner
 
+from .policy_guard_middleware import install_policy_guard_middleware
 from .routes import router
 
 
@@ -32,6 +33,7 @@ def create_app(runner_factory: Callable[[], SharipovAIRunner] | None = None) -> 
     app_instance.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
     app_instance.include_router(router)
     _install_feature_apis(app_instance)
+    install_policy_guard_middleware(app_instance)
     _install_public_entrypoints(app_instance)
     return app_instance
 
