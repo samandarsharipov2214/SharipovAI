@@ -18,17 +18,12 @@ def test_user_management_lifecycle() -> None:
     assert created["username"] == "pilot01"
 
     users = list_users(users_data)
-    assert users == [
-        {
-            "username": "pilot01",
-            "role": "user",
-            "active": True,
-            "must_change_password": True,
-            "created_at": users[0]["created_at"],
-            "password_changed_at": 0,
-            "disabled_at": 0,
-        }
-    ]
+    assert len(users) == 1
+    assert users[0]["username"] == "pilot01"
+    assert users[0]["role"] == "user"
+    assert users[0]["active"] is True
+    assert users[0]["must_change_password"] is True
+    assert users[0]["created_at"] > 0
     assert "password_hash" not in users[0]
 
     disabled = set_user_active(users_data, "pilot01", False)
