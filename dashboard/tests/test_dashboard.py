@@ -9,6 +9,23 @@ from learning_engine import LearningSummary
 from runner import RunnerOutput
 
 
+VISIBLE_PAGES = (
+    "/",
+    "/ai-decision",
+    "/market",
+    "/news",
+    "/portfolio",
+    "/paper-trading",
+    "/learning",
+    "/self-analysis",
+    "/stress-lab",
+    "/ai-improvement",
+    "/reports",
+    "/ai-control-center",
+    "/settings",
+)
+
+
 def test_app_creates_successfully() -> None:
     """FastAPI app is created successfully."""
 
@@ -18,28 +35,43 @@ def test_app_creates_successfully() -> None:
 
 
 def test_all_pages_return_success() -> None:
-    """All visible pages return HTTP 200."""
+    """All visible pages return HTTP 200 and render the OS shell."""
 
     client = TestClient(create_app(runner_factory=_runner_factory))
 
-    for path in (
-        "/",
-        "/ai-decision",
-        "/market",
-        "/news",
-        "/portfolio",
-        "/paper-trading",
-        "/learning",
-        "/self-analysis",
-        "/stress-lab",
-        "/ai-improvement",
-        "/reports",
-        "/ai-control-center",
-        "/settings",
-    ):
+    for path in VISIBLE_PAGES:
         response = client.get(path)
         assert response.status_code == 200
         assert "SharipovAI OS" in response.text
+        assert "os-sidebar" in response.text
+        assert "os-main" in response.text
+
+
+def test_overview_page_renders_rebuilt_live_interface() -> None:
+    """Overview page matches the rebuilt index.html structure."""
+
+    response = TestClient(create_app(runner_factory=_runner_factory)).get("/?lang=ru")
+
+    assert response.status_code == 200
+    assert "hero-decision" in response.text
+    assert "id=\"hero-decision\"" in response.text
+    assert "id=\"hero-confidence\"" in response.text
+    assert "id=\"portfolio-equity\"" in response.text
+    assert "id=\"run-analysis\"" in response.text
+    assert "Стресс-лаборатория" in response.text
+
+
+def test_overview_page_displays_runner_values() -> None:
+    """Overview page includes translated runner output values."""
+
+    response = TestClient(create_app(runner_factory=_runner_factory)).get("/?lang=en")
+
+    assert response.status_code == 200
+    assert "BUY BITCOIN" in response.text
+    assert "LOW" in response.text
+    assert "UNANIMOUS 100.0%" in response.text
+    assert "10000.00 USDT" in response.text
+    assert "9500.00 USDT" in response.text
 
 
 def test_health_endpoints_work() -> None:
@@ -60,6 +92,8 @@ def test_api_run_endpoint_works() -> None:
     payload = response.json()
     assert payload["decision"] == "BUY"
     assert payload["risk_level"] == "LOW"
+    assert payload["paper_cash"] == 9500.0
+    assert payload["paper_equity"] == 10000.0
     assert payload["learning_summary"]["total_trades"] == 1
 
 
@@ -90,19 +124,20 @@ def test_crash_test_endpoints_work() -> None:
     assert "block new BUY decisions" in payload["protective_measures"]
 
 
-def test_stress_lab_page_returns_success_and_is_not_empty() -> None:
-    """Stress Lab page renders meaningful UI."""
+def test_stress_lab_page_returns_success_and_matches_rebuilt_template() -> None:
+    """Stress Lab page renders the rebuilt stress interface."""
 
     response = TestClient(create_app(runner_factory=_runner_factory)).get(
         "/stress-lab?lang=en"
     )
 
     assert response.status_code == 200
-    assert "Stress Lab" in response.text
-    assert "Scenario selection" in response.text
-    assert "Before state" in response.text
-    assert "After simulated shock" in response.text
-    assert "Protective measures" in response.text
+    assert "STRESS LAB" in response.text
+    assert "data-stress-scenario=\"btc_drop_20\"" in response.text
+    assert "id=\"stress-scenario\"" in response.text
+    assert "id=\"stress-before\"" in response.text
+    assert "id=\"stress-after\"" in response.text
+    assert "id=\"stress-measures\"" in response.text
 
 
 def test_stress_lab_scenario_list_api_works() -> None:
@@ -116,6 +151,7 @@ def test_stress_lab_scenario_list_api_works() -> None:
     scenarios = response.json()["scenarios"]
     assert {"id": "btc_drop_20", "label": "BTC price drop 20%"} in scenarios
     assert {"id": "market_crash_50", "label": "Market crash 50%"} in scenarios
+    assert {"id": "virtual_capital_loss_10", "label": "Virtual capital loss 10%"} in scenarios
 
 
 def test_stress_lab_btc_drop_20_scenario_works() -> None:
@@ -210,8 +246,8 @@ def test_ai_improvement_page_and_api_work() -> None:
 
     assert page.status_code == 200
     assert "AI Improvement" in page.text
-    assert "Add Macro Agent" in page.text
-    assert "No automatic self-modification" in page.text
+    assert "Улучшение AI" in page.text
+    assert "Macro Agent" in page.text
     assert api.status_code == 200
     assert api.json()["recommendations"][0]["title"] == "Add Macro Agent"
 
@@ -252,7 +288,6 @@ def test_russian_translation_is_complete_for_core_labels() -> None:
     assert "ПОКУПАТЬ БИТКОЙН" in response.text
     assert "НИЗКИЙ" in response.text
     assert "ЕДИНОГЛАСНО" in response.text
-    assert "Краш-тест" in response.text
 
 
 def test_english_translation_appears() -> None:
@@ -323,26 +358,22 @@ def test_missing_runner_data_does_not_crash_overview_page() -> None:
 
     assert response.status_code == 200
     assert "SharipovAI OS" in response.text
+    assert "id=\"hero-decision\"" in response.text
 
 
-def test_settings_page_renders_all_major_sections() -> None:
-    """Settings page contains the complete settings structure."""
+def test_settings_page_renders_rebuilt_control_sections() -> None:
+    """Settings page contains the rebuilt control-center structure."""
 
     response = TestClient(create_app(runner_factory=_runner_factory)).get("/settings")
 
     assert response.status_code == 200
     for label in (
-        "Общие",
-        "Бумажная торговля",
+        "Настройки",
+        "Виртуальный кошелек",
         "Риск",
-        "Торговля",
-        "Рынок",
-        "Новости",
-        "Уведомления",
-        "Обучение",
-        "Память",
+        "Лимиты",
         "Безопасность",
-        "Самоанализ",
+        "Реальная торговля выключена",
     ):
         assert label in response.text
 
@@ -353,40 +384,55 @@ def test_self_analysis_page_renders_recommendations_section() -> None:
     response = TestClient(create_app(runner_factory=_runner_factory)).get("/self-analysis")
 
     assert response.status_code == 200
+    assert "Самоанализ ошибок" in response.text
     assert "Рекомендации" in response.text
-    assert "Автоматическое самоизменение запрещено" in response.text
+    assert "AI не меняет себя автоматически" in response.text
 
 
 def test_each_content_page_is_not_empty() -> None:
-    """Every content page includes meaningful section text."""
+    """Every fallback content page includes meaningful rebuilt section text."""
 
     client = TestClient(create_app(runner_factory=_runner_factory))
     expected = {
         "/market": "Обзор рынка",
         "/news": "Последние новости",
         "/ai-decision": "Текущее решение",
-        "/portfolio": "Состояние портфеля",
-        "/paper-trading": "Виртуальный кошелек",
-        "/learning": "Состояние обучения",
-        "/reports": "Дневной отчет",
-        "/ai-control-center": "Центр управления AI",
+        "/portfolio": "Портфель",
+        "/paper-trading": "Бумажная торговля",
+        "/learning": "Обучение",
+        "/reports": "Отчеты",
     }
 
     for path, text in expected.items():
         response = client.get(path)
         assert response.status_code == 200
         assert text in response.text
+        assert "Раздел активен" in response.text
+        assert "Страница подключена к SharipovAI OS" in response.text
 
 
-def test_crash_test_panel_visible_and_mentions_protection() -> None:
-    """Crash-test panel is visible and includes protective measures."""
+def test_ai_control_center_uses_rebuilt_settings_panel() -> None:
+    """AI Control Center shares the rebuilt control panel."""
+
+    response = TestClient(create_app(runner_factory=_runner_factory)).get(
+        "/ai-control-center"
+    )
+
+    assert response.status_code == 200
+    assert "AI Control Center" in response.text
+    assert "Виртуальный кошелек" in response.text
+    assert "Сохранить настройки" in response.text
+
+
+def test_crash_test_panel_was_replaced_by_stress_lab_link() -> None:
+    """Overview links to Stress Lab instead of the removed crash-test card."""
 
     response = TestClient(create_app(runner_factory=_runner_factory)).get("/")
 
     assert response.status_code == 200
-    assert "Панель краш-теста" in response.text
-    assert "Защитные меры" in response.text
-    assert "заблокировать новые BUY-решения" in response.text
+    assert "Панель краш-теста" not in response.text
+    assert "href=\"/stress-lab?lang=ru\"" in response.text
+    assert "Стресс-лаборатория" in response.text
 
 
 class _FakeRunner:
