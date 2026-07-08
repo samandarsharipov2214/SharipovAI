@@ -10,6 +10,7 @@ from .app import create_app as _create_base_app
 from .demo_api import install_demo_api
 from .exceptions import DashboardError
 from .exchange_api import install_exchange_api
+from .public_check_api import install_public_check_api
 from .social_news_api import install_social_news_api
 
 
@@ -20,6 +21,7 @@ def create_app(runner_factory: Callable[[], SharipovAIRunner] | None = None):
     install_exchange_api(app_instance)
     install_demo_api(app_instance)
     install_social_news_api(app_instance)
+    install_public_check_api(app_instance)
     return app_instance
 
 
