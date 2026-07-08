@@ -5,13 +5,15 @@ from __future__ import annotations
 from html import escape
 from typing import Any
 
-from fastapi import Body, FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi import Body, FastAPI, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from ai_evidence import system_scoreboard
 from learning_engine_v2 import learning_state, propose_lesson
 from news_monitor.agents import run_news_agents
 from trading_intelligence import market_regime, trade_gate
+
+from .policy_guard import check_dashboard_action, guarded_response
 
 
 def install_trading_intelligence_api(app: FastAPI) -> None:
@@ -41,12 +43,26 @@ def install_trading_intelligence_api(app: FastAPI) -> None:
         return market_regime(payload or {})
 
     @app.get("/api/trade-gate")
-    def trade_gate_api() -> dict[str, Any]:
-        return trade_gate()
+    def trade_gate_api(request: Request) -> dict[str, Any] | JSONResponse:
+        decision = check_dashboard_action(action_type="trade", actor="trade_gate", topic="trading", request=request)
+        if decision.get("allowed") is False:
+            return JSONResponse(status_code=403, content=guarded_response(decision))
+        gate = trade_gate()
+        if decision.get("decision") == "caution":
+            gate.setdefault("warnings", []).append("Policy Guard: действие разрешено только в осторожном режиме.")
+            gate["policy_guard"] = decision
+        return gate
 
     @app.post("/api/trade-gate")
-    def trade_gate_post(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
-        return trade_gate(payload or {})
+    def trade_gate_post(request: Request, payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any] | JSONResponse:
+        decision = check_dashboard_action(action_type="trade", actor="trade_gate", topic="trading", request=request, extra={"payload_keys": sorted((payload or {}).keys())})
+        if decision.get("allowed") is False:
+            return JSONResponse(status_code=403, content=guarded_response(decision))
+        gate = trade_gate(payload or {})
+        if decision.get("decision") == "caution":
+            gate.setdefault("warnings", []).append("Policy Guard: действие разрешено только в осторожном режиме.")
+            gate["policy_guard"] = decision
+        return gate
 
     @app.get("/trade-gate", response_class=HTMLResponse)
     def trade_gate_page() -> HTMLResponse:
@@ -57,8 +73,14 @@ def install_trading_intelligence_api(app: FastAPI) -> None:
         return learning_state()
 
     @app.post("/api/learning-v2/propose")
-    def learning_v2_propose(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
-        return propose_lesson(payload or {})
+    def learning_v2_propose(request: Request, payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any] | JSONResponse:
+        decision = check_dashboard_action(action_type="bot_learning", actor="learning_engine", topic="bot_learning", request=request, extra={"payload_keys": sorted((payload or {}).keys())})
+        if decision.get("allowed") is False:
+            return JSONResponse(status_code=403, content=guarded_response(decision))
+        result = propose_lesson(payload or {})
+        if decision.get("decision") == "caution":
+            result["policy_guard"] = decision
+        return result
 
     @app.get("/learning-v2", response_class=HTMLResponse)
     def learning_v2_page() -> HTMLResponse:
