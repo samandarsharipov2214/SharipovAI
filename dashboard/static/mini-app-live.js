@@ -2,6 +2,7 @@
   const $ = (selector) => document.querySelector(selector);
   const $$ = (selector) => Array.from(document.querySelectorAll(selector));
   const fmt = (value) => Number(value || 0).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmtRate = (value) => `${(Number(value || 0) * 100).toFixed(4)}%`;
   const RISK_STORAGE_KEY = 'sharipovaiRiskSettingsV2';
 
   function addMessage(role, text) {
@@ -84,16 +85,31 @@
     });
   }
 
+  function renderCostIntelligence(state) {
+    const costs = state.bybit_costs || {};
+    const venue = costs.best_trade_venue || {};
+    const best = venue.best || {};
+    const borrows = costs.cheapest_borrows || [];
+    const topBorrow = borrows[0] || {};
+    setText('#cost-best-venue', `${best.product || 'spot'} / ${best.liquidity || 'maker'}`);
+    setText('#cost-roundtrip', `${fmt(best.round_trip_fee)} USDT`);
+    setText('#cost-breakeven-move', `${Number(best.break_even_move_percent || 0).toFixed(4)}%`);
+    setText('#cost-saving', `${fmt(venue.estimated_saving_vs_worst)} USDT`);
+    setText('#cost-cheapest-borrow', `${topBorrow.symbol || 'BTC'} · ${fmtRate(topBorrow.hourly_rate)}/ч`);
+  }
+
   function renderExchangeMonitor(state) {
     const exchange = state.exchange_status || {};
     const monitor = state.online_monitoring || {};
     setText('#exchange-mode', String(exchange.mode || monitor.mode || 'sandbox'));
     setText('#exchange-preview', monitor.order_preview_online ? 'Онлайн' : 'Ограничен');
+    setText('#exchange-cost-ai', monitor.cost_intelligence_online ? 'Онлайн' : 'Нет');
     setText('#exchange-live', monitor.live_execution_enabled ? 'Включено' : 'Выкл.');
     setText('#exchange-fees', `${fmt(state.total_fees)} USDT`);
     setText('#exchange-drag', `${fmt(state.commission_drag)} USDT`);
     setText('#exchange-breakeven', `${fmt(state.break_even_price)} USDT`);
-    setText('#exchange-message', monitor.real_orders_blocked ? 'Реальные ордера заблокированы. Демо считает комиссии и net PnL через биржевой preview.' : 'Live gates открыты. Нужна ручная проверка риска перед каждым ордером.');
+    setText('#exchange-message', monitor.real_orders_blocked ? 'Реальные ордера заблокированы. AI считает комиссии, ставки займов, VIP и net PnL через Bybit cost intelligence.' : 'Live gates открыты. Нужна ручная проверка риска перед каждым ордером.');
+    renderCostIntelligence(state);
   }
 
   function renderState(state) {
@@ -156,7 +172,7 @@
     const input = $('#ai-command-input');
     const value = String(command || input?.value || '').trim();
     if (!value) {
-      addMessage('ai', 'Напиши команду: «купи BTC», «продай», «поставь баланс 20000», «мониторинг онлайн» или «анализ рынка».');
+      addMessage('ai', 'Напиши команду: «найди выгодные условия», «купи BTC», «поставь баланс 20000», «мониторинг онлайн» или «анализ рынка».');
       return;
     }
     addMessage('user', value);
