@@ -17,7 +17,11 @@
 
   function translateDecision(value) {
     const key = String(value || '').toUpperCase();
-    return { BUY: 'КУПИТЬ', SELL: 'ПРОДАТЬ', WATCH: 'НАБЛЮДАТЬ', IGNORE: 'ПРОПУСТИТЬ', NO_DECISION: 'НЕТ РЕШЕНИЯ' }[key] || value || 'НАБЛЮДАТЬ';
+    return { BUY: 'КУПИТЬ', SELL: 'ПРОДАТЬ', WATCH: 'НАБЛЮДАТЬ', IGNORE: 'ПРОПУСТИТЬ', NO_DECISION: 'НЕТ РЕШЕНИЯ', BLOCK_BUY: 'БЛОК BUY' }[key] || value || 'НАБЛЮДАТЬ';
+  }
+
+  function translateImpact(value) {
+    return { bullish: 'позитивно', bearish: 'негативно', neutral: 'нейтрально' }[String(value || '').toLowerCase()] || 'нейтрально';
   }
 
   function addMessage(role, text) {
@@ -31,6 +35,39 @@
     log.scrollTop = log.scrollHeight;
   }
 
+  function ensureNewsPanel() {
+    const tabs = $('.mini-tabs');
+    if (tabs && !tabs.querySelector('[data-mini-tab="news-section"]')) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.dataset.miniTab = 'news-section';
+      button.textContent = 'Новости';
+      tabs.appendChild(button);
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        showPanel('news-section');
+      });
+    }
+    if ($('#news-section')) return;
+    const shell = $('.mini-app-shell');
+    const safe = $('.bottom-safe');
+    if (!shell) return;
+    const article = document.createElement('article');
+    article.className = 'mini-card mini-section';
+    article.id = 'news-section';
+    article.innerHTML = `
+      <h2>Новости и соцсети</h2>
+      <div class="mini-grid">
+        <div class="mini-stat"><small>Источников</small><b id="news-sources-total">0</b></div>
+        <div class="mini-stat"><small>Срочные</small><b id="news-high-urgency">0</b></div>
+        <div class="mini-stat"><small>Нужно подтвердить</small><b id="news-confirmations">0</b></div>
+        <div class="mini-stat"><small>Действие AI</small><b id="news-ai-action">НАБЛЮДАТЬ</b></div>
+      </div>
+      <div class="bot-grid" id="news-list"><div class="bot-row"><div><b>Загрузка новостей...</b><small>RSS/official/demo analysis</small></div><span class="bot-state">...</span></div></div>
+      <p class="info-box">Telegram и X будут читаться только после безопасного подключения API/доступов. Одна публикация из соцсетей не даёт право на сделку без подтверждения.</p>`;
+    shell.insertBefore(article, safe || null);
+  }
+
   function showPanel(targetId) {
     const fallback = document.getElementById(targetId) ? targetId : 'overview-section';
     $$('.mini-app-shell .mini-section').forEach((panel) => panel.classList.toggle('active-panel', panel.id === fallback));
@@ -40,6 +77,7 @@
   }
 
   function installTabs() {
+    ensureNewsPanel();
     $$('[data-mini-tab]').forEach((button) => {
       button.addEventListener('click', (event) => {
         event.preventDefault();
@@ -144,6 +182,30 @@
     renderReports(state);
   }
 
+  function renderNews(payload) {
+    ensureNewsPanel();
+    const summary = payload.news?.summary || payload.summary || {};
+    const sources = payload.sources || {};
+    setText('#news-sources-total', String(sources.total || 0));
+    setText('#news-high-urgency', String(summary.high_urgency || 0));
+    setText('#news-confirmations', String(summary.needs_confirmation || 0));
+    setText('#news-ai-action', summary.block_buy ? 'БЛОК BUY' : 'НАБЛЮДАТЬ');
+    const list = $('#news-list');
+    if (!list) return;
+    const items = payload.news?.items || payload.items || [];
+    list.innerHTML = '';
+    if (!items.length) {
+      list.innerHTML = '<div class="bot-row"><div><b>Новостей пока нет</b><small>Жду обновления источников</small></div><span class="bot-state">0</span></div>';
+      return;
+    }
+    items.slice(0, 8).forEach((item) => {
+      const row = document.createElement('div');
+      row.className = 'bot-row';
+      row.innerHTML = `<div><b>${item.title || 'Новость'}</b><small>${item.source_name || 'Источник'} · ${translateImpact(item.impact)} · ${item.needs_confirmation ? 'нужно подтверждение' : 'подтверждено'}</small></div><span class="bot-state">${item.trust_score || 0}%</span>`;
+      list.appendChild(row);
+    });
+  }
+
   async function loadDemoState() {
     try {
       const response = await fetch('/api/demo/state', { cache: 'no-store' });
@@ -192,6 +254,14 @@
     }
   }
 
+  async function loadNews() {
+    try {
+      const response = await fetch('/api/social-news', { cache: 'no-store' });
+      if (!response.ok) return;
+      renderNews(await response.json());
+    } catch (_) {}
+  }
+
   async function runDemoCommand(command) {
     const response = await fetch('/api/demo/chat', {
       method: 'POST',
@@ -236,7 +306,9 @@
     loadDemoState();
     loadStressLab();
     loadBots();
+    loadNews();
     setInterval(loadDemoState, 15000);
     setInterval(loadBots, 30000);
+    setInterval(loadNews, 60000);
   });
 })();
