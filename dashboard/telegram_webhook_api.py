@@ -28,9 +28,17 @@ def install_telegram_webhook_api(app: FastAPI) -> None:
         return
     app.state.telegram_webhook_api_installed = True
 
+    @app.on_event("startup")
+    def telegram_auto_configure_webhook() -> None:
+        """Best-effort Render startup hook: set Telegram webhook automatically."""
+
+        app.state.telegram_webhook_autoconfigure = _auto_configure_webhook()
+
     @app.get("/api/telegram/status")
     def telegram_status() -> dict[str, Any]:
-        return _telegram_status()
+        status = _telegram_status()
+        status["auto_configure"] = getattr(app.state, "telegram_webhook_autoconfigure", None)
+        return status
 
     @app.get("/api/telegram/self-test")
     def telegram_self_test() -> dict[str, Any]:
@@ -58,11 +66,15 @@ def install_telegram_webhook_api(app: FastAPI) -> None:
 
     @app.get("/api/telegram/set-webhook")
     def set_webhook_get() -> dict[str, Any]:
-        return _set_webhook()
+        result = _set_webhook()
+        app.state.telegram_webhook_autoconfigure = result
+        return result
 
     @app.post("/api/telegram/set-webhook")
     def set_webhook_post() -> dict[str, Any]:
-        return _set_webhook()
+        result = _set_webhook()
+        app.state.telegram_webhook_autoconfigure = result
+        return result
 
     @app.get("/api/telegram/delete-webhook")
     def delete_webhook_get() -> dict[str, Any]:
@@ -82,6 +94,22 @@ def install_telegram_webhook_api(app: FastAPI) -> None:
         return {"status": "ok", "sent": True}
 
 
+def _auto_configure_webhook() -> dict[str, Any]:
+    """Set webhook automatically unless explicitly disabled by env."""
+
+    enabled = os.getenv("TELEGRAM_AUTO_SET_WEBHOOK", "1").strip().lower()
+    if enabled in {"0", "false", "no", "off"}:
+        return {"status": "disabled", "reason": "TELEGRAM_AUTO_SET_WEBHOOK=0"}
+    if not _bot_token():
+        return {"status": "skipped", "reason": "BOT_TOKEN is missing"}
+    if not _webapp_url():
+        return {"status": "skipped", "reason": "WEBAPP_URL is missing"}
+    try:
+        return _set_webhook()
+    except Exception as exc:  # pragma: no cover - startup must not fail app
+        return {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
+
+
 def _telegram_status() -> dict[str, Any]:
     token = _bot_token()
     status: dict[str, Any] = {
@@ -90,6 +118,7 @@ def _telegram_status() -> dict[str, Any]:
         "webapp_url": _webapp_url(),
         "webhook_endpoint": "/telegram/webhook",
         "webhook_secret_configured": bool(_webhook_secret()),
+        "auto_set_webhook_enabled": os.getenv("TELEGRAM_AUTO_SET_WEBHOOK", "1").strip().lower() not in {"0", "false", "no", "off"},
         "mode": "webhook",
         "set_webhook_url": "/api/telegram/set-webhook",
         "delete_webhook_url": "/api/telegram/delete-webhook",
@@ -108,6 +137,7 @@ def _render_telegram_check(status: dict[str, Any], health: dict[str, Any]) -> st
     webhook_result = webhook.get("result", {}) if isinstance(webhook, dict) else {}
     token_ok = "ДА" if status.get("bot_token_configured") else "НЕТ"
     secret_ok = "ДА" if status.get("webhook_secret_configured") else "НЕТ"
+    auto_ok = "ДА" if status.get("auto_set_webhook_enabled") else "НЕТ"
     webapp = html.escape(str(status.get("webapp_url") or "не задан"))
     username = html.escape(str(bot.get("username") or "неизвестно"))
     webhook_url = html.escape(str(webhook_result.get("url") or "не установлен"))
@@ -117,7 +147,7 @@ def _render_telegram_check(status: dict[str, Any], health: dict[str, Any]) -> st
     explanation = html.escape(str(health.get("explanation", "")))
     score = html.escape(str(health.get("health_score", 0)))
     next_fix = html.escape(str(health.get("next_fix", "")))
-    return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SharipovAI · Telegram Check</title><style>body{{margin:0;background:#070b12;color:#eef4ff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}}main{{padding:18px;max-width:900px;margin:auto}}.card{{background:#111827;border:1px solid #243044;border-radius:18px;padding:16px;margin:12px 0;box-shadow:0 20px 60px rgba(0,0,0,.25)}}.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}}.stat{{background:#0b1220;border:1px solid #1f2a3d;border-radius:14px;padding:12px}}small{{display:block;color:#8ea2c4}}b{{font-size:22px}}a{{color:#60a5fa;font-weight:800}}.ok{{display:inline-block;background:#10b981;color:#03130d;border-radius:999px;padding:7px 12px;font-weight:900}}.warn{{display:inline-block;background:#f59e0b;color:#120a02;border-radius:999px;padding:7px 12px;font-weight:900}}</style></head><body><main><section class="card"><span class="ok">TELEGRAM CHECK</span><h1>Проверка Telegram Bot</h1><p>Эта страница нужна после финального деплоя. Сначала проверь статус, потом один раз нажми set-webhook.</p><p><a href="/">Главная</a> · <a href="/api/telegram/status">JSON status</a> · <a href="/api/telegram/self-test">Self-test</a> · <a href="/api/telegram/set-webhook">Set webhook</a> · <a href="/api/telegram/delete-webhook">Delete webhook</a></p></section><section class="card"><h2>Self-test</h2><div class="grid"><div class="stat"><small>Verdict</small><b>{verdict}</b></div><div class="stat"><small>Health</small><b>{score}</b></div></div><p>{explanation}</p><p><small>Next fix</small>{next_fix}</p></section><section class="card"><div class="grid"><div class="stat"><small>BOT_TOKEN</small><b>{token_ok}</b></div><div class="stat"><small>Webhook secret</small><b>{secret_ok}</b></div><div class="stat"><small>Bot username</small><b>@{username}</b></div><div class="stat"><small>Mode</small><b>webhook</b></div><div class="stat"><small>Pending updates</small><b>{pending}</b></div></div></section><section class="card"><h2>Webhook</h2><p><small>WEBAPP_URL</small>{webapp}</p><p><small>Webhook URL</small>{webhook_url}</p><p><small>Last error</small>{last_error}</p></section><section class="card"><h2>После деплоя порядок такой</h2><ol><li>Открыть эту страницу.</li><li>Убедиться, что BOT_TOKEN = ДА и WEBAPP_URL правильный.</li><li>Нажать <b>Set webhook</b>.</li><li>Написать боту /start.</li><li>Проверить команды /status /trade /audit /scoreboard.</li></ol></section></main></body></html>"""
+    return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SharipovAI · Telegram Check</title><style>body{{margin:0;background:#070b12;color:#eef4ff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}}main{{padding:18px;max-width:900px;margin:auto}}.card{{background:#111827;border:1px solid #243044;border-radius:18px;padding:16px;margin:12px 0;box-shadow:0 20px 60px rgba(0,0,0,.25)}}.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}}.stat{{background:#0b1220;border:1px solid #1f2a3d;border-radius:14px;padding:12px}}small{{display:block;color:#8ea2c4}}b{{font-size:22px}}a{{color:#60a5fa;font-weight:800}}.ok{{display:inline-block;background:#10b981;color:#03130d;border-radius:999px;padding:7px 12px;font-weight:900}}.warn{{display:inline-block;background:#f59e0b;color:#120a02;border-radius:999px;padding:7px 12px;font-weight:900}}</style></head><body><main><section class="card"><span class="ok">TELEGRAM CHECK</span><h1>Проверка Telegram Bot</h1><p>После деплоя web-сервис сам пытается установить webhook. Если бот молчит, нажми Set webhook один раз.</p><p><a href="/">Главная</a> · <a href="/api/telegram/status">JSON status</a> · <a href="/api/telegram/self-test">Self-test</a> · <a href="/api/telegram/set-webhook">Set webhook</a> · <a href="/api/telegram/delete-webhook">Delete webhook</a></p></section><section class="card"><h2>Self-test</h2><div class="grid"><div class="stat"><small>Verdict</small><b>{verdict}</b></div><div class="stat"><small>Health</small><b>{score}</b></div></div><p>{explanation}</p><p><small>Next fix</small>{next_fix}</p></section><section class="card"><div class="grid"><div class="stat"><small>BOT_TOKEN</small><b>{token_ok}</b></div><div class="stat"><small>Webhook secret</small><b>{secret_ok}</b></div><div class="stat"><small>Auto webhook</small><b>{auto_ok}</b></div><div class="stat"><small>Bot username</small><b>@{username}</b></div><div class="stat"><small>Mode</small><b>webhook</b></div><div class="stat"><small>Pending updates</small><b>{pending}</b></div></div></section><section class="card"><h2>Webhook</h2><p><small>WEBAPP_URL</small>{webapp}</p><p><small>Webhook URL</small>{webhook_url}</p><p><small>Last error</small>{last_error}</p></section><section class="card"><h2>Что делать</h2><ol><li>Сделать Deploy latest commit.</li><li>Открыть эту страницу.</li><li>Если Webhook URL пустой — нажать <b>Set webhook</b>.</li><li>Написать боту /start.</li></ol></section></main></body></html>"""
 
 
 def _bot_token() -> str:
