@@ -10,9 +10,10 @@ from typing import Any
 
 from fastapi import Request, Response
 from fastapi.responses import HTMLResponse
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .app import _load_users, _record_security_event, _session_username
+from .menu_visibility import hide_security_link_for_non_admin
 from .roles import is_admin, resolve_role
 from .secure_app import create_secure_app
 
@@ -21,9 +22,10 @@ SECURITY_PATHS = ("/security", "/api/security")
 
 
 def create_admin_secure_app(runner_factory: Any | None = None):
-    """Create app with login lockout and admin-only security center."""
+    """Create app with login lockout, role menu and admin-only security center."""
 
     dashboard = create_secure_app(runner_factory=runner_factory)
+    dashboard.add_middleware(RoleAwareMenuMiddleware)
     dashboard.add_middleware(AdminOnlySecurityMiddleware)
 
     @dashboard.get("/api/auth/role")
@@ -33,6 +35,56 @@ def create_admin_secure_app(runner_factory: Any | None = None):
         return {"authenticated": bool(username), "user": username, "role": role, "admin": role == "admin"}
 
     return dashboard
+
+
+class RoleAwareMenuMiddleware:
+    """Hide admin-only menu items from non-admin users."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        request = Request(scope)
+        username = _session_username(request)
+        admin = is_admin(username, _load_users())
+        captured: list[Message] = []
+
+        async def capture_send(message: Message) -> None:
+            captured.append(message)
+
+        await self.app(scope, receive, capture_send)
+
+        content_type = ""
+        for message in captured:
+            if message.get("type") == "http.response.start":
+                headers = message.get("headers", [])
+                content_type = _header_value(headers, b"content-type")
+                break
+
+        if "text/html" not in content_type:
+            for message in captured:
+                await send(message)
+            return
+
+        body = b"".join(message.get("body", b"") for message in captured if message.get("type") == "http.response.body")
+        text = body.decode("utf-8")
+        text = hide_security_link_for_non_admin(text, admin=admin)
+        body_bytes = text.encode("utf-8")
+
+        for message in captured:
+            if message.get("type") == "http.response.start":
+                headers = [(key, value) for key, value in message.get("headers", []) if key.lower() != b"content-length"]
+                message = {**message, "headers": headers}
+                await send(message)
+            elif message.get("type") == "http.response.body":
+                await send({"type": "http.response.body", "body": body_bytes, "more_body": False})
+                break
+            else:
+                await send(message)
 
 
 class AdminOnlySecurityMiddleware:
@@ -68,6 +120,13 @@ class AdminOnlySecurityMiddleware:
 
 def _is_security_path(path: str) -> bool:
     return any(path == item or path.startswith(f"{item}/") for item in SECURITY_PATHS)
+
+
+def _header_value(headers: list[tuple[bytes, bytes]], name: bytes) -> str:
+    for key, value in headers:
+        if key.lower() == name.lower():
+            return value.decode("latin1")
+    return ""
 
 
 def _forbidden_page_html() -> str:
