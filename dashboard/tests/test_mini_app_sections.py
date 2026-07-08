@@ -30,8 +30,26 @@ def test_mini_app_has_tabs_and_ai_bot_monitor() -> None:
     assert "Установить демо-баланс" in text
 
 
-def test_mini_app_live_js_loads_ai_bots_and_demo_state() -> None:
-    """Mini App controller must load demo state and AI bot status APIs."""
+def test_mini_app_has_exchange_commission_monitor() -> None:
+    """Mini App must show exchange, fee, commission drag, and break-even fields."""
+
+    response = TestClient(create_app(runner_factory=_runner_factory)).get("/?lang=ru")
+
+    assert response.status_code == 200
+    text = response.text
+    assert "Биржа и комиссии" in text
+    assert "id=\"exchange-mode\"" in text
+    assert "id=\"exchange-preview\"" in text
+    assert "id=\"exchange-live\"" in text
+    assert "id=\"exchange-fees\"" in text
+    assert "id=\"exchange-drag\"" in text
+    assert "id=\"exchange-breakeven\"" in text
+    assert "Реальные ордера заблокированы" in text
+    assert "Потери от комиссий" in text
+
+
+def test_mini_app_live_js_loads_ai_bots_demo_state_and_exchange_monitor() -> None:
+    """Mini App controller must load demo, bots, and exchange monitoring APIs."""
 
     response = TestClient(create_app(runner_factory=_runner_factory)).get("/static/mini-app-live.js")
 
@@ -40,6 +58,9 @@ def test_mini_app_live_js_loads_ai_bots_and_demo_state() -> None:
     assert "/api/demo/state" in text
     assert "/api/demo/chat" in text
     assert "/api/ai-bots" in text
+    assert "renderExchangeMonitor" in text
+    assert "exchange_status" in text
+    assert "online_monitoring" in text
     assert "Установить демо-баланс" in text
 
 
