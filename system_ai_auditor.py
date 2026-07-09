@@ -95,7 +95,9 @@ def _safe_call(name: str, fn: Callable[[], dict[str, Any]]) -> dict[str, Any]:
 def _safe_news_audit() -> dict[str, Any]:
     if not audit_news_ai:
         return {"status": "error", "module": "news_monitor.ai_auditor", "error": "audit_news_ai import failed", "interviews": []}
-    return _safe_call("news_monitor.ai_auditor", audit_news_ai) | {"interviews": _safe_interviews(_safe_call("news_monitor.ai_auditor", audit_news_ai))}
+    result = _safe_call("news_monitor.ai_auditor", audit_news_ai)
+    result["interviews"] = _safe_interviews(result)
+    return result
 
 
 def _safe_interviews(news_audit: dict[str, Any]) -> list[dict[str, object]]:
