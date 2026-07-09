@@ -37,6 +37,38 @@
     return `${Math.floor(diff / 86400)} дн ${Math.floor((diff % 86400) / 3600)} ч`;
   }
 
+  function reasonRu(reason, fallback) {
+    if (fallback) return fallback;
+    const raw = String(reason || 'ok');
+    if (raw.startsWith('catch_up_completed:')) return `догнал пропущенные циклы: ${raw.split(':')[1].replace('_ticks', '')}`;
+    if (raw.startsWith('bootstrap_completed:')) return `восстановлена история после пустого состояния: ${raw.split(':')[1].replace('_ticks', '')} виртуальных циклов`;
+    if (raw.startsWith('waiting_interval:')) return `ждёт следующий цикл: ${raw.split(':')[1].replace('s_left', '')} сек`;
+    const map = {
+      opened_virtual_trade: 'открыта виртуальная сделка',
+      opened_paper_trade: 'открыта виртуальная сделка',
+      max_open_reached_closed_oldest: 'достигнут лимит открытых сделок — закрыта самая старая',
+      trade_gate_blocked_virtual_execution: 'Trade Gate заблокировал виртуальную сделку',
+      not_started: 'ещё не запускался',
+      ok: 'работает',
+    };
+    return map[raw] || raw;
+  }
+
+  function sourceRu(source, fallback) {
+    if (fallback) return fallback;
+    const map = {
+      virtual_account_execution_engine: 'виртуальный счёт',
+      paper_activity_engine: 'виртуальный счёт',
+      paper: 'виртуальный счёт',
+    };
+    return map[String(source || 'paper')] || String(source || 'виртуальный счёт');
+  }
+
+  function statusRu(status) {
+    const map = { OPEN: 'открыта', CLOSED: 'закрыта' };
+    return map[String(status || 'OPEN').toUpperCase()] || String(status || 'открыта');
+  }
+
   function renderAllTrades(state) {
     const table = document.querySelector('.mini-table tbody');
     const section = document.getElementById('trades-section');
@@ -49,7 +81,7 @@
     setText('#all-trades-open', String(summary.open_positions || trades.filter((t) => t.status === 'OPEN').length));
     setText('#all-trades-closed', String(summary.closed_positions || trades.filter((t) => t.status === 'CLOSED').length));
     setText('#all-trades-pnl', `${summary.net_pnl >= 0 ? '+' : ''}${fmt(summary.net_pnl)} USDT`);
-    setText('#all-trades-reason', String(summary.last_reason || 'ok'));
+    setText('#all-trades-reason', reasonRu(summary.last_reason, summary.last_reason_ru));
     setText('#all-trades-last-tick', summary.last_tick_at ? `${fmtTime(summary.last_tick_at)} · ${ageText(summary.last_tick_at)}` : '—');
 
     table.innerHTML = '';
@@ -68,7 +100,7 @@
       const tr = document.createElement('tr');
       tr.className = 'trade-clickable all-trade-row';
       tr.dataset.tradeId = trade.id || '';
-      tr.innerHTML = `<td><b>#${trades.length - index} · ${trade.asset || trade.symbol || 'UNKNOWN'} ${trade.side || ''}</b><br><small>${trade.status || 'OPEN'} · комиссия ${fmt(fee)} USDT · ${trade.source || 'paper'}<br>🕒 открыта: ${opened} · ${age}<br>⏱ длительность: ${duration}<br>🏁 закрыта: ${closed}</small></td><td class="${pnl >= 0 ? 'positive' : 'negative'}">${pnl >= 0 ? '+' : ''}${fmt(pnl)}</td>`;
+      tr.innerHTML = `<td><b>#${trades.length - index} · ${trade.asset || trade.symbol || 'UNKNOWN'} ${trade.side || ''}</b><br><small>${statusRu(trade.status)} · комиссия ${fmt(fee)} USDT · ${sourceRu(trade.source, trade.source_ru)}<br>🕒 открыта: ${opened} · ${age}<br>⏱ длительность: ${duration}<br>🏁 закрыта: ${closed}</small></td><td class="${pnl >= 0 ? 'positive' : 'negative'}">${pnl >= 0 ? '+' : ''}${fmt(pnl)}</td>`;
       table.appendChild(tr);
     });
   }
@@ -78,13 +110,13 @@
     const box = document.createElement('div');
     box.id = 'all-trades-summary';
     box.className = 'mini-grid';
-    box.innerHTML = `<div class="mini-stat"><small>Всего сделок</small><b id="all-trades-count">0</b></div><div class="mini-stat"><small>Открыты</small><b id="all-trades-open">0</b></div><div class="mini-stat"><small>Закрыты</small><b id="all-trades-closed">0</b></div><div class="mini-stat"><small>Net PnL</small><b id="all-trades-pnl">0.00 USDT</b></div><div class="mini-stat"><small>Последний tick</small><b id="all-trades-last-tick">—</b></div><div class="mini-stat"><small>Причина</small><b id="all-trades-reason">—</b></div>`;
+    box.innerHTML = `<div class="mini-stat"><small>Всего сделок</small><b id="all-trades-count">0</b></div><div class="mini-stat"><small>Открыты</small><b id="all-trades-open">0</b></div><div class="mini-stat"><small>Закрыты</small><b id="all-trades-closed">0</b></div><div class="mini-stat"><small>Net PnL</small><b id="all-trades-pnl">0.00 USDT</b></div><div class="mini-stat"><small>Последний цикл</small><b id="all-trades-last-tick">—</b></div><div class="mini-stat"><small>Причина</small><b id="all-trades-reason">—</b></div>`;
     const title = section.querySelector('h2');
     if (title) title.insertAdjacentElement('afterend', box);
 
     const hint = section.querySelector('.info-box');
     if (hint) {
-      hint.innerHTML = 'Показаны <b>все paper-сделки</b> с временем открытия, закрытия и длительностью. Полный JSON: <a href="/api/paper-activity/state">/api/paper-activity/state</a>. Нажми на сделку, чтобы открыть отчёт.';
+      hint.innerHTML = 'Показаны <b>все виртуальные сделки</b> с временем открытия, закрытия и длительностью. Полный JSON: <a href="/api/paper-activity/state">/api/paper-activity/state</a>. Нажми на сделку, чтобы открыть отчёт.';
     }
   }
 
