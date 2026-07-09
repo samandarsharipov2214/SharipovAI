@@ -1,0 +1,137 @@
+name: AI Autofix
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: "Branch/ref to fix"
+        required: true
+        default: "main"
+      task:
+        description: "Task for AI autofix"
+        required: true
+        default: "Run full pytest, fix all failures, preserve safety and compatibility."
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: read
+
+jobs:
+  ai-autofix:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request &&
+       contains(github.event.comment.body, '/ai-autofix') &&
+       github.actor == 'samandarsharipov2214')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Resolve target branch from PR comment
+        id: pr
+        if: github.event_name == 'issue_comment'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {owner, repo} = context.repo;
+            const pull_number = context.payload.issue.number;
+            const pr = await github.rest.pulls.get({owner, repo, pull_number});
+            core.setOutput('head_ref', pr.data.head.ref);
+            core.setOutput('head_repo', pr.data.head.repo.full_name);
+
+      - name: Checkout PR branch
+        if: github.event_name == 'issue_comment'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.pr.outputs.head_repo }}
+          ref: ${{ steps.pr.outputs.head_ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Checkout workflow dispatch ref
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install pytest httpx fastapi uvicorn
+
+      - name: Run AI autofix loop
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-5.5' }}
+          AI_AUTOFIX_ATTEMPTS: "2"
+          AI_AUTOFIX_TASK: ${{ github.event_name == 'workflow_dispatch' && inputs.task || github.event.comment.body }}
+          ADMIN_USERNAME: Samandar2212
+          ADMIN_PASSWORD: ci-test-password
+          AUTH_SECRET: ci-test-secret
+          SHARIPOVAI_DISABLE_AUTH: "1"
+          SHARIPOVAI_DATA_DIR: ${{ github.workspace }}/.ci-data
+        run: python scripts/ai_autofix.py
+        continue-on-error: true
+
+      - name: Commit AI changes
+        id: commit
+        run: |
+          git config user.name "SharipovAI Autofix"
+          git config user.email "actions@github.com"
+          git status --short
+          if [ -n "$(git status --porcelain)" ]; then
+            git add .
+            git commit -m "fix(ci): AI autofix pytest failures"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push changes to PR branch
+        if: steps.commit.outputs.changed == 'true' && github.event_name == 'issue_comment'
+        run: git push origin HEAD:${{ steps.pr.outputs.head_ref }}
+
+      - name: Push changes to workflow dispatch ref
+        if: steps.commit.outputs.changed == 'true' && github.event_name == 'workflow_dispatch'
+        run: git push origin HEAD:${{ inputs.target_ref }}
+
+      - name: Final pytest
+        env:
+          ADMIN_USERNAME: Samandar2212
+          ADMIN_PASSWORD: ci-test-password
+          AUTH_SECRET: ci-test-secret
+          SHARIPOVAI_DISABLE_AUTH: "1"
+          SHARIPOVAI_DATA_DIR: ${{ github.workspace }}/.ci-data
+        run: python -m pytest
+
+      - name: Upload pytest log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-autofix-log
+          path: pytest-autofix.log
+          if-no-files-found: ignore
+
+      - name: Comment result on PR
+        if: always() && github.event_name == 'issue_comment'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const changed = '${{ steps.commit.outputs.changed }}' === 'true';
+            const conclusion = '${{ job.status }}';
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              body: `AI Autofix finished.\n\n- Changed files committed: ${changed}\n- Job status: ${conclusion}\n- Check Actions log/artifact: pytest-autofix-log\n\nIf tests still fail, comment \`/ai-autofix continue\` and I will run another pass.`
+            });
