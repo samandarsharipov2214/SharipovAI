@@ -174,10 +174,22 @@
       const text = String(input?.value || '').trim();
       if (!text) return;
       appendChat(bot, 'user', text);
-      const answer = generateAnswer(bot, text);
-      appendChat(bot, 'ai', answer);
+      const fallback = generateAnswer(bot, text);
+      appendChat(bot, 'ai', fallback);
       appendAction(bot, `ответил в чате: ${text.slice(0, 60)}`, 'CHAT');
       heartbeat(bot, `ответил в чате ${clock()}`);
+      fetch('/api/bot-network/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store',
+        body: JSON.stringify({ bot, message: text }),
+      })
+        .then((response) => (response.ok ? response.json() : null))
+        .then((payload) => {
+          if (payload?.reply) appendChat(bot, 'ai', payload.reply);
+          renderChat(modal, bot);
+        })
+        .catch(() => {});
       setTimeout(() => {
         renderChat(modal, bot);
         renderActions(modal, bot);

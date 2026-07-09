@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from persistence_paths import durable_data_path
 from profitability_gate import evaluate_profitability_candidate
 from sharipovai_constitution import EXECUTION_MODE, virtual_account_state
 from trading_intelligence import trade_gate
@@ -42,7 +43,10 @@ SOURCE_RU = {
 def paper_state_file() -> Path:
     """Backward-compatible env name; stores virtual account execution state."""
 
-    return Path(os.getenv("VIRTUAL_ACCOUNT_STATE_FILE", os.getenv("PAPER_ACTIVITY_STATE_FILE", DEFAULT_STATE_FILE)))
+    legacy = os.getenv("PAPER_ACTIVITY_STATE_FILE")
+    if legacy and not os.getenv("VIRTUAL_ACCOUNT_STATE_FILE"):
+        return Path(legacy)
+    return durable_data_path("VIRTUAL_ACCOUNT_STATE_FILE", DEFAULT_STATE_FILE)
 
 
 def paper_tick_seconds() -> int:
@@ -234,7 +238,7 @@ class PaperActivityEngine:
         trades = state.setdefault("trades", [])
         trades.append(trade)
         state["cash"] = round(float(state.get("cash", 10000.0)) - fee, 4)
-        state["equity"] = round(float(state.get("equity", 10000.0)) - fee, 4)
+        state["equity"] = round(float(state.get("cash", state.get("equity", 10000.0))) + _open_expected_value(state), 4)
         return trade
 
     def _close_oldest_open(self, state: dict[str, Any], now: int) -> dict[str, Any] | None:
@@ -254,7 +258,7 @@ class PaperActivityEngine:
         trade["close_reason_ru"] = "закрытие по управлению прибыльностью и комиссии"
         trade["source_ru"] = source_ru(str(trade.get("source", "virtual_account_execution_engine")))
         state["cash"] = round(float(state.get("cash", 10000.0)) + trade["net_pnl"], 4)
-        state["equity"] = round(float(state.get("equity", 10000.0)) + trade["net_pnl"], 4)
+        state["equity"] = round(float(state.get("cash", 10000.0)) + _open_expected_value(state), 4)
         return trade
 
     def _summary(self, state: dict[str, Any]) -> dict[str, Any]:
@@ -262,6 +266,8 @@ class PaperActivityEngine:
         open_count = len([trade for trade in trades if trade.get("status") == "OPEN"])
         closed_count = len([trade for trade in trades if trade.get("status") == "CLOSED"])
         net_pnl = round(sum(float(trade.get("net_pnl", 0.0) or 0.0) for trade in trades), 4)
+        closed_net_pnl = round(sum(float(trade.get("net_pnl", 0.0) or 0.0) for trade in trades if trade.get("status") == "CLOSED"), 4)
+        expected_open_net_pnl = round(sum(float(trade.get("expected_net_usdt", 0.0) or 0.0) for trade in trades if trade.get("status") == "OPEN"), 4)
         total_fees = round(sum(float(trade.get("fee", 0.0) or 0.0) for trade in trades), 4)
         profitable_closed = len([trade for trade in trades if trade.get("status") == "CLOSED" and float(trade.get("net_pnl", 0.0) or 0.0) > 0])
         losing_closed = len([trade for trade in trades if trade.get("status") == "CLOSED" and float(trade.get("net_pnl", 0.0) or 0.0) < 0])
@@ -276,6 +282,10 @@ class PaperActivityEngine:
             "losing_closed": losing_closed,
             "skipped_count": int(state.get("skipped_count", 0) or 0),
             "net_pnl": net_pnl,
+            "closed_net_pnl": closed_net_pnl,
+            "expected_open_net_pnl": expected_open_net_pnl,
+            "cash": round(float(state.get("cash", 10000.0) or 10000.0), 4),
+            "equity": round(float(state.get("cash", 10000.0) or 10000.0) + expected_open_net_pnl, 4),
             "total_fees": total_fees,
             "last_reason": last_reason,
             "last_reason_ru": str(state.get("last_reason_ru", reason_ru(last_reason))),
@@ -379,6 +389,10 @@ def _migrate_state(state: dict[str, Any]) -> dict[str, Any]:
             if trade.get("close_reason") == "virtual_account_mark_to_market":
                 trade["close_reason_ru"] = "виртуальная переоценка и закрытие старой позиции"
     return migrated
+
+
+def _open_expected_value(state: dict[str, Any]) -> float:
+    return round(sum(float(trade.get("expected_net_usdt", 0.0) or 0.0) for trade in state.get("trades", []) if isinstance(trade, dict) and trade.get("status") == "OPEN"), 4)
 
 
 def _safe_gate_payload(payload: dict[str, Any] | None) -> dict[str, Any]:

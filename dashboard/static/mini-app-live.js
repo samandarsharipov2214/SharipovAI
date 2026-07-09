@@ -319,10 +319,11 @@
 
   async function loadPaperActivity() {
     try {
-      const response = await fetch('/api/paper-activity/state', { cache: 'no-store' });
+      const response = await fetch('/api/virtual-account/trades', { cache: 'no-store' });
       if (!response.ok) return;
       const payload = await response.json();
-      renderPaperState(payload.state || {}, payload.autorun || {});
+      const state = { summary: payload.summary || {}, trades: Array.isArray(payload.trades) ? payload.trades : [] };
+      renderPaperState(state, payload.autorun || {});
     } catch (_) {}
   }
 
@@ -381,7 +382,7 @@
   }
 
   async function runDemoCommand(command) {
-    const response = await fetch('/api/demo/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, cache: 'no-store', body: JSON.stringify({ message: command }) });
+    const response = await fetch('/api/demo/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, cache: 'no-store', body: JSON.stringify({ message: command, persist: true }) });
     if (!response.ok) throw new Error('command failed');
     return response.json();
   }
