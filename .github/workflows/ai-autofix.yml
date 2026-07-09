@@ -25,30 +25,37 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'issue_comment' &&
-       github.event.issue.pull_request &&
        contains(github.event.comment.body, '/ai-autofix') &&
        github.actor == 'samandarsharipov2214')
     runs-on: ubuntu-latest
 
     steps:
-      - name: Resolve target branch from PR comment
-        id: pr
+      - name: Resolve target from comment
+        id: target
         if: github.event_name == 'issue_comment'
         uses: actions/github-script@v7
         with:
           script: |
             const {owner, repo} = context.repo;
-            const pull_number = context.payload.issue.number;
-            const pr = await github.rest.pulls.get({owner, repo, pull_number});
-            core.setOutput('head_ref', pr.data.head.ref);
-            core.setOutput('head_repo', pr.data.head.repo.full_name);
+            const issue = context.payload.issue;
+            if (issue.pull_request) {
+              const pull_number = issue.number;
+              const pr = await github.rest.pulls.get({owner, repo, pull_number});
+              core.setOutput('ref', pr.data.head.ref);
+              core.setOutput('repo', pr.data.head.repo.full_name);
+              core.setOutput('is_pr', 'true');
+            } else {
+              core.setOutput('ref', 'main');
+              core.setOutput('repo', `${owner}/${repo}`);
+              core.setOutput('is_pr', 'false');
+            }
 
-      - name: Checkout PR branch
+      - name: Checkout comment target
         if: github.event_name == 'issue_comment'
         uses: actions/checkout@v4
         with:
-          repository: ${{ steps.pr.outputs.head_repo }}
-          ref: ${{ steps.pr.outputs.head_ref }}
+          repository: ${{ steps.target.outputs.repo }}
+          ref: ${{ steps.target.outputs.ref }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Checkout workflow dispatch ref
@@ -97,9 +104,9 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Push changes to PR branch
+      - name: Push changes to comment target
         if: steps.commit.outputs.changed == 'true' && github.event_name == 'issue_comment'
-        run: git push origin HEAD:${{ steps.pr.outputs.head_ref }}
+        run: git push origin HEAD:${{ steps.target.outputs.ref }}
 
       - name: Push changes to workflow dispatch ref
         if: steps.commit.outputs.changed == 'true' && github.event_name == 'workflow_dispatch'
@@ -122,7 +129,7 @@ jobs:
           path: pytest-autofix.log
           if-no-files-found: ignore
 
-      - name: Comment result on PR
+      - name: Comment result
         if: always() && github.event_name == 'issue_comment'
         uses: actions/github-script@v7
         with:
@@ -133,5 +140,5 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.payload.issue.number,
-              body: `AI Autofix finished.\n\n- Changed files committed: ${changed}\n- Job status: ${conclusion}\n- Check Actions log/artifact: pytest-autofix-log\n\nIf tests still fail, comment \`/ai-autofix continue\` and I will run another pass.`
+              body: `AI Autofix finished.\n\n- Target ref: ${{ steps.target.outputs.ref }}\n- Changed files committed: ${changed}\n- Job status: ${conclusion}\n- Check Actions log/artifact: pytest-autofix-log\n\nIf tests still fail, comment \`/ai-autofix continue\` and I will run another pass.`
             });
