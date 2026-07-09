@@ -134,8 +134,9 @@ class PaperActivityEngine:
 
         If the web process was asleep or no scheduler called tick, the first
         state request can safely catch up a bounded number of virtual-only
-        actions. This is not fake activity: every catch-up tick is timestamped,
-        gated, fee-counted and visible in status.
+        actions. Empty-state bootstrap is deliberately independent from the
+        normal catch-up cap, because a cap of 1 caused the UI to show only one
+        trade after redeploy.
         """
 
         now = int(time.time()) if now is None else int(now)
@@ -143,7 +144,7 @@ class PaperActivityEngine:
         state = self._load()
         last_tick = int(state.get("last_tick_at", 0) or 0)
         if last_tick <= 0:
-            count = min(limit, bootstrap_ticks())
+            count = bootstrap_ticks()
             start_at = now - paper_tick_seconds() * max(0, count - 1)
             results = [self.tick(force=True, now=start_at + paper_tick_seconds() * index) for index in range(count)]
             final_state = self._load()
@@ -151,7 +152,7 @@ class PaperActivityEngine:
             final_state["last_reason_ru"] = f"восстановлена история после пустого состояния: {len(results)} виртуальных циклов"
             final_state["last_tick_status"] = results[-1].get("status", "ok") if results else "ok"
             self._save(final_state)
-            return {"status": "ok", "catch_up_ticks": len(results), "bootstrap": True, "reason_ru": final_state["last_reason_ru"], "last_result": results[-1] if results else None}
+            return {"status": "ok", "catch_up_ticks": len(results), "bootstrap": True, "bootstrap_independent_from_catch_up_cap": True, "reason_ru": final_state["last_reason_ru"], "last_result": results[-1] if results else None}
         elapsed = max(0, now - last_tick)
         due = min(limit, elapsed // paper_tick_seconds())
         results: list[dict[str, Any]] = []
