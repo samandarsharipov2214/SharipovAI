@@ -23,13 +23,13 @@ services:
         value: "1"
       - key: TELEGRAM_POLLING_ENABLED
         value: "0"
-      - key: PAPER_ACTIVITY_AUTORUN_ENABLED
+      - key: VIRTUAL_ACCOUNT_AUTORUN_ENABLED
         value: "1"
-      - key: PAPER_ACTIVITY_TICK_SECONDS
+      - key: VIRTUAL_ACCOUNT_TICK_SECONDS
         value: "60"
-      - key: PAPER_ACTIVITY_MAX_OPEN
+      - key: VIRTUAL_ACCOUNT_MAX_OPEN
         value: "8"
-      - key: PAPER_ACTIVITY_MAX_CATCH_UP_TICKS
+      - key: VIRTUAL_ACCOUNT_MAX_CATCH_UP_TICKS
         value: "48"
       - key: NEWS_AUTORUN_ENABLED
         value: "1"
