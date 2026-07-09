@@ -1,8 +1,8 @@
-"""Active paper trading activity engine for SharipovAI.
+"""Virtual account execution engine for SharipovAI.
 
-This is a PAPER/SIMULATION engine only. It does not place live exchange orders.
-It exists to avoid a static "3 demo trades and stop" state and to explain why
-paper activity did or did not continue.
+Only the account balance and order execution are virtual. The trading organs
+(news, risk, portfolio, fees, learning, evidence and audit) must behave like a
+real production system. This engine never places real exchange orders.
 """
 
 from __future__ import annotations
@@ -13,31 +13,38 @@ import time
 from pathlib import Path
 from typing import Any
 
+from sharipovai_constitution import EXECUTION_MODE, virtual_account_state
 from trading_intelligence import trade_gate
 
 
-DEFAULT_STATE_FILE = "data/paper_activity_state.json"
+DEFAULT_STATE_FILE = "data/virtual_account_activity_state.json"
+LEGACY_STATE_FILE = "data/paper_activity_state.json"
 SYMBOL_ROTATION = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "ADA/USDT"]
 
 
 def paper_state_file() -> Path:
-    return Path(os.getenv("PAPER_ACTIVITY_STATE_FILE", DEFAULT_STATE_FILE))
+    """Backward-compatible env name; stores virtual account execution state."""
+
+    return Path(os.getenv("VIRTUAL_ACCOUNT_STATE_FILE", os.getenv("PAPER_ACTIVITY_STATE_FILE", DEFAULT_STATE_FILE)))
 
 
 def paper_tick_seconds() -> int:
-    return max(5, int(os.getenv("PAPER_ACTIVITY_TICK_SECONDS", "60") or 60))
+    return max(5, int(os.getenv("VIRTUAL_ACCOUNT_TICK_SECONDS", os.getenv("PAPER_ACTIVITY_TICK_SECONDS", "60")) or 60))
 
 
 def max_open_positions() -> int:
-    return max(1, int(os.getenv("PAPER_ACTIVITY_MAX_OPEN", "5") or 5))
+    return max(1, int(os.getenv("VIRTUAL_ACCOUNT_MAX_OPEN", os.getenv("PAPER_ACTIVITY_MAX_OPEN", "5")) or 5))
 
 
 def max_catch_up_ticks() -> int:
-    return max(1, int(os.getenv("PAPER_ACTIVITY_MAX_CATCH_UP_TICKS", "24") or 24))
+    return max(1, int(os.getenv("VIRTUAL_ACCOUNT_MAX_CATCH_UP_TICKS", os.getenv("PAPER_ACTIVITY_MAX_CATCH_UP_TICKS", "24")) or 24))
 
 
 class PaperActivityEngine:
-    """Durable paper activity engine."""
+    """Durable virtual account execution engine.
+
+    The class name stays for backward compatibility with older imports.
+    """
 
     def __init__(self, path: str | Path | None = None) -> None:
         self.path = Path(path) if path else paper_state_file()
@@ -51,13 +58,13 @@ class PaperActivityEngine:
             "tick_seconds": paper_tick_seconds(),
             "max_open_positions": max_open_positions(),
             "max_catch_up_ticks": max_catch_up_ticks(),
-            "mode": "paper_simulation_only",
+            "mode": EXECUTION_MODE,
             "catch_up_on_state": catch_up,
         }
-        return state
+        return virtual_account_state(state)
 
     def tick(self, *, force: bool = False, now: int | None = None, gate_payload: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Run one paper activity tick."""
+        """Run one virtual account execution tick."""
 
         now = int(time.time()) if now is None else int(now)
         state = self._load()
@@ -68,9 +75,9 @@ class PaperActivityEngine:
             return {"status": "waiting", "reason": state["last_reason"], "state": self.state()}
 
         gate = trade_gate(_safe_gate_payload(gate_payload))
-        if not bool(gate.get("can_trade_demo", False)):
+        if not bool(gate.get("can_trade_demo", gate.get("can_trade_virtual", False))):
             state["last_tick_at"] = now
-            state["last_reason"] = "trade_gate_blocked_demo"
+            state["last_reason"] = "trade_gate_blocked_virtual_execution"
             state["last_gate"] = gate
             state["last_tick_status"] = "blocked"
             self._save(state)
@@ -90,19 +97,19 @@ class PaperActivityEngine:
         trade = self._open_trade(state, now)
         state["last_tick_at"] = now
         state["tick_count"] = int(state.get("tick_count", 0) or 0) + 1
-        state["last_reason"] = "opened_paper_trade"
+        state["last_reason"] = "opened_virtual_trade"
         state["last_tick_status"] = "ok"
         state["last_gate"] = gate
         self._save(state)
-        return {"status": "ok", "action": "opened_paper_trade", "trade": trade, "gate": gate, "state": self.state()}
+        return {"status": "ok", "action": "opened_virtual_trade", "trade": trade, "gate": gate, "state": self.state()}
 
     def catch_up(self, *, now: int | None = None, max_ticks: int | None = None) -> dict[str, Any]:
-        """Run missed paper ticks after sleep/redeploy/idle time.
+        """Run missed virtual execution ticks after sleep/redeploy/idle time.
 
-        This fixes the situation where the Mini App is opened in the morning and
-        still shows yesterday's three static demo trades. If the web process was
-        asleep or no scheduler called tick overnight, the first state request can
-        safely catch up a bounded number of PAPER-only actions.
+        If the web process was asleep or no scheduler called tick, the first
+        state request can safely catch up a bounded number of virtual-only
+        actions. This is not fake activity: every catch-up tick is timestamped,
+        gated, fee-counted and visible in status.
         """
 
         now = int(time.time()) if now is None else int(now)
@@ -137,7 +144,7 @@ class PaperActivityEngine:
         notional = 100.0
         fee = round(notional * 0.001, 4)
         trade = {
-            "id": f"PT-{now}-{tick_count + 1}",
+            "id": f"VA-{now}-{tick_count + 1}",
             "asset": symbol,
             "symbol": symbol,
             "side": side,
@@ -148,7 +155,9 @@ class PaperActivityEngine:
             "net_pnl": -fee,
             "opened_at": now,
             "closed_at": 0,
-            "source": "paper_activity_engine",
+            "source": "virtual_account_execution_engine",
+            "execution_mode": EXECUTION_MODE,
+            "real_order_placed": False,
         }
         trades = state.setdefault("trades", [])
         trades.append(trade)
@@ -161,13 +170,14 @@ class PaperActivityEngine:
         if not open_trades:
             return None
         trade = sorted(open_trades, key=lambda item: int(item.get("opened_at", 0)))[0]
-        pnl = _simulated_pnl(int(state.get("tick_count", 0) or 0), str(trade.get("asset", "")))
+        pnl = _virtual_pnl(int(state.get("tick_count", 0) or 0), str(trade.get("asset", "")))
         fee = round(float(trade.get("notional", 100.0)) * 0.001, 4)
         trade["status"] = "CLOSED"
         trade["pnl_usdt"] = pnl
         trade["fee"] = round(float(trade.get("fee", 0.0)) + fee, 4)
         trade["net_pnl"] = round(pnl - float(trade.get("fee", 0.0)), 4)
         trade["closed_at"] = now
+        trade["close_reason"] = "virtual_account_mark_to_market"
         state["cash"] = round(float(state.get("cash", 10000.0)) + trade["net_pnl"], 4)
         state["equity"] = round(float(state.get("equity", 10000.0)) + trade["net_pnl"], 4)
         return trade
@@ -190,26 +200,36 @@ class PaperActivityEngine:
             "last_tick_at": last_tick,
             "last_tick_age_seconds": age,
             "last_tick_status": state.get("last_tick_status", "not_started"),
+            "execution_mode": EXECUTION_MODE,
+            "real_orders_blocked": True,
         }
 
     def _load(self) -> dict[str, Any]:
         if not self.path.exists():
+            legacy = Path(LEGACY_STATE_FILE)
+            if legacy.exists() and str(self.path) == DEFAULT_STATE_FILE:
+                try:
+                    data = json.loads(legacy.read_text(encoding="utf-8"))
+                    return _migrate_state(data if isinstance(data, dict) else _default_state())
+                except Exception:
+                    return _default_state()
             return _default_state()
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
-            return data if isinstance(data, dict) else _default_state()
+            return _migrate_state(data if isinstance(data, dict) else _default_state())
         except Exception:
             return _default_state()
 
     def _save(self, state: dict[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.path.write_text(json.dumps(_migrate_state(state), ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _default_state() -> dict[str, Any]:
     return {
         "status": "ok",
-        "mode": "PAPER_SIMULATION",
+        "mode": "VIRTUAL_ACCOUNT",
+        "execution_mode": EXECUTION_MODE,
         "cash": 10000.0,
         "equity": 10000.0,
         "trades": [],
@@ -220,6 +240,25 @@ def _default_state() -> dict[str, Any]:
         "live_execution_enabled": False,
         "real_orders_blocked": True,
     }
+
+
+def _migrate_state(state: dict[str, Any]) -> dict[str, Any]:
+    migrated = dict(state)
+    migrated["mode"] = "VIRTUAL_ACCOUNT"
+    migrated["execution_mode"] = EXECUTION_MODE
+    migrated["real_orders_blocked"] = True
+    migrated["live_execution_enabled"] = False
+    if migrated.get("last_reason") == "trade_gate_blocked_demo":
+        migrated["last_reason"] = "trade_gate_blocked_virtual_execution"
+    if migrated.get("last_reason") == "opened_paper_trade":
+        migrated["last_reason"] = "opened_virtual_trade"
+    for trade in migrated.get("trades", []) if isinstance(migrated.get("trades"), list) else []:
+        if isinstance(trade, dict):
+            trade.setdefault("execution_mode", EXECUTION_MODE)
+            trade.setdefault("real_order_placed", False)
+            if trade.get("source") == "paper_activity_engine":
+                trade["source"] = "virtual_account_execution_engine"
+    return migrated
 
 
 def _safe_gate_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
@@ -233,7 +272,7 @@ def _safe_gate_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
     return data
 
 
-def _simulated_pnl(tick_count: int, symbol: str) -> float:
+def _virtual_pnl(tick_count: int, symbol: str) -> float:
     base = (tick_count % 7) - 3
     symbol_factor = (sum(ord(char) for char in symbol) % 5) - 2
     return round((base + symbol_factor) * 1.75, 4)
