@@ -10,7 +10,34 @@ from typing import Any
 from fastapi import Body, FastAPI
 from fastapi.responses import HTMLResponse
 
+from learning.ai_learning_core import BOT_NAMES
 from learning.bot_communication import BotCommunicationNetwork
+
+
+CHAT_BOT_ALIASES = {
+    "general_controller": "general_controller",
+    "general controller": "general_controller",
+    "market_agent": "market_agent",
+    "market agent": "market_agent",
+    "news_agent": "news_agent",
+    "news agent": "news_agent",
+    "risk_engine": "risk_engine",
+    "risk engine": "risk_engine",
+    "portfolio_engine": "portfolio_engine",
+    "portfolio engine": "portfolio_engine",
+    "paper_trading_bot": "paper_trading_bot",
+    "paper trading bot": "paper_trading_bot",
+    "confidence_engine": "confidence_engine",
+    "confidence engine": "confidence_engine",
+    "consensus_engine": "consensus_engine",
+    "consensus engine": "consensus_engine",
+    "stress_bot": "stress_bot",
+    "stress bot": "stress_bot",
+    "learning_engine": "learning_engine",
+    "learning engine": "learning_engine",
+    "security_guard": "security_guard",
+    "security guard": "security_guard",
+}
 
 
 def install_bot_communication_api(app: FastAPI) -> None:
@@ -67,34 +94,45 @@ def install_bot_communication_api(app: FastAPI) -> None:
             participants=participants if isinstance(participants, list) else None,
         )
 
-
     @app.post("/api/bot-network/chat")
     def bot_chat_api(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
         data = payload or {}
-        bot = str(data.get("bot", data.get("recipient", "general_controller")))
+        requested_bot = _chat_bot(str(data.get("bot", data.get("recipient", "general_controller"))))
         text = str(data.get("message", "")).strip()
         if not text:
             return {"status": "empty_message", "reply": "Напиши вопрос AI-боту."}
+
+        # The durable bot bus only accepts bot-to-bot messages and rejects
+        # sender == recipient. A Mini App user question to General Controller
+        # is persisted as Security Guard -> General Controller, while the
+        # payload marks it as a user-originated Mini App message for audits.
+        sender = "security_guard" if requested_bot == "general_controller" else "general_controller"
         sent = network().send_message(
-            sender="general_controller",
-            recipient=bot,
+            sender=sender,
+            recipient=requested_bot,
             message_type="question",
             topic="mini_app_chat",
-            payload={"text": text, "source": "mini_app"},
+            payload={"text": text, "source": "mini_app", "requested_bot": requested_bot, "user_message": True},
             priority="normal",
         )
-        reply = f"{bot}: вопрос сохранён в durable message bus. Я проверяю свою зону и отвечаю по live state, а не только localStorage."
-        if sent.get("status") == "ok":
-            network().send_message(
-                sender=bot,
-                recipient="general_controller",
-                message_type="answer",
-                topic="mini_app_chat",
-                thread_id=str(sent.get("thread_id")),
-                payload={"text": reply, "question": text},
-                priority="normal",
-            )
-        return {"status": "ok", "reply": reply, "message": sent}
+        if sent.get("status") != "ok":
+            return {
+                "status": "not_saved",
+                "reply": "Вопрос не сохранён в durable bus. Проверь Bot Communication DB и имя AI-бота.",
+                "message": sent,
+            }
+
+        reply = f"{requested_bot}: вопрос сохранён в durable message bus. Я проверяю свою зону и отвечаю по live state, а не только localStorage."
+        answer = network().send_message(
+            sender=requested_bot,
+            recipient=sender,
+            message_type="answer",
+            topic="mini_app_chat",
+            thread_id=str(sent.get("thread_id")),
+            payload={"text": reply, "question": text, "source": "mini_app"},
+            priority="normal",
+        )
+        return {"status": "ok" if answer.get("status") == "ok" else "partial", "reply": reply, "message": sent, "answer": answer}
 
     @app.get("/api/bot-network/inbox/{bot_name}")
     def inbox_api(bot_name: str, unread_only: bool = False) -> dict[str, Any]:
@@ -111,6 +149,15 @@ def install_bot_communication_api(app: FastAPI) -> None:
     @app.get("/bot-network", response_class=HTMLResponse)
     def bot_network_page() -> HTMLResponse:
         return HTMLResponse(_render_bot_network(network().health()))
+
+
+def _chat_bot(value: str) -> str:
+    """Normalize Mini App display names to durable bot IDs."""
+
+    key = value.strip().lower().replace("-", "_").replace(" ", "_")
+    alias_key = value.strip().lower().replace("-", " ").replace("_", " ")
+    bot = CHAT_BOT_ALIASES.get(key) or CHAT_BOT_ALIASES.get(alias_key) or key
+    return bot if bot in BOT_NAMES else "general_controller"
 
 
 def _render_bot_network(health: dict[str, Any]) -> str:
