@@ -1,8 +1,9 @@
 """SharipovAI constitution and runtime discipline.
 
-These rules are intentionally simple and import-safe. They define how every bot
-must behave even in demo/sandbox: demo protects real funds, but the AI must train
-as if every decision could affect real capital.
+The only simulated part of SharipovAI is the account balance/execution layer:
+orders are virtual and real money is protected. Everything else must behave as a
+real production AI system: news, risk, portfolio, fees, learning, evidence,
+Telegram, website, realtime status, and audit.
 """
 
 from __future__ import annotations
@@ -10,15 +11,17 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-CONSTITUTION_VERSION = "2026.07.live-discipline-v1"
-CAPITAL_MODE = "paper_realism"
+CONSTITUTION_VERSION = "2026.07.virtual-account-production-v1"
+CAPITAL_MODE = "virtual_account"
+EXECUTION_MODE = "virtual_execution_only"
 
 PRINCIPLES: tuple[str, ...] = (
-    "Demo is a safety wrapper for Samandar, not a permission to be careless.",
+    "Only the account balance and order execution are virtual; all AI organs must operate with production discipline.",
     "Every AI decision must be treated as if real capital, reputation, and future habits are at risk.",
     "No fake activity: never show template timestamps, fake progress, or 'working' without last_seen evidence.",
-    "Every agent must expose last_seen, last_action, confidence, risk impact, and learning consequence.",
-    "If data is simulated, label it as paper_realism and still calculate risk, fees, drawdown, and opportunity cost.",
+    "Every agent must expose last_seen, last_action, confidence, risk impact, data freshness, and learning consequence.",
+    "Virtual execution must still calculate risk, fees, drawdown, slippage assumptions, opportunity cost, and prevented loss.",
+    "News, source monitoring, risk, audit, Telegram, and UI must use real-time status and must not fall back to static demo content silently.",
     "If uncertainty is high, say WAIT/BLOCK before chasing profit.",
     "All errors must be sent to Learning/Evidence instead of being hidden.",
 )
@@ -37,14 +40,23 @@ def constitution_snapshot() -> dict[str, Any]:
         "status": "ok",
         "version": CONSTITUTION_VERSION,
         "capital_mode": CAPITAL_MODE,
-        "demo_meaning": "Демо защищает реальные деньги Самандара, но AI обязан тренироваться как при реальном капитале.",
+        "execution_mode": EXECUTION_MODE,
+        "virtual_account_meaning": "Только счёт и сделки виртуальные. Остальные органы AI обязаны работать как реальная production-система.",
         "forbidden": [
             "фейковые 00:00/00:01 журналы",
             "статичный статус без last_seen",
-            "отношение к demo как к игрушке",
+            "отношение к виртуальному счёту как к игрушке",
+            "подмена реального обновления статичными шаблонами",
             "скрытие ошибок вместо отправки в Learning/Evidence",
         ],
-        "required_agent_fields": ["last_seen", "last_action", "heartbeat_age_seconds", "capital_discipline", "evidence_mode"],
+        "required_agent_fields": [
+            "last_seen",
+            "last_action",
+            "heartbeat_age_seconds",
+            "data_freshness_seconds",
+            "capital_discipline",
+            "evidence_mode",
+        ],
         "principles": list(PRINCIPLES),
         "generated_at": now_iso(),
     }
@@ -61,13 +73,15 @@ def apply_agent_discipline(agent: dict[str, Any], *, index: int = 0, action: str
         {
             "constitution_version": CONSTITUTION_VERSION,
             "capital_mode": CAPITAL_MODE,
-            "capital_discipline": "treat_demo_as_real_capital_training",
-            "evidence_mode": "paper_realism_with_honest_labels",
+            "execution_mode": EXECUTION_MODE,
+            "capital_discipline": "virtual_account_real_system_discipline",
+            "evidence_mode": "production_evidence_with_virtual_execution",
             "last_seen": now,
             "last_report_at": now,
             "heartbeat_age_seconds": heartbeat_age,
+            "data_freshness_seconds": heartbeat_age,
             "last_action": action or _default_action(str(agent.get("name", "AI Agent"))),
-            "status_explanation": "Работает в безопасном paper/demo, но риск считается как для реального капитала.",
+            "status_explanation": "Счёт виртуальный, но орган AI обязан работать как production-система с реальной дисциплиной риска.",
         }
     )
     return disciplined
@@ -75,9 +89,9 @@ def apply_agent_discipline(agent: dict[str, Any], *, index: int = 0, action: str
 
 def _default_action(name: str) -> str:
     if "Risk" in name:
-        return "пересчитал риск и проверил запрет LIVE"
+        return "пересчитал риск и проверил запрет реального исполнения"
     if "News" in name:
-        return "проверил подтверждение новостей перед торговым сигналом"
+        return "обновил источники и проверил подтверждение новостей перед сигналом"
     if "Market" in name:
         return "обновил market-сценарий и передал уверенность контроллёру"
     if "Learning" in name:
@@ -85,24 +99,32 @@ def _default_action(name: str) -> str:
     if "Security" in name:
         return "подтвердил защиту от реальных ордеров без разрешения"
     if "Portfolio" in name:
-        return "пересчитал капитал, комиссии и чистый PnL"
+        return "пересчитал виртуальный капитал, комиссии и чистый PnL"
     if "Controller" in name:
-        return "сверил работу агентов, цель дня и конфликт решений"
+        return "сверил работу органов AI, цель дня и конфликт решений"
     return "прошёл live-check и отправил статус General Controller"
 
 
-def paper_realism_state(state: dict[str, Any]) -> dict[str, Any]:
-    """Mark a demo state as serious paper-realism training."""
+def virtual_account_state(state: dict[str, Any]) -> dict[str, Any]:
+    """Mark a state as virtual-account execution with real AI discipline."""
 
     enriched = dict(state)
     enriched.update(
         {
             "capital_mode": CAPITAL_MODE,
+            "execution_mode": EXECUTION_MODE,
             "constitution_version": CONSTITUTION_VERSION,
-            "demo_warning": "Это paper/demo для безопасности пользователя, но AI обязан считать риск как при реальном капитале.",
+            "virtual_account_notice": "Счёт и исполнение виртуальные. Новости, риск, обучение, Evidence, аудит и интерфейсы работают как real-system органы.",
             "last_updated_at": now_iso(),
             "real_money_protected": True,
             "carelessness_allowed": False,
+            "fake_static_demo_allowed": False,
         }
     )
     return enriched
+
+
+def paper_realism_state(state: dict[str, Any]) -> dict[str, Any]:
+    """Backward-compatible alias: use virtual_account_state in new code."""
+
+    return virtual_account_state(state)
