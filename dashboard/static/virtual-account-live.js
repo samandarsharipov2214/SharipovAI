@@ -2,6 +2,8 @@
   const START_BALANCE = 10000;
   const fmt = (value) => Number(value || 0).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const $ = (selector) => document.querySelector(selector);
+  let lastEquity = START_BALANCE;
+  let refreshInFlight = false;
 
   function setText(selector, value) {
     const element = $(selector);
@@ -36,7 +38,27 @@
     }).join('');
   }
 
+  function equityFrom(state, summary) {
+    const stateEquity = Number(state.equity);
+    const summaryEquity = Number(summary.equity);
+    const netPnl = Number(summary.net_pnl ?? 0);
+    if (Number.isFinite(summaryEquity) && summaryEquity > 0) return summaryEquity;
+    if (Number.isFinite(stateEquity) && stateEquity > 0) return stateEquity;
+    return START_BALANCE + netPnl;
+  }
+
+  function protectEquityText() {
+    const element = $('#portfolio-equity');
+    if (!element || !Number.isFinite(lastEquity) || lastEquity <= 0) return;
+    const current = Number(String(element.textContent || '').replace(/[^0-9,.-]/g, '').replace(',', '.'));
+    if (!Number.isFinite(current) || current <= 0) {
+      element.textContent = `${fmt(lastEquity)} USDT`;
+    }
+  }
+
   async function refreshVirtualAccount() {
+    if (refreshInFlight) return;
+    refreshInFlight = true;
     try {
       const response = await fetch('/api/virtual-account/state', { cache: 'no-store' });
       if (!response.ok) return;
@@ -45,9 +67,9 @@
       const summary = state.summary || {};
       const netPnl = Number(summary.net_pnl ?? 0);
       const totalFees = Number(summary.total_fees ?? 0);
-      const equity = Number.isFinite(Number(state.equity)) && Number(state.equity) !== START_BALANCE
-        ? Number(state.equity)
-        : START_BALANCE + netPnl;
+      const expectedOpen = Number(summary.expected_open_net_pnl ?? 0);
+      const equity = equityFrom(state, summary);
+      lastEquity = equity;
 
       setText('#portfolio-equity', `${fmt(equity)} USDT`);
       setText('#portfolio-pnl', `${netPnl >= 0 ? '+' : ''}${fmt(netPnl)} USDT`);
@@ -61,12 +83,21 @@
       setText('#exchange-live', 'Заблокировано');
       setText('#hero-decision-mini', summary.last_tick_status === 'blocked' ? 'WAIT/BLOCK' : 'VIRTUAL');
       setText('#mini-paper-last-refresh', `${clock()} · ${summary.last_reason_ru || summary.last_reason || 'virtual account updated'} · trades ${summary.trade_count || 0}`);
+      setText('#exchange-preview', `Ожидаемая открытая позиция: ${expectedOpen >= 0 ? '+' : ''}${fmt(expectedOpen)} USDT`);
       renderTrades(state.trades || []);
-    } catch (_) {}
+    } catch (_) {
+      protectEquityText();
+    } finally {
+      refreshInFlight = false;
+    }
   }
 
   window.addEventListener('DOMContentLoaded', () => {
     refreshVirtualAccount();
+    const equityNode = $('#portfolio-equity');
+    if (equityNode && window.MutationObserver) {
+      new MutationObserver(protectEquityText).observe(equityNode, { childList: true, characterData: true, subtree: true });
+    }
     setInterval(refreshVirtualAccount, 5000);
   });
 })();
