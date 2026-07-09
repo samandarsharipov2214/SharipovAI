@@ -1,7 +1,8 @@
 """Trading intelligence layer: market regime and strict trade gate.
 
-This is a safety-first layer. It does not place orders. It answers whether the
-system is allowed to trade in DEMO, and why LIVE must remain locked.
+This is a safety-first layer. It does not place real exchange orders. It answers
+whether the system may use virtual-account execution and why real/live execution
+must remain locked.
 """
 
 from __future__ import annotations
@@ -43,7 +44,7 @@ def market_regime(payload: dict[str, Any] | None = None) -> dict[str, Any]:
     elif abs(trend_score) >= 0.65 and volatility < 6:
         regime = "trend"
         risk = "medium"
-        action = "DEMO_ONLY"
+        action = "VIRTUAL_ONLY"
     elif volatility <= 2 and abs(trend_score) < 0.35:
         regime = "range_low_volatility"
         risk = "medium"
@@ -70,7 +71,7 @@ def market_regime(payload: dict[str, Any] | None = None) -> dict[str, Any]:
 
 
 def trade_gate(payload: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Strict safety gate: can SharipovAI trade now?"""
+    """Strict safety gate: can SharipovAI use virtual execution now?"""
 
     payload = payload or {}
     regime = market_regime(payload)
@@ -85,7 +86,7 @@ def trade_gate(payload: dict[str, Any] | None = None) -> dict[str, Any]:
     warnings: list[str] = []
 
     if live_requested:
-        blockers.append("LIVE trading заблокирован: нужен ручной unlock и отдельная проверка безопасности.")
+        blockers.append("REAL/LIVE execution заблокирован: нужен ручной unlock и отдельная проверка безопасности.")
     if regime["recommended_action"] in {"BLOCK", "WAIT"}:
         blockers.append(f"Market Regime AI говорит {regime['recommended_action']}: {regime['explanation']}")
     if ai_score < 70:
@@ -97,14 +98,16 @@ def trade_gate(payload: dict[str, Any] | None = None) -> dict[str, Any]:
     if not exchange_ok:
         blockers.append("Exchange/API нестабилен или не подтверждён.")
     if not has_strategy_approval:
-        warnings.append("Стратегия не прошла полный backtest/paper pipeline. Разрешён только demo-watch режим.")
+        warnings.append("Стратегия не прошла полный backtest/virtual-account pipeline. Разрешён только virtual-watch режим.")
 
-    decision = "BLOCK" if blockers else "DEMO_ONLY" if warnings or not has_strategy_approval else "DEMO_ALLOWED"
+    decision = "BLOCK" if blockers else "VIRTUAL_ONLY" if warnings or not has_strategy_approval else "VIRTUAL_ALLOWED"
     return {
         "status": "ok",
         "decision": decision,
-        "can_trade_demo": decision in {"DEMO_ONLY", "DEMO_ALLOWED"},
+        "can_trade_virtual": decision in {"VIRTUAL_ONLY", "VIRTUAL_ALLOWED"},
+        "can_trade_demo": decision in {"VIRTUAL_ONLY", "VIRTUAL_ALLOWED"},  # backward compatibility
         "can_trade_live": False,
+        "can_trade_real": False,
         "blockers": blockers,
         "warnings": warnings,
         "market_regime": regime,
@@ -149,7 +152,7 @@ def _regime_explanation(regime: str) -> str:
         "news_shock": "новостной шок — цена может резко двигаться без технического подтверждения",
         "panic": "паника/высокая волатильность — риск ложных входов и ликвидаций высокий",
         "bad_execution": "плохие условия исполнения — спред/ликвидность могут съесть прибыль",
-        "trend": "есть тренд, можно смотреть только demo при подтверждении риска",
+        "trend": "есть тренд, можно смотреть только виртуальное исполнение при подтверждении риска",
         "range_low_volatility": "боковик/низкая волатильность — лучше ждать сильного сигнала",
         "mixed": "смешанный рынок — нужен дополнительный консенсус AI",
     }
@@ -158,7 +161,7 @@ def _regime_explanation(regime: str) -> str:
 
 def _human_answer(decision: str, blockers: list[str], warnings: list[str]) -> str:
     if decision == "BLOCK":
-        return "НЕТ. Торговать нельзя. " + " ".join(blockers[:3])
-    if decision == "DEMO_ONLY":
-        return "ТОЛЬКО DEMO. LIVE запрещён. " + " ".join(warnings[:2])
-    return "Можно только DEMO при сохранении лимитов риска. LIVE всё равно запрещён."
+        return "НЕТ. Реальную сделку и виртуальный вход нельзя открывать. " + " ".join(blockers[:3])
+    if decision == "VIRTUAL_ONLY":
+        return "ТОЛЬКО ВИРТУАЛЬНЫЙ СЧЁТ. Реальное исполнение запрещено. " + " ".join(warnings[:2])
+    return "Можно только на виртуальном счёте при сохранении лимитов риска. Реальное исполнение всё равно запрещено."
