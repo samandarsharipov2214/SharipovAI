@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import Body, FastAPI
 from fastapi.responses import HTMLResponse
 
+from paper_activity_autorun import paper_activity_autorun_status, start_paper_activity_autorun
 from paper_activity_engine import PaperActivityEngine
 
 
@@ -18,14 +19,23 @@ def install_paper_activity_api(app: FastAPI) -> None:
         return
     app.state.paper_activity_api_installed = True
 
+    @app.on_event("startup")
+    def paper_activity_startup() -> None:
+        app.state.paper_activity_autorun = start_paper_activity_autorun()
+
     @app.get("/api/paper-activity/state")
     def paper_state() -> dict[str, Any]:
-        return PaperActivityEngine().state()
+        return {"status": "ok", "state": PaperActivityEngine().state(catch_up=True), "autorun": paper_activity_autorun_status()}
 
     @app.post("/api/paper-activity/tick")
     def paper_tick(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
         data = payload or {}
         return PaperActivityEngine().tick(force=bool(data.get("force", False)), gate_payload=data.get("gate_payload") if isinstance(data.get("gate_payload"), dict) else None)
+
+    @app.post("/api/paper-activity/catch-up")
+    def paper_catch_up(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
+        data = payload or {}
+        return PaperActivityEngine().catch_up(max_ticks=int(data.get("max_ticks", 24) or 24))
 
     @app.post("/api/paper-activity/reset")
     def paper_reset() -> dict[str, Any]:
@@ -33,13 +43,14 @@ def install_paper_activity_api(app: FastAPI) -> None:
 
     @app.get("/paper-activity", response_class=HTMLResponse)
     def paper_activity_page() -> HTMLResponse:
-        return HTMLResponse(_render(PaperActivityEngine().state()))
+        return HTMLResponse(_render(PaperActivityEngine().state(catch_up=True), paper_activity_autorun_status()))
 
 
-def _render(state: dict[str, Any]) -> str:
+def _render(state: dict[str, Any], autorun: dict[str, Any] | None = None) -> str:
     summary = state.get("summary", {})
+    autorun = autorun or {}
     trades = "".join(_trade_row(trade) for trade in list(state.get("trades", []))[-30:]) or "<tr><td colspan='7'>Пока нет paper-сделок. Нажми tick.</td></tr>"
-    return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SharipovAI · Paper Activity</title><style>{_css()}</style></head><body><main><section class="card"><span class="ok">PAPER ONLY</span><h1>Paper Activity Engine</h1><p>Это активная demo/paper-симуляция. Реальные ордера заблокированы.</p><p><a href="/">Главная</a> · <a href="/api/paper-activity/state">JSON state</a></p></section><section class="card"><div class="grid"><div class="stat"><small>Trades</small><b>{summary.get('trade_count', 0)}</b></div><div class="stat"><small>Open</small><b>{summary.get('open_positions', 0)}</b></div><div class="stat"><small>Closed</small><b>{summary.get('closed_positions', 0)}</b></div><div class="stat"><small>Net PnL</small><b>{summary.get('net_pnl', 0)}</b></div><div class="stat"><small>Last reason</small><b>{escape(str(summary.get('last_reason', '')))}</b></div></div></section><section class="card"><h2>Как ускорить</h2><p>POST <code>/api/paper-activity/tick</code> с <code>{{"force": true}}</code> принудительно делает следующий paper tick.</p><p>Env: <code>PAPER_ACTIVITY_TICK_SECONDS</code>, <code>PAPER_ACTIVITY_MAX_OPEN</code>.</p></section><section class="card"><h2>Сделки</h2><table><thead><tr><th>ID</th><th>Asset</th><th>Side</th><th>Status</th><th>Notional</th><th>Net PnL</th><th>Source</th></tr></thead><tbody>{trades}</tbody></table></section></main></body></html>"""
+    return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SharipovAI · Paper Activity</title><style>{_css()}</style></head><body><main><section class="card"><span class="ok">PAPER ONLY</span><h1>Paper Activity Engine</h1><p>Это активная demo/paper-симуляция. Реальные ордера заблокированы.</p><p><a href="/">Главная</a> · <a href="/api/paper-activity/state">JSON state</a></p></section><section class="card"><div class="grid"><div class="stat"><small>Trades</small><b>{summary.get('trade_count', 0)}</b></div><div class="stat"><small>Open</small><b>{summary.get('open_positions', 0)}</b></div><div class="stat"><small>Closed</small><b>{summary.get('closed_positions', 0)}</b></div><div class="stat"><small>Net PnL</small><b>{summary.get('net_pnl', 0)}</b></div><div class="stat"><small>Last reason</small><b>{escape(str(summary.get('last_reason', '')))}</b></div><div class="stat"><small>Last tick age</small><b>{escape(str(summary.get('last_tick_age_seconds', '—')))}</b></div><div class="stat"><small>Autorun</small><b>{escape(str(autorun.get('status', 'unknown')))}</b></div><div class="stat"><small>Thread</small><b>{'alive' if autorun.get('thread_alive') else 'not alive'}</b></div></div></section><section class="card"><h2>Как ускорить</h2><p>POST <code>/api/paper-activity/tick</code> с <code>{{"force": true}}</code> принудительно делает следующий paper tick.</p><p>POST <code>/api/paper-activity/catch-up</code> догоняет пропущенные tick после ночи/сна сервера.</p><p>Env: <code>PAPER_ACTIVITY_AUTORUN_ENABLED</code>, <code>PAPER_ACTIVITY_TICK_SECONDS</code>, <code>PAPER_ACTIVITY_MAX_OPEN</code>, <code>PAPER_ACTIVITY_MAX_CATCH_UP_TICKS</code>.</p></section><section class="card"><h2>Сделки</h2><table><thead><tr><th>ID</th><th>Asset</th><th>Side</th><th>Status</th><th>Notional</th><th>Net PnL</th><th>Source</th></tr></thead><tbody>{trades}</tbody></table></section></main></body></html>"""
 
 
 def _trade_row(trade: dict[str, Any]) -> str:
