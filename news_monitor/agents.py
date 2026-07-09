@@ -10,9 +10,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .analyzer import analyze_items, demo_items
+from .analyzer import analyze_items
 from .models import NewsItem, NewsSource
 from .sources import default_sources
+from .storage import load_news_state
 
 
 @dataclass(frozen=True)
@@ -57,18 +58,33 @@ def agent_configs_payload() -> list[dict[str, object]]:
 
 
 def run_news_agents(raw_items: list[dict[str, object]] | None = None) -> dict[str, object]:
-    """Run all specialized news agents and aggregate their reports."""
+    """Run all specialized news agents and aggregate their reports.
+
+    If raw_items is None, use the latest saved real news state. Never inject
+    demo/sample items as if they were fresh live news.
+    """
 
     sources = default_sources()
-    items = analyze_items(raw_items or demo_items(), sources=sources)
+    raw = _latest_raw_items() if raw_items is None else list(raw_items)
+    items = analyze_items(raw, sources=sources)
     reports = [_run_agent(config, sources, items) for config in AGENT_CONFIGS]
-    supervisor = _supervisor_report(reports)
+    supervisor = _supervisor_report(reports, source_mode="saved_real_state" if raw_items is None else "provided_real_input")
     return {
         "status": "ok",
+        "source_mode": "saved_real_state" if raw_items is None else "provided_real_input",
         "supervisor": supervisor,
         "agents": reports,
         "configs": agent_configs_payload(),
     }
+
+
+def _latest_raw_items() -> list[dict[str, object]]:
+    state = load_news_state()
+    news = state.get("news") if isinstance(state, dict) else {}
+    items = news.get("items") if isinstance(news, dict) else []
+    if isinstance(items, list):
+        return [item for item in items if isinstance(item, dict)]
+    return []
 
 
 def _run_agent(config: NewsAgentConfig, sources: list[NewsSource], items: list[NewsItem]) -> dict[str, object]:
@@ -78,10 +94,10 @@ def _run_agent(config: NewsAgentConfig, sources: list[NewsSource], items: list[N
     urgent = [item for item in owned_items if item.urgency == "high"]
     confirmations = [item for item in owned_items if item.needs_confirmation]
     blocked = [item for item in owned_items if item.ai_action == "BLOCK_BUY"]
-    avg_credibility = round(sum(item.credibility_percent for item in owned_items) / max(len(owned_items), 1), 1)
+    avg_credibility = round(sum(item.credibility_percent for item in owned_items) / len(owned_items), 1) if owned_items else 0.0
     load_percent = min(round(len(owned_sources) / max(config.max_items_per_cycle, 1) * 100, 1), 100.0)
-    health_score = _agent_health(source_count=len(owned_sources), avg_credibility=avg_credibility, blocked=len(blocked), load_percent=load_percent)
-    status = "active" if owned_sources else "no_sources"
+    health_score = _agent_health(source_count=len(owned_sources), item_count=len(owned_items), avg_credibility=avg_credibility, blocked=len(blocked), load_percent=load_percent)
+    status = "active" if owned_sources and owned_items else "stale_no_items" if owned_sources else "no_sources"
     if load_percent > 85:
         status = "overloaded"
     if blocked:
@@ -105,7 +121,7 @@ def _run_agent(config: NewsAgentConfig, sources: list[NewsSource], items: list[N
     }
 
 
-def _supervisor_report(agent_reports: list[dict[str, object]]) -> dict[str, object]:
+def _supervisor_report(agent_reports: list[dict[str, object]], *, source_mode: str) -> dict[str, object]:
     total_sources = sum(int(report.get("source_count", 0)) for report in agent_reports)
     total_items = sum(int(report.get("item_count", 0)) for report in agent_reports)
     total_confirmations = sum(int(report.get("needs_confirmation", 0)) for report in agent_reports)
@@ -114,8 +130,11 @@ def _supervisor_report(agent_reports: list[dict[str, object]]) -> dict[str, obje
     avg_credibility = round(sum(float(report.get("average_credibility_percent", 0)) for report in agent_reports) / max(len(agent_reports), 1), 1)
     overloaded = [report for report in agent_reports if report.get("status") == "overloaded"]
     attention = [report for report in agent_reports if report.get("status") == "attention"]
+    stale = [report for report in agent_reports if report.get("status") == "stale_no_items"]
     decision = "NORMAL"
-    if total_blocked:
+    if total_items <= 0:
+        decision = "NO_FRESH_NEWS_DO_NOT_TRADE_FROM_NEWS"
+    elif total_blocked:
         decision = "BLOCK_BUY_AND_VERIFY"
     elif total_confirmations >= 3:
         decision = "VERIFY_BEFORE_ACTION"
@@ -123,6 +142,7 @@ def _supervisor_report(agent_reports: list[dict[str, object]]) -> dict[str, obje
         "id": "main_news_supervisor_ai",
         "name": "Main News Supervisor AI",
         "role": "Контролирует подкатегории новостей, нагрузку, достоверность и итоговое действие AI.",
+        "source_mode": source_mode,
         "agent_count": len(agent_reports),
         "total_sources": total_sources,
         "total_items": total_items,
@@ -132,18 +152,21 @@ def _supervisor_report(agent_reports: list[dict[str, object]]) -> dict[str, obje
         "block_buy": total_blocked,
         "overloaded_agents": [report["name"] for report in overloaded],
         "attention_agents": [report["name"] for report in attention],
+        "stale_agents": [report["name"] for report in stale],
         "decision": decision,
-        "assessment": _supervisor_assessment(avg_health, avg_credibility, total_confirmations, total_blocked, overloaded, attention),
+        "assessment": _supervisor_assessment(avg_health, avg_credibility, total_items, total_confirmations, total_blocked, overloaded, attention),
     }
 
 
-def _agent_health(*, source_count: int, avg_credibility: float, blocked: int, load_percent: float) -> int:
+def _agent_health(*, source_count: int, item_count: int, avg_credibility: float, blocked: int, load_percent: float) -> int:
     score = 70
     if source_count >= 5:
         score += 10
+    if item_count <= 0:
+        score -= 30
     if avg_credibility >= 70:
         score += 10
-    if avg_credibility < 55:
+    if item_count and avg_credibility < 55:
         score -= 12
     if blocked:
         score -= 8
@@ -158,11 +181,15 @@ def _agent_assessment(name: str, source_count: int, item_count: int, credibility
     if confirmations:
         return f"{name}: часть новостей требует подтверждения, средняя достоверность {credibility:.1f}%."
     if item_count:
-        return f"{name}: работает штатно, источников {source_count}, средняя достоверность {credibility:.1f}%."
-    return f"{name}: источники назначены, но новых материалов в текущем цикле нет."
+        return f"{name}: работает штатно, источников {source_count}, свежих материалов {item_count}, средняя достоверность {credibility:.1f}%."
+    if source_count:
+        return f"{name}: источники назначены, но свежих материалов нет. Нельзя показывать это как активный анализ."
+    return f"{name}: нет назначенных источников."
 
 
-def _supervisor_assessment(health: float, credibility: float, confirmations: int, blocked: int, overloaded: list[dict[str, object]], attention: list[dict[str, object]]) -> str:
+def _supervisor_assessment(health: float, credibility: float, total_items: int, confirmations: int, blocked: int, overloaded: list[dict[str, object]], attention: list[dict[str, object]]) -> str:
+    if total_items <= 0:
+        return "Главный News AI: свежих новостей нет. Торговые решения не должны опираться на новости до RSS/источников."
     if blocked:
         return "Главный News AI: обнаружены рискованные неподтверждённые новости. Торговые BUY-сигналы должны ждать проверки."
     if overloaded:
