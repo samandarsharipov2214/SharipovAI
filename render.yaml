@@ -19,6 +19,26 @@ services:
         sync: false
       - key: TELEGRAM_WEBHOOK_SECRET
         sync: false
+      - key: TELEGRAM_AUTO_SET_WEBHOOK
+        value: "1"
+      - key: TELEGRAM_POLLING_ENABLED
+        value: "0"
+      - key: PAPER_ACTIVITY_AUTORUN_ENABLED
+        value: "1"
+      - key: PAPER_ACTIVITY_TICK_SECONDS
+        value: "60"
+      - key: PAPER_ACTIVITY_MAX_OPEN
+        value: "8"
+      - key: PAPER_ACTIVITY_MAX_CATCH_UP_TICKS
+        value: "48"
+      - key: NEWS_AUTORUN_ENABLED
+        value: "1"
+      - key: NEWS_REFRESH_SECONDS
+        value: "180"
+      - key: NEWS_STALE_SECONDS
+        value: "240"
+      - key: NEWS_LIMIT_PER_SOURCE
+        value: "5"
       - key: EXCHANGE_NAME
         value: bybit
       - key: EXCHANGE_MODE
@@ -34,9 +54,7 @@ services:
     name: sharipovai-telegram-worker
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: python telegram_bot.py
+    startCommand: python -c "print('telegram webhook mode')"
     envVars:
-      - key: BOT_TOKEN
-        sync: false
-      - key: WEBAPP_URL
-        sync: false
+      - key: TELEGRAM_POLLING_ENABLED
+        value: "0"
