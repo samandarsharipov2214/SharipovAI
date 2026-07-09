@@ -66,7 +66,9 @@ def _install_feature_apis(app_instance: FastAPI) -> None:
         ("dashboard.learning_os_api", "install_learning_os_api"),
         ("dashboard.evidence_vault_api", "install_evidence_vault_api"),
         ("dashboard.bot_communication_api", "install_bot_communication_api"),
+        ("dashboard.paper_activity_api", "install_paper_activity_api"),
         ("dashboard.autonomous_learning_api", "install_autonomous_learning_api"),
+        ("dashboard.realtime_status_api", "install_realtime_status_api"),
         ("dashboard.launch_check_api", "install_launch_check_api"),
     ]
     for module_name, function_name in installers:
