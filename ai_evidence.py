@@ -19,6 +19,8 @@ REAL_DATA_WAITING_API = "waiting_api"
 REAL_DATA_DISABLED = "disabled"
 REAL_DATA_DEMO = REAL_DATA_VIRTUAL_EXECUTION  # backward compatibility only
 
+LEGACY_AGENT_ALIASES = {"demo_trader": "virtual_trader"}
+
 
 def _now_iso() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat()
@@ -52,14 +54,6 @@ SYSTEM_AI_STATUS: dict[str, dict[str, Any]] = {
         "last_real_update": _now_iso(),
         "evidence": _evidence("Есть virtual account state", "Есть виртуальные сделки с комиссиями", "Есть catch-up/autorun", virtual_execution=True),
         "missing": ["Расширить стратегии", "Добавить execution quality метрики по времени"],
-        "tier": "execution_virtual",
-    },
-    "demo_trader": {
-        "name": "Virtual Account Execution AI",
-        "real_data_status": REAL_DATA_VIRTUAL_EXECUTION,
-        "last_real_update": _now_iso(),
-        "evidence": _evidence("Legacy id mapped to virtual account execution", virtual_execution=True),
-        "missing": ["Переименовать legacy demo_trader id в virtual_trader во всех старых местах"],
         "tier": "execution_virtual",
     },
     "exchange_cost_ai": {
@@ -135,8 +129,12 @@ NEWS_REAL_DATA_OVERRIDES: dict[str, dict[str, Any]] = {
 def enrich_ai_status(agent: dict[str, Any]) -> dict[str, Any]:
     """Add real data status/evidence to any system or news AI agent."""
 
-    agent_id = str(agent.get("id", ""))
+    original_id = str(agent.get("id", ""))
+    agent_id = LEGACY_AGENT_ALIASES.get(original_id, original_id)
     enriched = dict(agent)
+    enriched["id"] = agent_id
+    if original_id != agent_id:
+        enriched["legacy_id"] = original_id
     status = SYSTEM_AI_STATUS.get(agent_id) or NEWS_REAL_DATA_OVERRIDES.get(agent_id)
     if status:
         enriched.update({key: value for key, value in status.items() if key not in {"name"} or not enriched.get("name")})
