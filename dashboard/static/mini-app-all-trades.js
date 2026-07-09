@@ -46,6 +46,7 @@
     const map = {
       opened_virtual_trade: 'открыта виртуальная сделка',
       opened_paper_trade: 'открыта виртуальная сделка',
+      profitability_gate_wait: 'нет преимущества — вход пропущен',
       max_open_reached_closed_oldest: 'достигнут лимит открытых сделок — закрыта самая старая',
       trade_gate_blocked_virtual_execution: 'Trade Gate заблокировал виртуальную сделку',
       not_started: 'ещё не запускался',
@@ -76,17 +77,21 @@
 
     const trades = Array.isArray(state.trades) ? state.trades : [];
     const summary = state.summary || {};
+    const profitGate = summary.last_profitability_gate || {};
     ensureTradeSummary(section);
     setText('#all-trades-count', String(trades.length));
     setText('#all-trades-open', String(summary.open_positions || trades.filter((t) => t.status === 'OPEN').length));
     setText('#all-trades-closed', String(summary.closed_positions || trades.filter((t) => t.status === 'CLOSED').length));
+    setText('#all-trades-skipped', String(summary.skipped_count || 0));
+    setText('#all-trades-profitable', `${summary.profitable_closed || 0}/${summary.closed_positions || 0}`);
     setText('#all-trades-pnl', `${summary.net_pnl >= 0 ? '+' : ''}${fmt(summary.net_pnl)} USDT`);
     setText('#all-trades-reason', reasonRu(summary.last_reason, summary.last_reason_ru));
+    setText('#all-trades-profit-gate', profitGate.reason_ru || 'ожидаю следующий сигнал');
     setText('#all-trades-last-tick', summary.last_tick_at ? `${fmtTime(summary.last_tick_at)} · ${ageText(summary.last_tick_at)}` : '—');
 
     table.innerHTML = '';
     if (!trades.length) {
-      table.innerHTML = '<tr><td>Сделок пока нет</td><td>0.00</td></tr>';
+      table.innerHTML = '<tr><td>Сделок пока нет. Это может быть правильно, если Profitability Gate не видит преимущества.</td><td>0.00</td></tr>';
       return;
     }
 
@@ -97,10 +102,12 @@
       const closed = trade.closed_at ? fmtTime(trade.closed_at) : 'ещё открыта';
       const age = ageText(trade.opened_at);
       const duration = durationText(trade.opened_at, trade.closed_at);
+      const expected = Number(trade.expected_net_usdt || 0);
+      const edgeRatio = Number(trade.edge_to_fee_ratio || 0);
       const tr = document.createElement('tr');
       tr.className = 'trade-clickable all-trade-row';
       tr.dataset.tradeId = trade.id || '';
-      tr.innerHTML = `<td><b>#${trades.length - index} · ${trade.asset || trade.symbol || 'UNKNOWN'} ${trade.side || ''}</b><br><small>${statusRu(trade.status)} · комиссия ${fmt(fee)} USDT · ${sourceRu(trade.source, trade.source_ru)}<br>🕒 открыта: ${opened} · ${age}<br>⏱ длительность: ${duration}<br>🏁 закрыта: ${closed}</small></td><td class="${pnl >= 0 ? 'positive' : 'negative'}">${pnl >= 0 ? '+' : ''}${fmt(pnl)}</td>`;
+      tr.innerHTML = `<td><b>#${trades.length - index} · ${trade.asset || trade.symbol || 'UNKNOWN'} ${trade.side || ''}</b><br><small>${statusRu(trade.status)} · комиссия ${fmt(fee)} USDT · ${sourceRu(trade.source, trade.source_ru)}<br>ожидание: ${expected >= 0 ? '+' : ''}${fmt(expected)} USDT · edge/fee ${edgeRatio.toFixed(2)}x<br>🕒 открыта: ${opened} · ${age}<br>⏱ длительность: ${duration}<br>🏁 закрыта: ${closed}</small></td><td class="${pnl >= 0 ? 'positive' : 'negative'}">${pnl >= 0 ? '+' : ''}${fmt(pnl)}</td>`;
       table.appendChild(tr);
     });
   }
@@ -110,13 +117,13 @@
     const box = document.createElement('div');
     box.id = 'all-trades-summary';
     box.className = 'mini-grid';
-    box.innerHTML = `<div class="mini-stat"><small>Всего сделок</small><b id="all-trades-count">0</b></div><div class="mini-stat"><small>Открыты</small><b id="all-trades-open">0</b></div><div class="mini-stat"><small>Закрыты</small><b id="all-trades-closed">0</b></div><div class="mini-stat"><small>Net PnL</small><b id="all-trades-pnl">0.00 USDT</b></div><div class="mini-stat"><small>Последний цикл</small><b id="all-trades-last-tick">—</b></div><div class="mini-stat"><small>Причина</small><b id="all-trades-reason">—</b></div>`;
+    box.innerHTML = `<div class="mini-stat"><small>Всего сделок</small><b id="all-trades-count">0</b></div><div class="mini-stat"><small>Открыты</small><b id="all-trades-open">0</b></div><div class="mini-stat"><small>Закрыты</small><b id="all-trades-closed">0</b></div><div class="mini-stat"><small>Пропущено плохих входов</small><b id="all-trades-skipped">0</b></div><div class="mini-stat"><small>Прибыльных закрытий</small><b id="all-trades-profitable">0/0</b></div><div class="mini-stat"><small>Net PnL</small><b id="all-trades-pnl">0.00 USDT</b></div><div class="mini-stat"><small>Последний цикл</small><b id="all-trades-last-tick">—</b></div><div class="mini-stat"><small>Причина</small><b id="all-trades-reason">—</b></div><div class="mini-stat"><small>Profitability Gate</small><b id="all-trades-profit-gate">—</b></div>`;
     const title = section.querySelector('h2');
     if (title) title.insertAdjacentElement('afterend', box);
 
     const hint = section.querySelector('.info-box');
     if (hint) {
-      hint.innerHTML = 'Показаны <b>все виртуальные сделки</b> с временем открытия, закрытия и длительностью. Полный JSON: <a href="/api/paper-activity/state">/api/paper-activity/state</a>. Нажми на сделку, чтобы открыть отчёт.';
+      hint.innerHTML = '<b>Новая логика:</b> сделка открывается только если ожидаемое преимущество больше комиссии и риска. Если преимущества нет — вход пропускается, чтобы не делать минус ради количества. Полный JSON: <a href="/api/paper-activity/state">/api/paper-activity/state</a>.';
     }
   }
 
