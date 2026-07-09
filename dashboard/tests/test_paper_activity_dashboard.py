@@ -24,9 +24,15 @@ def test_paper_activity_api_installed_via_dashboard(tmp_path, monkeypatch) -> No
     assert tick.status_code == 200
     assert tick.json()["state"]["summary"]["trade_count"] >= 2
 
+    trades = client.get("/api/paper-activity/trades")
+    assert trades.status_code == 200
+    assert trades.json()["summary"]["trade_count"] == len(trades.json()["trades"])
+
     page = client.get("/paper-activity")
     assert page.status_code == 200
     assert "Paper Activity Engine" in page.text
+    assert "Все сделки" in page.text
+    assert "JSON all trades" in page.text
     assert "Autorun" in page.text
 
 
