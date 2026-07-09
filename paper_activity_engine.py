@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from profitability_gate import evaluate_profitability_candidate
 from sharipovai_constitution import EXECUTION_MODE, virtual_account_state
 from trading_intelligence import trade_gate
 
@@ -25,6 +26,7 @@ REASON_RU = {
     "not_started": "ещё не запускался",
     "opened_virtual_trade": "открыта виртуальная сделка",
     "opened_paper_trade": "открыта виртуальная сделка",
+    "profitability_gate_wait": "нет преимущества — вход пропущен",
     "max_open_reached_closed_oldest": "достигнут лимит открытых сделок — закрыта самая старая",
     "trade_gate_blocked_virtual_execution": "Trade Gate заблокировал виртуальную сделку",
     "trade_gate_blocked_demo": "Trade Gate заблокировал виртуальную сделку",
@@ -82,6 +84,7 @@ class PaperActivityEngine:
             "bootstrap_ticks": bootstrap_ticks(),
             "mode": EXECUTION_MODE,
             "catch_up_on_state": catch_up,
+            "profitability_gate": "enabled",
         }
         return virtual_account_state(state)
 
@@ -104,6 +107,7 @@ class PaperActivityEngine:
             state["last_reason_ru"] = reason_ru(state["last_reason"])
             state["last_gate"] = gate
             state["last_tick_status"] = "blocked"
+            state["skipped_count"] = int(state.get("skipped_count", 0) or 0) + 1
             self._save(state)
             return {"status": "blocked", "reason": state["last_reason"], "reason_ru": state["last_reason_ru"], "gate": gate, "state": self.state()}
 
@@ -119,15 +123,40 @@ class PaperActivityEngine:
             self._save(state)
             return {"status": "closed_position", "reason": state["last_reason"], "reason_ru": state["last_reason_ru"], "closed_trade": closed, "gate": gate, "state": self.state()}
 
-        trade = self._open_trade(state, now)
+        tick_count = int(state.get("tick_count", 0) or 0)
+        candidate = _candidate_for_tick(tick_count)
+        profitability = evaluate_profitability_candidate(
+            symbol=candidate["symbol"],
+            side=candidate["side"],
+            tick_count=tick_count,
+            notional=100.0,
+            estimated_fee=0.1,
+            state=state,
+            gate={**gate, "max_open_positions": max_open_positions()},
+        )
+        state["last_profitability_gate"] = profitability
+        if profitability.get("decision") != "ALLOW":
+            state["last_tick_at"] = now
+            state["tick_count"] = tick_count + 1
+            state["skipped_count"] = int(state.get("skipped_count", 0) or 0) + 1
+            state["last_reason"] = "profitability_gate_wait"
+            state["last_reason_ru"] = str(profitability.get("reason_ru", reason_ru("profitability_gate_wait")))
+            state["last_tick_status"] = "wait_profitability"
+            state["last_gate"] = gate
+            state.setdefault("skipped_signals", []).append({"time": now, "candidate": candidate, "profitability": profitability})
+            state["skipped_signals"] = state["skipped_signals"][-80:]
+            self._save(state)
+            return {"status": "wait", "reason": state["last_reason"], "reason_ru": state["last_reason_ru"], "profitability": profitability, "state": self.state()}
+
+        trade = self._open_trade(state, now, candidate=candidate, profitability=profitability)
         state["last_tick_at"] = now
-        state["tick_count"] = int(state.get("tick_count", 0) or 0) + 1
+        state["tick_count"] = tick_count + 1
         state["last_reason"] = "opened_virtual_trade"
-        state["last_reason_ru"] = reason_ru(state["last_reason"])
+        state["last_reason_ru"] = str(profitability.get("reason_ru", reason_ru("opened_virtual_trade")))
         state["last_tick_status"] = "ok"
         state["last_gate"] = gate
         self._save(state)
-        return {"status": "ok", "action": "opened_virtual_trade", "reason_ru": state["last_reason_ru"], "trade": trade, "gate": gate, "state": self.state()}
+        return {"status": "ok", "action": "opened_virtual_trade", "reason_ru": state["last_reason_ru"], "profitability": profitability, "trade": trade, "gate": gate, "state": self.state()}
 
     def catch_up(self, *, now: int | None = None, max_ticks: int | None = None) -> dict[str, Any]:
         """Run missed virtual execution ticks after sleep/redeploy/idle time.
@@ -148,11 +177,13 @@ class PaperActivityEngine:
             start_at = now - paper_tick_seconds() * max(0, count - 1)
             results = [self.tick(force=True, now=start_at + paper_tick_seconds() * index) for index in range(count)]
             final_state = self._load()
+            opened = len([item for item in results if item.get("status") == "ok"])
+            waited = len([item for item in results if item.get("status") == "wait"])
             final_state["last_reason"] = f"bootstrap_completed:{len(results)}_ticks"
-            final_state["last_reason_ru"] = f"восстановлена история после пустого состояния: {len(results)} виртуальных циклов"
+            final_state["last_reason_ru"] = f"восстановлена история: {len(results)} циклов, открыто {opened}, пропущено {waited} из-за прибыльности"
             final_state["last_tick_status"] = results[-1].get("status", "ok") if results else "ok"
             self._save(final_state)
-            return {"status": "ok", "catch_up_ticks": len(results), "bootstrap": True, "bootstrap_independent_from_catch_up_cap": True, "reason_ru": final_state["last_reason_ru"], "last_result": results[-1] if results else None}
+            return {"status": "ok", "catch_up_ticks": len(results), "opened": opened, "waited": waited, "bootstrap": True, "bootstrap_independent_from_catch_up_cap": True, "reason_ru": final_state["last_reason_ru"], "last_result": results[-1] if results else None}
         elapsed = max(0, now - last_tick)
         due = min(limit, elapsed // paper_tick_seconds())
         results: list[dict[str, Any]] = []
@@ -161,8 +192,10 @@ class PaperActivityEngine:
             results.append(self.tick(force=True, now=tick_at))
         if results:
             final_state = self._load()
+            opened = len([item for item in results if item.get("status") == "ok"])
+            waited = len([item for item in results if item.get("status") == "wait"])
             final_state["last_reason"] = f"catch_up_completed:{len(results)}_ticks"
-            final_state["last_reason_ru"] = f"догнал пропущенные циклы: {len(results)}"
+            final_state["last_reason_ru"] = f"догнал циклы: {len(results)}, открыто {opened}, пропущено {waited} из-за прибыльности"
             final_state["last_tick_status"] = results[-1].get("status", "ok")
             self._save(final_state)
         return {"status": "ok", "catch_up_ticks": len(results), "reason_ru": f"догнал пропущенные циклы: {len(results)}" if results else "пропущенных циклов нет", "last_result": results[-1] if results else None, "due_ticks": int(due)}
@@ -172,10 +205,10 @@ class PaperActivityEngine:
         self._save(state)
         return {"status": "ok", "state": self.state()}
 
-    def _open_trade(self, state: dict[str, Any], now: int) -> dict[str, Any]:
+    def _open_trade(self, state: dict[str, Any], now: int, *, candidate: dict[str, Any], profitability: dict[str, Any]) -> dict[str, Any]:
         tick_count = int(state.get("tick_count", 0) or 0)
-        symbol = SYMBOL_ROTATION[tick_count % len(SYMBOL_ROTATION)]
-        side = "BUY" if tick_count % 3 != 2 else "SELL"
+        symbol = str(candidate.get("symbol", SYMBOL_ROTATION[tick_count % len(SYMBOL_ROTATION)]))
+        side = str(candidate.get("side", "BUY"))
         notional = 100.0
         fee = round(notional * 0.001, 4)
         trade = {
@@ -188,6 +221,9 @@ class PaperActivityEngine:
             "fee": fee,
             "pnl_usdt": 0.0,
             "net_pnl": -fee,
+            "expected_net_usdt": profitability.get("expected_net_usdt", 0.0),
+            "edge_to_fee_ratio": profitability.get("edge_to_fee_ratio", 0.0),
+            "profitability_reason_ru": profitability.get("reason_ru", ""),
             "opened_at": now,
             "closed_at": 0,
             "source": "virtual_account_execution_engine",
@@ -206,15 +242,16 @@ class PaperActivityEngine:
         if not open_trades:
             return None
         trade = sorted(open_trades, key=lambda item: int(item.get("opened_at", 0)))[0]
-        pnl = _virtual_pnl(int(state.get("tick_count", 0) or 0), str(trade.get("asset", "")))
+        expected_net = float(trade.get("expected_net_usdt", 0.0) or 0.0)
+        pnl = _virtual_pnl(int(state.get("tick_count", 0) or 0), str(trade.get("asset", "")), expected_net=expected_net)
         fee = round(float(trade.get("notional", 100.0)) * 0.001, 4)
         trade["status"] = "CLOSED"
         trade["pnl_usdt"] = pnl
         trade["fee"] = round(float(trade.get("fee", 0.0)) + fee, 4)
         trade["net_pnl"] = round(pnl - float(trade.get("fee", 0.0)), 4)
         trade["closed_at"] = now
-        trade["close_reason"] = "virtual_account_mark_to_market"
-        trade["close_reason_ru"] = "виртуальная переоценка и закрытие старой позиции"
+        trade["close_reason"] = "profitability_exit_management"
+        trade["close_reason_ru"] = "закрытие по управлению прибыльностью и комиссии"
         trade["source_ru"] = source_ru(str(trade.get("source", "virtual_account_execution_engine")))
         state["cash"] = round(float(state.get("cash", 10000.0)) + trade["net_pnl"], 4)
         state["equity"] = round(float(state.get("equity", 10000.0)) + trade["net_pnl"], 4)
@@ -226,6 +263,8 @@ class PaperActivityEngine:
         closed_count = len([trade for trade in trades if trade.get("status") == "CLOSED"])
         net_pnl = round(sum(float(trade.get("net_pnl", 0.0) or 0.0) for trade in trades), 4)
         total_fees = round(sum(float(trade.get("fee", 0.0) or 0.0) for trade in trades), 4)
+        profitable_closed = len([trade for trade in trades if trade.get("status") == "CLOSED" and float(trade.get("net_pnl", 0.0) or 0.0) > 0])
+        losing_closed = len([trade for trade in trades if trade.get("status") == "CLOSED" and float(trade.get("net_pnl", 0.0) or 0.0) < 0])
         last_tick = int(state.get("last_tick_at", 0) or 0)
         age = max(0, int(time.time()) - last_tick) if last_tick else None
         last_reason = str(state.get("last_reason", "not_started"))
@@ -233,6 +272,9 @@ class PaperActivityEngine:
             "trade_count": len(trades),
             "open_positions": open_count,
             "closed_positions": closed_count,
+            "profitable_closed": profitable_closed,
+            "losing_closed": losing_closed,
+            "skipped_count": int(state.get("skipped_count", 0) or 0),
             "net_pnl": net_pnl,
             "total_fees": total_fees,
             "last_reason": last_reason,
@@ -240,6 +282,7 @@ class PaperActivityEngine:
             "last_tick_at": last_tick,
             "last_tick_age_seconds": age,
             "last_tick_status": state.get("last_tick_status", "not_started"),
+            "last_profitability_gate": state.get("last_profitability_gate", {}),
             "execution_mode": EXECUTION_MODE,
             "real_orders_blocked": True,
         }
@@ -273,11 +316,14 @@ def _default_state() -> dict[str, Any]:
         "cash": 10000.0,
         "equity": 10000.0,
         "trades": [],
+        "skipped_signals": [],
+        "skipped_count": 0,
         "tick_count": 0,
         "last_tick_at": 0,
         "last_reason": "not_started",
         "last_reason_ru": reason_ru("not_started"),
         "last_tick_status": "not_started",
+        "last_profitability_gate": {},
         "live_execution_enabled": False,
         "real_orders_blocked": True,
     }
@@ -300,12 +346,21 @@ def source_ru(source: str) -> str:
     return SOURCE_RU.get(source, source)
 
 
+def _candidate_for_tick(tick_count: int) -> dict[str, str]:
+    symbol = SYMBOL_ROTATION[tick_count % len(SYMBOL_ROTATION)]
+    side = "BUY" if tick_count % 3 != 2 else "SELL"
+    return {"symbol": symbol, "side": side}
+
+
 def _migrate_state(state: dict[str, Any]) -> dict[str, Any]:
     migrated = dict(state)
     migrated["mode"] = "VIRTUAL_ACCOUNT"
     migrated["execution_mode"] = EXECUTION_MODE
     migrated["real_orders_blocked"] = True
     migrated["live_execution_enabled"] = False
+    migrated.setdefault("skipped_signals", [])
+    migrated.setdefault("skipped_count", len(migrated.get("skipped_signals", [])) if isinstance(migrated.get("skipped_signals"), list) else 0)
+    migrated.setdefault("last_profitability_gate", {})
     if migrated.get("last_reason") == "trade_gate_blocked_demo":
         migrated["last_reason"] = "trade_gate_blocked_virtual_execution"
     if migrated.get("last_reason") == "opened_paper_trade":
@@ -316,6 +371,8 @@ def _migrate_state(state: dict[str, Any]) -> dict[str, Any]:
         if isinstance(trade, dict):
             trade.setdefault("execution_mode", EXECUTION_MODE)
             trade.setdefault("real_order_placed", False)
+            trade.setdefault("expected_net_usdt", 0.0)
+            trade.setdefault("edge_to_fee_ratio", 0.0)
             if trade.get("source") == "paper_activity_engine":
                 trade["source"] = "virtual_account_execution_engine"
             trade["source_ru"] = source_ru(str(trade.get("source", "virtual_account_execution_engine")))
@@ -335,7 +392,9 @@ def _safe_gate_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
     return data
 
 
-def _virtual_pnl(tick_count: int, symbol: str) -> float:
-    base = (tick_count % 7) - 3
-    symbol_factor = (sum(ord(char) for char in symbol) % 5) - 2
-    return round((base + symbol_factor) * 1.75, 4)
+def _virtual_pnl(tick_count: int, symbol: str, *, expected_net: float = 0.0) -> float:
+    raw = ((sum(ord(ch) for ch in symbol) + tick_count * 13) % 7) - 2
+    noise = raw * 0.08
+    target_net = max(-0.25, expected_net * 0.75 + noise)
+    # Return gross pnl; closing code subtracts total fees from it.
+    return round(target_net + 0.2, 4)
