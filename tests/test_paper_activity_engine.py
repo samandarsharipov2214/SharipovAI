@@ -48,6 +48,32 @@ def test_paper_activity_closes_oldest_when_max_open_reached(tmp_path, monkeypatc
     assert state["summary"]["open_positions"] == 1
 
 
+def test_paper_activity_catches_up_after_idle_time(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("PAPER_ACTIVITY_STATE_FILE", str(tmp_path / "paper.json"))
+    monkeypatch.setenv("PAPER_ACTIVITY_TICK_SECONDS", "60")
+    monkeypatch.setenv("PAPER_ACTIVITY_MAX_OPEN", "20")
+    engine = PaperActivityEngine()
+    engine.tick(force=True, now=1000)
+
+    result = engine.catch_up(now=1000 + 60 * 10, max_ticks=5)
+    state = engine.state()
+
+    assert result["status"] == "ok"
+    assert result["catch_up_ticks"] == 5
+    assert state["summary"]["trade_count"] == 6
+    assert state["summary"]["last_reason"] == "catch_up_completed:5_ticks"
+
+
+def test_paper_activity_state_can_catch_up_when_first_opened(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("PAPER_ACTIVITY_STATE_FILE", str(tmp_path / "paper.json"))
+    engine = PaperActivityEngine()
+
+    state = engine.state(catch_up=True)
+
+    assert state["summary"]["trade_count"] == 1
+    assert state["config"]["catch_up_on_state"] is True
+
+
 def test_paper_activity_reset(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("PAPER_ACTIVITY_STATE_FILE", str(tmp_path / "paper.json"))
     engine = PaperActivityEngine()
