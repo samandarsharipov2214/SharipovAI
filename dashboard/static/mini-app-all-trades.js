@@ -1,0 +1,71 @@
+(() => {
+  const fmt = (value) => Number(value || 0).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const $ = (selector) => document.querySelector(selector);
+
+  function setText(selector, value) {
+    const el = $(selector);
+    if (el) el.textContent = value;
+  }
+
+  function renderAllTrades(state) {
+    const table = document.querySelector('.mini-table tbody');
+    const section = document.getElementById('trades-section');
+    if (!table || !section) return;
+
+    const trades = Array.isArray(state.trades) ? state.trades : [];
+    const summary = state.summary || {};
+    ensureTradeSummary(section);
+    setText('#all-trades-count', String(trades.length));
+    setText('#all-trades-open', String(summary.open_positions || trades.filter((t) => t.status === 'OPEN').length));
+    setText('#all-trades-closed', String(summary.closed_positions || trades.filter((t) => t.status === 'CLOSED').length));
+    setText('#all-trades-pnl', `${summary.net_pnl >= 0 ? '+' : ''}${fmt(summary.net_pnl)} USDT`);
+    setText('#all-trades-reason', String(summary.last_reason || 'ok'));
+
+    table.innerHTML = '';
+    if (!trades.length) {
+      table.innerHTML = '<tr><td>Сделок пока нет</td><td>0.00</td></tr>';
+      return;
+    }
+
+    trades.slice().reverse().forEach((trade, index) => {
+      const pnl = Number(trade.net_pnl ?? trade.pnl_usdt ?? 0);
+      const fee = Number(trade.fee || 0);
+      const opened = trade.opened_at ? new Date(Number(trade.opened_at) * 1000).toLocaleString('ru-RU') : '—';
+      const closed = trade.closed_at ? new Date(Number(trade.closed_at) * 1000).toLocaleString('ru-RU') : '—';
+      const tr = document.createElement('tr');
+      tr.className = 'trade-clickable all-trade-row';
+      tr.dataset.tradeId = trade.id || '';
+      tr.innerHTML = `<td><b>#${trades.length - index} · ${trade.asset || trade.symbol || 'UNKNOWN'} ${trade.side || ''}</b><br><small>${trade.status || 'OPEN'} · комиссия ${fmt(fee)} USDT · ${trade.source || 'paper'}<br>открыта: ${opened} · закрыта: ${closed}</small></td><td class="${pnl >= 0 ? 'positive' : 'negative'}">${pnl >= 0 ? '+' : ''}${fmt(pnl)}</td>`;
+      table.appendChild(tr);
+    });
+  }
+
+  function ensureTradeSummary(section) {
+    if (document.getElementById('all-trades-summary')) return;
+    const box = document.createElement('div');
+    box.id = 'all-trades-summary';
+    box.className = 'mini-grid';
+    box.innerHTML = `<div class="mini-stat"><small>Всего сделок</small><b id="all-trades-count">0</b></div><div class="mini-stat"><small>Открыты</small><b id="all-trades-open">0</b></div><div class="mini-stat"><small>Закрыты</small><b id="all-trades-closed">0</b></div><div class="mini-stat"><small>Net PnL</small><b id="all-trades-pnl">0.00 USDT</b></div><div class="mini-stat"><small>Причина</small><b id="all-trades-reason">—</b></div>`;
+    const title = section.querySelector('h2');
+    if (title) title.insertAdjacentElement('afterend', box);
+
+    const hint = section.querySelector('.info-box');
+    if (hint) {
+      hint.innerHTML = 'Показаны <b>все paper-сделки</b>, не только последние. Полный JSON: <a href="/api/paper-activity/state">/api/paper-activity/state</a>. Нажми на сделку, чтобы открыть отчёт.';
+    }
+  }
+
+  async function loadAllTrades() {
+    try {
+      const response = await fetch('/api/paper-activity/state', { cache: 'no-store' });
+      if (!response.ok) return;
+      const payload = await response.json();
+      renderAllTrades(payload.state || {});
+    } catch (_) {}
+  }
+
+  window.addEventListener('DOMContentLoaded', () => {
+    loadAllTrades();
+    setInterval(loadAllTrades, 15000);
+  });
+})();
