@@ -32,16 +32,28 @@ def max_open_positions() -> int:
     return max(1, int(os.getenv("PAPER_ACTIVITY_MAX_OPEN", "5") or 5))
 
 
+def max_catch_up_ticks() -> int:
+    return max(1, int(os.getenv("PAPER_ACTIVITY_MAX_CATCH_UP_TICKS", "24") or 24))
+
+
 class PaperActivityEngine:
     """Durable paper activity engine."""
 
     def __init__(self, path: str | Path | None = None) -> None:
         self.path = Path(path) if path else paper_state_file()
 
-    def state(self) -> dict[str, Any]:
+    def state(self, *, catch_up: bool = False) -> dict[str, Any]:
+        if catch_up:
+            self.catch_up()
         state = self._load()
         state["summary"] = self._summary(state)
-        state["config"] = {"tick_seconds": paper_tick_seconds(), "max_open_positions": max_open_positions(), "mode": "paper_simulation_only"}
+        state["config"] = {
+            "tick_seconds": paper_tick_seconds(),
+            "max_open_positions": max_open_positions(),
+            "max_catch_up_ticks": max_catch_up_ticks(),
+            "mode": "paper_simulation_only",
+            "catch_up_on_state": catch_up,
+        }
         return state
 
     def tick(self, *, force: bool = False, now: int | None = None, gate_payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -60,6 +72,7 @@ class PaperActivityEngine:
             state["last_tick_at"] = now
             state["last_reason"] = "trade_gate_blocked_demo"
             state["last_gate"] = gate
+            state["last_tick_status"] = "blocked"
             self._save(state)
             return {"status": "blocked", "reason": state["last_reason"], "gate": gate, "state": self.state()}
 
@@ -69,6 +82,7 @@ class PaperActivityEngine:
             state["last_tick_at"] = now
             state["tick_count"] = int(state.get("tick_count", 0) or 0) + 1
             state["last_reason"] = "max_open_reached_closed_oldest"
+            state["last_tick_status"] = "closed_position"
             state["last_gate"] = gate
             self._save(state)
             return {"status": "closed_position", "reason": state["last_reason"], "closed_trade": closed, "gate": gate, "state": self.state()}
@@ -77,9 +91,39 @@ class PaperActivityEngine:
         state["last_tick_at"] = now
         state["tick_count"] = int(state.get("tick_count", 0) or 0) + 1
         state["last_reason"] = "opened_paper_trade"
+        state["last_tick_status"] = "ok"
         state["last_gate"] = gate
         self._save(state)
         return {"status": "ok", "action": "opened_paper_trade", "trade": trade, "gate": gate, "state": self.state()}
+
+    def catch_up(self, *, now: int | None = None, max_ticks: int | None = None) -> dict[str, Any]:
+        """Run missed paper ticks after sleep/redeploy/idle time.
+
+        This fixes the situation where the Mini App is opened in the morning and
+        still shows yesterday's three static demo trades. If the web process was
+        asleep or no scheduler called tick overnight, the first state request can
+        safely catch up a bounded number of PAPER-only actions.
+        """
+
+        now = int(time.time()) if now is None else int(now)
+        limit = int(max_ticks or max_catch_up_ticks())
+        state = self._load()
+        last_tick = int(state.get("last_tick_at", 0) or 0)
+        if last_tick <= 0:
+            result = self.tick(force=True, now=now)
+            return {"status": "ok", "catch_up_ticks": 1, "last_result": result}
+        elapsed = max(0, now - last_tick)
+        due = min(limit, elapsed // paper_tick_seconds())
+        results: list[dict[str, Any]] = []
+        for index in range(int(due)):
+            tick_at = last_tick + paper_tick_seconds() * (index + 1)
+            results.append(self.tick(force=True, now=tick_at))
+        if results:
+            final_state = self._load()
+            final_state["last_reason"] = f"catch_up_completed:{len(results)}_ticks"
+            final_state["last_tick_status"] = results[-1].get("status", "ok")
+            self._save(final_state)
+        return {"status": "ok", "catch_up_ticks": len(results), "last_result": results[-1] if results else None, "due_ticks": int(due)}
 
     def reset(self) -> dict[str, Any]:
         state = _default_state()
@@ -95,6 +139,7 @@ class PaperActivityEngine:
         trade = {
             "id": f"PT-{now}-{tick_count + 1}",
             "asset": symbol,
+            "symbol": symbol,
             "side": side,
             "status": "OPEN",
             "notional": notional,
@@ -132,12 +177,19 @@ class PaperActivityEngine:
         open_count = len([trade for trade in trades if trade.get("status") == "OPEN"])
         closed_count = len([trade for trade in trades if trade.get("status") == "CLOSED"])
         net_pnl = round(sum(float(trade.get("net_pnl", 0.0) or 0.0) for trade in trades), 4)
+        total_fees = round(sum(float(trade.get("fee", 0.0) or 0.0) for trade in trades), 4)
+        last_tick = int(state.get("last_tick_at", 0) or 0)
+        age = max(0, int(time.time()) - last_tick) if last_tick else None
         return {
             "trade_count": len(trades),
             "open_positions": open_count,
             "closed_positions": closed_count,
             "net_pnl": net_pnl,
+            "total_fees": total_fees,
             "last_reason": state.get("last_reason", "not_started"),
+            "last_tick_at": last_tick,
+            "last_tick_age_seconds": age,
+            "last_tick_status": state.get("last_tick_status", "not_started"),
         }
 
     def _load(self) -> dict[str, Any]:
@@ -164,6 +216,7 @@ def _default_state() -> dict[str, Any]:
         "tick_count": 0,
         "last_tick_at": 0,
         "last_reason": "not_started",
+        "last_tick_status": "not_started",
         "live_execution_enabled": False,
         "real_orders_blocked": True,
     }
