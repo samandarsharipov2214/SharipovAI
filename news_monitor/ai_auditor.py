@@ -1,7 +1,8 @@
 """AI auditor for checking subsystem News AI operability.
 
 The auditor runs a scripted interview with every News AI agent and marks whether
-it is active, partially implemented, credential-blocked, or placeholder-like.
+it is active, stale/no-fresh-items, partially implemented, credential-blocked,
+or placeholder-like.
 """
 
 from __future__ import annotations
@@ -27,15 +28,16 @@ def audit_news_ai() -> dict[str, object]:
     agents = list(report.get("agents", [])) if isinstance(report, dict) else []
     interviews = [_interview_agent(agent) for agent in agents]
     fake_like = [item for item in interviews if item["verdict"] in {"делает вид", "заглушка"}]
-    underbuilt = [item for item in interviews if item["verdict"] in {"недоработан", "частично работает"}]
+    underbuilt = [item for item in interviews if item["verdict"] in {"недоработан", "частично работает", "нет свежих данных"}]
     working = [item for item in interviews if item["verdict"] == "работает"]
     priority = _priority_actions(interviews)
     grade = _overall_grade(len(working), len(interviews), len(fake_like), len(underbuilt))
     return {
         "status": "ok",
+        "source_mode": report.get("source_mode", "unknown") if isinstance(report, dict) else "unknown",
         "auditor": {
             "name": "AI Auditor",
-            "role": "Проводит беседу с под-AI и проверяет, кто реально работает, кто заглушка, кто требует доработки.",
+            "role": "Проводит беседу с News AI и проверяет, кто реально обновляет данные, кто ждёт API, кто stale.",
             "overall_grade": grade,
             "working": len(working),
             "underbuilt": len(underbuilt),
@@ -62,7 +64,7 @@ def _interview_agent(agent: dict[str, Any]) -> dict[str, object]:
     questions = [
         {"q": "Какая твоя зона ответственности?", "a": str(agent.get("responsibility", "Не указана."))},
         {"q": "Сколько источников ты реально контролируешь?", "a": str(source_count)},
-        {"q": "Есть ли свежие материалы в текущем цикле?", "a": "да" if item_count else "нет, сейчас только источники/демо-сигналы"},
+        {"q": "Есть ли свежие материалы в текущем цикле?", "a": "да" if item_count else "нет свежих обработанных материалов"},
         {"q": "Можешь ли ты работать без внешних ключей?", "a": "частично" if needs_real_data else "да, через RSS/официальные источники"},
         {"q": "Что мешает тебе работать полноценно?", "a": REAL_DATA_REQUIRED.get(agent_id, "Нужно подключить реальный refresh источников и больше проверок качества.")},
     ]
@@ -88,14 +90,12 @@ def _interview_agent(agent: dict[str, Any]) -> dict[str, object]:
 def _verdict(*, agent_id: str, source_count: int, item_count: int, health: int, credibility: float, status: str) -> str:
     if source_count <= 0:
         return "заглушка"
-    if agent_id in REAL_DATA_REQUIRED and item_count <= 0:
-        return "делает вид"
+    if item_count <= 0:
+        return "нет свежих данных"
     if agent_id in REAL_DATA_REQUIRED:
         return "частично работает"
     if status == "overloaded" or health < 60:
         return "недоработан"
-    if item_count <= 0 and agent_id in CRITICAL_AGENTS:
-        return "частично работает"
     return "работает"
 
 
@@ -109,7 +109,7 @@ def _problems(*, agent_id: str, source_count: int, item_count: int, health: int,
         problems.append(REAL_DATA_REQUIRED[agent_id])
     if health < 70:
         problems.append("Health ниже желаемого уровня.")
-    if credibility < 60:
+    if item_count and credibility < 60:
         problems.append("Средняя достоверность низкая или нет достаточной базы для оценки.")
     if status == "overloaded":
         problems.append("AI перегружен: слишком много источников на один цикл.")
@@ -123,6 +123,8 @@ def _next_fix(agent_id: str, verdict: str) -> str:
         return "Добавить X API reader через env X_API_BEARER_TOKEN и allowlist аккаунтов."
     if agent_id == "youtube_news_ai":
         return "Добавить YouTube RSS/API reader и отделение мнений от фактов."
+    if verdict == "нет свежих данных":
+        return "Проверить RSS/news autorun, last_refresh_at, ошибки источников и сеть Render."
     if verdict in {"частично работает", "недоработан"}:
         return "Подключить реальный refresh источников и добавить проверку свежести данных."
     if verdict in {"делает вид", "заглушка"}:
@@ -135,9 +137,11 @@ def _priority_actions(interviews: list[dict[str, object]]) -> list[str]:
     by_id = {str(item["id"]): item for item in interviews}
     for agent_id in ("telegram_news_ai", "x_news_ai", "youtube_news_ai"):
         item = by_id.get(agent_id)
-        if item and item.get("verdict") in {"делает вид", "частично работает", "заглушка"}:
+        if item and item.get("verdict") in {"нет свежих данных", "делает вид", "частично работает", "заглушка"}:
             actions.append(str(item["next_fix"]))
-    actions.append("Добавить live freshness score: когда последний раз каждый AI реально обновлял данные.")
+    if any(item.get("verdict") == "нет свежих данных" for item in interviews):
+        actions.append("Проверить /api/social-news/rss/refresh и /api/realtime/status → news.errors.")
+    actions.append("Добавить live freshness score: когда последний раз каждый News AI реально обновлял данные.")
     actions.append("Добавить self-test кнопку в Mini App: 'Провести беседу с ИИ'.")
     return actions
 
@@ -157,7 +161,7 @@ def _overall_grade(working: int, total: int, fake_like: int, underbuilt: int) ->
 
 def _summary(grade: str, working: int, total: int, fake_like: int, underbuilt: int) -> str:
     if grade == "GOOD":
-        return f"Работает {working}/{total}. Система в целом живая, но нужно продолжать live-проверки."
+        return f"Работает {working}/{total}. News AI живой, но нужно продолжать freshness-проверки."
     if fake_like:
-        return f"Работает {working}/{total}, но {fake_like} AI выглядят как активные без реального подключения. Их нужно либо подключить, либо пометить как ожидающие доступ."
-    return f"Работает {working}/{total}. Недоработано: {underbuilt}. Нужна доработка источников и freshness score."
+        return f"Работает {working}/{total}, но {fake_like} AI выглядят как активные без реального подключения. Их нужно подключить или пометить как ожидающие доступ."
+    return f"Работает {working}/{total}. Недоработано/stale: {underbuilt}. Нужны реальные источники, RSS refresh и freshness score."
