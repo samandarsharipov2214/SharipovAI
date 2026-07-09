@@ -86,7 +86,11 @@ def analyze_items(raw_items: Iterable[dict[str, object]], sources: list[NewsSour
 
 
 def demo_items() -> list[dict[str, object]]:
-    """Return deterministic demo news for UI/API tests."""
+    """Return deterministic sample news for tests/manual previews only.
+
+    This function is never used as implicit live input. Production paths must
+    call analyzed_news_payload(raw_items=real_items) or pass an empty list.
+    """
 
     return [
         {"source_id": "bybit_announcements", "title": "Bybit announces BTC market monitoring and fee updates", "summary": "Official exchange update for BTC traders."},
@@ -98,24 +102,32 @@ def demo_items() -> list[dict[str, object]]:
 
 
 def analyzed_news_payload(raw_items: Iterable[dict[str, object]] | None = None) -> dict[str, object]:
-    """Return API-ready analyzed news payload."""
+    """Return API-ready analyzed news payload.
 
-    items = analyze_items(raw_items or demo_items())
+    If raw_items is None, this returns an honest empty analysis. It does not
+    inject demo/sample news as live data.
+    """
+
+    real_input = raw_items is not None
+    items = analyze_items(list(raw_items or []))
     high = [item for item in items if item.urgency == "high"]
     blocked = [item for item in items if item.ai_action == "BLOCK_BUY"]
     confirmations_needed = [item for item in items if item.needs_confirmation]
-    avg_credibility = round(sum(item.credibility_percent for item in items) / max(len(items), 1), 1)
+    avg_credibility = round(sum(item.credibility_percent for item in items) / len(items), 1) if items else 0.0
     low_credibility = [item for item in items if item.credibility_percent < 60]
     return {
         "status": "ok",
+        "source_mode": "real_input" if real_input else "empty_no_live_input",
         "summary": {
             "total": len(items),
             "high_urgency": len(high),
+            "urgent_count": len(high),
             "block_buy": len(blocked),
             "needs_confirmation": len(confirmations_needed),
             "average_credibility_percent": avg_credibility,
             "low_credibility": len(low_credibility),
             "last_updated": _now_iso(),
+            "has_live_items": bool(items),
         },
         "items": [item.to_dict() for item in items],
         "alerts": [item.to_dict() for item in high[:5]],
@@ -125,6 +137,7 @@ def analyzed_news_payload(raw_items: Iterable[dict[str, object]] | None = None) 
             "Official exchange/security announcements can block risky trades immediately.",
             "Rank sources by trust, confirmations, source type, urgency, and error risk.",
             "Credibility percent is an estimate for decision safety, not a guarantee of absolute truth.",
+            "If no live news items are available, report empty/stale instead of showing sample news as live.",
         ],
     }
 
