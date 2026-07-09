@@ -15,6 +15,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from persistence_paths import durable_data_path
+
 from .ai_learning_core import BOT_NAMES
 
 
@@ -55,7 +57,7 @@ class BotCommunicationNetwork:
     """SQLite message bus for inter-bot communication."""
 
     def __init__(self, path: str | Path | None = None) -> None:
-        self.path = Path(path or os.getenv("BOT_COMMUNICATION_DB", DEFAULT_DB))
+        self.path = Path(path) if path else durable_data_path("BOT_COMMUNICATION_DB", DEFAULT_DB)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 

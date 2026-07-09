@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from exchange_connector import SafeExchangeConnector, ai_cost_report, best_trade_venue, estimate_borrow_cost
+from persistence_paths import durable_data_path
 
 DEFAULT_BALANCE = 10_000.0
 DEFAULT_PRICE = 50_000.0
@@ -24,7 +25,7 @@ DEFAULT_QUANTITY = 0.01
 def state_file() -> Path:
     """Return demo state path."""
 
-    return Path(os.getenv("DEMO_STATE_FILE", "data/demo_state.json"))
+    return durable_data_path("DEMO_STATE_FILE", "data/demo_state.json")
 
 
 def exchange_connector() -> SafeExchangeConnector:

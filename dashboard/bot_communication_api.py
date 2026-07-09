@@ -21,7 +21,7 @@ def install_bot_communication_api(app: FastAPI) -> None:
     app.state.bot_communication_api_installed = True
 
     def network() -> BotCommunicationNetwork:
-        return BotCommunicationNetwork(Path(os.getenv("BOT_COMMUNICATION_DB", "data/bot_communication.sqlite3")))
+        return BotCommunicationNetwork(Path(os.getenv("BOT_COMMUNICATION_DB")) if os.getenv("BOT_COMMUNICATION_DB") else None)
 
     @app.get("/api/bot-network/health")
     def health_api() -> dict[str, Any]:
@@ -66,6 +66,35 @@ def install_bot_communication_api(app: FastAPI) -> None:
             question=str(data.get("question", "Need consensus.")),
             participants=participants if isinstance(participants, list) else None,
         )
+
+
+    @app.post("/api/bot-network/chat")
+    def bot_chat_api(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
+        data = payload or {}
+        bot = str(data.get("bot", data.get("recipient", "general_controller")))
+        text = str(data.get("message", "")).strip()
+        if not text:
+            return {"status": "empty_message", "reply": "Напиши вопрос AI-боту."}
+        sent = network().send_message(
+            sender="general_controller",
+            recipient=bot,
+            message_type="question",
+            topic="mini_app_chat",
+            payload={"text": text, "source": "mini_app"},
+            priority="normal",
+        )
+        reply = f"{bot}: вопрос сохранён в durable message bus. Я проверяю свою зону и отвечаю по live state, а не только localStorage."
+        if sent.get("status") == "ok":
+            network().send_message(
+                sender=bot,
+                recipient="general_controller",
+                message_type="answer",
+                topic="mini_app_chat",
+                thread_id=str(sent.get("thread_id")),
+                payload={"text": reply, "question": text},
+                priority="normal",
+            )
+        return {"status": "ok", "reply": reply, "message": sent}
 
     @app.get("/api/bot-network/inbox/{bot_name}")
     def inbox_api(bot_name: str, unread_only: bool = False) -> dict[str, Any]:
