@@ -7,6 +7,36 @@
     if (el) el.textContent = value;
   }
 
+  function fmtTime(seconds) {
+    if (!seconds) return '—';
+    return new Date(Number(seconds) * 1000).toLocaleString('ru-RU', {
+      day: '2-digit',
+      month: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+  }
+
+  function ageText(seconds) {
+    if (!seconds) return '—';
+    const diff = Math.max(0, Math.round((Date.now() - Number(seconds) * 1000) / 1000));
+    if (diff < 60) return `${diff} сек назад`;
+    if (diff < 3600) return `${Math.floor(diff / 60)} мин назад`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)} ч назад`;
+    return `${Math.floor(diff / 86400)} дн назад`;
+  }
+
+  function durationText(openedAt, closedAt) {
+    if (!openedAt) return '—';
+    const end = closedAt ? Number(closedAt) : Math.floor(Date.now() / 1000);
+    const diff = Math.max(0, end - Number(openedAt));
+    if (diff < 60) return `${diff} сек`;
+    if (diff < 3600) return `${Math.floor(diff / 60)} мин`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)} ч ${Math.floor((diff % 3600) / 60)} мин`;
+    return `${Math.floor(diff / 86400)} дн ${Math.floor((diff % 86400) / 3600)} ч`;
+  }
+
   function renderAllTrades(state) {
     const table = document.querySelector('.mini-table tbody');
     const section = document.getElementById('trades-section');
@@ -20,6 +50,7 @@
     setText('#all-trades-closed', String(summary.closed_positions || trades.filter((t) => t.status === 'CLOSED').length));
     setText('#all-trades-pnl', `${summary.net_pnl >= 0 ? '+' : ''}${fmt(summary.net_pnl)} USDT`);
     setText('#all-trades-reason', String(summary.last_reason || 'ok'));
+    setText('#all-trades-last-tick', summary.last_tick_at ? `${fmtTime(summary.last_tick_at)} · ${ageText(summary.last_tick_at)}` : '—');
 
     table.innerHTML = '';
     if (!trades.length) {
@@ -30,12 +61,14 @@
     trades.slice().reverse().forEach((trade, index) => {
       const pnl = Number(trade.net_pnl ?? trade.pnl_usdt ?? 0);
       const fee = Number(trade.fee || 0);
-      const opened = trade.opened_at ? new Date(Number(trade.opened_at) * 1000).toLocaleString('ru-RU') : '—';
-      const closed = trade.closed_at ? new Date(Number(trade.closed_at) * 1000).toLocaleString('ru-RU') : '—';
+      const opened = fmtTime(trade.opened_at);
+      const closed = trade.closed_at ? fmtTime(trade.closed_at) : 'ещё открыта';
+      const age = ageText(trade.opened_at);
+      const duration = durationText(trade.opened_at, trade.closed_at);
       const tr = document.createElement('tr');
       tr.className = 'trade-clickable all-trade-row';
       tr.dataset.tradeId = trade.id || '';
-      tr.innerHTML = `<td><b>#${trades.length - index} · ${trade.asset || trade.symbol || 'UNKNOWN'} ${trade.side || ''}</b><br><small>${trade.status || 'OPEN'} · комиссия ${fmt(fee)} USDT · ${trade.source || 'paper'}<br>открыта: ${opened} · закрыта: ${closed}</small></td><td class="${pnl >= 0 ? 'positive' : 'negative'}">${pnl >= 0 ? '+' : ''}${fmt(pnl)}</td>`;
+      tr.innerHTML = `<td><b>#${trades.length - index} · ${trade.asset || trade.symbol || 'UNKNOWN'} ${trade.side || ''}</b><br><small>${trade.status || 'OPEN'} · комиссия ${fmt(fee)} USDT · ${trade.source || 'paper'}<br>🕒 открыта: ${opened} · ${age}<br>⏱ длительность: ${duration}<br>🏁 закрыта: ${closed}</small></td><td class="${pnl >= 0 ? 'positive' : 'negative'}">${pnl >= 0 ? '+' : ''}${fmt(pnl)}</td>`;
       table.appendChild(tr);
     });
   }
@@ -45,13 +78,13 @@
     const box = document.createElement('div');
     box.id = 'all-trades-summary';
     box.className = 'mini-grid';
-    box.innerHTML = `<div class="mini-stat"><small>Всего сделок</small><b id="all-trades-count">0</b></div><div class="mini-stat"><small>Открыты</small><b id="all-trades-open">0</b></div><div class="mini-stat"><small>Закрыты</small><b id="all-trades-closed">0</b></div><div class="mini-stat"><small>Net PnL</small><b id="all-trades-pnl">0.00 USDT</b></div><div class="mini-stat"><small>Причина</small><b id="all-trades-reason">—</b></div>`;
+    box.innerHTML = `<div class="mini-stat"><small>Всего сделок</small><b id="all-trades-count">0</b></div><div class="mini-stat"><small>Открыты</small><b id="all-trades-open">0</b></div><div class="mini-stat"><small>Закрыты</small><b id="all-trades-closed">0</b></div><div class="mini-stat"><small>Net PnL</small><b id="all-trades-pnl">0.00 USDT</b></div><div class="mini-stat"><small>Последний tick</small><b id="all-trades-last-tick">—</b></div><div class="mini-stat"><small>Причина</small><b id="all-trades-reason">—</b></div>`;
     const title = section.querySelector('h2');
     if (title) title.insertAdjacentElement('afterend', box);
 
     const hint = section.querySelector('.info-box');
     if (hint) {
-      hint.innerHTML = 'Показаны <b>все paper-сделки</b>, не только последние. Полный JSON: <a href="/api/paper-activity/state">/api/paper-activity/state</a>. Нажми на сделку, чтобы открыть отчёт.';
+      hint.innerHTML = 'Показаны <b>все paper-сделки</b> с временем открытия, закрытия и длительностью. Полный JSON: <a href="/api/paper-activity/state">/api/paper-activity/state</a>. Нажми на сделку, чтобы открыть отчёт.';
     }
   }
 
