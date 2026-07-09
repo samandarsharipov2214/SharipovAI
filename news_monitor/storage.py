@@ -18,7 +18,7 @@ def state_path() -> Path:
 
 
 def load_news_state() -> dict[str, Any]:
-    """Load saved monitor state or return a seeded default."""
+    """Load saved monitor state or return an honest empty default."""
 
     path = state_path()
     if not path.exists():
@@ -44,13 +44,17 @@ def save_news_state(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def default_news_state() -> dict[str, Any]:
-    """Return seeded default state."""
+    """Return an honest default state with no fake live news."""
 
     return {
         "sources": sources_payload(),
-        "news": analyzed_news_payload(),
+        "news": analyzed_news_payload([]),
         "telegram_enabled": False,
         "x_enabled": False,
         "rss_enabled": True,
-        "message": "Первый слой Social News Monitor включён: RSS/official/demo analysis. Telegram/X ждут безопасного подключения.",
+        "source_mode": "empty_waiting_real_refresh",
+        "last_refresh_at": 0,
+        "last_refresh_item_count": 0,
+        "last_refresh_errors": [],
+        "message": "Social News Monitor включён, но ждёт реальный RSS/official refresh. Статичные demo-новости не подставляются как live.",
     }
