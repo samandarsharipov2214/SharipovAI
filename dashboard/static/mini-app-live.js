@@ -6,6 +6,7 @@
   const bootTime = new Date();
   let lastBotRefresh = null;
   let lastStateRefresh = null;
+  let lastPaperRefresh = null;
 
   const agentBrains = {
     'General Controller': { icon: 'GC', mission: 'Следит за всеми ботами, целями дня, простоями, ошибками и конфликтами решений.', prompt: 'Я главный контролёр. Могу объяснить, кто ошибся, кто простаивает и почему цель дня не выполнена.', actions: ['принял контроль дневной цели +1%', 'запросил отчёт Market Agent', 'проверил Risk Engine', 'заблокировал агрессивный BUY без новостей', 'отправил ETH-ошибку в Learning Engine'] },
@@ -134,7 +135,7 @@
     }
     const reports = $('#reports-section');
     if (reports) {
-      reports.innerHTML = `<h2>Отчёты</h2><div class="mini-grid"><div class="mini-stat"><small>Сегодня</small><b id="mini-report-day">+0.00 USDT</b></div><div class="mini-stat"><small>Комиссии</small><b id="mini-report-fees">0.00 USDT</b></div><div class="mini-stat"><small>Последний state</small><b id="mini-state-last-refresh">—</b></div><div class="mini-stat"><small>Боты</small><b id="mini-bots-last-refresh">—</b></div></div><div class="info-box"><b>Вывод General Controller:</b><br>Если время «Последний state/Боты» не меняется дольше 1–2 минут — тогда backend реально завис или вкладка не обновляется.</div>`;
+      reports.innerHTML = `<h2>Отчёты</h2><div class="mini-grid"><div class="mini-stat"><small>Сегодня</small><b id="mini-report-day">+0.00 USDT</b></div><div class="mini-stat"><small>Комиссии</small><b id="mini-report-fees">0.00 USDT</b></div><div class="mini-stat"><small>Paper tick</small><b id="mini-paper-last-refresh">—</b></div><div class="mini-stat"><small>Последний state</small><b id="mini-state-last-refresh">—</b></div><div class="mini-stat"><small>Боты</small><b id="mini-bots-last-refresh">—</b></div></div><div class="info-box"><b>Вывод General Controller:</b><br>Если Paper tick не меняется дольше интервала — значит backend/scheduler не делает tick. Тогда открывай /api/paper-activity/state.</div>`;
     }
     const risk = $('#risk-section');
     if (risk && !$('#risk-profile-card')) {
@@ -193,6 +194,8 @@
     const details = tradeDetails[asset] || tradeDetails['BTC/USDT'];
     const pnl = Number(trade.net_pnl ?? trade.pnl_usdt ?? 0);
     const fee = Number(trade.fee || 0);
+    const opened = trade.opened_at ? new Date(Number(trade.opened_at) * 1000).toLocaleString('ru-RU') : (details.opened === 'demo' ? clockMinus(34) : details.opened);
+    const closed = trade.closed_at ? new Date(Number(trade.closed_at) * 1000).toLocaleString('ru-RU') : (trade.status === 'OPEN' ? 'Открыта' : details.closed);
     let modal = $('#trade-detail-modal');
     if (!modal) {
       modal = document.createElement('div');
@@ -200,7 +203,7 @@
       modal.className = 'trade-modal';
       document.body.appendChild(modal);
     }
-    modal.innerHTML = `<div class="trade-modal-card"><button class="modal-close" type="button">×</button><h2>${asset} · ${trade.side || ''}</h2><div class="mini-grid"><div class="mini-stat"><small>Статус</small><b>${trade.status || 'OPEN'}</b></div><div class="mini-stat"><small>Чистый PnL</small><b class="${pnl >= 0 ? 'positive' : 'negative'}">${pnl >= 0 ? '+' : ''}${fmt(pnl)} USDT</b></div><div class="mini-stat"><small>Открыта</small><b>${details.opened === 'demo' ? clockMinus(34) : details.opened}</b></div><div class="mini-stat"><small>Закрыта</small><b>${details.closed === 'demo' ? clockMinus(8) : details.closed}</b></div><div class="mini-stat"><small>Цена входа</small><b>${details.entry}</b></div><div class="mini-stat"><small>Цена выхода/текущая</small><b>${details.exit}</b></div><div class="mini-stat"><small>Размер</small><b>${details.size}</b></div><div class="mini-stat"><small>Комиссии</small><b>${fmt(fee)} USDT</b></div></div><p class="info-box"><b>Почему AI открыл:</b><br>${details.reason}</p><p class="info-box"><b>Почему минус/закрытие:</b><br>${details.closeReason}</p><h3>Голоса AI</h3><div class="bot-grid">${details.votes.map((vote) => `<div class="bot-row"><div><b>${vote[0]}</b><small>${vote[1]}</small></div><span class="bot-state">${vote[2]}</span></div>`).join('')}</div><h3>Журнал решения</h3><div class="bot-grid">${details.log.map((item, index) => `<div class="bot-row"><div><b>${clockMinus(details.log.length - index)} · ${item}</b><small>Demo decision log · обновляется при открытии</small></div><span class="bot-state">AI</span></div>`).join('')}</div></div>`;
+    modal.innerHTML = `<div class="trade-modal-card"><button class="modal-close" type="button">×</button><h2>${asset} · ${trade.side || ''}</h2><div class="mini-grid"><div class="mini-stat"><small>Статус</small><b>${trade.status || 'OPEN'}</b></div><div class="mini-stat"><small>Чистый PnL</small><b class="${pnl >= 0 ? 'positive' : 'negative'}">${pnl >= 0 ? '+' : ''}${fmt(pnl)} USDT</b></div><div class="mini-stat"><small>Открыта</small><b>${opened}</b></div><div class="mini-stat"><small>Закрыта</small><b>${closed}</b></div><div class="mini-stat"><small>Цена входа</small><b>${details.entry}</b></div><div class="mini-stat"><small>Цена выхода/текущая</small><b>${details.exit}</b></div><div class="mini-stat"><small>Размер</small><b>${trade.notional ? `${fmt(trade.notional)} USDT` : details.size}</b></div><div class="mini-stat"><small>Комиссии</small><b>${fmt(fee)} USDT</b></div></div><p class="info-box"><b>Почему AI открыл:</b><br>${details.reason}<br><br><b>Источник:</b> ${trade.source || 'paper_activity_engine'}</p><p class="info-box"><b>Почему минус/закрытие:</b><br>${details.closeReason}</p><h3>Голоса AI</h3><div class="bot-grid">${details.votes.map((vote) => `<div class="bot-row"><div><b>${vote[0]}</b><small>${vote[1]}</small></div><span class="bot-state">${vote[2]}</span></div>`).join('')}</div><h3>Журнал решения</h3><div class="bot-grid">${details.log.map((item, index) => `<div class="bot-row"><div><b>${clockMinus(details.log.length - index)} · ${item}</b><small>Demo decision log · обновляется при открытии</small></div><span class="bot-state">AI</span></div>`).join('')}</div></div>`;
     modal.classList.add('open');
     modal.querySelector('.modal-close')?.addEventListener('click', () => modal.classList.remove('open'));
   }
@@ -238,7 +241,7 @@
   function renderTrades(trades) {
     const table = document.querySelector('.mini-table tbody');
     if (!table) return;
-    const rows = (trades || []).slice(-8).reverse();
+    const rows = (trades || []).slice(-12).reverse();
     table.innerHTML = '';
     if (!rows.length) {
       table.innerHTML = '<tr><td>Сделок пока нет</td><td>0.00</td></tr>';
@@ -249,7 +252,7 @@
       const fee = Number(trade.fee || 0);
       const tr = document.createElement('tr');
       tr.className = 'trade-clickable';
-      tr.innerHTML = `<td><b>${trade.asset || trade.symbol || 'BTC/USDT'} ${trade.side || ''}</b><br><small>${trade.status || 'OPEN'} · комиссия ${fmt(fee)} USDT · нажми для отчёта</small></td><td class="${pnl >= 0 ? 'positive' : 'negative'}">${pnl >= 0 ? '+' : ''}${fmt(pnl)}</td>`;
+      tr.innerHTML = `<td><b>${trade.asset || trade.symbol || 'BTC/USDT'} ${trade.side || ''}</b><br><small>${trade.status || 'OPEN'} · комиссия ${fmt(fee)} USDT · ${trade.source || 'paper'} · нажми для отчёта</small></td><td class="${pnl >= 0 ? 'positive' : 'negative'}">${pnl >= 0 ? '+' : ''}${fmt(pnl)}</td>`;
       tr.addEventListener('click', () => openTradeDetail(trade));
       table.appendChild(tr);
     });
@@ -263,7 +266,6 @@
     setText('#portfolio-pnl', `${fmt(pnl)} USDT`);
     setText('#hero-risk', translateRisk(state.risk_level));
     setText('#hero-decision-mini', translateDecision(state.decision));
-    renderTrades(state.trades || []);
     setText('#exchange-mode', state.exchange_status?.mode === 'sandbox' ? 'Песочница' : 'Live');
     setText('#overview-exchange', 'Песочница');
     setText('#exchange-preview', state.online_monitoring?.order_preview_online ? 'Онлайн' : 'Ограничен');
@@ -274,11 +276,25 @@
     const best = state.bybit_costs?.best_trade_venue?.best || {};
     setText('#cost-best-venue', `${best.product || 'spot'} / ${best.liquidity || 'maker'}`);
     setText('#cost-roundtrip', `${fmt(best.round_trip_fee)} USDT`);
-    setText('#cost-breakeven-move', `${Number(best.break_even_move_percent || 0).toFixed(4)}%`);
+    setText('#cost-breakeven-move', `${Number(best.break_even_price || best.break_even_move_percent || 0).toFixed(4)}%`);
     setText('#cost-saving', `${fmt(state.bybit_costs?.best_trade_venue?.estimated_saving_vs_worst)} USDT`);
     setText('#mini-report-day', `${pnl >= 0 ? '+' : ''}${fmt(pnl)} USDT`);
     setText('#mini-report-fees', `${fmt(state.total_fees)} USDT`);
     setText('#mini-state-last-refresh', clock(lastStateRefresh));
+  }
+
+  function renderPaperState(paperState, autorun = {}) {
+    if (!paperState) return;
+    lastPaperRefresh = new Date();
+    const summary = paperState.summary || {};
+    renderTrades(paperState.trades || []);
+    setText('#portfolio-equity', `${fmt(paperState.equity)} USDT`);
+    setText('#portfolio-pnl', `${fmt(summary.net_pnl)} USDT`);
+    setText('#exchange-fees', `${fmt(summary.total_fees)} USDT`);
+    setText('#exchange-drag', `${fmt(summary.total_fees)} USDT`);
+    setText('#mini-report-day', `${summary.net_pnl >= 0 ? '+' : ''}${fmt(summary.net_pnl)} USDT`);
+    setText('#mini-report-fees', `${fmt(summary.total_fees)} USDT`);
+    setText('#mini-paper-last-refresh', `${clock(lastPaperRefresh)} · ${summary.last_reason || 'ok'} · ${autorun.thread_alive ? 'autorun alive' : 'autorun ?'}`);
   }
 
   function renderNews(payload) {
@@ -298,6 +314,15 @@
     try {
       const response = await fetch('/api/demo/state', { cache: 'no-store' });
       if (response.ok) renderState((await response.json()).state || {});
+    } catch (_) {}
+  }
+
+  async function loadPaperActivity() {
+    try {
+      const response = await fetch('/api/paper-activity/state', { cache: 'no-store' });
+      if (!response.ok) return;
+      const payload = await response.json();
+      renderPaperState(payload.state || {}, payload.autorun || {});
     } catch (_) {}
   }
 
@@ -374,6 +399,7 @@
       const payload = await runDemoCommand(value);
       renderState(payload.state || {});
       addMessage('ai', payload.reply || 'Команда выполнена.');
+      loadPaperActivity();
     } catch (_) {
       addMessage('ai', 'Команда не выполнена. Нужен свежий деплой backend или проверка Render logs.');
     }
@@ -391,6 +417,7 @@
     setText('#mini-live-clock', `Запущено ${clock(bootTime)} · сейчас ${clock()}`);
     setText('#mini-state-last-refresh', lastStateRefresh ? clock(lastStateRefresh) : '—');
     setText('#mini-bots-last-refresh', lastBotRefresh ? clock(lastBotRefresh) : '—');
+    setText('#mini-paper-last-refresh', lastPaperRefresh ? `${clock(lastPaperRefresh)} · ${freshness(lastPaperRefresh)}` : '—');
   }
 
   window.addEventListener('DOMContentLoaded', () => {
@@ -398,11 +425,13 @@
     installRiskPersistence();
     installChat();
     loadDemoState();
+    loadPaperActivity();
     loadStressLab();
     loadBots();
     refreshNews();
     $$('[data-stress]').forEach((button) => button.addEventListener('click', () => loadStressLab(button.dataset.stress)));
     setInterval(loadDemoState, 15000);
+    setInterval(loadPaperActivity, 15000);
     setInterval(loadBots, 30000);
     setInterval(refreshNews, 120000);
     setInterval(refreshFreshnessLabels, 1000);
