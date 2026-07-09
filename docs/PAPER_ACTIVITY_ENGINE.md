@@ -12,36 +12,36 @@ _demo_trades() -> ровно 3 demo-сделки
 
 Также `trading_intelligence.trade_gate` намеренно не размещает ордера и держит LIVE locked.
 
-## Что добавлено
+## Почему за ночь сделки не добавились
 
-Файл:
+Причина была в связке:
+
+```text
+Mini App -> /api/demo/state -> _demo_trades() -> ровно 3 статичные сделки
+```
+
+Новый `Paper Activity Engine` уже был добавлен, но экран Mini App “Сделки” его не читал. Поэтому ночью ничего не менялось на экране.
+
+## Что исправлено
+
+Файлы:
 
 ```text
 paper_activity_engine.py
-```
-
-Dashboard API:
-
-```text
+paper_activity_autorun.py
 dashboard/paper_activity_api.py
+dashboard/static/mini-app-live.js
+dashboard/templates/index.html
 ```
 
-Launch Check integration:
+Теперь:
 
 ```text
-dashboard/launch_check_api.py
-```
-
-## Что умеет
-
-```text
-активный paper tick
-открывать paper-сделку
-ждать интервал
-закрывать старую позицию при лимите open positions
-объяснять last_reason
-хранить state в JSON
-не трогать реальные ордера
+1. Paper engine умеет catch_up после сна сервера/ночи.
+2. Dashboard запускает background autorun loop при startup.
+3. /api/paper-activity/state делает безопасный catch_up.
+4. Mini App “Сделки” читает /api/paper-activity/state.
+5. UI показывает last_reason, last tick age и autorun status.
 ```
 
 ## Runtime state
@@ -59,8 +59,10 @@ PAPER_ACTIVITY_STATE_FILE
 ## Настройки
 
 ```text
+PAPER_ACTIVITY_AUTORUN_ENABLED=1
 PAPER_ACTIVITY_TICK_SECONDS=60
 PAPER_ACTIVITY_MAX_OPEN=5
+PAPER_ACTIVITY_MAX_CATCH_UP_TICKS=24
 ```
 
 Минимальный tick interval — 5 секунд.
@@ -70,6 +72,7 @@ PAPER_ACTIVITY_MAX_OPEN=5
 ```text
 GET  /api/paper-activity/state
 POST /api/paper-activity/tick
+POST /api/paper-activity/catch-up
 POST /api/paper-activity/reset
 GET  /paper-activity
 ```
@@ -82,12 +85,23 @@ GET  /paper-activity
 }
 ```
 
+Catch-up после ночи:
+
+```json
+{
+  "max_ticks": 24
+}
+```
+
 ## Почему он может ждать
 
 В state смотреть:
 
 ```text
-summary.last_reason
+state.summary.last_reason
+state.summary.last_tick_age_seconds
+autorun.thread_alive
+autorun.status
 ```
 
 Возможные причины:
@@ -97,6 +111,7 @@ not_started
 waiting_interval:Ns_left
 opened_paper_trade
 max_open_reached_closed_oldest
+catch_up_completed:N_ticks
 trade_gate_blocked_demo
 ```
 
@@ -147,4 +162,10 @@ python -m uvicorn dashboard.app:app --reload
 
 ```powershell
 Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/paper-activity/tick -ContentType 'application/json' -Body '{"force":true}'
+```
+
+Чтобы догнать ночь:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/paper-activity/catch-up -ContentType 'application/json' -Body '{"max_ticks":24}'
 ```
