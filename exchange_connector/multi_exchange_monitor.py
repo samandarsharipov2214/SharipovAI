@@ -19,7 +19,7 @@ class MultiExchangeMonitor:
         self.market_data = market_data or MarketDataService()
         configured = os.getenv("MULTI_EXCHANGE_SYMBOLS", "BTCUSDT,ETHUSDT,SOLUSDT")
         self.symbols = [item.strip().upper() for item in configured.split(",") if item.strip()]
-        self.interval_seconds = max(float(os.getenv("MULTI_EXCHANGE_POLL_SECONDS", "5")), 2.0)
+        self.interval_seconds = max(float(os.getenv("MULTI_EXCHANGE_POLL_SECONDS", "2")), 1.0)
         self.state_path = durable_data_path("MULTI_EXCHANGE_STATE_FILE", "data/multi_exchange_market.json")
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
