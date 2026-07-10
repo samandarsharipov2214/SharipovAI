@@ -1,58 +1,88 @@
-"""Trading intelligence layer: market regime and strict trade gate.
+"""Trading intelligence layer: verified market regime and strict trade gate.
 
-This is a safety-first layer. It does not place real exchange orders. It answers
-whether the system may use virtual-account execution and why real/live execution
-must remain locked.
+This safety-first layer never places real orders. When no explicit payload is
+provided it reads a verified public quote through exchange_connector.market_data.
+If current market data cannot be verified, virtual and live entries are blocked.
 """
-
 from __future__ import annotations
 
 from typing import Any
+
+from exchange_connector.market_data import MarketDataService, MarketDataUnavailable
 
 try:
     from news_monitor.analyzer import analyzed_news_payload
 except Exception:  # pragma: no cover
     analyzed_news_payload = None  # type: ignore[assignment]
 
+_MARKET_DATA = MarketDataService()
+
+
+def verified_market_payload(symbol: str = "BTCUSDT") -> dict[str, Any]:
+    """Return normalized live inputs with provenance for downstream safety gates."""
+    quote = _MARKET_DATA.quote(symbol)
+    change = float(quote.change_24h_percent or 0.0)
+    volume = float(quote.volume_24h or 0.0)
+    return {
+        "symbol": quote.symbol,
+        "market_data_verified": quote.verified,
+        "exchange_ok": quote.verified,
+        "price": quote.price,
+        "price_change_24h_percent": change,
+        "volatility_percent": abs(change),
+        "trend_score": max(-1.0, min(1.0, change / 10.0)),
+        "liquidity_score": 80.0 if volume > 0 else 35.0,
+        "market_quote": quote.to_dict(),
+    }
+
+
+def _resolved_payload(payload: dict[str, Any] | None) -> tuple[dict[str, Any], str | None]:
+    if payload is not None:
+        result = dict(payload)
+        result.setdefault("market_data_verified", bool(result.get("exchange_ok", False)))
+        return result, None
+    try:
+        return verified_market_payload(), None
+    except MarketDataUnavailable as exc:
+        return {
+            "market_data_verified": False,
+            "exchange_ok": False,
+            "symbol": "BTCUSDT",
+        }, str(exc)
+
 
 def market_regime(payload: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Detect simple market regime from optional market payload.
+    """Detect market regime from verified live data or an explicit test payload."""
+    payload, market_error = _resolved_payload(payload)
+    if not bool(payload.get("market_data_verified", False)):
+        return {
+            "status": "blocked",
+            "regime": "market_data_unavailable",
+            "risk_level": "high",
+            "recommended_action": "BLOCK",
+            "inputs": payload,
+            "market_data_error": market_error,
+            "explanation": "актуальная котировка не подтверждена; анализ и вход по выдуманной цене запрещены",
+        }
 
-    Expected optional fields: volatility_percent, trend_score, spread_percent,
-    news_shock_score, liquidity_score.
-    """
-
-    payload = payload or {}
-    volatility = float(payload.get("volatility_percent", 2.5) or 0)
-    trend_score = float(payload.get("trend_score", 0.2) or 0)
+    volatility = float(payload.get("volatility_percent", 0.0) or 0)
+    trend_score = float(payload.get("trend_score", 0.0) or 0)
     spread = float(payload.get("spread_percent", 0.05) or 0)
     news_shock = float(payload.get("news_shock_score", _news_shock_score()) or 0)
     liquidity = float(payload.get("liquidity_score", 75) or 0)
 
     if news_shock >= 70:
-        regime = "news_shock"
-        risk = "high"
-        action = "WAIT"
+        regime, risk, action = "news_shock", "high", "WAIT"
     elif volatility >= 8:
-        regime = "panic"
-        risk = "high"
-        action = "BLOCK"
+        regime, risk, action = "panic", "high", "BLOCK"
     elif spread >= 0.25 or liquidity < 35:
-        regime = "bad_execution"
-        risk = "high"
-        action = "WAIT"
+        regime, risk, action = "bad_execution", "high", "WAIT"
     elif abs(trend_score) >= 0.65 and volatility < 6:
-        regime = "trend"
-        risk = "medium"
-        action = "VIRTUAL_ONLY"
+        regime, risk, action = "trend", "medium", "VIRTUAL_ONLY"
     elif volatility <= 2 and abs(trend_score) < 0.35:
-        regime = "range_low_volatility"
-        risk = "medium"
-        action = "WAIT"
+        regime, risk, action = "range_low_volatility", "medium", "WAIT"
     else:
-        regime = "mixed"
-        risk = "medium"
-        action = "WATCH"
+        regime, risk, action = "mixed", "medium", "WATCH"
 
     return {
         "status": "ok",
@@ -66,25 +96,27 @@ def market_regime(payload: dict[str, Any] | None = None) -> dict[str, Any]:
             "news_shock_score": news_shock,
             "liquidity_score": liquidity,
         },
+        "market_quote": payload.get("market_quote"),
         "explanation": _regime_explanation(regime),
     }
 
 
 def trade_gate(payload: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Strict safety gate: can SharipovAI use virtual execution now?"""
-
-    payload = payload or {}
-    regime = market_regime(payload)
-    live_requested = bool(payload.get("live_requested", False))
-    ai_score = float(payload.get("ai_consensus_score", 62) or 0)
-    risk_per_trade = float(payload.get("risk_per_trade_percent", 1.0) or 0)
-    news_credibility = float(payload.get("news_credibility_percent", _news_credibility()) or 0)
-    exchange_ok = bool(payload.get("exchange_ok", True))
-    has_strategy_approval = bool(payload.get("strategy_approved", False))
+    """Strict gate for virtual execution; real execution always remains locked."""
+    resolved, market_error = _resolved_payload(payload)
+    regime = market_regime(resolved)
+    live_requested = bool(resolved.get("live_requested", False))
+    ai_score = float(resolved.get("ai_consensus_score", 62) or 0)
+    risk_per_trade = float(resolved.get("risk_per_trade_percent", 1.0) or 0)
+    news_credibility = float(resolved.get("news_credibility_percent", _news_credibility()) or 0)
+    exchange_ok = bool(resolved.get("exchange_ok", False))
+    market_verified = bool(resolved.get("market_data_verified", False))
+    has_strategy_approval = bool(resolved.get("strategy_approved", False))
 
     blockers: list[str] = []
     warnings: list[str] = []
-
+    if not market_verified:
+        blockers.append("Актуальная рыночная котировка не подтверждена. Любой вход заблокирован.")
     if live_requested:
         blockers.append("REAL/LIVE execution заблокирован: нужен ручной unlock и отдельная проверка безопасности.")
     if regime["recommended_action"] in {"BLOCK", "WAIT"}:
@@ -100,14 +132,17 @@ def trade_gate(payload: dict[str, Any] | None = None) -> dict[str, Any]:
     if not has_strategy_approval:
         warnings.append("Стратегия не прошла полный backtest/virtual-account pipeline. Разрешён только virtual-watch режим.")
 
-    decision = "BLOCK" if blockers else "VIRTUAL_ONLY" if warnings or not has_strategy_approval else "VIRTUAL_ALLOWED"
+    decision = "BLOCK" if blockers else "VIRTUAL_ONLY" if warnings else "VIRTUAL_ALLOWED"
     return {
-        "status": "ok",
+        "status": "ok" if market_verified else "blocked",
         "decision": decision,
         "can_trade_virtual": decision in {"VIRTUAL_ONLY", "VIRTUAL_ALLOWED"},
-        "can_trade_demo": decision in {"VIRTUAL_ONLY", "VIRTUAL_ALLOWED"},  # backward compatibility
+        "can_trade_demo": decision in {"VIRTUAL_ONLY", "VIRTUAL_ALLOWED"},
         "can_trade_live": False,
         "can_trade_real": False,
+        "market_data_verified": market_verified,
+        "market_data_error": market_error,
+        "market_quote": resolved.get("market_quote"),
         "blockers": blockers,
         "warnings": warnings,
         "market_regime": regime,
@@ -129,9 +164,7 @@ def _news_shock_score() -> float:
     try:
         news = analyzed_news_payload()
         summary = news.get("summary", {}) if isinstance(news, dict) else {}
-        urgent = int(summary.get("urgent_count", 0) or 0)
-        needs_confirmation = int(summary.get("needs_confirmation", 0) or 0)
-        return min(100, urgent * 25 + needs_confirmation * 10)
+        return min(100, int(summary.get("urgent_count", 0) or 0) * 25 + int(summary.get("needs_confirmation", 0) or 0) * 10)
     except Exception:
         return 35
 
