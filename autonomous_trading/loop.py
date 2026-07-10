@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import os
 import threading
-import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -40,18 +39,10 @@ class AutonomousPaperLoop:
         self._stop.set()
 
     def snapshot(self) -> dict[str, Any]:
-        with self._lock:
-            state = json.loads(json.dumps(self._state))
         market = self.stream.snapshot()
-        positions_value = 0.0
-        unrealized = 0.0
-        for symbol, position in state["positions"].items():
-            quote = market.get("quotes", {}).get(symbol)
-            current = float(quote["price"]) if quote else float(position["entry_price"])
-            positions_value += current * float(position["quantity"])
-            unrealized += (current - float(position["entry_price"])) * float(position["quantity"])
-        state["unrealized_pnl"] = round(unrealized, 8)
-        state["equity"] = round(float(state["cash"]) + positions_value, 8)
+        with self._lock:
+            self._mark_to_market(market)
+            state = json.loads(json.dumps(self._state))
         state["market_stream"] = {k: market.get(k) for k in ("status", "connected", "verified", "age_seconds", "last_error")}
         state["real_execution_enabled"] = False
         return state
@@ -61,28 +52,30 @@ class AutonomousPaperLoop:
         if not market.get("verified"):
             self._event("BLOCK", "Market stream is unavailable or stale; no paper order created")
             return
-        for symbol in self.stream.symbols:
-            try:
-                quote = self.stream.quote(symbol)
-            except RuntimeError as exc:
-                self._event("BLOCK", str(exc), symbol)
-                continue
-            change = quote.change_24h_percent
-            if change is None:
-                continue
-            position = self._state["positions"].get(symbol)
-            if position:
-                entry = float(position["entry_price"])
-                move = (quote.price - entry) / entry * 100
-                if move <= -self.stop_loss_percent:
-                    self._close(symbol, quote.price, "stop_loss")
-                elif move >= self.take_profit_percent:
-                    self._close(symbol, quote.price, "take_profit")
-                elif change <= self.exit_change_percent:
-                    self._close(symbol, quote.price, "momentum_exit")
-            elif change >= self.entry_change_percent:
-                self._open(symbol, quote.price, "positive_24h_momentum")
-        self._persist()
+        with self._lock:
+            for symbol in self.stream.symbols:
+                try:
+                    quote = self.stream.quote(symbol)
+                except RuntimeError as exc:
+                    self._event("BLOCK", str(exc), symbol)
+                    continue
+                change = quote.change_24h_percent
+                if change is None:
+                    continue
+                position = self._state["positions"].get(symbol)
+                if position:
+                    entry = float(position["entry_price"])
+                    move = (quote.price - entry) / entry * 100
+                    if move <= -self.stop_loss_percent:
+                        self._close(symbol, quote.price, "stop_loss")
+                    elif move >= self.take_profit_percent:
+                        self._close(symbol, quote.price, "take_profit")
+                    elif change <= self.exit_change_percent:
+                        self._close(symbol, quote.price, "momentum_exit")
+                elif change >= self.entry_change_percent:
+                    self._open(symbol, quote.price, "positive_24h_momentum")
+            self._mark_to_market(market)
+            self._persist()
 
     def _open(self, symbol: str, price: float, reason: str) -> None:
         cash = float(self._state["cash"])
@@ -92,8 +85,13 @@ class AutonomousPaperLoop:
             return
         quantity = budget / price
         self._state["cash"] = cash - budget - fee
-        self._state["positions"][symbol] = {"quantity": quantity, "entry_price": price,
-            "opened_at": self._now(), "entry_fee": fee, "reason": reason}
+        self._state["positions"][symbol] = {
+            "quantity": quantity,
+            "entry_price": price,
+            "opened_at": self._now(),
+            "entry_fee": fee,
+            "reason": reason,
+        }
         self._state["total_fees"] += fee
         self._trade(symbol, "BUY", quantity, price, fee, reason, None)
 
@@ -109,21 +107,58 @@ class AutonomousPaperLoop:
         self._state["total_fees"] += fee
         self._trade(symbol, "SELL", quantity, price, fee, reason, net)
 
-    def _trade(self, symbol: str, side: str, quantity: float, price: float, fee: float,
-               reason: str, net_pnl: float | None) -> None:
-        self._state["trades"].append({"time": self._now(), "symbol": symbol, "side": side,
-            "quantity": quantity, "price": price, "fee": fee, "net_pnl": net_pnl,
-            "reason": reason, "source": "bybit_websocket", "verified_market_data": True})
+    def _trade(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price: float,
+        fee: float,
+        reason: str,
+        net_pnl: float | None,
+    ) -> None:
+        self._state["trades"].append({
+            "time": self._now(),
+            "symbol": symbol,
+            "side": side,
+            "quantity": quantity,
+            "price": price,
+            "fee": fee,
+            "net_pnl": net_pnl,
+            "reason": reason,
+            "source": "bybit_websocket",
+            "verified_market_data": True,
+        })
         self._state["trades"] = self._state["trades"][-500:]
         self._event(side, reason, symbol)
 
     def _event(self, action: str, reason: str, symbol: str | None = None) -> None:
-        self._state["events"].append({"time": self._now(), "action": action, "symbol": symbol, "reason": reason})
-        self._state["events"] = self._state["events"][-1000:]
-        self._state["last_action"] = action
-        self._state["last_reason"] = reason
+        with self._lock:
+            self._state["events"].append({
+                "time": self._now(),
+                "action": action,
+                "symbol": symbol,
+                "reason": reason,
+            })
+            self._state["events"] = self._state["events"][-1000:]
+            self._state["last_action"] = action
+            self._state["last_reason"] = reason
+            self._state["updated_at"] = self._now()
+            self._persist()
+
+    def _mark_to_market(self, market: dict[str, Any]) -> None:
+        positions_value = 0.0
+        unrealized = 0.0
+        quotes = market.get("quotes", {}) if isinstance(market, dict) else {}
+        for symbol, position in self._state["positions"].items():
+            quote = quotes.get(symbol)
+            current = float(quote["price"]) if quote and float(quote.get("price", 0)) > 0 else float(position["entry_price"])
+            quantity = float(position["quantity"])
+            positions_value += current * quantity
+            unrealized += (current - float(position["entry_price"])) * quantity
+        self._state["unrealized_pnl"] = round(unrealized, 8)
+        self._state["equity"] = round(float(self._state["cash"]) + positions_value, 8)
         self._state["updated_at"] = self._now()
-        self._persist()
 
     def _run(self) -> None:
         while not self._stop.wait(self.tick_seconds):
@@ -140,10 +175,20 @@ class AutonomousPaperLoop:
                     return data
             except Exception:
                 pass
-        return {"mode": "autonomous_paper", "cash": self.initial_cash, "equity": self.initial_cash,
-                "realized_pnl": 0.0, "unrealized_pnl": 0.0, "total_fees": 0.0,
-                "positions": {}, "trades": [], "events": [], "last_action": "START",
-                "last_reason": "Autonomous paper account initialized", "updated_at": self._now()}
+        return {
+            "mode": "autonomous_paper",
+            "cash": self.initial_cash,
+            "equity": self.initial_cash,
+            "realized_pnl": 0.0,
+            "unrealized_pnl": 0.0,
+            "total_fees": 0.0,
+            "positions": {},
+            "trades": [],
+            "events": [],
+            "last_action": "START",
+            "last_reason": "Autonomous paper account initialized",
+            "updated_at": self._now(),
+        }
 
     def _persist(self) -> None:
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
