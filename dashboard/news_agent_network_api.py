@@ -8,8 +8,8 @@ from typing import Any
 from fastapi import Body, FastAPI
 from fastapi.responses import HTMLResponse
 
+from news_monitor.agent_bridge import bridge_events, bridge_status, start_agent_bridge
 from news_monitor.agent_network import (
-    AGENTS,
     agent_detail,
     network_status,
     run_agent,
@@ -27,11 +27,14 @@ def install_news_agent_network_api(app: FastAPI) -> None:
     @app.on_event("startup")
     def news_agent_network_startup() -> None:
         app.state.news_agent_network = start_agent_network()
+        app.state.news_agent_bridge = start_agent_bridge()
 
     @app.get("/api/news-agents/status")
     def news_agents_status() -> dict[str, Any]:
         refresh_news_if_stale(reason="news_agent_network_status")
-        return network_status(run_due=True)
+        payload = network_status(run_due=True)
+        payload["bridge"] = bridge_status()
+        return payload
 
     @app.get("/api/news-agents")
     def news_agents() -> dict[str, Any]:
@@ -44,24 +47,35 @@ def install_news_agent_network_api(app: FastAPI) -> None:
     @app.post("/api/news-agents/{agent_id}/run")
     def news_agent_run(agent_id: str) -> dict[str, Any]:
         refresh_news_if_stale(reason=f"news_agent_manual:{agent_id}")
-        return run_agent(agent_id)
+        result = run_agent(agent_id)
+        result["bridge"] = bridge_events()
+        return result
 
     @app.post("/api/news-agents/run-all")
     def news_agents_run_all(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
         refresh_news_if_stale(reason="news_agent_manual_all")
-        return run_due_agents(force=bool((payload or {}).get("force", True)))
+        result = run_due_agents(force=bool((payload or {}).get("force", True)))
+        result["bridge"] = bridge_events()
+        return result
+
+    @app.post("/api/news-agents/bridge")
+    def news_agents_bridge() -> dict[str, Any]:
+        return bridge_events()
 
     @app.get("/news-agents", response_class=HTMLResponse)
     def news_agents_page() -> HTMLResponse:
         refresh_news_if_stale(reason="news_agent_page")
-        return HTMLResponse(_render(network_status(run_due=True)))
+        payload = network_status(run_due=True)
+        payload["bridge"] = bridge_status()
+        return HTMLResponse(_render(payload))
 
 
 def _render(payload: dict[str, Any]) -> str:
     agents = payload.get("agents", [])
     cards = "".join(_agent_card(agent) for agent in agents)
     coordinator = payload.get("coordinator", {})
-    return f"""<!doctype html><html lang='ru'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>SharipovAI · News Agents</title><style>{_css()}</style></head><body><main><section class='hero'><span class='pill'>{escape(str(payload.get('status')))}</span><h1>Specialized News AI Network</h1><p>Каждый агент имеет собственный цикл, память, freshness, ошибки и маршруты к другим органам AI.</p><p><a href='/api/news-agents/status'>JSON status</a> · <a href='/api/social-news/rss/refresh'>Refresh RSS</a> · <a href='/realtime-status'>Realtime Status</a></p></section><section class='grid'>{cards}</section><section class='panel'><h2>World News Coordinator</h2><pre>{escape(str(coordinator))}</pre></section><script>setTimeout(()=>location.reload(),30000)</script></main></body></html>"""
+    bridge = payload.get("bridge", {})
+    return f"""<!doctype html><html lang='ru'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>SharipovAI · News Agents</title><style>{_css()}</style></head><body><main><section class='hero'><span class='pill'>{escape(str(payload.get('status')))}</span><h1>Specialized News AI Network</h1><p>Каждый агент имеет собственный цикл, память, freshness, ошибки и маршруты к другим органам AI.</p><p><a href='/api/news-agents/status'>JSON status</a> · <a href='/api/social-news/rss/refresh'>Refresh RSS</a> · <a href='/realtime-status'>Realtime Status</a></p></section><section class='panel'><h2>Связь с системными ботами</h2><p>Bridge thread: <b>{escape(str(bridge.get('thread_alive')))}</b> · отправлено в последнем цикле: <b>{escape(str(bridge.get('last_sent_count', 0)))}</b></p></section><section class='grid'>{cards}</section><section class='panel'><h2>World News Coordinator</h2><pre>{escape(str(coordinator))}</pre></section><script>setTimeout(()=>location.reload(),30000)</script></main></body></html>"""
 
 
 def _agent_card(agent: dict[str, Any]) -> str:
