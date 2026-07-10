@@ -1,52 +1,43 @@
-"""Telegram webhook endpoints for SharipovAI.
-
-Render starts the web app with uvicorn, so long polling in telegram_bot.py does
-not run automatically. Webhook mode lets Telegram deliver updates directly to
-this FastAPI app.
-"""
-
+"""Secure Telegram webhook and Mini App authentication for SharipovAI."""
 from __future__ import annotations
 
-import html
+import hashlib
+import hmac
+import json
 import os
+import time
 from typing import Any
+from urllib.parse import parse_qsl
 
 import httpx
-from fastapi import BackgroundTasks, Body, FastAPI, Header
-from fastapi.responses import HTMLResponse
+from fastapi import BackgroundTasks, Body, FastAPI, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from telegram_bot import handle_callback, handle_message, main_keyboard, send_message, setup_bot_commands
 from telegram_health import telegram_health
 
 TELEGRAM_API_TIMEOUT = 20.0
+MINIAPP_MAX_AGE_SECONDS = int(os.getenv("TELEGRAM_INIT_DATA_MAX_AGE", "3600"))
 
 
 def install_telegram_webhook_api(app: FastAPI) -> None:
-    """Install Telegram bot webhook and management endpoints."""
-
     if getattr(app.state, "telegram_webhook_api_installed", False):
         return
     app.state.telegram_webhook_api_installed = True
 
     @app.on_event("startup")
     def telegram_auto_configure_webhook() -> None:
-        """Best-effort Render startup hook: set Telegram webhook automatically."""
-
         app.state.telegram_webhook_autoconfigure = _auto_configure_webhook()
 
     @app.get("/api/telegram/status")
     def telegram_status() -> dict[str, Any]:
-        status = _telegram_status()
-        status["auto_configure"] = getattr(app.state, "telegram_webhook_autoconfigure", None)
-        return status
+        result = _telegram_status()
+        result["auto_configure"] = getattr(app.state, "telegram_webhook_autoconfigure", None)
+        return result
 
     @app.get("/api/telegram/self-test")
     def telegram_self_test() -> dict[str, Any]:
         return telegram_health()
-
-    @app.get("/telegram-check", response_class=HTMLResponse)
-    def telegram_check_page() -> HTMLResponse:
-        return HTMLResponse(_render_telegram_check(_telegram_status(), telegram_health()))
 
     @app.post("/telegram/webhook")
     async def telegram_webhook(
@@ -54,142 +45,167 @@ def install_telegram_webhook_api(app: FastAPI) -> None:
         update: dict[str, Any] = Body(default_factory=dict),
         x_telegram_bot_api_secret_token: str | None = Header(default=None),
     ) -> dict[str, Any]:
-        """Receive one Telegram update and acknowledge it before heavy AI work."""
-
-        expected_secret = _webhook_secret()
-        if expected_secret and x_telegram_bot_api_secret_token != expected_secret:
-            return {"ok": False, "error": "invalid_webhook_secret"}
+        expected = _webhook_secret()
+        if not expected or not hmac.compare_digest(x_telegram_bot_api_secret_token or "", expected):
+            raise HTTPException(status_code=403, detail="invalid_webhook_secret")
+        if not isinstance(update, dict) or "update_id" not in update:
+            raise HTTPException(status_code=400, detail="invalid_telegram_update")
         background_tasks.add_task(_process_update_safely, update)
         return {"ok": True, "queued": True}
 
     @app.get("/api/telegram/set-webhook")
-    def set_webhook_get() -> dict[str, Any]:
-        result = _set_webhook()
-        app.state.telegram_webhook_autoconfigure = result
-        return result
+    def set_webhook_get() -> JSONResponse:
+        return JSONResponse(status_code=405, content={"status": "method_not_allowed", "use": "POST /api/telegram/set-webhook with X-SharipovAI-Admin"})
 
     @app.post("/api/telegram/set-webhook")
-    def set_webhook_post() -> dict[str, Any]:
+    def set_webhook_post(x_sharipovai_admin: str | None = Header(default=None)) -> dict[str, Any]:
+        _require_admin_token(x_sharipovai_admin)
         result = _set_webhook()
         app.state.telegram_webhook_autoconfigure = result
         return result
 
     @app.get("/api/telegram/delete-webhook")
-    def delete_webhook_get() -> dict[str, Any]:
-        return _delete_webhook()
+    def delete_webhook_get() -> JSONResponse:
+        return JSONResponse(status_code=405, content={"status": "method_not_allowed", "use": "POST /api/telegram/delete-webhook with X-SharipovAI-Admin"})
 
     @app.post("/api/telegram/delete-webhook")
-    def delete_webhook_post() -> dict[str, Any]:
+    def delete_webhook_post(x_sharipovai_admin: str | None = Header(default=None)) -> dict[str, Any]:
+        _require_admin_token(x_sharipovai_admin)
         return _delete_webhook()
 
     @app.post("/api/telegram/test-message")
-    def telegram_test_message(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
-        payload = payload or {}
-        chat_id = payload.get("chat_id")
+    def telegram_test_message(
+        payload: dict[str, Any] | None = Body(default=None),
+        x_sharipovai_admin: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        _require_admin_token(x_sharipovai_admin)
+        chat_id = (payload or {}).get("chat_id")
         if not chat_id:
-            return {"status": "error", "error": "chat_id_required"}
-        send_message(int(chat_id), "✅ SharipovAI Telegram webhook работает. AI Chat Orchestrator подключён.", main_keyboard())
+            raise HTTPException(status_code=400, detail="chat_id_required")
+        send_message(int(chat_id), "✅ Telegram webhook работает. Mini App авторизация включена.", main_keyboard())
         return {"status": "ok", "sent": True}
+
+    @app.post("/api/telegram/miniapp-auth")
+    def miniapp_auth(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
+        init_data = str((payload or {}).get("init_data", ""))
+        validation = validate_miniapp_init_data(init_data)
+        if not validation["ok"]:
+            raise HTTPException(status_code=401, detail=validation["error"])
+        return {"status": "ok", "authenticated": True, "user": validation.get("user"), "auth_date": validation.get("auth_date")}
+
+
+def validate_miniapp_init_data(init_data: str) -> dict[str, Any]:
+    token = _bot_token()
+    if not token:
+        return {"ok": False, "error": "BOT_TOKEN_missing"}
+    if not init_data:
+        return {"ok": False, "error": "init_data_missing"}
+    try:
+        pairs = dict(parse_qsl(init_data, keep_blank_values=True, strict_parsing=True))
+    except ValueError:
+        return {"ok": False, "error": "init_data_malformed"}
+    received_hash = pairs.pop("hash", "")
+    pairs.pop("signature", None)
+    if not received_hash:
+        return {"ok": False, "error": "hash_missing"}
+    data_check_string = "\n".join(f"{key}={pairs[key]}" for key in sorted(pairs))
+    secret_key = hmac.new(b"WebAppData", token.encode("utf-8"), hashlib.sha256).digest()
+    calculated = hmac.new(secret_key, data_check_string.encode("utf-8"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(received_hash, calculated):
+        return {"ok": False, "error": "invalid_hash"}
+    try:
+        auth_date = int(pairs.get("auth_date", "0"))
+    except ValueError:
+        return {"ok": False, "error": "invalid_auth_date"}
+    now = int(time.time())
+    if auth_date <= 0 or abs(now - auth_date) > MINIAPP_MAX_AGE_SECONDS:
+        return {"ok": False, "error": "init_data_expired"}
+    user: dict[str, Any] | None = None
+    if pairs.get("user"):
+        try:
+            parsed = json.loads(pairs["user"])
+            user = parsed if isinstance(parsed, dict) else None
+        except json.JSONDecodeError:
+            return {"ok": False, "error": "invalid_user_json"}
+    return {"ok": True, "auth_date": auth_date, "user": user, "query_id": pairs.get("query_id")}
 
 
 def _process_update_safely(update: dict[str, Any]) -> None:
-    """Process a Telegram update without letting failures become webhook 502/500."""
-
     try:
-        if "message" in update:
+        if isinstance(update.get("message"), dict):
             handle_message(update["message"])
-        if "callback_query" in update:
+        if isinstance(update.get("callback_query"), dict):
             handle_callback(update["callback_query"])
-    except Exception as exc:  # pragma: no cover - production safety net
-        print(f"Telegram webhook update processing error: {type(exc).__name__}: {exc}")
-        _send_fallback_error(update, exc)
-
-
-def _send_fallback_error(update: dict[str, Any], exc: Exception) -> None:
-    chat_id = _chat_id_from_update(update)
-    if not chat_id:
-        return
-    try:
-        send_message(
-            int(chat_id),
-            "⚠️ SharipovAI получил команду, но один внутренний модуль упал. "
-            f"Webhook не сломан; ошибка передана в лог Render: {html.escape(type(exc).__name__)}. "
-            "Попробуй /start или /status.",
-        )
-    except Exception as send_exc:  # pragma: no cover
-        print(f"Telegram fallback send failed: {type(send_exc).__name__}: {send_exc}")
-
-
-def _chat_id_from_update(update: dict[str, Any]) -> int | None:
-    message = update.get("message") or {}
-    if isinstance(message, dict):
-        chat = message.get("chat") or {}
-        if isinstance(chat, dict) and chat.get("id"):
-            return int(chat["id"])
-    callback = update.get("callback_query") or {}
-    if isinstance(callback, dict):
-        callback_message = callback.get("message") or {}
-        if isinstance(callback_message, dict):
-            chat = callback_message.get("chat") or {}
-            if isinstance(chat, dict) and chat.get("id"):
-                return int(chat["id"])
-    return None
+    except Exception as exc:
+        print(f"Telegram webhook processing error: {type(exc).__name__}: {exc}", flush=True)
 
 
 def _auto_configure_webhook() -> dict[str, Any]:
-    """Set webhook automatically unless explicitly disabled by env."""
-
     enabled = os.getenv("TELEGRAM_AUTO_SET_WEBHOOK", "1").strip().lower()
     if enabled in {"0", "false", "no", "off"}:
-        return {"status": "disabled", "reason": "TELEGRAM_AUTO_SET_WEBHOOK=0"}
-    if not _bot_token():
-        return {"status": "skipped", "reason": "BOT_TOKEN is missing"}
-    if not _webapp_url():
-        return {"status": "skipped", "reason": "WEBAPP_URL is missing"}
-    try:
-        return _set_webhook()
-    except Exception as exc:  # pragma: no cover - startup must not fail app
-        return {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
+        return {"status": "disabled"}
+    if not _bot_token() or not _webapp_url():
+        return {"status": "skipped", "reason": "BOT_TOKEN_or_WEBAPP_URL_missing"}
+    return _set_webhook()
+
+
+def _set_webhook() -> dict[str, Any]:
+    webhook_url = f"{_webapp_url()}/telegram/webhook"
+    commands = _safe_setup_commands()
+    payload = {
+        "url": webhook_url,
+        "secret_token": _webhook_secret(),
+        "drop_pending_updates": False,
+        "allowed_updates": ["message", "callback_query"],
+        "max_connections": 20,
+    }
+    result = _telegram("setWebhook", payload)
+    return {"status": "ok" if result.get("ok") else "error", "webhook_url": webhook_url, "secret_token_configured": True, "set_webhook": result, "commands": commands}
+
+
+def _delete_webhook() -> dict[str, Any]:
+    result = _telegram("deleteWebhook", {"drop_pending_updates": False})
+    return {"status": "ok" if result.get("ok") else "error", "delete_webhook": result}
 
 
 def _telegram_status() -> dict[str, Any]:
     token = _bot_token()
-    status: dict[str, Any] = {
+    result: dict[str, Any] = {
         "status": "ok" if token else "missing_token",
         "bot_token_configured": bool(token),
         "webapp_url": _webapp_url(),
         "webhook_endpoint": "/telegram/webhook",
         "webhook_secret_configured": bool(_webhook_secret()),
-        "auto_set_webhook_enabled": os.getenv("TELEGRAM_AUTO_SET_WEBHOOK", "1").strip().lower() not in {"0", "false", "no", "off"},
         "mode": "webhook",
-        "set_webhook_url": "/api/telegram/set-webhook",
-        "delete_webhook_url": "/api/telegram/delete-webhook",
-        "self_test_url": "/api/telegram/self-test",
+        "miniapp_auth": "/api/telegram/miniapp-auth",
     }
     if token:
-        status["telegram_get_me"] = _telegram("getMe")
-        status["webhook_info"] = _telegram("getWebhookInfo")
-    return status
+        result["telegram_get_me"] = _telegram("getMe")
+        result["webhook_info"] = _telegram("getWebhookInfo")
+    return result
 
 
-def _render_telegram_check(status: dict[str, Any], health: dict[str, Any]) -> str:
-    get_me = status.get("telegram_get_me", {}) if isinstance(status, dict) else {}
-    bot = get_me.get("result", {}) if isinstance(get_me, dict) else {}
-    webhook = status.get("webhook_info", {}) if isinstance(status, dict) else {}
-    webhook_result = webhook.get("result", {}) if isinstance(webhook, dict) else {}
-    token_ok = "ДА" if status.get("bot_token_configured") else "НЕТ"
-    secret_ok = "ДА" if status.get("webhook_secret_configured") else "НЕТ"
-    auto_ok = "ДА" if status.get("auto_set_webhook_enabled") else "НЕТ"
-    webapp = html.escape(str(status.get("webapp_url") or "не задан"))
-    username = html.escape(str(bot.get("username") or "неизвестно"))
-    webhook_url = html.escape(str(webhook_result.get("url") or "не установлен"))
-    pending = html.escape(str(webhook_result.get("pending_update_count", 0)))
-    last_error = html.escape(str(webhook_result.get("last_error_message") or "нет"))
-    verdict = html.escape(str(health.get("verdict", "unknown")))
-    explanation = html.escape(str(health.get("explanation", "")))
-    score = html.escape(str(health.get("health_score", 0)))
-    next_fix = html.escape(str(health.get("next_fix", "")))
-    return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SharipovAI · Telegram Check</title><style>body{{margin:0;background:#070b12;color:#eef4ff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}}main{{padding:18px;max-width:900px;margin:auto}}.card{{background:#111827;border:1px solid #243044;border-radius:18px;padding:16px;margin:12px 0;box-shadow:0 20px 60px rgba(0,0,0,.25)}}.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}}.stat{{background:#0b1220;border:1px solid #1f2a3d;border-radius:14px;padding:12px}}small{{display:block;color:#8ea2c4}}b{{font-size:22px}}a{{color:#60a5fa;font-weight:800}}.ok{{display:inline-block;background:#10b981;color:#03130d;border-radius:999px;padding:7px 12px;font-weight:900}}.warn{{display:inline-block;background:#f59e0b;color:#120a02;border-radius:999px;padding:7px 12px;font-weight:900}}</style></head><body><main><section class="card"><span class="ok">TELEGRAM CHECK</span><h1>Проверка Telegram Bot</h1><p>После деплоя web-сервис сам пытается установить webhook. Если бот молчит, нажми Set webhook один раз.</p><p><a href="/">Главная</a> · <a href="/api/telegram/status">JSON status</a> · <a href="/api/telegram/self-test">Self-test</a> · <a href="/api/telegram/set-webhook">Set webhook</a> · <a href="/api/telegram/delete-webhook">Delete webhook</a></p></section><section class="card"><h2>Self-test</h2><div class="grid"><div class="stat"><small>Verdict</small><b>{verdict}</b></div><div class="stat"><small>Health</small><b>{score}</b></div></div><p>{explanation}</p><p><small>Next fix</small>{next_fix}</p></section><section class="card"><div class="grid"><div class="stat"><small>BOT_TOKEN</small><b>{token_ok}</b></div><div class="stat"><small>Webhook secret</small><b>{secret_ok}</b></div><div class="stat"><small>Auto webhook</small><b>{auto_ok}</b></div><div class="stat"><small>Bot username</small><b>@{username}</b></div><div class="stat"><small>Mode</small><b>webhook</b></div><div class="stat"><small>Pending updates</small><b>{pending}</b></div></div></section><section class="card"><h2>Webhook</h2><p><small>WEBAPP_URL</small>{webapp}</p><p><small>Webhook URL</small>{webhook_url}</p><p><small>Last error</small>{last_error}</p></section><section class="card"><h2>Что делать</h2><ol><li>Сделать Deploy latest commit.</li><li>Открыть эту страницу.</li><li>Если Webhook URL пустой — нажать <b>Set webhook</b>.</li><li>Написать боту /start.</li></ol></section></main></body></html>"""
+def _safe_setup_commands() -> dict[str, Any]:
+    try:
+        setup_bot_commands()
+        return {"ok": True}
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+def _telegram(method: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    token = _bot_token()
+    if not token:
+        return {"ok": False, "error": "BOT_TOKEN_missing"}
+    try:
+        with httpx.Client(timeout=TELEGRAM_API_TIMEOUT) as client:
+            response = client.post(f"https://api.telegram.org/bot{token}/{method}", json=payload or {})
+            data = response.json()
+            if response.is_error:
+                return {"ok": False, "status_code": response.status_code, "telegram": data}
+            return data if isinstance(data, dict) else {"ok": False, "raw": data}
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
 
 def _bot_token() -> str:
@@ -201,45 +217,20 @@ def _webapp_url() -> str:
 
 
 def _webhook_secret() -> str:
-    return os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
+    configured = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
+    if configured:
+        return configured
+    source = os.getenv("AUTH_SECRET", "").strip() or _bot_token()
+    return hashlib.sha256(f"sharipovai-webhook:{source}".encode("utf-8")).hexdigest()
 
 
-def _telegram(method: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-    token = _bot_token()
-    if not token:
-        return {"ok": False, "error": "BOT_TOKEN is missing"}
-    try:
-        with httpx.Client(timeout=TELEGRAM_API_TIMEOUT) as client:
-            response = client.post(f"https://api.telegram.org/bot{token}/{method}", json=payload or {})
-            data = response.json()
-            return data if isinstance(data, dict) else {"ok": False, "raw": data}
-    except Exception as exc:  # pragma: no cover - network/runtime safety
-        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+def _admin_token() -> str:
+    return os.getenv("TELEGRAM_ADMIN_SECRET", "").strip() or os.getenv("AUTH_SECRET", "").strip()
 
 
-def _set_webhook() -> dict[str, Any]:
-    base = _webapp_url()
-    if not _bot_token():
-        return {"status": "error", "error": "BOT_TOKEN is missing in Render env"}
-    if not base:
-        return {"status": "error", "error": "WEBAPP_URL is missing in Render env"}
-    webhook_url = f"{base}/telegram/webhook"
-    commands_result = _safe_setup_commands()
-    payload: dict[str, Any] = {"url": webhook_url, "drop_pending_updates": False, "allowed_updates": ["message", "callback_query"]}
-    if _webhook_secret():
-        payload["secret_token"] = _webhook_secret()
-    result = _telegram("setWebhook", payload)
-    return {"status": "ok" if result.get("ok") else "error", "webhook_url": webhook_url, "secret_token_configured": bool(_webhook_secret()), "set_webhook": result, "commands": commands_result, "health_after": telegram_health()}
-
-
-def _delete_webhook() -> dict[str, Any]:
-    result = _telegram("deleteWebhook", {"drop_pending_updates": False})
-    return {"status": "ok" if result.get("ok") else "error", "delete_webhook": result}
-
-
-def _safe_setup_commands() -> dict[str, Any]:
-    try:
-        setup_bot_commands()
-        return {"ok": True}
-    except Exception as exc:  # pragma: no cover
-        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+def _require_admin_token(provided: str | None) -> None:
+    expected = _admin_token()
+    if not expected:
+        raise HTTPException(status_code=503, detail="TELEGRAM_ADMIN_SECRET_or_AUTH_SECRET_missing")
+    if not hmac.compare_digest(provided or "", expected):
+        raise HTTPException(status_code=403, detail="admin_token_invalid")
