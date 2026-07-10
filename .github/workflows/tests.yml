@@ -5,29 +5,87 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONUNBUFFERED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      ADMIN_USERNAME: ci-admin
+      ADMIN_PASSWORD: ci-test-password
+      AUTH_SECRET: ci-test-secret
+      SHARIPOVAI_DISABLE_AUTH: "1"
+      MARKET_STREAM_ENABLED: "0"
+      AUTONOMOUS_PAPER_ENABLED: "0"
+      AUTONOMOUS_TESTNET_BRIDGE_ENABLED: "0"
+      AUTONOMOUS_TESTNET_ENABLED: "0"
+      TESTNET_EXECUTION_ENABLED: "0"
+      EXCHANGE_LIVE_TRADING_ENABLED: "0"
+      EXECUTION_KILL_SWITCH: "1"
+      EXCHANGE_MODE: sandbox
+      AUTONOMOUS_PAPER_STATE_FILE: /tmp/sharipovai-autonomous-paper.json
+      MARKET_STREAM_STATE_FILE: /tmp/sharipovai-market-stream.json
+      TESTNET_BRIDGE_STATE_FILE: /tmp/sharipovai-testnet-bridge.json
+      EXECUTION_JOURNAL_FILE: /tmp/sharipovai-execution-journal.json
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python 3.12.8
         uses: actions/setup-python@v5
         with:
           python-version: "3.12.8"
+          cache: pip
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          pip install pytest httpx fastapi uvicorn
+          python -m pip install --upgrade pip --quiet
+          pip install -r requirements.txt --quiet
 
-      - name: Run tests
-        env:
-          ADMIN_USERNAME: Samandar2212
-          ADMIN_PASSWORD: ci-test-password
-          AUTH_SECRET: ci-test-secret
-          SHARIPOVAI_DISABLE_AUTH: "1"
-        run: python -m pytest
+      - name: Compile Python sources
+        run: python -m compileall -q .
+
+      - name: Import application safely
+        run: python -c "import dashboard; assert dashboard.app is not None; print('dashboard import: ok')"
+
+      - name: Verify execution safety defaults
+        run: |
+          python - <<'PY'
+          from exchange_connector.bybit_execution import BybitExecutionClient
+          status = BybitExecutionClient().status()
+          assert status["live_execution_enabled"] is False
+          assert status["testnet_execution_enabled"] is False
+          assert status["kill_switch"] is True
+          print("execution safety gates: ok")
+          PY
+
+      - name: Run test suite
+        id: pytest
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          python -m pytest -q --disable-warnings --maxfail=1 2>&1 | tee pytest-output.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload pytest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-output
+          path: pytest-output.txt
+          if-no-files-found: error
+
+      - name: Fail when pytest failed
+        if: steps.pytest.outputs.exit_code != '0'
+        run: exit 1
