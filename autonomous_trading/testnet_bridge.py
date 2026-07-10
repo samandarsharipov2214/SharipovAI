@@ -44,24 +44,40 @@ class AutonomousTestnetBridge:
         }
 
     def tick(self) -> None:
+        trades = self._paper_trades()
         if not _truthy("AUTONOMOUS_TESTNET_ENABLED"):
-            self._state["last_status"] = "disabled"
-            self._persist()
+            self._baseline(trades, "disabled")
             return
+
         assessment = self.stages.assess()
         if assessment.eligible_stage < 3:
-            self._state["last_status"] = "blocked_by_stage_evidence"
-            self._persist()
+            self._baseline(trades, "blocked_by_stage_evidence")
             return
-        trades = self._paper_trades()
-        processed = int(self._state.get("processed_trade_count", 0))
+
+        processed = min(int(self._state.get("processed_trade_count", 0)), len(trades))
         for index, trade in enumerate(trades[processed:], start=processed):
             if trade.get("side") not in {"BUY", "SELL"}:
                 self._state["processed_trade_count"] = index + 1
+                self._persist()
                 continue
-            price = float(trade.get("price", 0))
-            paper_quantity = float(trade.get("quantity", 0))
+            price = float(trade.get("price", 0) or 0)
+            paper_quantity = float(trade.get("quantity", 0) or 0)
             safe_quantity = min(paper_quantity, self.client.max_notional / price) if price > 0 else 0
+            if safe_quantity <= 0:
+                self.journal.append({
+                    "status": "blocked_or_error",
+                    "mode": self.client.mode,
+                    "symbol": trade.get("symbol"),
+                    "side": trade.get("side"),
+                    "quantity": safe_quantity,
+                    "paper_trade_index": index,
+                    "message": "Invalid paper trade price or quantity",
+                    "origin": "autonomous_bridge",
+                })
+                self._state["processed_trade_count"] = index + 1
+                self._state["last_status"] = "skipped_invalid_trade"
+                self._persist()
+                continue
             try:
                 result = self.client.place_market_order(
                     symbol=str(trade.get("symbol", "")),
@@ -97,6 +113,12 @@ class AutonomousTestnetBridge:
                 self._state["last_error"] = f"{type(exc).__name__}: {exc}"
                 self._persist()
                 break
+
+    def _baseline(self, trades: list[dict[str, Any]], status: str) -> None:
+        if not _truthy("TESTNET_REPLAY_HISTORICAL_TRADES"):
+            self._state["processed_trade_count"] = len(trades)
+        self._state["last_status"] = status
+        self._persist()
 
     def _run(self) -> None:
         while not self._stop.wait(self.interval):
