@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 
-from autonomous_trading import StageController
+from autonomous_trading import ExecutionJournal, StageController
 from exchange_connector.bybit_execution import BybitExecutionClient
 
 
@@ -14,7 +14,8 @@ def install_execution_stages_api(app: FastAPI) -> None:
         return
     app.state.execution_stages_api_installed = True
     app.state.execution_client = BybitExecutionClient()
-    app.state.stage_controller = StageController()
+    app.state.execution_journal = ExecutionJournal()
+    app.state.stage_controller = StageController(journal=app.state.execution_journal)
 
     @app.get("/api/execution/stage-status")
     def stage_status() -> dict[str, Any]:
@@ -22,6 +23,7 @@ def install_execution_stages_api(app: FastAPI) -> None:
             "status": "ok",
             "assessment": app.state.stage_controller.assess().to_dict(),
             "execution": app.state.execution_client.status(),
+            "journal": app.state.execution_journal.summary(),
             "real_profit_guaranteed": False,
         }
 
@@ -38,5 +40,15 @@ def install_execution_stages_api(app: FastAPI) -> None:
                 reference_price=float(payload.get("reference_price", 0)),
             )
         except (ValueError, RuntimeError) as exc:
+            app.state.execution_journal.append({
+                "status": "blocked_or_error",
+                "mode": client.mode,
+                "symbol": payload.get("symbol"),
+                "side": payload.get("side"),
+                "quantity": payload.get("quantity"),
+                "message": str(exc),
+                "origin": "manual_api",
+            })
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return result.to_dict()
+        recorded = app.state.execution_journal.append({**result.to_dict(), "origin": "manual_api"})
+        return {**result.to_dict(), "evidence_recorded_at": recorded["recorded_at"]}
