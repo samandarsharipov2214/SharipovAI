@@ -6,27 +6,33 @@ Run with:
 
 from __future__ import annotations
 
+from html import escape
 from typing import Any
 
 from fastapi import Request, Response
 from fastapi.responses import HTMLResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from .app import _load_users, _record_security_event, _session_username
+from .app import _load_access_requests, _load_users, _record_security_event, _session_username
 from .menu_visibility import hide_security_link_for_non_admin
 from .roles import is_admin, resolve_role
 from .secure_app import create_secure_app
-
 
 SECURITY_PATHS = ("/security", "/api/security")
 
 
 def create_admin_secure_app(runner_factory: Any | None = None):
     """Create app with login lockout, role menu and admin-only security center."""
-
     dashboard = create_secure_app(runner_factory=runner_factory)
     dashboard.add_middleware(RoleAwareMenuMiddleware)
     dashboard.add_middleware(AdminOnlySecurityMiddleware)
+
+    @dashboard.get("/security", response_class=HTMLResponse)
+    def security_center(request: Request) -> HTMLResponse:
+        username = _session_username(request) or "admin"
+        requests = _load_access_requests()
+        pending = [entry for entry in requests.values() if isinstance(entry, dict) and entry.get("status") == "pending"]
+        return HTMLResponse(_security_center_html(username=username, pending_count=len(pending)))
 
     @dashboard.get("/api/auth/role")
     def auth_role(request: Request) -> dict[str, Any]:
@@ -61,8 +67,7 @@ class RoleAwareMenuMiddleware:
         content_type = ""
         for message in captured:
             if message.get("type") == "http.response.start":
-                headers = message.get("headers", [])
-                content_type = _header_value(headers, b"content-type")
+                content_type = _header_value(message.get("headers", []), b"content-type")
                 break
 
         if "text/html" not in content_type:
@@ -71,15 +76,13 @@ class RoleAwareMenuMiddleware:
             return
 
         body = b"".join(message.get("body", b"") for message in captured if message.get("type") == "http.response.body")
-        text = body.decode("utf-8")
-        text = hide_security_link_for_non_admin(text, admin=admin)
+        text = hide_security_link_for_non_admin(body.decode("utf-8"), admin=admin)
         body_bytes = text.encode("utf-8")
 
         for message in captured:
             if message.get("type") == "http.response.start":
                 headers = [(key, value) for key, value in message.get("headers", []) if key.lower() != b"content-length"]
-                message = {**message, "headers": headers}
-                await send(message)
+                await send({**message, "headers": headers})
             elif message.get("type") == "http.response.body":
                 await send({"type": "http.response.body", "body": body_bytes, "more_body": False})
                 break
@@ -127,6 +130,10 @@ def _header_value(headers: list[tuple[bytes, bytes]], name: bytes) -> str:
         if key.lower() == name.lower():
             return value.decode("latin1")
     return ""
+
+
+def _security_center_html(*, username: str, pending_count: int) -> str:
+    return f"""<!doctype html><html lang='ru'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>SharipovAI · Кибер-безопасность</title><style>body{{min-height:100vh;margin:0;background:#020817;color:#f8fbff;font-family:Inter,system-ui,sans-serif}}main{{width:min(920px,92vw);margin:40px auto}}.card{{border:1px solid #38bdf844;background:#071426;border-radius:28px;padding:24px;box-shadow:0 30px 80px #0008}}.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px}}.stat{{border:1px solid #ffffff18;border-radius:18px;padding:16px;background:#0b1b2c}}small{{color:#94a3b8}}a{{color:#7dd3fc}}</style></head><body><main><h1>Кибер-безопасность</h1><p>Администратор: {escape(username)}</p><section class='card'><div class='grid'><div class='stat'><small>Статус</small><h2>Защищено</h2></div><div class='stat'><small>Заявки</small><h2>{pending_count}</h2></div><div class='stat'><small>Роль</small><h2>admin</h2></div></div><p><a href='/api/security/access-requests'>Открыть заявки доступа</a></p></section></main></body></html>"""
 
 
 def _forbidden_page_html() -> str:
