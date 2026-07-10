@@ -1,15 +1,15 @@
-"""Full SharipovAI system AI auditor.
+"""Canonical SharipovAI system auditor.
 
-The auditor must not let one broken AI poison the whole report. Every subsystem
-is checked with failure isolation: if News/Telegram/Learning/etc. fails, the
-report marks that module as broken instead of crashing all other AI organs.
+Audits the 9 canonical AI organs from ai_architecture_registry.py. Interfaces,
+storage and transports are reported separately and never inflate AI counts.
+One failed probe is isolated and cannot crash the full report.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any, Callable
 
+from ai_architecture_registry import CANONICAL_AI_ORGANS, NON_AI_COMPONENTS, architecture_snapshot
 from ai_evidence import enrich_ai_status, system_scoreboard
 from sharipovai_constitution import CAPITAL_MODE, EXECUTION_MODE, constitution_snapshot, now_iso
 from telegram_health import telegram_health
@@ -20,252 +20,201 @@ except Exception:  # pragma: no cover
     audit_news_ai = None  # type: ignore[assignment]
 
 
-@dataclass(frozen=True)
-class SystemBot:
-    id: str
-    name: str
-    responsibility: str
-    evidence: tuple[str, ...]
-    missing: tuple[str, ...]
-    critical: bool = False
-
-
-SYSTEM_BOTS: tuple[SystemBot, ...] = (
-    SystemBot("general_controller", "General Controller AI", "Главный контролёр: следит за ботами, ошибками, простоями, качеством и соблюдением конституции virtual-account.", ("Есть системный аудит.", "Есть supervisor decision.", "Есть /api/ai-bots last_seen/last_action."), ("Нужен независимый cron/self-test с историей.",), True),
-    SystemBot("risk_engine", "Risk Engine AI", "Оценивает риск сделки, блокирует опасные действия, запрещает real execution без ручного разрешения.", ("Есть risk state.", "Есть stress lab сценарии.", "Real execution заблокирован."), ("Нужна связь с реальным read-only портфелем.",), True),
-    SystemBot("virtual_trader", "Virtual Account Execution AI", "Исполняет сделки только на виртуальном счёте и показывает PnL без реальных ордеров.", ("Есть /api/virtual-account/state.", "Есть виртуальные сделки.", "Есть комиссии, catch-up и autorun."), ("Нужны execution-quality метрики: slippage/spread/fill quality.",), True),
-    SystemBot("exchange_cost_ai", "Exchange Cost AI", "Считает комиссии, break-even, fee impact и стоимость сделки.", ("Есть cost intelligence.", "Комиссии учитываются в virtual account PnL."), ("Нужен live read-only sync комиссий/ставок.", "Нужен slippage simulator."), True),
-    SystemBot("learning_engine", "Learning Engine AI", "Учится на ошибках, сделках, новостях и улучшает правила.", ("Есть Learning Engine 2.0 skeleton.", "Ошибки виртуального счёта считаются уроками."), ("Нужна постоянная база ошибок.", "Нужен approval workflow для новых правил.")),
-    SystemBot("stress_lab_ai", "Stress Lab AI", "Проверяет капитал на падение рынка, depeg, ликвидации и стресс.", ("Есть stress scenarios.", "Есть shock simulation.", "Есть prevented_loss_amount."), ("Нужно больше сценариев: depeg, exchange outage, funding spike.",), True),
-    SystemBot("portfolio_report_ai", "Portfolio & Reports AI", "Показывает equity, PnL, комиссии, сделки и отчёты.", ("Есть virtual account state с equity/PnL/fees.",), ("Нужен read-only портфель реальной биржи.", "Нужен export daily/weekly report.")),
-    SystemBot("security_cyber_ai", "Security/Cyber AI", "Следит за доступами, секретами, real-execution lock и кибер-рисками.", ("Real execution disabled.", "Есть security news sources.", "Реальные ордера запрещены без ручного разрешения."), ("Нужен secret scanner.", "Нужен suspicious login alert."), True),
-    SystemBot("telegram_bot_ai", "Telegram Bot AI", "Общается с пользователем в Telegram, открывает Mini App и показывает realtime status.", ("Есть telegram_bot.py.", "Есть webhook API.", "Есть Telegram self-test.", "Есть virtual-account ответы."), ("Нужен production webhook self-test с историей последних ошибок.",), True),
-    SystemBot("mini_app_ui_ai", "Mini App UI AI", "Показывает dashboard, новости, сделки, риск, чат и live freshness в Telegram Mini App.", ("Есть live pages.", "Есть Mini App JS.", "Есть virtual-account live balance override.", "Есть realtime status endpoint."), ("Добавить Evidence replay к кнопке 'Можно ли торговать?'.",)),
-)
+PROBE_HINTS: dict[str, dict[str, Any]] = {
+    "general_controller": {
+        "evidence": ["Canonical architecture registry", "Failure-isolated system audit", "General Controller owns supervision/recovery"],
+        "missing": ["Нужен always-on watchdog на ПК и история recovery attempts."],
+        "verdict": "частично работает",
+    },
+    "market_intelligence": {
+        "evidence": ["Market regime/trade gate", "Read-only exchange integration paths"],
+        "missing": ["Нужно подтвердить runtime-свежесть котировок на основном ПК/сервере."],
+        "verdict": "частично работает",
+    },
+    "news_intelligence": {
+        "evidence": ["RSS autorun", "Specialized News Agent Network", "Source credibility/freshness"],
+        "missing": ["Telegram/X/YouTube агенты ждут внешние credentials/API."],
+        "verdict": "частично работает",
+    },
+    "risk_engine": {
+        "evidence": ["Trade blocking", "Drawdown/risk checks", "Stress Lab is a Risk submodule"],
+        "missing": ["Нужна связь с read-only реальным портфелем и live market freshness."],
+        "verdict": "работает",
+    },
+    "portfolio_engine": {
+        "evidence": ["Virtual account equity/PnL/fees", "Reports owned by Portfolio"],
+        "missing": ["Нужен read-only реальный портфель и стабильный daily/weekly export."],
+        "verdict": "частично работает",
+    },
+    "virtual_execution": {
+        "evidence": ["Virtual-only execution", "Fees/trade history", "Real orders blocked"],
+        "missing": ["Нужны slippage, spread и fill-quality метрики."],
+        "verdict": "работает",
+    },
+    "decision_quality": {
+        "evidence": ["Confidence and Consensus unified under one owner", "Conflict/consensus message types"],
+        "missing": ["Нужен единый runtime endpoint и калибровка confidence по фактическим исходам."],
+        "verdict": "недоработан",
+    },
+    "learning_engine": {
+        "evidence": ["Learning OS", "Evidence integration", "Controlled lessons/rules/exams"],
+        "missing": ["Нужна постоянная база ошибок и approval workflow для новых правил."],
+        "verdict": "недоработан",
+    },
+    "security_guard": {
+        "evidence": ["Policy guard", "Access/auth controls", "Real-order lock"],
+        "missing": ["Нужны secret scanner и suspicious-login alerts."],
+        "verdict": "частично работает",
+    },
+}
 
 
 def audit_system_ai() -> dict[str, object]:
-    """Audit all system AI bots and include News AI and Telegram health audit."""
+    """Audit canonical AI organs and non-AI components separately."""
 
-    system_interviews = [_safe_interview_system_bot(bot) for bot in SYSTEM_BOTS]
-    telegram = _safe_telegram_health()
-    system_interviews = _apply_telegram_health(system_interviews, telegram)
     news_audit = _safe_news_audit()
-    news_interviews = _normalize_news_interviews(news_audit)
-    all_interviews = [enrich_ai_status(item) for item in system_interviews + news_interviews]
-    working = [item for item in all_interviews if item.get("verdict") == "работает"]
-    partial = [item for item in all_interviews if item.get("verdict") in {"частично работает", "недоработан"}]
-    fake_like = [item for item in all_interviews if item.get("verdict") in {"делает вид", "заглушка"}]
-    critical_bad = [item for item in all_interviews if item.get("critical") and item.get("verdict") != "работает"]
-    news_agents = [item for item in all_interviews if item.get("scope") == "news"]
-    scoreboard = _safe_scoreboard(news_agents)
+    telegram = _safe_call("telegram_health", telegram_health)
+    organs = [_audit_organ(organ.id, organ.name, organ.responsibility, organ.critical, news_audit) for organ in CANONICAL_AI_ORGANS]
+    working = [item for item in organs if item["verdict"] == "работает"]
+    partial = [item for item in organs if item["verdict"] in {"частично работает", "недоработан"}]
+    failed = [item for item in organs if item["verdict"] in {"ошибка", "заглушка"}]
+    critical_bad = [item for item in organs if item.get("critical") and item["verdict"] != "работает"]
+    scoreboard = _safe_scoreboard(organs)
+    components = _component_status(telegram)
+    architecture = architecture_snapshot()
     return {
         "status": "ok",
         "generated_at": now_iso(),
         "constitution": constitution_snapshot(),
+        "architecture": architecture,
         "auditor": {
-            "name": "System AI Auditor",
-            "role": "Проводит беседу со всеми AI-органами SharipovAI и изолирует ошибки модулей.",
-            "total": len(all_interviews),
+            "name": "Canonical System AI Auditor",
+            "role": "Проверяет 9 настоящих AI-органов без дублирования интерфейсов и подсистем.",
+            "total": len(organs),
             "working": len(working),
             "partial_or_underbuilt": len(partial),
-            "fake_like": len(fake_like),
+            "failed": len(failed),
+            "fake_like": len(failed),
             "critical_bad": len(critical_bad),
             "average_proof_score": scoreboard.get("average_proof_score", 0),
-            "overall_grade": _grade(len(working), len(all_interviews), len(fake_like), len(critical_bad)),
-            "summary": _summary(len(working), len(all_interviews), len(fake_like), len(critical_bad), scoreboard.get("average_proof_score", 0), telegram),
+            "overall_grade": _grade(len(working), len(organs), len(failed), len(critical_bad)),
+            "summary": _summary(working=len(working), total=len(organs), partial=len(partial), failed=len(failed), critical_bad=len(critical_bad)),
         },
         "scoreboard": scoreboard,
+        "interviews": organs,
+        "system_interviews": organs,
+        "components": components,
         "telegram_health": telegram,
-        "interviews": all_interviews,
-        "system_interviews": [item for item in all_interviews if item.get("scope") == "system"],
         "news_audit": news_audit,
-        "priority_actions": _priority_actions(all_interviews, telegram),
+        "priority_actions": _priority_actions(organs, components),
+        "resolved_merges": architecture["resolved_merges"],
     }
 
 
-def _safe_call(name: str, fn: Callable[[], dict[str, Any]]) -> dict[str, Any]:
-    try:
-        result = fn()
-        return result if isinstance(result, dict) else {"status": "error", "error": f"{name} returned non-dict"}
-    except Exception as exc:
-        return {"status": "error", "module": name, "error": f"{type(exc).__name__}: {exc}", "generated_at": now_iso()}
-
-
-def _safe_news_audit() -> dict[str, Any]:
-    if not audit_news_ai:
-        return {"status": "error", "module": "news_monitor.ai_auditor", "error": "audit_news_ai import failed", "interviews": []}
-    result = _safe_call("news_monitor.ai_auditor", audit_news_ai)
-    result["interviews"] = _safe_interviews(result)
-    return result
-
-
-def _safe_interviews(news_audit: dict[str, Any]) -> list[dict[str, object]]:
-    interviews = news_audit.get("interviews", []) if isinstance(news_audit, dict) else []
-    return [item for item in interviews if isinstance(item, dict)] if isinstance(interviews, list) else []
-
-
-def _safe_telegram_health() -> dict[str, Any]:
-    return _safe_call("telegram_health", telegram_health)
-
-
-def _safe_scoreboard(news_agents: list[dict[str, Any]]) -> dict[str, Any]:
-    return _safe_call("system_scoreboard", lambda: system_scoreboard(news_agents))
-
-
-def _safe_interview_system_bot(bot: SystemBot) -> dict[str, object]:
-    try:
-        return _interview_system_bot(bot)
-    except Exception as exc:
-        return {
-            "id": bot.id,
-            "name": bot.name,
-            "scope": "system",
-            "critical": bot.critical,
-            "verdict": "недоработан",
-            "health_score": 0,
-            "last_seen": now_iso(),
-            "capital_mode": CAPITAL_MODE,
-            "execution_mode": EXECUTION_MODE,
-            "evidence": [],
-            "problems": [f"Ошибка интервью: {type(exc).__name__}: {exc}"],
-            "missing": ["Исправить падение self-audit этого AI."],
-            "next_fix": "Проверить импорт/зависимости/данные этого AI.",
-            "interview": [],
-        }
-
-
-def _apply_telegram_health(items: list[dict[str, object]], health: dict[str, Any]) -> list[dict[str, object]]:
-    out: list[dict[str, object]] = []
-    for item in items:
-        if item.get("id") != "telegram_bot_ai":
-            out.append(item)
-            continue
-        verdict = "работает" if health.get("verdict") == "working" else "частично работает"
-        updated = dict(item)
-        updated["verdict"] = verdict
-        updated["health_score"] = health.get("health_score", updated.get("health_score", 0))
-        updated["evidence"] = list(updated.get("evidence", [])) + [f"Telegram self-test verdict: {health.get('verdict', health.get('status'))}"]
-        updated["problems"] = [str(health.get("explanation", health.get("error", "")))]
-        updated["missing"] = [str(health.get("next_fix", "Проверить /telegram-check и webhook."))]
-        updated["next_fix"] = str(health.get("next_fix", "Проверить /telegram-check и webhook."))
-        updated["telegram_health"] = health
-        updated["last_seen"] = now_iso()
-        out.append(updated)
-    return out
-
-
-def _interview_system_bot(bot: SystemBot) -> dict[str, object]:
-    verdict = _system_verdict(bot)
-    health = 90 if verdict == "работает" else 72 if verdict == "частично работает" else 58
+def _audit_organ(organ_id: str, name: str, responsibility: str, critical: bool, news_audit: dict[str, Any]) -> dict[str, Any]:
+    hint = PROBE_HINTS[organ_id]
+    verdict = str(hint["verdict"])
+    evidence = list(hint["evidence"])
+    missing = list(hint["missing"])
+    runtime: dict[str, Any] = {}
+    if organ_id == "news_intelligence":
+        runtime = news_audit
+        if news_audit.get("status") == "error":
+            verdict = "ошибка"
+            missing.insert(0, f"News audit error: {news_audit.get('error', 'unknown')}")
+        else:
+            auditor = news_audit.get("auditor", {}) if isinstance(news_audit.get("auditor"), dict) else {}
+            working = int(auditor.get("working", 0) or 0)
+            total = int(auditor.get("total", 0) or 0)
+            evidence.append(f"News subagents working: {working}/{total}")
+            if working <= 0:
+                verdict = "недоработан"
+    health = {"работает": 90, "частично работает": 68, "недоработан": 48, "ошибка": 0, "заглушка": 10}.get(verdict, 30)
     item = {
-        "id": bot.id,
-        "name": bot.name,
-        "scope": "system",
-        "critical": bot.critical,
+        "id": organ_id,
+        "name": name,
+        "scope": "canonical_ai_organ",
+        "critical": critical,
+        "responsibility": responsibility,
         "verdict": verdict,
         "health_score": health,
         "last_seen": now_iso(),
         "capital_mode": CAPITAL_MODE,
-        "execution_mode": EXECUTION_MODE if bot.id == "virtual_trader" else "no_order_execution",
-        "evidence": list(bot.evidence),
-        "problems": list(bot.missing) if bot.missing else ["Критических проблем не найдено."],
-        "missing": list(bot.missing),
-        "next_fix": _next_fix(bot.id, verdict),
+        "execution_mode": EXECUTION_MODE if organ_id == "virtual_execution" else "no_order_execution",
+        "evidence": evidence,
+        "problems": missing,
+        "missing": missing,
+        "next_fix": missing[0] if missing else "Продолжать runtime monitoring.",
+        "runtime": runtime,
         "interview": [
-            {"q": "За что ты отвечаешь?", "a": bot.responsibility},
-            {"q": "Какие доказательства работы есть?", "a": " | ".join(bot.evidence)},
-            {"q": "Что у тебя недоделано?", "a": " | ".join(bot.missing) if bot.missing else "Серьёзных недоделок не найдено."},
+            {"q": "За что ты отвечаешь?", "a": responsibility},
+            {"q": "Ты дублируешь другой AI?", "a": "Нет. Владелец обязанностей закреплён в ai_architecture_registry.py."},
             {"q": "Твой честный статус?", "a": verdict},
-            {"q": "Что виртуально?", "a": "Только счёт и исполнение. Остальные органы AI должны работать как реальная система."},
         ],
     }
     return enrich_ai_status(item)
 
 
-def _system_verdict(bot: SystemBot) -> str:
-    if bot.id in {"virtual_trader", "exchange_cost_ai", "stress_lab_ai", "general_controller", "risk_engine", "telegram_bot_ai", "mini_app_ui_ai"}:
-        return "работает"
-    if bot.id == "learning_engine":
-        return "недоработан"
-    return "частично работает"
+def _component_status(telegram: dict[str, Any]) -> list[dict[str, Any]]:
+    statuses: list[dict[str, Any]] = []
+    for component_id, responsibility in NON_AI_COMPONENTS.items():
+        status = "configured"
+        details: dict[str, Any] = {}
+        if component_id == "telegram_bot":
+            status = "working" if telegram.get("verdict") == "working" else "warning"
+            details = telegram
+        statuses.append({
+            "id": component_id,
+            "kind": "component_not_ai",
+            "responsibility": responsibility,
+            "status": status,
+            "details": details,
+        })
+    return statuses
 
 
-def _normalize_news_interviews(news_audit: dict[str, object]) -> list[dict[str, object]]:
-    output: list[dict[str, object]] = []
-    if news_audit.get("status") == "error":
-        return [{
-            "id": "news_supervisor_ai",
-            "name": "News Supervisor AI",
-            "scope": "news",
-            "critical": True,
-            "verdict": "недоработан",
-            "health_score": 0,
-            "source_count": 0,
-            "item_count": 0,
-            "problems": [str(news_audit.get("error", "News audit failed"))],
-            "missing": ["Исправить News AI audit/import/runtime."],
-            "next_fix": "Проверить news_monitor.ai_auditor, RSS refresh и storage.",
-            "last_seen": now_iso(),
-        }]
-    for item in _safe_interviews(news_audit):
-        normalized = dict(item)
-        normalized["scope"] = "news"
-        normalized["critical"] = normalized.get("id") in {"finance_crypto_ai", "politics_government_ai", "security_news_ai", "world_news_ai"}
-        normalized.setdefault("last_seen", now_iso())
-        output.append(enrich_ai_status(normalized))
-    return output
+def _safe_news_audit() -> dict[str, Any]:
+    if audit_news_ai is None:
+        return {"status": "error", "error": "audit_news_ai import failed", "interviews": []}
+    return _safe_call("news_monitor.ai_auditor", audit_news_ai)
 
 
-def _next_fix(bot_id: str, verdict: str) -> str:
-    fixes = {
-        "general_controller": "Добавить cron/self-test с историей и Evidence replay.",
-        "risk_engine": "Подключить риск к реальному read-only портфелю и сохранять причины блокировки.",
-        "virtual_trader": "Добавить execution-quality метрики: slippage, spread, confidence decay и fill quality.",
-        "exchange_cost_ai": "Добавить live read-only sync комиссий/ставок и fallback cache.",
-        "learning_engine": "Подключить Learning Engine 2.0 к ошибкам сделок, новостей и риск-блокировок.",
-        "stress_lab_ai": "Добавить сценарии depeg, flash crash, exchange outage, funding spike.",
-        "portfolio_report_ai": "Добавить ежедневный/недельный отчёт и экспорт в Mini App.",
-        "security_cyber_ai": "Добавить секрет-сканер и security alerts по токенам/env/логинам.",
-        "telegram_bot_ai": "Держать webhook working и хранить историю последних ошибок Telegram.",
-        "mini_app_ui_ai": "Добавить Evidence replay к кнопке 'Можно ли торговать?'.",
-    }
-    return fixes.get(bot_id, "Добавить реальные входные данные, freshness score и журнал проверок.")
+def _safe_scoreboard(organs: list[dict[str, Any]]) -> dict[str, Any]:
+    return _safe_call("system_scoreboard", lambda: system_scoreboard(organs))
 
 
-def _priority_actions(items: list[dict[str, object]], telegram: dict[str, object]) -> list[str]:
-    actions: list[str] = []
-    if telegram.get("verdict") != "working":
-        actions.append(str(telegram.get("next_fix", "Открыть /telegram-check.")))
-    for target in ("news_supervisor_ai", "telegram_news_ai", "x_news_ai", "youtube_news_ai", "learning_engine", "security_cyber_ai", "portfolio_report_ai"):
-        item = next((entry for entry in items if entry.get("id") == target), None)
-        if item and item.get("verdict") != "работает":
-            actions.append(str(item.get("next_fix", "")))
-    actions.append("Показывать last_seen/last_action/capital_mode на Mini App и Telegram.")
-    actions.append("Любую ошибку модуля изолировать и отправлять в Learning/Evidence, не валить весь аудит.")
-    return [action for action in actions if action]
+def _safe_call(name: str, fn: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+    try:
+        result = fn()
+        return result if isinstance(result, dict) else {"status": "error", "module": name, "error": "non-dict response"}
+    except Exception as exc:
+        return {"status": "error", "module": name, "error": f"{type(exc).__name__}: {exc}", "generated_at": now_iso()}
 
 
-def _grade(working: int, total: int, fake_like: int, critical_bad: int) -> str:
-    if total <= 0:
-        return "FAIL"
-    if fake_like:
-        return "PARTIAL"
+def _priority_actions(organs: list[dict[str, Any]], components: list[dict[str, Any]]) -> list[str]:
+    actions = [str(item["next_fix"]) for item in organs if item["verdict"] != "работает"]
+    if any(item["status"] == "warning" for item in components):
+        actions.append("Исправить warning интерфейсов/транспортов, не создавая для этого новый AI.")
+    actions.append("Перед новым AI использовать responsibility_owner(); сначала расширять существующий орган.")
+    return list(dict.fromkeys(action for action in actions if action))
+
+
+def _grade(working: int, total: int, failed: int, critical_bad: int) -> str:
+    if total <= 0 or failed:
+        return "FAIL" if failed >= 2 else "PARTIAL"
+    ratio = working / total
     if critical_bad >= 3:
         return "PARTIAL"
-    if working / total >= 0.75:
+    if ratio >= 0.75:
         return "GOOD"
     return "PARTIAL"
 
 
-def _summary(working: int, total: int, fake_like: int, critical_bad: int, avg_proof: object, telegram: dict[str, object]) -> str:
-    telegram_line = f" Telegram: {telegram.get('verdict', telegram.get('status'))} ({telegram.get('explanation', telegram.get('error', ''))})."
+def _summary(*, working: int, total: int, partial: int, failed: int, critical_bad: int) -> str:
     return (
-        f"Работают полноценно: {working}/{total}. "
-        f"Делают вид/заглушки: {fake_like}. "
-        f"Критичных AI с недоработками: {critical_bad}. "
-        f"Средний proof score: {avg_proof}. "
-        "Модель исправлена: виртуальны только счёт и исполнение; AI-органы должны работать как real-system. "
-        "Падение одного AI теперь должно отображаться как проблема этого AI, а не ломать весь аудит."
-        f"{telegram_line}"
+        f"Канонических AI-органов: {total}. Полноценно работают: {working}. "
+        f"Частично/недоработаны: {partial}. Ошибки: {failed}. "
+        f"Критичных органов с недоработками: {critical_bad}. "
+        "Telegram, Mini App, Evidence Vault и message bus больше не считаются отдельными ИИ. "
+        "Supervisor объединён с General Controller; Stress Lab — часть Risk; Reports — часть Portfolio; Confidence и Consensus — Decision Quality."
     )
