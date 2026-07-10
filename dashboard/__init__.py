@@ -8,9 +8,11 @@ from __future__ import annotations
 
 from .app import app, create_app
 from .exceptions import DashboardError
+from .market_data_api import install_market_data_api
 from .news_agent_network_api import install_news_agent_network_api
 
 install_news_agent_network_api(app)
+install_market_data_api(app)
 
 try:
     from .telegram_news_agents import install_telegram_news_agent_commands
