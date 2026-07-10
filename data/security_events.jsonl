@@ -9,3 +9,14 @@
 {"event": "failed_login", "username": "samandar2212", "time": 1783635664, "ip": "testclient", "user_agent": "testclient", "metadata": {"reason": "bad_credentials", "failed_attempts": 3}}
 {"event": "login_locked", "username": "samandar2212", "time": 1783635664, "ip": "testclient", "user_agent": "testclient", "metadata": {"locked_until": 1783635724}}
 {"event": "login_blocked", "username": "samandar2212", "time": 1783635664, "ip": "testclient", "user_agent": "testclient", "metadata": {"seconds_left": 60}}
+{"event": "login", "username": "samandar2212", "time": 1783650310, "ip": "testclient", "user_agent": "testclient", "metadata": {}}
+{"event": "security_access_denied", "username": "anonymous", "time": 1783650310, "ip": "testclient", "user_agent": "testclient", "metadata": {"path": "/security", "role": "none"}}
+{"event": "login", "username": "samandar2212", "time": 1783650310, "ip": "testclient", "user_agent": "testclient", "metadata": {}}
+{"event": "security_access_denied", "username": "anonymous", "time": 1783650310, "ip": "testclient", "user_agent": "testclient", "metadata": {"path": "/api/security/access-requests", "role": "none"}}
+{"event": "policy_guard_blocked_action", "username": "anonymous", "time": 1783650317, "ip": "testclient", "user_agent": "testclient", "metadata": {"decision": "block", "reason": "policy_block_action", "action_type": "trade", "actor": "dashboard_runner", "topic": "trading"}}
+{"event": "policy_guard_blocked_action", "username": "anonymous", "time": 1783650318, "ip": "testclient", "user_agent": "testclient", "metadata": {"decision": "block", "reason": "policy_block_action", "action_type": "trade", "actor": "trade_gate", "topic": "trading"}}
+{"event": "failed_login", "username": "samandar2212", "time": 1783650318, "ip": "testclient", "user_agent": "testclient", "metadata": {"reason": "bad_credentials", "failed_attempts": 1}}
+{"event": "failed_login", "username": "samandar2212", "time": 1783650318, "ip": "testclient", "user_agent": "testclient", "metadata": {"reason": "bad_credentials", "failed_attempts": 2}}
+{"event": "failed_login", "username": "samandar2212", "time": 1783650318, "ip": "testclient", "user_agent": "testclient", "metadata": {"reason": "bad_credentials", "failed_attempts": 3}}
+{"event": "login_locked", "username": "samandar2212", "time": 1783650318, "ip": "testclient", "user_agent": "testclient", "metadata": {"locked_until": 1783650378}}
+{"event": "login_blocked", "username": "samandar2212", "time": 1783650318, "ip": "testclient", "user_agent": "testclient", "metadata": {"seconds_left": 60}}
