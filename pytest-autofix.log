@@ -4,43 +4,44 @@ rootdir: /home/runner/work/SharipovAI/SharipovAI
 configfile: pyproject.toml
 testpaths: agents/tests, ai_core/tests, confidence/tests, config/tests, consensus/tests, dashboard/tests, data_layer/tests, decision/tests, exchange_connector/tests, learning_engine/tests, news_agent/tests, paper_trading/tests, portfolio_engine/tests, risk_engine/tests, runner/tests
 plugins: anyio-4.14.1
-collected 244 items
+collected 247 items
 
 agents/tests/test_market_agent.py ......                                 [  2%]
 ai_core/tests/test_ai_core.py ......                                     [  4%]
 confidence/tests/test_confidence_engine.py .........                     [  8%]
-config/tests/test_config_loader.py ......                                [ 11%]
+config/tests/test_config_loader.py ......                                [ 10%]
 consensus/tests/test_consensus_engine.py .........                       [ 14%]
 dashboard/tests/test_admin_secure_app_roles.py FF                        [ 15%]
 dashboard/tests/test_ai_bots_and_chat.py FFFFF                           [ 17%]
-dashboard/tests/test_ai_bots_chat_questions.py F                         [ 18%]
+dashboard/tests/test_ai_bots_chat_questions.py F                         [ 17%]
 dashboard/tests/test_auth_security_flow.py FF                            [ 18%]
 dashboard/tests/test_bot_chat_persistence_api.py ..                      [ 19%]
 dashboard/tests/test_bot_communication_dashboard_integration.py ..       [ 20%]
-dashboard/tests/test_crash_hardening.py FFFF.                            [ 22%]
-dashboard/tests/test_dashboard.py .FFFF..FFFFFFF.FF.FFF...F.FFFFF        [ 35%]
+dashboard/tests/test_canonical_agent_health.py ...                       [ 21%]
+dashboard/tests/test_crash_hardening.py FFFF.                            [ 23%]
+dashboard/tests/test_dashboard.py .FFFF..FFFFFFF.FF.FFF...F.FFFFF        [ 36%]
 dashboard/tests/test_demo_api.py F.FFFFF                                 [ 38%]
-dashboard/tests/test_evidence_recorder_middleware.py F.                  [ 38%]
-dashboard/tests/test_evidence_vault_dashboard_integration.py ..          [ 39%]
+dashboard/tests/test_evidence_recorder_middleware.py F.                  [ 39%]
+dashboard/tests/test_evidence_vault_dashboard_integration.py ..          [ 40%]
 dashboard/tests/test_exchange_api.py ......                              [ 42%]
 dashboard/tests/test_learning_os_dashboard_integration.py ..             [ 43%]
-dashboard/tests/test_menu_visibility.py ..                               [ 43%]
-dashboard/tests/test_mini_app_sections.py .F.F                           [ 45%]
-dashboard/tests/test_paper_activity_dashboard.py ...                     [ 46%]
+dashboard/tests/test_menu_visibility.py ..                               [ 44%]
+dashboard/tests/test_mini_app_sections.py .F.F                           [ 46%]
+dashboard/tests/test_paper_activity_dashboard.py F..                     [ 47%]
 dashboard/tests/test_password_change_flow.py F                           [ 47%]
-dashboard/tests/test_policy_guard_dashboard_integration.py ....          [ 48%]
-dashboard/tests/test_roles.py ....                                       [ 50%]
-dashboard/tests/test_secure_app_lockout_flow.py .                        [ 50%]
+dashboard/tests/test_policy_guard_dashboard_integration.py ....          [ 49%]
+dashboard/tests/test_roles.py ....                                       [ 51%]
+dashboard/tests/test_secure_app_lockout_flow.py .                        [ 51%]
 dashboard/tests/test_security_approval_flow.py F                         [ 51%]
-dashboard/tests/test_security_guard.py ...                               [ 52%]
-dashboard/tests/test_social_news_api.py F....FF...                       [ 56%]
+dashboard/tests/test_security_guard.py ...                               [ 53%]
+dashboard/tests/test_social_news_api.py F....FF...                       [ 57%]
 dashboard/tests/test_telegram_bot.py FF.FFF                              [ 59%]
 dashboard/tests/test_user_admin.py ...                                   [ 60%]
 data_layer/tests/test_cache.py ...                                       [ 61%]
 data_layer/tests/test_live_market_provider.py .....                      [ 63%]
 data_layer/tests/test_live_rss_provider.py ....                          [ 65%]
-data_layer/tests/test_models.py ......                                   [ 67%]
-decision/tests/test_decision_engine.py ........                          [ 70%]
+data_layer/tests/test_models.py ......                                   [ 68%]
+decision/tests/test_decision_engine.py ........                          [ 71%]
 exchange_connector/tests/test_bybit_costs.py ........                    [ 74%]
 exchange_connector/tests/test_safe_client.py ........                    [ 77%]
 learning_engine/tests/test_learning_engine.py .......                    [ 80%]
@@ -54,7 +55,7 @@ runner/tests/test_runner.py ...........                                  [100%]
 _____________________ test_admin_can_open_security_center ______________________
 
 tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_admin_can_open_security_c0')
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f35920e3d70>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f2a9d02d670>
 
     def test_admin_can_open_security_center(tmp_path: Path, monkeypatch) -> None:
         _set_auth_env(tmp_path, monkeypatch)
@@ -65,14 +66,14 @@ monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f35920e3d70>
     
         security = client.get("/security")
 >       assert security.status_code == 200
-E       assert 404 == 200
-E        +  where 404 = <Response [404 Not Found]>.status_code
+E       assert 403 == 200
+E        +  where 403 = <Response [403 Forbidden]>.status_code
 
 dashboard/tests/test_admin_secure_app_roles.py:56: AssertionError
 ________________ test_regular_user_cannot_open_security_center _________________
 
 tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_regular_user_cannot_open_0')
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f35923b1160>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f2a9a3eaa20>
 
     def test_regular_user_cannot_open_security_center(tmp_path: Path, monkeypatch) -> None:
         _set_auth_env(tmp_path, monkeypatch)
@@ -88,10 +89,10 @@ monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f35923b1160>
     
         _login_admin(admin_client)
 >       request_id = admin_client.get("/api/security/access-requests").json()["requests"][0]["id"]
-                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-E       IndexError: list index out of range
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'requests'
 
-dashboard/tests/test_admin_secure_app_roles.py:77: IndexError
+dashboard/tests/test_admin_secure_app_roles.py:77: KeyError
 _______________ test_ai_bots_page_renders_supervisor_and_agents ________________
 
     def test_ai_bots_page_renders_supervisor_and_agents() -> None:
@@ -103,8 +104,8 @@ _______________ test_ai_bots_page_renders_supervisor_and_agents ________________
         assert response.status_code == 200
         assert "AI-боты" in response.text
 >       assert "Генеральный контролёр AI" in response.text
-E       assert 'Генеральный контролёр AI' in "<html><head><meta name='viewport' content='width=device-width,initial-scale=1'><link rel='stylesheet' href='/static/s...без ручного разрешения</td><td>100%</td><td>2026-07-10T10:29:29+00:00</td></tr></table></section></main></body></html>"
-E        +  where "<html><head><meta name='viewport' content='width=device-width,initial-scale=1'><link rel='stylesheet' href='/static/s...без ручного разрешения</td><td>100%</td><td>2026-07-10T10:29:29+00:00</td></tr></table></section></main></body></html>" = <Response [200 OK]>.text
+E       assert 'Генеральный контролёр AI' in "<html><head><meta name='viewport' content='width=device-width,initial-scale=1'><link rel='stylesheet' href='/static/s...без ручного разрешения</td><td>100%</td><td>2026-07-10T11:36:40+00:00</td></tr></table></section></main></body></html>"
+E        +  where "<html><head><meta name='viewport' content='width=device-width,initial-scale=1'><link rel='stylesheet' href='/static/s...без ручного разрешения</td><td>100%</td><td>2026-07-10T11:36:40+00:00</td></tr></table></section></main></body></html>" = <Response [200 OK]>.text
 
 dashboard/tests/test_ai_bots_and_chat.py:20: AssertionError
 _________________ test_ai_bots_api_returns_supervisor_summary __________________
@@ -178,7 +179,7 @@ ____________ test_chat_answers_ai_bot_status_question_with_bot_list ____________
         assert response.status_code == 200
         reply = response.json()["reply"]
 >       assert "работает" in reply
-E       AssertionError: assert 'работает' in 'System AI Auditor провёл проверку всех ИИ.\nРаботают полноценно: 6/19. Делают вид/заглушки: 0. Критичных AI с недораб...ста:\n• Learning Engine AI — недоработан: Подключить Learning Engine 2.0 к ошибкам сделок, новостей и риск-блокировок.'
+E       AssertionError: assert 'работает' in 'System AI Auditor провёл проверку всех ИИ.\nРаботают полноценно: 12/19. Делают вид/заглушки: 0. Критичных AI с недора...ста:\n• Learning Engine AI — недоработан: Подключить Learning Engine 2.0 к ошибкам сделок, новостей и риск-блокировок.'
 
 dashboard/tests/test_ai_bots_chat_questions.py:20: AssertionError
 ___________________ test_login_page_points_to_access_request ___________________
@@ -198,7 +199,7 @@ dashboard/tests/test_auth_security_flow.py:36: AssertionError
 ________________ test_register_creates_security_access_request _________________
 
 tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_register_creates_security0')
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f3592010ad0>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f2a90c7a5d0>
 
     def test_register_creates_security_access_request(tmp_path: Path, monkeypatch) -> None:
         monkeypatch.setenv("AUTH_ACCESS_REQUESTS_FILE", str(tmp_path / "access_requests.json"))
@@ -222,7 +223,7 @@ E        +  where 400 = <Response [400 Bad Request]>.status_code
 dashboard/tests/test_auth_security_flow.py:57: AssertionError
 _____________ test_private_api_requires_auth_when_auth_is_enabled ______________
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f3590604350>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f2a9a57ff20>
 
     def test_private_api_requires_auth_when_auth_is_enabled(monkeypatch) -> None:
         """Protected APIs should reject unauthenticated users in real dashboard mode."""
@@ -239,7 +240,7 @@ E        +  where 200 = <Response [200 OK]>.status_code
 dashboard/tests/test_crash_hardening.py:24: AssertionError
 ________ test_access_request_is_recorded_without_creating_password_user ________
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f35906077d0>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f2a992d4dd0>
 tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_access_request_is_recorde0')
 
     def test_access_request_is_recorded_without_creating_password_user(monkeypatch, tmp_path: Path) -> None:
@@ -365,17 +366,17 @@ __________________________ test_health_endpoints_work __________________________
         client = TestClient(create_app(runner_factory=_runner_factory))
     
 >       assert client.get("/health").json() == {"status": "ok"}
-E       AssertionError: assert {'status': 'o...e_seconds': 2} == {'status': 'ok'}
+E       AssertionError: assert {'status': 'o..._seconds': 14} == {'status': 'ok'}
 E         
 E         Omitting 1 identical items, use -vv to show
 E         Left contains 2 more items:
-E         {'started_at': '2026-07-10T10:29:28+00:00', 'uptime_seconds': 2}
+E         {'started_at': '2026-07-10T11:36:38+00:00', 'uptime_seconds': 14}
 E         
 E         Full diff:
 E           {
 E               'status': 'ok',
-E         +     'started_at': '2026-07-10T10:29:28+00:00',
-E         +     'uptime_seconds': 2,
+E         +     'started_at': '2026-07-10T11:36:38+00:00',
+E         +     'uptime_seconds': 14,
 E           }
 
 dashboard/tests/test_dashboard.py:83: AssertionError
@@ -682,7 +683,7 @@ E        +  where '<!doctype html>\n<html lang="ru">\n<head>\n  <meta charset="u
 dashboard/tests/test_dashboard.py:436: AssertionError
 _____________________ test_demo_state_is_funded_by_default _____________________
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f3591d73050>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f2a90a6b320>
 tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_demo_state_is_funded_by_d0')
 
     def test_demo_state_is_funded_by_default(monkeypatch, tmp_path: Path) -> None:
@@ -702,7 +703,7 @@ E       assert 10051.63 == 10000.0
 dashboard/tests/test_demo_api.py:23: AssertionError
 ________________ test_demo_chat_can_find_bybit_best_conditions _________________
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f3590745cd0>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f2a93cf5160>
 tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_demo_chat_can_find_bybit_0')
 
     def test_demo_chat_can_find_bybit_best_conditions(monkeypatch, tmp_path: Path) -> None:
@@ -723,7 +724,7 @@ E       AssertionError: assert 'Bybit cost intelligence' in 'Exchange Cost AI п
 dashboard/tests/test_demo_api.py:60: AssertionError
 ________________ test_demo_chat_returns_json_when_engine_fails _________________
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f35906454f0>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f2a93cd7710>
 
     def test_demo_chat_returns_json_when_engine_fails(monkeypatch) -> None:
         """Demo chat should return useful JSON instead of a 500 on internal errors."""
@@ -749,7 +750,7 @@ E         + ok
 dashboard/tests/test_demo_api.py:81: AssertionError
 _________ test_demo_chat_can_buy_virtual_btc_with_exchange_preview_fee _________
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f35908d1010>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f2a93e79190>
 tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_demo_chat_can_buy_virtual0')
 
     def test_demo_chat_can_buy_virtual_btc_with_exchange_preview_fee(monkeypatch, tmp_path: Path) -> None:
@@ -767,13 +768,13 @@ tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_demo_chat_can_buy_virt
         assert payload["status"] == "ok"
 >       assert "купил" in payload["reply"].lower()
 E       assert 'купил' in "я не отвечаю сам от себя: я спрашиваю нужных ai-ботов. сейчас trade gate говорит: block. новости: средняя достовернос...проси: 'что сегодня произошло?', 'почему рисковано?', 'можно покупать?', 'какие ии не работают?', 'чему ты научился?'."
-E        +  where "я не отвечаю сам от себя: я спрашиваю нужных ai-ботов. сейчас trade gate говорит: block. новости: средняя достовернос...проси: 'что сегодня произошло?', 'почему рисковано?', 'можно покупать?', 'какие ии не работают?', 'чему ты научился?'." = <built-in method lower of str object at 0x557ed675f130>()
-E        +    where <built-in method lower of str object at 0x557ed675f130> = "Я не отвечаю сам от себя: я спрашиваю нужных AI-ботов. Сейчас Trade Gate говорит: BLOCK. Новости: средняя достовернос...проси: 'что сегодня произошло?', 'почему рисковано?', 'можно покупать?', 'какие ИИ не работают?', 'чему ты научился?'.".lower
+E        +  where "я не отвечаю сам от себя: я спрашиваю нужных ai-ботов. сейчас trade gate говорит: block. новости: средняя достовернос...проси: 'что сегодня произошло?', 'почему рисковано?', 'можно покупать?', 'какие ии не работают?', 'чему ты научился?'." = <built-in method lower of str object at 0x55e8f82a1780>()
+E        +    where <built-in method lower of str object at 0x55e8f82a1780> = "Я не отвечаю сам от себя: я спрашиваю нужных AI-ботов. Сейчас Trade Gate говорит: BLOCK. Новости: средняя достовернос...проси: 'что сегодня произошло?', 'почему рисковано?', 'можно покупать?', 'какие ИИ не работают?', 'чему ты научился?'.".lower
 
 dashboard/tests/test_demo_api.py:99: AssertionError
 __________ test_demo_chat_can_sell_virtual_position_after_commissions __________
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f3590923050>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f2a93d70b00>
 tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_demo_chat_can_sell_virtua0')
 
     def test_demo_chat_can_sell_virtual_position_after_commissions(monkeypatch, tmp_path: Path) -> None:
@@ -796,7 +797,7 @@ E       KeyError: 'open_positions'
 dashboard/tests/test_demo_api.py:124: KeyError
 _______________________ test_demo_chat_online_monitoring _______________________
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f3590aa7830>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f2a9a5bd130>
 tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_demo_chat_online_monitori0')
 
     def test_demo_chat_online_monitoring(monkeypatch, tmp_path: Path) -> None:
@@ -817,7 +818,7 @@ dashboard/tests/test_demo_api.py:142: AssertionError
 ____________ test_trade_gate_response_is_recorded_in_evidence_vault ____________
 
 tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_trade_gate_response_is_re0')
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f3590b25b80>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f2a90a9a570>
 
     def test_trade_gate_response_is_recorded_in_evidence_vault(tmp_path, monkeypatch) -> None:
         evidence_db = tmp_path / "evidence.sqlite3"
@@ -865,10 +866,26 @@ _____ test_mini_app_live_js_loads_ai_bots_demo_state_and_exchange_monitor ______
 E       AssertionError: assert 'renderExchangeMonitor' in '(() => {\n  const $ = (selector) => document.querySelector(selector);\n  const $$ = (selector) => Array.from(document...loadBots, 30000);\n    setInterval(refreshNews, 120000);\n    setInterval(refreshFreshnessLabels, 1000);\n  });\n})();'
 
 dashboard/tests/test_mini_app_sections.py:102: AssertionError
+_______________ test_paper_activity_api_installed_via_dashboard ________________
+
+tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_paper_activity_api_instal0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f2a93e0a300>
+
+    def test_paper_activity_api_installed_via_dashboard(tmp_path, monkeypatch) -> None:
+        monkeypatch.setenv("PAPER_ACTIVITY_STATE_FILE", str(tmp_path / "paper.json"))
+        monkeypatch.setenv("PAPER_ACTIVITY_AUTORUN_ENABLED", "0")
+        client = TestClient(create_app(runner_factory=DummyRunner))
+    
+        state = client.get("/api/paper-activity/state")
+        assert state.status_code == 200
+>       assert state.json()["state"]["summary"]["trade_count"] >= 1
+E       assert 0 >= 1
+
+dashboard/tests/test_paper_activity_dashboard.py:20: AssertionError
 ___________________ test_user_can_change_temporary_password ____________________
 
 tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_user_can_change_temporary0')
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f3591eb3f80>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f2a93e7af90>
 
     def test_user_can_change_temporary_password(tmp_path: Path, monkeypatch) -> None:
         monkeypatch.setenv("AUTH_USERS_FILE", str(tmp_path / "users.json"))
@@ -889,7 +906,7 @@ dashboard/tests/test_password_change_flow.py:40: IndexError
 _______ test_admin_can_approve_access_request_and_created_user_can_login _______
 
 tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_admin_can_approve_access_0')
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f3590923920>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f2a9a57dd90>
 
     def test_admin_can_approve_access_request_and_created_user_can_login(tmp_path: Path, monkeypatch) -> None:
         monkeypatch.setenv("AUTH_USERS_FILE", str(tmp_path / "users.json"))
@@ -913,7 +930,7 @@ E        +  where 400 = <Response [400 Bad Request]>.status_code
 dashboard/tests/test_security_approval_flow.py:44: AssertionError
 __________________ test_social_news_api_returns_seeded_state ___________________
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f3591f846b0>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f2a93c05790>
 tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_social_news_api_returns_s0')
 
     def test_social_news_api_returns_seeded_state(monkeypatch, tmp_path: Path) -> None:
@@ -933,7 +950,7 @@ E       assert 10 >= 50
 dashboard/tests/test_social_news_api.py:24: AssertionError
 _______________________ test_social_news_rss_refresh_api _______________________
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f359090b200>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f2a93b87fb0>
 tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_social_news_rss_refresh_a0')
 
     def test_social_news_rss_refresh_api(monkeypatch, tmp_path: Path) -> None:
@@ -970,7 +987,7 @@ E       KeyError: 'items'
 dashboard/tests/test_social_news_api.py:129: KeyError
 _____________ test_social_news_telegram_status_when_not_configured _____________
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f35908bda60>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f2a93ff2390>
 tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_social_news_telegram_stat0')
 
     def test_social_news_telegram_status_when_not_configured(monkeypatch, tmp_path: Path) -> None:
@@ -997,7 +1014,7 @@ E         ?           ++++++++
 dashboard/tests/test_social_news_api.py:148: AssertionError
 ____________________ test_main_keyboard_without_webapp_url _____________________
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f35902a3d70>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f2a90c7a7e0>
 
     def test_main_keyboard_without_webapp_url(monkeypatch) -> None:
         """Keyboard works without Mini App URL."""
@@ -1016,7 +1033,7 @@ E         + now
 dashboard/tests/test_telegram_bot.py:16: AssertionError
 ______________________ test_main_keyboard_with_webapp_url ______________________
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f35902a0860>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f2a90c79520>
 
     def test_main_keyboard_with_webapp_url(monkeypatch) -> None:
         """Keyboard includes Telegram Mini App button when WEBAPP_URL is set."""
@@ -1032,7 +1049,7 @@ E       KeyError: 'web_app'
 dashboard/tests/test_telegram_bot.py:29: KeyError
 ___________________ test_handle_start_message_sends_welcome ____________________
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f35902a1430>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f2a90c78950>
 
     def test_handle_start_message_sends_welcome(monkeypatch) -> None:
         """The /start command sends the SharipovAI welcome message."""
@@ -1065,7 +1082,7 @@ E       AttributeError: module 'telegram_bot' has no attribute 'bot_ai_reply'
 dashboard/tests/test_telegram_bot.py:69: AttributeError
 ___________________ test_handle_plain_message_uses_ai_reply ____________________
 
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f35902a2d20>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f2a91952180>
 
     def test_handle_plain_message_uses_ai_reply(monkeypatch) -> None:
         """Plain Telegram messages should receive useful direct AI replies."""
@@ -1097,6 +1114,7 @@ dashboard/tests/test_ai_bots_chat_questions.py: 1 warning
 dashboard/tests/test_auth_security_flow.py: 2 warnings
 dashboard/tests/test_bot_chat_persistence_api.py: 2 warnings
 dashboard/tests/test_bot_communication_dashboard_integration.py: 2 warnings
+dashboard/tests/test_canonical_agent_health.py: 1 warning
 dashboard/tests/test_crash_hardening.py: 4 warnings
 dashboard/tests/test_dashboard.py: 31 warnings
 dashboard/tests/test_demo_api.py: 7 warnings
@@ -1126,6 +1144,7 @@ dashboard/tests/test_ai_bots_chat_questions.py: 3 warnings
 dashboard/tests/test_auth_security_flow.py: 6 warnings
 dashboard/tests/test_bot_chat_persistence_api.py: 6 warnings
 dashboard/tests/test_bot_communication_dashboard_integration.py: 6 warnings
+dashboard/tests/test_canonical_agent_health.py: 3 warnings
 dashboard/tests/test_crash_hardening.py: 12 warnings
 dashboard/tests/test_dashboard.py: 93 warnings
 dashboard/tests/test_demo_api.py: 21 warnings
@@ -1155,6 +1174,7 @@ dashboard/tests/test_ai_bots_chat_questions.py: 1 warning
 dashboard/tests/test_auth_security_flow.py: 2 warnings
 dashboard/tests/test_bot_chat_persistence_api.py: 2 warnings
 dashboard/tests/test_bot_communication_dashboard_integration.py: 2 warnings
+dashboard/tests/test_canonical_agent_health.py: 1 warning
 dashboard/tests/test_crash_hardening.py: 4 warnings
 dashboard/tests/test_dashboard.py: 31 warnings
 dashboard/tests/test_demo_api.py: 7 warnings
@@ -1184,6 +1204,7 @@ dashboard/tests/test_ai_bots_chat_questions.py: 1 warning
 dashboard/tests/test_auth_security_flow.py: 2 warnings
 dashboard/tests/test_bot_chat_persistence_api.py: 2 warnings
 dashboard/tests/test_bot_communication_dashboard_integration.py: 2 warnings
+dashboard/tests/test_canonical_agent_health.py: 1 warning
 dashboard/tests/test_crash_hardening.py: 4 warnings
 dashboard/tests/test_dashboard.py: 31 warnings
 dashboard/tests/test_demo_api.py: 7 warnings
@@ -1208,11 +1229,11 @@ dashboard/tests/test_social_news_api.py: 10 warnings
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
 =========================== short test summary info ============================
-FAILED dashboard/tests/test_admin_secure_app_roles.py::test_admin_can_open_security_center - assert 404 == 200
- +  where 404 = <Response [404 Not Found]>.status_code
-FAILED dashboard/tests/test_admin_secure_app_roles.py::test_regular_user_cannot_open_security_center - IndexError: list index out of range
-FAILED dashboard/tests/test_ai_bots_and_chat.py::test_ai_bots_page_renders_supervisor_and_agents - assert 'Генеральный контролёр AI' in "<html><head><meta name='viewport' content='width=device-width,initial-scale=1'><link rel='stylesheet' href='/static/s...без ручного разрешения</td><td>100%</td><td>2026-07-10T10:29:29+00:00</td></tr></table></section></main></body></html>"
- +  where "<html><head><meta name='viewport' content='width=device-width,initial-scale=1'><link rel='stylesheet' href='/static/s...без ручного разрешения</td><td>100%</td><td>2026-07-10T10:29:29+00:00</td></tr></table></section></main></body></html>" = <Response [200 OK]>.text
+FAILED dashboard/tests/test_admin_secure_app_roles.py::test_admin_can_open_security_center - assert 403 == 200
+ +  where 403 = <Response [403 Forbidden]>.status_code
+FAILED dashboard/tests/test_admin_secure_app_roles.py::test_regular_user_cannot_open_security_center - KeyError: 'requests'
+FAILED dashboard/tests/test_ai_bots_and_chat.py::test_ai_bots_page_renders_supervisor_and_agents - assert 'Генеральный контролёр AI' in "<html><head><meta name='viewport' content='width=device-width,initial-scale=1'><link rel='stylesheet' href='/static/s...без ручного разрешения</td><td>100%</td><td>2026-07-10T11:36:40+00:00</td></tr></table></section></main></body></html>"
+ +  where "<html><head><meta name='viewport' content='width=device-width,initial-scale=1'><link rel='stylesheet' href='/static/s...без ручного разрешения</td><td>100%</td><td>2026-07-10T11:36:40+00:00</td></tr></table></section></main></body></html>" = <Response [200 OK]>.text
 FAILED dashboard/tests/test_ai_bots_and_chat.py::test_ai_bots_api_returns_supervisor_summary - AssertionError: assert 'General Controller' == 'Генеральный контролёр AI'
   
   - Генеральный контролёр AI
@@ -1220,7 +1241,7 @@ FAILED dashboard/tests/test_ai_bots_and_chat.py::test_ai_bots_api_returns_superv
 FAILED dashboard/tests/test_ai_bots_and_chat.py::test_chat_answers_identity_like_ai_assistant - AssertionError: assert 'SharipovAI' in 'System AI Auditor провёл проверку всех ИИ.\nРаботают полноценно: 6/19. Делают вид/заглушки: 0. Критичных AI с недораб...ста:\n• Learning Engine AI — недоработан: Подключить Learning Engine 2.0 к ошибкам сделок, новостей и риск-блокировок.'
 FAILED dashboard/tests/test_ai_bots_and_chat.py::test_chat_answers_what_was_bought_with_trade_details - assert 'открыты покупки' in "Я не отвечаю сам от себя: я спрашиваю нужных AI-ботов. Сейчас Trade Gate говорит: BLOCK. Новости: средняя достовернос...проси: 'что сегодня произошло?', 'почему рисковано?', 'можно покупать?', 'какие ИИ не работают?', 'чему ты научился?'."
 FAILED dashboard/tests/test_ai_bots_and_chat.py::test_chat_answers_unknown_question_with_system_state - assert 'Я понял твой вопрос' in "Я не отвечаю сам от себя: я спрашиваю нужных AI-ботов. Сейчас Trade Gate говорит: BLOCK. Новости: средняя достовернос...проси: 'что сегодня произошло?', 'почему рисковано?', 'можно покупать?', 'какие ИИ не работают?', 'чему ты научился?'."
-FAILED dashboard/tests/test_ai_bots_chat_questions.py::test_chat_answers_ai_bot_status_question_with_bot_list - AssertionError: assert 'работает' in 'System AI Auditor провёл проверку всех ИИ.\nРаботают полноценно: 6/19. Делают вид/заглушки: 0. Критичных AI с недораб...ста:\n• Learning Engine AI — недоработан: Подключить Learning Engine 2.0 к ошибкам сделок, новостей и риск-блокировок.'
+FAILED dashboard/tests/test_ai_bots_chat_questions.py::test_chat_answers_ai_bot_status_question_with_bot_list - AssertionError: assert 'работает' in 'System AI Auditor провёл проверку всех ИИ.\nРаботают полноценно: 12/19. Делают вид/заглушки: 0. Критичных AI с недора...ста:\n• Learning Engine AI — недоработан: Подключить Learning Engine 2.0 к ошибкам сделок, новостей и риск-блокировок.'
 FAILED dashboard/tests/test_auth_security_flow.py::test_login_page_points_to_access_request - assert 'Вход в SharipovAI' in '<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-...ssword" placeholder="Пароль от 8 символов"><button type="submit">Запросить доступ</button></form></main></body></html>'
  +  where '<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-...ssword" placeholder="Пароль от 8 символов"><button type="submit">Запросить доступ</button></form></main></body></html>' = <Response [200 OK]>.text
 FAILED dashboard/tests/test_auth_security_flow.py::test_register_creates_security_access_request - assert 400 == 202
@@ -1237,17 +1258,17 @@ FAILED dashboard/tests/test_dashboard.py::test_overview_page_renders_rebuilt_liv
  +  where '<!doctype html>\n<html lang="ru">\n<head>\n  <meta charset="utf-8">\n  <meta name="viewport" content="width=device-wi.../script>\n  <script src="/static/mini-app-mobile-fixes.js?v=20260710-modal-close-01" defer></script>\n</body>\n</html>' = <Response [200 OK]>.text
 FAILED dashboard/tests/test_dashboard.py::test_overview_page_displays_runner_values - assert 'BUY BITCOIN' in '<!doctype html>\n<html lang="en">\n<head>\n  <meta charset="utf-8">\n  <meta name="viewport" content="width=device-wi.../script>\n  <script src="/static/mini-app-mobile-fixes.js?v=20260710-modal-close-01" defer></script>\n</body>\n</html>'
  +  where '<!doctype html>\n<html lang="en">\n<head>\n  <meta charset="utf-8">\n  <meta name="viewport" content="width=device-wi.../script>\n  <script src="/static/mini-app-mobile-fixes.js?v=20260710-modal-close-01" defer></script>\n</body>\n</html>' = <Response [200 OK]>.text
-FAILED dashboard/tests/test_dashboard.py::test_health_endpoints_work - AssertionError: assert {'status': 'o...e_seconds': 2} == {'status': 'ok'}
+FAILED dashboard/tests/test_dashboard.py::test_health_endpoints_work - AssertionError: assert {'status': 'o..._seconds': 14} == {'status': 'ok'}
   
   Omitting 1 identical items, use -vv to show
   Left contains 2 more items:
-  {'started_at': '2026-07-10T10:29:28+00:00', 'uptime_seconds': 2}
+  {'started_at': '2026-07-10T11:36:38+00:00', 'uptime_seconds': 14}
   
   Full diff:
     {
         'status': 'ok',
-  +     'started_at': '2026-07-10T10:29:28+00:00',
-  +     'uptime_seconds': 2,
+  +     'started_at': '2026-07-10T11:36:38+00:00',
+  +     'uptime_seconds': 14,
     }
 FAILED dashboard/tests/test_dashboard.py::test_crash_test_endpoints_work - assert 25.0 == 50.0
 FAILED dashboard/tests/test_dashboard.py::test_stress_lab_page_returns_success_and_matches_rebuilt_template - assert 'STRESS LAB' in '<!doctype html>\n<html lang="en">\n<head>\n  <meta charset="utf-8">\n  <meta name="viewport" content="width=device-wi.../script>\n  <script src="/static/mini-app-mobile-fixes.js?v=20260710-modal-close-01" defer></script>\n</body>\n</html>'
@@ -1289,14 +1310,15 @@ FAILED dashboard/tests/test_demo_api.py::test_demo_chat_returns_json_when_engine
   - error
   + ok
 FAILED dashboard/tests/test_demo_api.py::test_demo_chat_can_buy_virtual_btc_with_exchange_preview_fee - assert 'купил' in "я не отвечаю сам от себя: я спрашиваю нужных ai-ботов. сейчас trade gate говорит: block. новости: средняя достовернос...проси: 'что сегодня произошло?', 'почему рисковано?', 'можно покупать?', 'какие ии не работают?', 'чему ты научился?'."
- +  where "я не отвечаю сам от себя: я спрашиваю нужных ai-ботов. сейчас trade gate говорит: block. новости: средняя достовернос...проси: 'что сегодня произошло?', 'почему рисковано?', 'можно покупать?', 'какие ии не работают?', 'чему ты научился?'." = <built-in method lower of str object at 0x557ed675f130>()
- +    where <built-in method lower of str object at 0x557ed675f130> = "Я не отвечаю сам от себя: я спрашиваю нужных AI-ботов. Сейчас Trade Gate говорит: BLOCK. Новости: средняя достовернос...проси: 'что сегодня произошло?', 'почему рисковано?', 'можно покупать?', 'какие ИИ не работают?', 'чему ты научился?'.".lower
+ +  where "я не отвечаю сам от себя: я спрашиваю нужных ai-ботов. сейчас trade gate говорит: block. новости: средняя достовернос...проси: 'что сегодня произошло?', 'почему рисковано?', 'можно покупать?', 'какие ии не работают?', 'чему ты научился?'." = <built-in method lower of str object at 0x55e8f82a1780>()
+ +    where <built-in method lower of str object at 0x55e8f82a1780> = "Я не отвечаю сам от себя: я спрашиваю нужных AI-ботов. Сейчас Trade Gate говорит: BLOCK. Новости: средняя достовернос...проси: 'что сегодня произошло?', 'почему рисковано?', 'можно покупать?', 'какие ИИ не работают?', 'чему ты научился?'.".lower
 FAILED dashboard/tests/test_demo_api.py::test_demo_chat_can_sell_virtual_position_after_commissions - KeyError: 'open_positions'
 FAILED dashboard/tests/test_demo_api.py::test_demo_chat_online_monitoring - assert 'Онлайн-мониторинг' in "Я не отвечаю сам от себя: я спрашиваю нужных AI-ботов. Сейчас Trade Gate говорит: BLOCK. Новости: средняя достовернос...проси: 'что сегодня произошло?', 'почему рисковано?', 'можно покупать?', 'какие ИИ не работают?', 'чему ты научился?'."
 FAILED dashboard/tests/test_evidence_recorder_middleware.py::test_trade_gate_response_is_recorded_in_evidence_vault - assert 404 == 200
  +  where 404 = <Response [404 Not Found]>.status_code
 FAILED dashboard/tests/test_mini_app_sections.py::test_mini_app_has_exchange_commission_monitor - assert 'Песочница' in '<!doctype html>\n<html lang="ru">\n<head>\n  <meta charset="utf-8">\n  <meta name="viewport" content="width=device-wi.../script>\n  <script src="/static/mini-app-mobile-fixes.js?v=20260710-modal-close-01" defer></script>\n</body>\n</html>'
 FAILED dashboard/tests/test_mini_app_sections.py::test_mini_app_live_js_loads_ai_bots_demo_state_and_exchange_monitor - AssertionError: assert 'renderExchangeMonitor' in '(() => {\n  const $ = (selector) => document.querySelector(selector);\n  const $$ = (selector) => Array.from(document...loadBots, 30000);\n    setInterval(refreshNews, 120000);\n    setInterval(refreshFreshnessLabels, 1000);\n  });\n})();'
+FAILED dashboard/tests/test_paper_activity_dashboard.py::test_paper_activity_api_installed_via_dashboard - assert 0 >= 1
 FAILED dashboard/tests/test_password_change_flow.py::test_user_can_change_temporary_password - IndexError: list index out of range
 FAILED dashboard/tests/test_security_approval_flow.py::test_admin_can_approve_access_request_and_created_user_can_login - assert 400 == 202
  +  where 400 = <Response [400 Bad Request]>.status_code
@@ -1315,4 +1337,4 @@ FAILED dashboard/tests/test_telegram_bot.py::test_main_keyboard_with_webapp_url 
 FAILED dashboard/tests/test_telegram_bot.py::test_handle_start_message_sends_welcome - AssertionError: assert 'Добро пожаловать в SharipovAI' in '👋 <b>SharipovAI Telegram запущен</b>\n\nРежим: <b>paper-realism</b>. Это безопасная среда для Самандара, но AI обязан.../status — статус Telegram\n\nКонституция: никаких фейковых журналов, скрытия ошибок и отношения «это всего лишь демо».'
 FAILED dashboard/tests/test_telegram_bot.py::test_bot_ai_reply_answers_portfolio_directly - AttributeError: module 'telegram_bot' has no attribute 'bot_ai_reply'
 FAILED dashboard/tests/test_telegram_bot.py::test_handle_plain_message_uses_ai_reply - AssertionError: assert 'Риск сейчас' in '<b>Risk Engine AI + Trade Gate</b>\n\nRisk Engine и Trade Gate проверили ситуацию.\nНЕТ. Реальную сделку и виртуальны...ne. Разрешён только virtual-watch режим.\n\n<i>Paper-realism: ответ оценивается как тренировка реального капитала.</i>'
-=========== 55 failed, 189 passed, 571 warnings in 98.33s (0:01:38) ============
+================ 56 failed, 191 passed, 577 warnings in 50.77s =================

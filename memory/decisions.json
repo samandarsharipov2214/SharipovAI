@@ -238,5 +238,65 @@
     "result": "SUCCESS",
     "profit_loss": 0.0,
     "notes": "Stored by LearningEngine."
+  },
+  {
+    "id": "559d7c21-53c3-4ac4-a62e-39add3bc0de8",
+    "timestamp": "2026-07-10T11:36:52.679561+00:00",
+    "symbol": "BTCUSDT",
+    "decision": "BUY",
+    "confidence": 99.91,
+    "agents": [
+      "Market Agent",
+      "News Agent"
+    ],
+    "factor_scores": [
+      {
+        "name": "Volume Factor",
+        "score": 100.0,
+        "weight": 0.3,
+        "reason": "24h volume 2000 scored relative to market maximum 2000."
+      },
+      {
+        "name": "Price Change Factor",
+        "score": 100.0,
+        "weight": 0.2,
+        "reason": "Absolute 24h price change 3% scored relative to the market maximum."
+      },
+      {
+        "name": "Liquidity Factor",
+        "score": 98.5,
+        "weight": 0.2,
+        "reason": "Liquidity scored from turnover relative to the market maximum and spread tightness relative to the market spread range."
+      },
+      {
+        "name": "Volatility Factor",
+        "score": 100.0,
+        "weight": 0.15,
+        "reason": "Volatility 3% scored relative to the largest absolute market move."
+      },
+      {
+        "name": "Trend Factor",
+        "score": 100.0,
+        "weight": 0.15,
+        "reason": "Directional 24h change 3% scored relative to the strongest positive market move."
+      }
+    ],
+    "reason": "Decision is BUY because a majority of successful agents are positive (2/2) and confidence is at least 80.",
+    "result": null,
+    "profit_loss": null,
+    "notes": "Stored by AICore analytical pipeline."
+  },
+  {
+    "id": "learning-BTCUSDT-1783683412.680473",
+    "timestamp": "2026-07-10T11:36:52.680473+00:00",
+    "symbol": "BTCUSDT",
+    "decision": "BUY",
+    "confidence": 99.91,
+    "agents": [],
+    "factor_scores": [],
+    "reason": "Decision is BUY because a majority of successful agents are positive (2/2) and confidence is at least 80.",
+    "result": "SUCCESS",
+    "profit_loss": 0.0,
+    "notes": "Stored by LearningEngine."
   }
 ]
