@@ -88,8 +88,7 @@ def analyze_items(raw_items: Iterable[dict[str, object]], sources: list[NewsSour
 def demo_items() -> list[dict[str, object]]:
     """Return deterministic sample news for tests/manual previews only.
 
-    This function is never used as implicit live input. Production paths must
-    call analyzed_news_payload(raw_items=real_items) or pass an empty list.
+    This function is never used as implicit live input.
     """
 
     return [
@@ -102,14 +101,57 @@ def demo_items() -> list[dict[str, object]]:
 
 
 def analyzed_news_payload(raw_items: Iterable[dict[str, object]] | None = None) -> dict[str, object]:
-    """Return API-ready analyzed news payload.
+    """Return current real news analysis.
 
-    If raw_items is None, this returns an honest empty analysis. It does not
-    inject demo/sample news as live data.
+    Passing raw_items analyzes those items directly. Calling without arguments is
+    the production read path used by Telegram, Risk and reports: it refreshes
+    stale RSS data and returns the latest saved real state. It never injects
+    sample/demo news.
     """
 
-    real_input = raw_items is not None
-    items = analyze_items(list(raw_items or []))
+    if raw_items is None:
+        return _saved_real_news_payload()
+    return _build_payload(list(raw_items), source_mode="real_input")
+
+
+def _saved_real_news_payload() -> dict[str, object]:
+    refresh_status: dict[str, object] = {}
+    try:
+        from .news_autorun import refresh_news_if_stale
+
+        refresh_status = refresh_news_if_stale(reason="analyzer_saved_state_read")
+    except Exception as exc:
+        refresh_status = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
+
+    try:
+        from .storage import load_news_state
+
+        state = load_news_state()
+        saved = state.get("news", {}) if isinstance(state, dict) else {}
+        if isinstance(saved, dict):
+            payload = dict(saved)
+            payload.setdefault("status", "ok")
+            payload["source_mode"] = str(state.get("source_mode", payload.get("source_mode", "saved_real_state")))
+            payload["refresh_status"] = refresh_status
+            payload["last_refresh_at"] = state.get("last_refresh_at", 0)
+            payload["rss_diagnostics"] = state.get("rss_diagnostics", {})
+            payload["rss_errors"] = state.get("last_refresh_errors", [])
+            summary = payload.get("summary")
+            if isinstance(summary, dict):
+                summary = dict(summary)
+                summary["has_live_items"] = bool(payload.get("items"))
+                payload["summary"] = summary
+            return payload
+    except Exception as exc:
+        refresh_status = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
+
+    empty = _build_payload([], source_mode="empty_no_live_input")
+    empty["refresh_status"] = refresh_status
+    return empty
+
+
+def _build_payload(raw_items: list[dict[str, object]], *, source_mode: str) -> dict[str, object]:
+    items = analyze_items(raw_items)
     high = [item for item in items if item.urgency == "high"]
     blocked = [item for item in items if item.ai_action == "BLOCK_BUY"]
     confirmations_needed = [item for item in items if item.needs_confirmation]
@@ -117,7 +159,7 @@ def analyzed_news_payload(raw_items: Iterable[dict[str, object]] | None = None) 
     low_credibility = [item for item in items if item.credibility_percent < 60]
     return {
         "status": "ok",
-        "source_mode": "real_input" if real_input else "empty_no_live_input",
+        "source_mode": source_mode,
         "summary": {
             "total": len(items),
             "high_urgency": len(high),
