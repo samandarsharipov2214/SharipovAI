@@ -45,6 +45,7 @@ class _NeverExecuteClient:
 def test_paper_tick_persists_mark_to_market_equity(tmp_path, monkeypatch):
     state_file = tmp_path / "paper.json"
     monkeypatch.setenv("AUTONOMOUS_PAPER_STATE_FILE", str(state_file))
+    monkeypatch.setenv("AUTONOMOUS_PAPER_TAKE_PROFIT_PERCENT", "20")
     loop = AutonomousPaperLoop(_Stream())
     loop._state["cash"] = 900.0
     loop._state["positions"] = {
