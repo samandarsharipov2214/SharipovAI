@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import os
 import threading
-import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -14,7 +13,7 @@ from .market_data import MarketDataService, MarketDataUnavailable
 
 
 class MultiExchangeMonitor:
-    """Poll all configured exchanges and persist consensus/deviation evidence."""
+    """Poll all five exchanges and persist consensus, health and deviation evidence."""
 
     def __init__(self, market_data: MarketDataService | None = None) -> None:
         self.market_data = market_data or MarketDataService()
@@ -37,37 +36,39 @@ class MultiExchangeMonitor:
         self._stop.set()
 
     def cycle(self) -> dict[str, Any]:
-        checked_at = datetime.now(UTC).isoformat()
         symbols: dict[str, Any] = {}
         for symbol in self.symbols:
             snapshot = self.market_data.all_quotes(symbol)
             quote_rows = [item.to_dict() for item in snapshot["quotes"]]
+            provider_gap = snapshot["online_count"] < len(snapshot["configured_sources"])
             try:
                 consensus = self.market_data.consensus_quote(symbol).to_dict()
-                status = "ok"
-                alert = bool((consensus.get("deviation_percent") or 0) > 0.35)
+                deviation = float(consensus.get("deviation_percent") or 0)
+                deviation_alert = deviation > 0.35
+                status = "warning" if provider_gap or deviation_alert else "ok"
                 error = None
             except MarketDataUnavailable as exc:
                 consensus = None
+                deviation_alert = True
                 status = "warning"
-                alert = True
                 error = str(exc)
             symbols[symbol] = {
                 "status": status,
                 "online_count": snapshot["online_count"],
                 "offline_count": snapshot["offline_count"],
+                "all_five_online": snapshot["online_count"] == 5,
                 "configured_sources": snapshot["configured_sources"],
                 "quotes": quote_rows,
                 "provider_errors": snapshot["errors"],
                 "consensus": consensus,
-                "deviation_alert": alert,
+                "deviation_alert": deviation_alert,
                 "error": error,
             }
         state = {
             "status": "ok" if all(row["status"] == "ok" for row in symbols.values()) else "warning",
-            "checked_at": checked_at,
+            "checked_at": datetime.now(UTC).isoformat(),
             "poll_interval_seconds": self.interval_seconds,
-            "minimum_exchange_count": 5,
+            "required_exchange_count": 5,
             "thread_alive": bool(self._thread and self._thread.is_alive()),
             "symbols": symbols,
         }
@@ -79,7 +80,7 @@ class MultiExchangeMonitor:
             if not self.state_path.exists():
                 return {
                     "status": "not_started",
-                    "minimum_exchange_count": 5,
+                    "required_exchange_count": 5,
                     "thread_alive": bool(self._thread and self._thread.is_alive()),
                     "symbols": {},
                 }
@@ -99,7 +100,7 @@ class MultiExchangeMonitor:
                     "status": "error",
                     "checked_at": datetime.now(UTC).isoformat(),
                     "error": f"{type(exc).__name__}: {exc}",
-                    "minimum_exchange_count": 5,
+                    "required_exchange_count": 5,
                     "symbols": {},
                 })
             self._stop.wait(self.interval_seconds)
