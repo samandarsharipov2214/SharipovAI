@@ -1,0 +1,332 @@
+"""Autonomous specialized News AI network for SharipovAI.
+
+Each agent has an independent schedule, source ownership, memory, health,
+freshness, and event output. The network consumes real saved RSS/API items; it
+never injects demo content. A coordinator routes events to other AI organs.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import threading
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from .storage import load_news_state
+
+STATE_PATH = Path(os.getenv("NEWS_AGENT_NETWORK_STATE_FILE", "data/news_agent_network.json"))
+MEMORY_LIMIT = max(50, int(os.getenv("NEWS_AGENT_MEMORY_LIMIT", "500") or 500))
+EVENT_LIMIT = max(100, int(os.getenv("NEWS_AGENT_EVENT_LIMIT", "1000") or 1000))
+
+
+@dataclass(frozen=True)
+class AgentSpec:
+    id: str
+    name: str
+    categories: tuple[str, ...]
+    interval_seconds: int
+    routes_to: tuple[str, ...]
+    mission: str
+
+
+AGENTS: tuple[AgentSpec, ...] = (
+    AgentSpec("politics_ai", "Politics AI", ("politics_official", "international_official", "regulation_official"), 120, ("economy_ai", "risk_engine", "world_coordinator"), "Политика, правительства, международные организации и регулирование."),
+    AgentSpec("world_ai", "World News AI", ("world_news", "international_official"), 120, ("politics_ai", "risk_engine", "world_coordinator"), "Мировые события, конфликты и международная повестка."),
+    AgentSpec("economy_ai", "Economy AI", ("macro_official", "world_finance"), 60, ("finance_ai", "crypto_ai", "risk_engine"), "Макроэкономика, центральные банки, инфляция и ставки."),
+    AgentSpec("finance_ai", "Finance AI", ("world_finance", "macro_official"), 60, ("crypto_ai", "portfolio_engine", "risk_engine"), "Финансовые рынки, ликвидность и движение капитала."),
+    AgentSpec("crypto_ai", "Crypto News AI", ("crypto_news", "exchange", "regulation_official"), 30, ("trading_ai", "risk_engine", "portfolio_engine", "learning_engine"), "Крипторынок, биржи, токены и отраслевые события."),
+    AgentSpec("security_ai", "Security News AI", ("security", "tech_security"), 90, ("crypto_ai", "risk_engine", "security_cyber_ai"), "Взломы, уязвимости, инфраструктурные и киберриски."),
+    AgentSpec("technology_ai", "Technology AI", ("tech_security", "security"), 180, ("security_ai", "world_coordinator"), "Технологические изменения и инфраструктурные риски."),
+    AgentSpec("sports_ai", "Sports News AI", ("sports",), 300, ("world_coordinator",), "Спортивные события, лиги и соревнования."),
+    AgentSpec("weather_ai", "Weather & Disaster AI", ("weather", "weather_disaster"), 300, ("risk_engine", "world_coordinator"), "Погода, стихийные бедствия и чрезвычайные события."),
+    AgentSpec("health_ai", "Health News AI", ("international_official",), 600, ("world_coordinator", "risk_engine"), "Глобальное здравоохранение и официальные предупреждения."),
+    AgentSpec("telegram_news_ai", "Telegram News AI", ("telegram_news",), 60, ("crypto_ai", "world_coordinator"), "Разрешённые Telegram-источники; требует credentials."),
+    AgentSpec("x_news_ai", "X News AI", ("x_news",), 60, ("crypto_ai", "world_coordinator"), "Разрешённые X-источники; требует API credentials."),
+    AgentSpec("youtube_news_ai", "YouTube News AI", ("youtube_news",), 300, ("world_coordinator",), "YouTube-источники; отделяет мнение от факта."),
+)
+
+_LOCK = threading.RLock()
+_THREAD: threading.Thread | None = None
+_STOP = threading.Event()
+
+
+def network_enabled() -> bool:
+    return os.getenv("NEWS_AGENT_NETWORK_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def start_agent_network() -> dict[str, Any]:
+    global _THREAD
+    if not network_enabled():
+        return {"status": "disabled", "thread_alive": False}
+    if _THREAD and _THREAD.is_alive():
+        return {"status": "already_running", "thread_alive": True}
+    _STOP.clear()
+    _THREAD = threading.Thread(target=_loop, name="news-agent-network", daemon=True)
+    _THREAD.start()
+    return {"status": "started", "thread_alive": True, "agent_count": len(AGENTS)}
+
+
+def stop_agent_network() -> dict[str, Any]:
+    _STOP.set()
+    return {"status": "stopping", "thread_alive": bool(_THREAD and _THREAD.is_alive())}
+
+
+def network_status(*, run_due: bool = False) -> dict[str, Any]:
+    if run_due:
+        run_due_agents()
+    state = _load_state()
+    agents = list(state.get("agents", {}).values())
+    now = int(time.time())
+    healthy = [a for a in agents if a.get("status") == "active" and now - int(a.get("last_run_at", 0) or 0) <= max(600, int(a.get("interval_seconds", 60)) * 3)]
+    stale = [a for a in agents if a.get("status") in {"stale", "waiting_credentials", "error"}]
+    return {
+        "status": "ok" if len(healthy) == len(AGENTS) else "warning",
+        "generated_at": now,
+        "thread_alive": bool(_THREAD and _THREAD.is_alive()),
+        "agent_count": len(AGENTS),
+        "healthy_count": len(healthy),
+        "attention_count": len(stale),
+        "agents": sorted(agents, key=lambda item: str(item.get("name"))),
+        "events": list(state.get("events", []))[-100:],
+        "routes": _routing_map(),
+        "coordinator": _coordinator_summary(state),
+    }
+
+
+def run_due_agents(*, force: bool = False) -> dict[str, Any]:
+    """Run every agent whose independent interval has elapsed."""
+
+    now = int(time.time())
+    with _LOCK:
+        state = _load_state()
+        results: list[dict[str, Any]] = []
+        for spec in AGENTS:
+            previous = dict(state.get("agents", {}).get(spec.id, {}))
+            last_run = int(previous.get("last_run_at", 0) or 0)
+            if not force and now - last_run < spec.interval_seconds:
+                continue
+            result = _run_agent(spec, state, now)
+            state.setdefault("agents", {})[spec.id] = result
+            results.append(result)
+        state["last_network_cycle_at"] = now
+        state["events"] = list(state.get("events", []))[-EVENT_LIMIT:]
+        _save_state(state)
+    return {"status": "ok", "ran": len(results), "results": results, "generated_at": now}
+
+
+def agent_detail(agent_id: str, *, run_now: bool = False) -> dict[str, Any]:
+    if run_now:
+        run_agent(agent_id)
+    state = _load_state()
+    agent = state.get("agents", {}).get(agent_id)
+    if not agent:
+        spec = next((item for item in AGENTS if item.id == agent_id), None)
+        if not spec:
+            return {"status": "not_found", "agent_id": agent_id}
+        run_agent(agent_id)
+        state = _load_state()
+        agent = state.get("agents", {}).get(agent_id, {})
+    memory = [item for item in state.get("memory", []) if item.get("agent_id") == agent_id][-MEMORY_LIMIT:]
+    events = [item for item in state.get("events", []) if item.get("agent_id") == agent_id][-100:]
+    return {"status": "ok", "agent": agent, "memory": memory, "events": events}
+
+
+def run_agent(agent_id: str) -> dict[str, Any]:
+    spec = next((item for item in AGENTS if item.id == agent_id), None)
+    if not spec:
+        return {"status": "not_found", "agent_id": agent_id}
+    with _LOCK:
+        state = _load_state()
+        result = _run_agent(spec, state, int(time.time()))
+        state.setdefault("agents", {})[spec.id] = result
+        state["events"] = list(state.get("events", []))[-EVENT_LIMIT:]
+        _save_state(state)
+    return {"status": "ok", "agent": result}
+
+
+def _run_agent(spec: AgentSpec, state: dict[str, Any], now: int) -> dict[str, Any]:
+    news_state = load_news_state()
+    news = news_state.get("news", {}) if isinstance(news_state.get("news"), dict) else {}
+    items = [item for item in news.get("items", []) if isinstance(item, dict)]
+    sources = ((news_state.get("sources") or {}).get("sources", [])) if isinstance(news_state.get("sources"), dict) else []
+    owned_sources = [source for source in sources if isinstance(source, dict) and source.get("category") in spec.categories]
+    owned_ids = {str(source.get("id")) for source in owned_sources}
+    owned_items = [item for item in items if item.get("source_id") in owned_ids]
+    credential_only = bool(owned_sources) and all(bool(source.get("requires_credentials")) for source in owned_sources)
+    errors = _source_errors(news_state, owned_ids)
+    last_refresh = int(news_state.get("last_refresh_at", 0) or 0)
+    freshness = now - last_refresh if last_refresh else None
+    status = "active"
+    if credential_only and not owned_items:
+        status = "waiting_credentials"
+    elif errors and not owned_items:
+        status = "error"
+    elif not owned_items:
+        status = "stale"
+    credibility = round(sum(float(item.get("credibility_percent", 0) or 0) for item in owned_items) / len(owned_items), 1) if owned_items else 0.0
+    urgent = [item for item in owned_items if item.get("urgency") == "high"]
+    confirmation = [item for item in owned_items if item.get("needs_confirmation")]
+    impact_score = round(sum(float(item.get("impact_score", 0) or 0) for item in owned_items), 2)
+    health = _health(status, len(owned_sources), len(owned_items), credibility, freshness, len(errors))
+    new_memory = []
+    for item in owned_items[:50]:
+        key = f"{spec.id}:{item.get('source_id')}:{item.get('title')}"
+        if any(existing.get("key") == key for existing in state.get("memory", [])[-MEMORY_LIMIT:]):
+            continue
+        memory_item = {
+            "key": key,
+            "agent_id": spec.id,
+            "created_at": now,
+            "title": item.get("title"),
+            "source_id": item.get("source_id"),
+            "credibility_percent": item.get("credibility_percent", 0),
+            "impact": item.get("impact", "neutral"),
+            "impact_score": item.get("impact_score", 0),
+            "needs_confirmation": bool(item.get("needs_confirmation")),
+            "url": item.get("url", ""),
+        }
+        state.setdefault("memory", []).append(memory_item)
+        new_memory.append(memory_item)
+    state["memory"] = list(state.get("memory", []))[-MEMORY_LIMIT * len(AGENTS):]
+    emitted = _emit_events(spec, owned_items, now, state)
+    return {
+        "id": spec.id,
+        "name": spec.name,
+        "mission": spec.mission,
+        "status": status,
+        "health_score": health,
+        "interval_seconds": spec.interval_seconds,
+        "last_run_at": now,
+        "last_seen": now,
+        "data_last_refresh_at": last_refresh,
+        "data_freshness_seconds": freshness,
+        "source_count": len(owned_sources),
+        "item_count": len(owned_items),
+        "new_memory_count": len(new_memory),
+        "memory_count": len([item for item in state.get("memory", []) if item.get("agent_id") == spec.id]),
+        "average_credibility_percent": credibility,
+        "high_urgency": len(urgent),
+        "needs_confirmation": len(confirmation),
+        "aggregate_impact_score": impact_score,
+        "routes_to": list(spec.routes_to),
+        "events_emitted": emitted,
+        "errors": errors,
+        "last_action": _last_action(status, len(owned_items), emitted),
+    }
+
+
+def _emit_events(spec: AgentSpec, items: list[dict[str, Any]], now: int, state: dict[str, Any]) -> int:
+    emitted = 0
+    for item in items[:20]:
+        urgent = item.get("urgency") == "high"
+        material = abs(float(item.get("impact_score", 0) or 0)) >= 30
+        if not urgent and not material and not item.get("needs_confirmation"):
+            continue
+        event = {
+            "event_id": f"NE-{now}-{spec.id}-{emitted}",
+            "created_at": now,
+            "agent_id": spec.id,
+            "agent_name": spec.name,
+            "title": item.get("title"),
+            "impact": item.get("impact", "neutral"),
+            "impact_score": item.get("impact_score", 0),
+            "credibility_percent": item.get("credibility_percent", 0),
+            "needs_confirmation": bool(item.get("needs_confirmation")),
+            "routes_to": list(spec.routes_to),
+            "action": "BLOCK_AND_VERIFY" if item.get("needs_confirmation") and urgent else "ANALYZE_AND_ROUTE",
+        }
+        state.setdefault("events", []).append(event)
+        emitted += 1
+    return emitted
+
+
+def _source_errors(news_state: dict[str, Any], owned_ids: set[str]) -> list[dict[str, Any]]:
+    errors = news_state.get("last_refresh_errors", [])
+    if not isinstance(errors, list):
+        return []
+    return [error for error in errors if isinstance(error, dict) and (not owned_ids or str(error.get("source_id", "")) in owned_ids)]
+
+
+def _health(status: str, source_count: int, item_count: int, credibility: float, freshness: int | None, error_count: int) -> int:
+    score = 70
+    score += min(source_count * 2, 15)
+    score += min(item_count, 10)
+    if credibility >= 70:
+        score += 8
+    if status == "stale":
+        score -= 30
+    elif status == "waiting_credentials":
+        score -= 40
+    elif status == "error":
+        score -= 45
+    if freshness is None or freshness > 900:
+        score -= 20
+    elif freshness > 300:
+        score -= 10
+    score -= min(error_count * 3, 15)
+    return max(0, min(100, score))
+
+
+def _last_action(status: str, item_count: int, emitted: int) -> str:
+    if status == "active":
+        return f"проанализировал {item_count} материалов и отправил {emitted} событий"
+    if status == "waiting_credentials":
+        return "ждёт credentials; не выдаёт себя за активный live-agent"
+    if status == "error":
+        return "обнаружил ошибки источников и изолировал их"
+    return "источники назначены, но свежих материалов нет"
+
+
+def _routing_map() -> dict[str, list[str]]:
+    return {spec.id: list(spec.routes_to) for spec in AGENTS}
+
+
+def _coordinator_summary(state: dict[str, Any]) -> dict[str, Any]:
+    agents = list(state.get("agents", {}).values())
+    events = list(state.get("events", []))[-100:]
+    return {
+        "name": "World News Coordinator",
+        "status": "active" if agents else "not_started",
+        "last_cycle_at": state.get("last_network_cycle_at", 0),
+        "agent_count": len(agents),
+        "active_agents": len([a for a in agents if a.get("status") == "active"]),
+        "stale_agents": [a.get("name") for a in agents if a.get("status") != "active"],
+        "events_last_100": len(events),
+        "block_and_verify_events": len([e for e in events if e.get("action") == "BLOCK_AND_VERIFY"]),
+        "routes": sorted({route for event in events for route in event.get("routes_to", [])}),
+    }
+
+
+def _default_state() -> dict[str, Any]:
+    return {"status": "ok", "agents": {}, "memory": [], "events": [], "last_network_cycle_at": 0}
+
+
+def _load_state() -> dict[str, Any]:
+    if not STATE_PATH.exists():
+        return _default_state()
+    try:
+        data = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else _default_state()
+    except Exception:
+        return _default_state()
+
+
+def _save_state(state: dict[str, Any]) -> None:
+    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    STATE_PATH.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _loop() -> None:
+    while not _STOP.is_set():
+        try:
+            run_due_agents()
+        except Exception as exc:  # pragma: no cover
+            with _LOCK:
+                state = _load_state()
+                state["network_error"] = f"{type(exc).__name__}: {exc}"
+                state["network_error_at"] = int(time.time())
+                _save_state(state)
+        _STOP.wait(5)
