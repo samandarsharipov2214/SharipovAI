@@ -51,6 +51,28 @@ services:
         value: "3.0"
       - key: AUTONOMOUS_PAPER_STATE_FILE
         value: /var/data/autonomous_paper.json
+      - key: AUTONOMOUS_TESTNET_BRIDGE_ENABLED
+        value: "1"
+      - key: AUTONOMOUS_TESTNET_ENABLED
+        value: "0"
+      - key: TESTNET_EXECUTION_ENABLED
+        value: "0"
+      - key: TESTNET_BRIDGE_TICK_SECONDS
+        value: "5"
+      - key: TESTNET_BRIDGE_STATE_FILE
+        value: /var/data/testnet_bridge.json
+      - key: EXECUTION_JOURNAL_FILE
+        value: /var/data/execution_journal.json
+      - key: EXECUTION_MAX_NOTIONAL_USDT
+        value: "25"
+      - key: EXECUTION_KILL_SWITCH
+        value: "0"
+      - key: AUTONOMOUS_TRADING_STAGE
+        value: "2"
+      - key: EXCHANGE_API_KEY
+        sync: false
+      - key: EXCHANGE_API_SECRET
+        sync: false
       - key: VIRTUAL_ACCOUNT_AUTORUN_ENABLED
         value: "1"
       - key: VIRTUAL_ACCOUNT_TICK_SECONDS
