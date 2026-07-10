@@ -25,7 +25,25 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run tests
+        id: pytest
+        continue-on-error: true
         env:
           SHARIPOVAI_DISABLE_AUTH: "1"
           AUTH_SECRET: test-secret-for-ci-only
-        run: python -m pytest
+        run: |
+          set +e
+          python -m pytest -q > pytest-output.txt 2>&1
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload pytest output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tests-pytest-output
+          path: pytest-output.txt
+
+      - name: Fail when pytest failed
+        if: steps.pytest.outputs.exit_code != '0'
+        run: exit 1
