@@ -28,6 +28,11 @@ jobs:
       MARKET_STREAM_ENABLED: "0"
       AUTONOMOUS_PAPER_ENABLED: "0"
       AUTONOMOUS_TESTNET_BRIDGE_ENABLED: "0"
+      AUTONOMOUS_TESTNET_ENABLED: "0"
+      TESTNET_EXECUTION_ENABLED: "0"
+      EXCHANGE_LIVE_TRADING_ENABLED: "0"
+      EXECUTION_KILL_SWITCH: "1"
+      EXCHANGE_MODE: sandbox
       AUTONOMOUS_PAPER_STATE_FILE: /tmp/sharipovai-autonomous-paper.json
       MARKET_STREAM_STATE_FILE: /tmp/sharipovai-market-stream.json
       TESTNET_BRIDGE_STATE_FILE: /tmp/sharipovai-testnet-bridge.json
@@ -55,12 +60,6 @@ jobs:
         run: python -c "import dashboard; assert dashboard.app is not None; print('dashboard import: ok')"
 
       - name: Verify execution safety defaults
-        env:
-          AUTONOMOUS_TESTNET_ENABLED: "0"
-          TESTNET_EXECUTION_ENABLED: "0"
-          EXCHANGE_LIVE_TRADING_ENABLED: "0"
-          EXECUTION_KILL_SWITCH: "1"
-          EXCHANGE_MODE: sandbox
         run: |
           python - <<'PY'
           from exchange_connector.bybit_execution import BybitExecutionClient
@@ -72,4 +71,21 @@ jobs:
           PY
 
       - name: Run test suite
-        run: pytest -q --disable-warnings --maxfail=1
+        id: pytest
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          pytest -q --disable-warnings --maxfail=1 2>&1 | tee pytest-output.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload pytest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-output
+          path: pytest-output.txt
+          if-no-files-found: error
+
+      - name: Fail when pytest failed
+        if: steps.pytest.outputs.exit_code != '0'
+        run: exit 1
