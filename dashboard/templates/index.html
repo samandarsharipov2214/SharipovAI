@@ -3,10 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
   <title>SharipovAI OS</title>
   <link rel="icon" href="/favicon.ico" type="image/svg+xml">
+  <script src="https://telegram.org/js/telegram-web-app.js?62"></script>
   <link rel="stylesheet" href="/static/style.css?v=20260709-01">
-  <link rel="stylesheet" href="/static/mobile-fix.css?v=20260709-apple-01">
+  <link rel="stylesheet" href="/static/mobile-fix.css?v=20260710-security-01">
   <link rel="stylesheet" href="/static/mini-app-mobile-overrides.css?v=20260710-modal-close-01">
 </head>
 <body>
@@ -35,7 +37,7 @@
 
       <article class="mini-card mini-section active-panel" id="overview-section"><h2>Mission Control</h2><small>Виртуальный счёт</small><div class="mini-balance" id="portfolio-equity">{{ "%.2f"|format(view.paper_equity) }} USDT</div><div class="mini-grid"><div class="mini-stat"><small>Чистый PnL</small><b id="portfolio-pnl" class="positive">{{ "%.2f"|format(view.paper_pnl) }} USDT</b></div><div class="mini-stat"><small>Риск</small><b id="hero-risk">{{ display.risk }}</b></div><div class="mini-stat"><small>Решение AI</small><b id="hero-decision-mini">{{ display.decision }}</b></div><div class="mini-stat"><small>Исполнение</small><b id="overview-exchange">Виртуальный счёт</b></div></div><p class="info-box">Виртуальны только баланс и сделки. Органы AI — новости, риск, портфель, Learning, Evidence, аудит и Telegram — должны работать как реальная система.</p></article>
 
-      <article class="mini-card mini-section" id="chat-section"><h2>AI Copilot</h2><div class="mini-chat-log" id="ai-chat-log"><div class="mini-message assistant-message"><div class="mini-avatar">SA</div><div class="mini-bubble"><b>SharipovAI</b><p>Я онлайн. Могу объяснить сделку, спросить любого агента, проверить риск, новости, комиссии и цель дня.</p></div></div></div><form id="ai-command-form" class="mini-form"><textarea id="ai-command-input" placeholder="Например: спроси Risk Engine почему BUY заблокирован..." autocomplete="off"></textarea><button class="mini-send" type="submit">➤</button></form><div class="quick-chat-actions"><button type="button" data-prompt="Покажи портфель">Портфель</button><button type="button" data-prompt="Почему AI не покупает BTC?">Почему WAIT?</button><button type="button" data-prompt="Проверь всех ботов">Боты</button><button type="button" data-prompt="Отчёт по сделке BTC">Сделка BTC</button></div></article>
+      <article class="mini-card mini-section" id="chat-section"><h2>AI Copilot</h2><div class="mini-chat-log" id="ai-chat-log"><div class="mini-message assistant-message"><div class="mini-avatar">SA</div><div class="mini-bubble"><b>SharipovAI</b><p>Я онлайн. Могу объяснить сделку, спросить любого агента, проверить риск, новости, комиссии и цель дня.</p></div></div></div><form id="ai-command-form" class="mini-form"><label class="sr-only" for="ai-command-input">Сообщение для SharipovAI</label><textarea id="ai-command-input" placeholder="Например: спроси Risk Engine почему BUY заблокирован..." autocomplete="off"></textarea><button class="mini-send" type="submit" aria-label="Отправить сообщение">➤</button></form><div class="quick-chat-actions"><button type="button" data-prompt="Покажи портфель">Портфель</button><button type="button" data-prompt="Почему AI не покупает BTC?">Почему WAIT?</button><button type="button" data-prompt="Проверь всех ботов">Боты</button><button type="button" data-prompt="Отчёт по сделке BTC">Сделка BTC</button></div></article>
 
       <article class="mini-card mini-section" id="bots-section"><h2>AI Agent Control</h2><div class="mini-grid"><div class="mini-stat"><small>Всего</small><b id="bots-total">0</b></div><div class="mini-stat"><small>Активны</small><b id="bots-active">0</b></div><div class="mini-stat"><small>Требуют внимания</small><b id="bots-warnings">0</b></div></div><div class="bot-grid" id="bot-list"><div class="bot-row"><div><b>Загрузка AI-ботов...</b><small>Проверяю состояние модулей</small></div><span class="bot-state">...</span></div></div></article>
 
@@ -48,12 +50,13 @@
       <article class="mini-card mini-section" id="stress-section"><h2>Stress Lab</h2></article>
       <article class="mini-card mini-section" id="learning-section"><h2>Обучение AI</h2><p class="info-box">Загружаю live-аудит ошибок из сделок, tick, PnL и Learning OS...</p></article>
       <article class="mini-card mini-section" id="reports-section"><h2>Отчёты</h2></article>
-      <article class="mini-card mini-section" id="settings-section"><h2>Настройки</h2><div class="quick-chat-actions"><button type="button" data-mini-tab="risk-section">Риск</button><button type="button" data-mini-tab="exchange-section">Биржа</button><button type="button" data-mini-tab="bots-section">AI-боты</button><a class="mini-link-button" href="/learning-os?lang={{ lang }}">Learning OS</a><a class="mini-link-button" href="/evidence-vault?lang={{ lang }}">Evidence Vault</a><a class="mini-link-button" href="/virtual-account?lang={{ lang }}">Virtual Account</a><button type="button" data-mini-tab="reports-section">Отчёты</button></div><p class="info-box">Mini App работает как Mission Control: realtime-status, агенты и журналы действий.</p></article>
+      <article class="mini-card mini-section" id="settings-section"><h2>Настройки</h2><div class="quick-chat-actions"><button type="button" data-mini-tab="risk-section">Риск</button><button type="button" data-mini-tab="exchange-section">Биржа</button><button type="button" data-mini-tab="bots-section">AI-боты</button><a class="mini-link-button" href="/learning-os?lang={{ lang }}">Learning OS</a><a class="mini-link-button" href="/evidence-vault?lang={{ lang }}">Evidence Vault</a><a class="mini-link-button" href="/virtual-account?lang={{ lang }}">Virtual Account</a><button type="button" data-mini-tab="reports-section">Отчёты</button></div><p class="info-box">Mini App использует тему, safe-area и проверенную авторизацию Telegram.</p></article>
       <div class="bottom-safe"></div>
     </section>
 
     <section class="legacy-test-hooks"><h2 id="hero-decision">{{ display.decision }}</h2><button id="run-analysis">{{ t.run_analysis }}</button><span id="hero-confidence">{{ "%.1f"|format(view.confidence) }}%</span><span id="hero-consensus">{{ display.consensus }} {{ "%.1f"|format(view.consensus_agreement) }}%</span><span id="decision-reason">{{ display.reason }}</span><span>{{ display.report }}</span><span>{{ display.risk }}</span><span>{{ "%.2f"|format(view.paper_cash) }} USDT</span><span>AI Control Center</span><a href="/learning-os?lang={{ lang }}">Learning OS</a><a href="/evidence-vault?lang={{ lang }}">Evidence Vault</a><a href="/api/evidence-vault/snapshot">JSON Evidence Vault</a></section>
   </main>
+  <script src="/static/telegram-miniapp.js?v=20260710-auth-01" defer></script>
   <script src="/static/mini-app-live.js?v=20260709-paper-autorun-01" defer></script>
   <script src="/static/mini-app-all-trades.js?v=20260709-all-trades-time-01" defer></script>
   <script src="/static/mini-app-learning-live.js?v=20260709-learning-live-01" defer></script>
