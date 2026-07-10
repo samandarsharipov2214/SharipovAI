@@ -29,4 +29,9 @@ jobs:
         env:
           SHARIPOVAI_DISABLE_AUTH: '1'
           AUTH_SECRET: test-secret-for-ci-only
-        run: python -m pytest -q --maxfail=1
+        run: |
+          set +e
+          python -m pytest -q --maxfail=1 > pytest-output.txt 2>&1
+          code=$?
+          tail -n 100 pytest-output.txt
+          exit $code
