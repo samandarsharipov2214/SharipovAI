@@ -1,167 +1,172 @@
-"""AI auditor for checking subsystem News AI operability.
-
-The auditor runs a scripted interview with every News AI agent and marks whether
-it is active, stale/no-fresh-items, partially implemented, credential-blocked,
-or placeholder-like.
-"""
+"""Auditor for the autonomous specialized News AI network."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from .agents import run_news_agents
+from .agent_bridge import bridge_status
+from .agent_network import network_status
 
-
-REAL_DATA_REQUIRED = {
-    "telegram_news_ai": "Нужен Telegram client/bot доступ к каналам или группам.",
-    "x_news_ai": "Нужен X API/Bearer Token или легальный источник данных X.",
-    "youtube_news_ai": "Нужен YouTube Data API/RSS каналов и отдельный парсер видео.",
+CREDENTIAL_AGENTS = {
+    "telegram_news_ai": "Нужен Telegram client/bot доступ к allowlist каналам.",
+    "x_news_ai": "Нужен X API/Bearer Token или другой легальный X data provider.",
+    "youtube_news_ai": "Нужен YouTube API/RSS reader и отделение мнения от факта.",
 }
 
-CRITICAL_AGENTS = {"finance_crypto_ai", "politics_government_ai", "security_news_ai", "world_news_ai"}
+CRITICAL_AGENTS = {"politics_ai", "world_ai", "economy_ai", "finance_ai", "crypto_ai", "security_ai"}
 
 
 def audit_news_ai() -> dict[str, object]:
-    """Run scripted interview/audit of all news AI agents."""
+    """Audit every specialized News AI with memory, freshness and routing proof."""
 
-    report = run_news_agents()
-    agents = list(report.get("agents", [])) if isinstance(report, dict) else []
-    interviews = [_interview_agent(agent) for agent in agents]
-    fake_like = [item for item in interviews if item["verdict"] in {"делает вид", "заглушка"}]
-    underbuilt = [item for item in interviews if item["verdict"] in {"недоработан", "частично работает", "нет свежих данных"}]
+    network = network_status(run_due=True)
+    agents = list(network.get("agents", []))
+    interviews = [_interview(agent) for agent in agents]
     working = [item for item in interviews if item["verdict"] == "работает"]
-    priority = _priority_actions(interviews)
-    grade = _overall_grade(len(working), len(interviews), len(fake_like), len(underbuilt))
+    underbuilt = [item for item in interviews if item["verdict"] in {"частично работает", "нет свежих данных", "ошибка"}]
+    fake_like = [item for item in interviews if item["verdict"] == "заглушка"]
+    bridge = bridge_status()
+    grade = _grade(len(working), len(interviews), len(fake_like), len(underbuilt), bool(bridge.get("thread_alive")))
     return {
         "status": "ok",
-        "source_mode": report.get("source_mode", "unknown") if isinstance(report, dict) else "unknown",
+        "source_mode": "specialized_agent_network",
         "auditor": {
-            "name": "AI Auditor",
-            "role": "Проводит беседу с News AI и проверяет, кто реально обновляет данные, кто ждёт API, кто stale.",
+            "name": "Specialized News AI Auditor",
+            "role": "Проверяет независимые циклы, память, freshness, источники, ошибки и маршрутизацию каждого News AI.",
             "overall_grade": grade,
             "working": len(working),
             "underbuilt": len(underbuilt),
             "fake_like": len(fake_like),
             "total": len(interviews),
-            "summary": _summary(grade, len(working), len(interviews), len(fake_like), len(underbuilt)),
+            "bridge_alive": bool(bridge.get("thread_alive")),
+            "summary": _summary(grade, len(working), len(interviews), len(underbuilt), bridge),
         },
         "interviews": interviews,
-        "priority_actions": priority,
-        "supervisor": report.get("supervisor", {}) if isinstance(report, dict) else {},
+        "priority_actions": _priority_actions(interviews, bridge),
+        "supervisor": network.get("coordinator", {}),
+        "bridge": bridge,
     }
 
 
-def _interview_agent(agent: dict[str, Any]) -> dict[str, object]:
+def _interview(agent: dict[str, Any]) -> dict[str, object]:
     agent_id = str(agent.get("id", "unknown"))
-    name = str(agent.get("name", "Unknown AI"))
+    status = str(agent.get("status", "unknown"))
     source_count = int(agent.get("source_count", 0) or 0)
     item_count = int(agent.get("item_count", 0) or 0)
     health = int(agent.get("health_score", 0) or 0)
-    credibility = float(agent.get("average_credibility_percent", 0) or 0)
-    status = str(agent.get("status", "unknown"))
-    needs_real_data = agent_id in REAL_DATA_REQUIRED
-
-    questions = [
-        {"q": "Какая твоя зона ответственности?", "a": str(agent.get("responsibility", "Не указана."))},
-        {"q": "Сколько источников ты реально контролируешь?", "a": str(source_count)},
-        {"q": "Есть ли свежие материалы в текущем цикле?", "a": "да" if item_count else "нет свежих обработанных материалов"},
-        {"q": "Можешь ли ты работать без внешних ключей?", "a": "частично" if needs_real_data else "да, через RSS/официальные источники"},
-        {"q": "Что мешает тебе работать полноценно?", "a": REAL_DATA_REQUIRED.get(agent_id, "Нужно подключить реальный refresh источников и больше проверок качества.")},
-    ]
-
-    verdict = _verdict(agent_id=agent_id, source_count=source_count, item_count=item_count, health=health, credibility=credibility, status=status)
-    problems = _problems(agent_id=agent_id, source_count=source_count, item_count=item_count, health=health, credibility=credibility, status=status)
-    next_fix = _next_fix(agent_id, verdict)
+    freshness = agent.get("data_freshness_seconds")
+    memory_count = int(agent.get("memory_count", 0) or 0)
+    events = int(agent.get("events_emitted", 0) or 0)
+    verdict = _verdict(agent_id, status, source_count, item_count, health, freshness)
+    problems = _problems(agent_id, status, source_count, item_count, health, freshness)
     return {
         "id": agent_id,
-        "name": name,
+        "name": str(agent.get("name", "Unknown News AI")),
+        "scope": "news",
+        "critical": agent_id in CRITICAL_AGENTS,
         "status": status,
         "health_score": health,
         "source_count": source_count,
         "item_count": item_count,
-        "average_credibility_percent": credibility,
+        "memory_count": memory_count,
+        "events_emitted": events,
+        "data_freshness_seconds": freshness,
+        "average_credibility_percent": float(agent.get("average_credibility_percent", 0) or 0),
         "verdict": verdict,
         "problems": problems,
-        "next_fix": next_fix,
-        "interview": questions,
+        "missing": problems,
+        "next_fix": _next_fix(agent_id, verdict),
+        "last_seen": agent.get("last_seen"),
+        "last_action": agent.get("last_action"),
+        "routes_to": agent.get("routes_to", []),
+        "interview": [
+            {"q": "Какая твоя зона?", "a": str(agent.get("mission", "Не указана"))},
+            {"q": "Сколько реальных источников назначено?", "a": str(source_count)},
+            {"q": "Сколько свежих материалов обработано?", "a": str(item_count)},
+            {"q": "Есть ли собственная память?", "a": f"да, записей: {memory_count}"},
+            {"q": "Куда ты передаёшь события?", "a": ", ".join(agent.get("routes_to", [])) or "маршруты не настроены"},
+            {"q": "Твой честный статус?", "a": verdict},
+        ],
     }
 
 
-def _verdict(*, agent_id: str, source_count: int, item_count: int, health: int, credibility: float, status: str) -> str:
+def _verdict(agent_id: str, status: str, source_count: int, item_count: int, health: int, freshness: object) -> str:
     if source_count <= 0:
         return "заглушка"
-    if item_count <= 0:
-        return "нет свежих данных"
-    if agent_id in REAL_DATA_REQUIRED:
+    if status == "waiting_credentials":
         return "частично работает"
-    if status == "overloaded" or health < 60:
-        return "недоработан"
+    if status == "error":
+        return "ошибка"
+    if status == "stale" or item_count <= 0:
+        return "нет свежих данных"
+    if health < 60:
+        return "частично работает"
+    try:
+        if freshness is None or int(freshness) > 900:
+            return "нет свежих данных"
+    except (TypeError, ValueError):
+        return "нет свежих данных"
     return "работает"
 
 
-def _problems(*, agent_id: str, source_count: int, item_count: int, health: int, credibility: float, status: str) -> list[str]:
+def _problems(agent_id: str, status: str, source_count: int, item_count: int, health: int, freshness: object) -> list[str]:
     problems: list[str] = []
     if source_count <= 0:
         problems.append("Нет назначенных источников.")
     if item_count <= 0:
-        problems.append("В текущем цикле нет свежих обработанных материалов.")
-    if agent_id in REAL_DATA_REQUIRED:
-        problems.append(REAL_DATA_REQUIRED[agent_id])
+        problems.append("Нет свежих обработанных материалов.")
+    if agent_id in CREDENTIAL_AGENTS and status == "waiting_credentials":
+        problems.append(CREDENTIAL_AGENTS[agent_id])
+    if status == "error":
+        problems.append("Есть ошибки чтения принадлежащих агенту источников.")
     if health < 70:
-        problems.append("Health ниже желаемого уровня.")
-    if item_count and credibility < 60:
-        problems.append("Средняя достоверность низкая или нет достаточной базы для оценки.")
-    if status == "overloaded":
-        problems.append("AI перегружен: слишком много источников на один цикл.")
+        problems.append("Health ниже 70%.")
+    try:
+        if freshness is None or int(freshness) > 900:
+            problems.append("Данные устарели более чем на 15 минут.")
+    except (TypeError, ValueError):
+        problems.append("Freshness неизвестен.")
     return problems or ["Критических проблем не найдено."]
 
 
 def _next_fix(agent_id: str, verdict: str) -> str:
-    if agent_id == "telegram_news_ai":
-        return "Подключить Telegram bot capture для групп/каналов и allowlist чатов."
-    if agent_id == "x_news_ai":
-        return "Добавить X API reader через env X_API_BEARER_TOKEN и allowlist аккаунтов."
-    if agent_id == "youtube_news_ai":
-        return "Добавить YouTube RSS/API reader и отделение мнений от фактов."
+    if agent_id in CREDENTIAL_AGENTS:
+        return CREDENTIAL_AGENTS[agent_id]
+    if verdict == "заглушка":
+        return "Назначить реальные RSS/API/official источники или отключить агента."
     if verdict == "нет свежих данных":
-        return "Проверить RSS/news autorun, last_refresh_at, ошибки источников и сеть Render."
-    if verdict in {"частично работает", "недоработан"}:
-        return "Подключить реальный refresh источников и добавить проверку свежести данных."
-    if verdict in {"делает вид", "заглушка"}:
-        return "Добавить реальные входные данные или отключить показ как активного AI."
-    return "Продолжать мониторинг; добавить live freshness score."
+        return "Проверить RSS autorun, source errors и data_freshness_seconds."
+    if verdict == "ошибка":
+        return "Открыть /api/social-news/rss/refresh и исправить ошибки принадлежащих источников."
+    if verdict == "частично работает":
+        return "Повысить health: увеличить реальное покрытие, память и подтверждение источников."
+    return "Продолжать независимые циклы и проверку качества событий."
 
 
-def _priority_actions(interviews: list[dict[str, object]]) -> list[str]:
-    actions: list[str] = []
-    by_id = {str(item["id"]): item for item in interviews}
-    for agent_id in ("telegram_news_ai", "x_news_ai", "youtube_news_ai"):
-        item = by_id.get(agent_id)
-        if item and item.get("verdict") in {"нет свежих данных", "делает вид", "частично работает", "заглушка"}:
-            actions.append(str(item["next_fix"]))
-    if any(item.get("verdict") == "нет свежих данных" for item in interviews):
-        actions.append("Проверить /api/social-news/rss/refresh и /api/realtime/status → news.errors.")
-    actions.append("Добавить live freshness score: когда последний раз каждый News AI реально обновлял данные.")
-    actions.append("Добавить self-test кнопку в Mini App: 'Провести беседу с ИИ'.")
-    return actions
+def _priority_actions(interviews: list[dict[str, object]], bridge: dict[str, Any]) -> list[str]:
+    actions = [str(item.get("next_fix")) for item in interviews if item.get("verdict") != "работает"]
+    if not bridge.get("thread_alive"):
+        actions.insert(0, "Запустить News Agent Bridge: события не доходят до Risk/Trading/Portfolio/Learning.")
+    actions.append("Проверять /api/news-agents/status и память каждого агента после Render deploy.")
+    return list(dict.fromkeys(action for action in actions if action))
 
 
-def _overall_grade(working: int, total: int, fake_like: int, underbuilt: int) -> str:
-    if total <= 0:
-        return "FAIL"
-    ratio = working / total
-    if fake_like:
+def _grade(working: int, total: int, fake_like: int, underbuilt: int, bridge_alive: bool) -> str:
+    if total <= 0 or fake_like:
+        return "WEAK"
+    if not bridge_alive:
         return "PARTIAL"
-    if ratio >= 0.8 and underbuilt <= 1:
+    ratio = working / total
+    if ratio >= 0.75 and underbuilt <= 3:
         return "GOOD"
-    if ratio >= 0.5:
+    if ratio >= 0.4:
         return "PARTIAL"
     return "WEAK"
 
 
-def _summary(grade: str, working: int, total: int, fake_like: int, underbuilt: int) -> str:
-    if grade == "GOOD":
-        return f"Работает {working}/{total}. News AI живой, но нужно продолжать freshness-проверки."
-    if fake_like:
-        return f"Работает {working}/{total}, но {fake_like} AI выглядят как активные без реального подключения. Их нужно подключить или пометить как ожидающие доступ."
-    return f"Работает {working}/{total}. Недоработано/stale: {underbuilt}. Нужны реальные источники, RSS refresh и freshness score."
+def _summary(grade: str, working: int, total: int, underbuilt: int, bridge: dict[str, Any]) -> str:
+    return (
+        f"Specialized News AI: полноценно работают {working}/{total}; требуют внимания {underbuilt}. "
+        f"Bridge к системным ботам: {'работает' if bridge.get('thread_alive') else 'не работает'}. "
+        f"Итоговая оценка: {grade}."
+    )
