@@ -42,19 +42,13 @@ services:
       - key: MULTI_EXCHANGE_SYMBOLS
         value: BTCUSDT,ETHUSDT,SOLUSDT
       - key: MULTI_EXCHANGE_POLL_SECONDS
-        value: "5"
+        value: "2"
       - key: MULTI_EXCHANGE_STATE_FILE
         value: /var/data/multi_exchange_market.json
-      - key: MARKET_CONSENSUS_MIN_SOURCES
+      - key: MARKET_DATA_MIN_SOURCES
         value: "3"
-      - key: MARKET_MAX_DEVIATION_PERCENT
-        value: "0.75"
-      - key: NEWS_MARKET_IMPACT_ENABLED
-        value: "1"
-      - key: NEWS_MARKET_IMPACT_TICK_SECONDS
-        value: "60"
-      - key: NEWS_MARKET_IMPACT_STATE_FILE
-        value: /var/data/news_market_impact.json
+      - key: MARKET_DATA_MAX_DEVIATION_PERCENT
+        value: "0.35"
       - key: AUTONOMOUS_PAPER_ENABLED
         value: "1"
       - key: AUTONOMOUS_PAPER_TICK_SECONDS
