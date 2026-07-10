@@ -1,7 +1,8 @@
 """Background real-news refresh for SharipovAI.
 
-This module keeps Social News Monitor from falling back to static demo-looking
-state. It only reads allowlisted public RSS sources and never places orders.
+This module keeps Social News Monitor from falling back to static content. It
+reads allowlisted public RSS sources, stores diagnostics, and never places
+orders.
 """
 
 from __future__ import annotations
@@ -75,6 +76,8 @@ def refresh_news_now(*, reason: str = "manual", limit_per_source: int | None = N
             raw_items = list(result.get("items", []))
             analyzed = analyzed_news_payload(raw_items)
             agents = run_news_agents(raw_items)
+            diagnostics = result.get("diagnostics", {})
+            errors = result.get("errors", [])
             state = load_news_state()
             state["news"] = analyzed
             state["agents"] = agents
@@ -83,21 +86,41 @@ def refresh_news_now(*, reason: str = "manual", limit_per_source: int | None = N
             state["last_refresh_at"] = started
             state["last_refresh_reason"] = reason
             state["last_refresh_item_count"] = len(raw_items)
-            state["last_refresh_errors"] = result.get("errors", [])
-            state["source_mode"] = "real_rss" if raw_items else "rss_empty_no_demo_replacement"
+            state["last_refresh_errors"] = errors
+            state["rss_diagnostics"] = diagnostics
+            state["source_mode"] = "real_rss" if raw_items else "rss_empty_real_fetch_failed_or_empty"
             save_news_state(state)
+            working_sources = int(diagnostics.get("working_sources", 0) or 0) if isinstance(diagnostics, dict) else 0
             _LAST_STATUS = {
                 "status": "running" if reason == "autorun" else "refreshed",
                 "last_refresh_at": started,
                 "last_refresh_age_seconds": 0,
                 "reason": reason,
                 "item_count": len(raw_items),
-                "errors": result.get("errors", []),
+                "working_sources": working_sources,
+                "error_count": len(errors),
+                "errors": errors[:10],
                 "refresh_seconds": news_refresh_seconds(),
             }
-            return {"status": "ok", "reason": reason, "rss": result.get("rss", {}), "item_count": len(raw_items), "errors": result.get("errors", []), "news": analyzed, "agents": agents}
+            return {
+                "status": "ok" if raw_items else "empty",
+                "reason": reason,
+                "rss": result.get("rss", {}),
+                "item_count": len(raw_items),
+                "working_sources": working_sources,
+                "errors": errors,
+                "diagnostics": diagnostics,
+                "news": analyzed,
+                "agents": agents,
+            }
         except Exception as exc:  # pragma: no cover - production safety
             _LAST_STATUS = {"status": "error", "error": f"{type(exc).__name__}: {exc}", "last_refresh_at": started, "reason": reason}
+            state = load_news_state()
+            state["last_refresh_at"] = started
+            state["last_refresh_reason"] = reason
+            state["last_refresh_errors"] = [{"source_id": "news_autorun", "error": _LAST_STATUS["error"]}]
+            state["source_mode"] = "rss_refresh_runtime_error"
+            save_news_state(state)
             return dict(_LAST_STATUS)
 
 
@@ -110,7 +133,15 @@ def refresh_news_if_stale(*, reason: str = "stale_request") -> dict[str, Any]:
     if age >= news_stale_seconds():
         return refresh_news_now(reason=reason)
     status = news_autorun_status()
-    status.update({"status": "fresh", "last_refresh_at": last, "last_refresh_age_seconds": age, "stale_after_seconds": news_stale_seconds()})
+    status.update({
+        "status": "fresh",
+        "last_refresh_at": last,
+        "last_refresh_age_seconds": age,
+        "stale_after_seconds": news_stale_seconds(),
+        "item_count": state.get("last_refresh_item_count", 0),
+        "working_sources": (state.get("rss_diagnostics") or {}).get("working_sources", 0) if isinstance(state.get("rss_diagnostics"), dict) else 0,
+        "error_count": len(state.get("last_refresh_errors", [])) if isinstance(state.get("last_refresh_errors"), list) else 0,
+    })
     return status
 
 
