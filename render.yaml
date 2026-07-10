@@ -4,6 +4,10 @@ services:
     env: python
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn dashboard:app --host 0.0.0.0 --port $PORT
+    disk:
+      name: sharipovai-data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
       - key: AUTH_SECRET
         sync: false
@@ -13,6 +17,8 @@ services:
         sync: false
       - key: SHARIPOVAI_DISABLE_AUTH
         value: "0"
+      - key: SHARIPOVAI_DATA_DIR
+        value: /var/data
       - key: BOT_TOKEN
         sync: false
       - key: WEBAPP_URL
@@ -23,6 +29,28 @@ services:
         value: "1"
       - key: TELEGRAM_POLLING_ENABLED
         value: "0"
+      - key: MARKET_STREAM_ENABLED
+        value: "1"
+      - key: MARKET_STREAM_SYMBOLS
+        value: BTCUSDT,ETHUSDT,SOLUSDT
+      - key: MARKET_STREAM_STALE_SECONDS
+        value: "15"
+      - key: MARKET_STREAM_STATE_FILE
+        value: /var/data/market_stream.json
+      - key: AUTONOMOUS_PAPER_ENABLED
+        value: "1"
+      - key: AUTONOMOUS_PAPER_TICK_SECONDS
+        value: "5"
+      - key: AUTONOMOUS_PAPER_INITIAL_CASH
+        value: "10000"
+      - key: AUTONOMOUS_PAPER_MAX_POSITION_PERCENT
+        value: "10"
+      - key: AUTONOMOUS_PAPER_STOP_LOSS_PERCENT
+        value: "1.5"
+      - key: AUTONOMOUS_PAPER_TAKE_PROFIT_PERCENT
+        value: "3.0"
+      - key: AUTONOMOUS_PAPER_STATE_FILE
+        value: /var/data/autonomous_paper.json
       - key: VIRTUAL_ACCOUNT_AUTORUN_ENABLED
         value: "1"
       - key: VIRTUAL_ACCOUNT_TICK_SECONDS
