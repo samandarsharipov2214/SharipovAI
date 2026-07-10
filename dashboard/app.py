@@ -60,10 +60,23 @@ def _install_feature_apis(app: FastAPI) -> None:
             getattr(module, function_name)(app)
         except Exception as exc:
             key = module_name.replace(".", "_")
+            warning_payload = {
+                "status": "warning",
+                "module": module_name,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
 
-            @app.get(f"/api/startup-warning/{key}")
-            def warning(module_name: str = module_name, exc: Exception = exc) -> dict[str, Any]:
-                return {"status": "warning", "module": module_name, "error": f"{type(exc).__name__}: {exc}"}
+            def make_warning(payload: dict[str, str]):
+                def warning() -> dict[str, str]:
+                    return dict(payload)
+                return warning
+
+            app.add_api_route(
+                f"/api/startup-warning/{key}",
+                make_warning(warning_payload),
+                methods=["GET"],
+                response_model=None,
+            )
 
 
 def _install_auth_guard(app: FastAPI) -> None:
