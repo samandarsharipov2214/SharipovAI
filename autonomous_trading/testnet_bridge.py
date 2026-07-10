@@ -19,7 +19,7 @@ class AutonomousTestnetBridge:
         self.interval = max(float(os.getenv("TESTNET_BRIDGE_TICK_SECONDS", "5")), 1.0)
         self.client = execution_client or BybitExecutionClient()
         self.journal = ExecutionJournal()
-        self.stages = StageController()
+        self.stages = StageController(journal=self.journal)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._state = self._load_state()
@@ -35,12 +35,11 @@ class AutonomousTestnetBridge:
         self._stop.set()
 
     def snapshot(self) -> dict[str, Any]:
-        assessment = self.stages.assess().to_dict()
         return {
             **self._state,
             "enabled": _truthy("AUTONOMOUS_TESTNET_ENABLED"),
             "execution": self.client.status(),
-            "stage_assessment": assessment,
+            "stage_assessment": self.stages.assess().to_dict(),
             "journal": self.journal.summary(),
         }
 
@@ -58,30 +57,46 @@ class AutonomousTestnetBridge:
         processed = int(self._state.get("processed_trade_count", 0))
         for index, trade in enumerate(trades[processed:], start=processed):
             if trade.get("side") not in {"BUY", "SELL"}:
+                self._state["processed_trade_count"] = index + 1
                 continue
+            price = float(trade.get("price", 0))
+            paper_quantity = float(trade.get("quantity", 0))
+            safe_quantity = min(paper_quantity, self.client.max_notional / price) if price > 0 else 0
             try:
                 result = self.client.place_market_order(
                     symbol=str(trade.get("symbol", "")),
                     side=str(trade.get("side", "")),
-                    quantity=float(trade.get("quantity", 0)),
-                    reference_price=float(trade.get("price", 0)),
+                    quantity=safe_quantity,
+                    reference_price=price,
                 )
-                self.journal.append({**result.to_dict(), "paper_trade_index": index, "signal_reason": trade.get("reason")})
+                self.journal.append({
+                    **result.to_dict(),
+                    "paper_trade_index": index,
+                    "paper_quantity": paper_quantity,
+                    "mirrored_quantity": safe_quantity,
+                    "signal_reason": trade.get("reason"),
+                    "origin": "autonomous_bridge",
+                })
+                self._state["processed_trade_count"] = index + 1
                 self._state["last_status"] = "accepted"
                 self._state["last_order_id"] = result.order_id
+                self._state["last_error"] = ""
+                self._persist()
             except Exception as exc:
                 self.journal.append({
-                    "status": "blocked_or_error", "mode": self.client.mode,
-                    "symbol": trade.get("symbol"), "side": trade.get("side"),
-                    "quantity": trade.get("quantity"), "paper_trade_index": index,
+                    "status": "blocked_or_error",
+                    "mode": self.client.mode,
+                    "symbol": trade.get("symbol"),
+                    "side": trade.get("side"),
+                    "quantity": safe_quantity,
+                    "paper_trade_index": index,
                     "message": f"{type(exc).__name__}: {exc}",
+                    "origin": "autonomous_bridge",
                 })
                 self._state["last_status"] = "blocked_or_error"
                 self._state["last_error"] = f"{type(exc).__name__}: {exc}"
-                break
-            finally:
-                self._state["processed_trade_count"] = index + 1
                 self._persist()
+                break
 
     def _run(self) -> None:
         while not self._stop.wait(self.interval):
