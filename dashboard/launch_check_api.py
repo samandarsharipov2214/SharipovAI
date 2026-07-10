@@ -17,12 +17,14 @@ from learning.bot_communication import BotCommunicationNetwork
 from learning_engine_v2 import learning_state
 from news_monitor.agents import run_news_agents
 from news_monitor.analyzer import analyzed_news_payload
+from operations_ai import cto_report, diagnose_system
 from paper_activity_engine import PaperActivityEngine
 from system_ai_auditor import audit_system_ai
 from telegram_health import telegram_health
 from trading_intelligence import trade_gate
 
 from .bot_communication_api import install_bot_communication_api
+from .operations_ai_api import install_operations_ai_api
 from .paper_activity_api import install_paper_activity_api
 
 
@@ -31,6 +33,7 @@ def install_launch_check_api(app: FastAPI) -> None:
 
     install_bot_communication_api(app)
     install_paper_activity_api(app)
+    install_operations_ai_api(app)
     if getattr(app.state, "launch_check_api_installed", False):
         return
     app.state.launch_check_api_installed = True
@@ -57,6 +60,8 @@ def launch_check() -> dict[str, Any]:
         _check("System AI Audit", "Аудит всех ИИ доступен", audit_system_ai),
         _check("Learning Engine 2.0", "Уроки и правила доступны", learning_state),
         _check("Bot Network", "Все 11 AI-ботов имеют канал связи", _bot_network_check),
+        _check("AI Doctor", "Каноническая диагностика и инциденты доступны", diagnose_system),
+        _check("AI CTO", "Release gate и приоритеты доступны", cto_report),
         _check("Telegram Bot", "BOT_TOKEN/WEBAPP_URL/webhook self-test", telegram_health),
     ]
     failures = [item for item in checks if item["ok"] is False]
@@ -78,6 +83,9 @@ def launch_check() -> dict[str, Any]:
             "paper_activity_state": "/api/paper-activity/state",
             "bot_network": "/bot-network",
             "bot_network_health": "/api/bot-network/health",
+            "operations": "/operations",
+            "ai_doctor": "/api/operations/doctor",
+            "ai_cto": "/api/operations/cto",
             "telegram_check": "/telegram-check",
             "set_webhook": "/api/telegram/set-webhook",
             "chat_debug": "/chat-debug?q=Что сегодня произошло?",
@@ -117,7 +125,7 @@ def _has_warning(data: Any) -> bool:
         return False
     if data.get("verdict") in {"waiting_env", "webhook_not_set", "webhook_error"}:
         return True
-    if data.get("status") in {"attention", "warning"}:
+    if data.get("status") in {"attention", "warning", "degraded"}:
         return True
     return False
 
@@ -168,6 +176,7 @@ def _next_steps(telegram: Any, failures: list[dict[str, Any]]) -> list[str]:
             steps.append("Telegram webhook уже выглядит рабочим. Написать боту /start.")
         else:
             steps.append("После деплоя открыть /telegram-check и выполнить подсказку Next fix.")
+    steps.append("Проверить /operations: AI Doctor должен показывать причины, а не декоративные проценты.")
     steps.append("Проверить /paper-activity и при необходимости POST /api/paper-activity/tick с force=true.")
     steps.append("Проверить /bot-network и /api/bot-network/health: full_mesh_possible должен быть true.")
     steps.append("Проверить /chat-debug?q=Что сегодня произошло? перед проверкой Telegram.")
@@ -186,7 +195,7 @@ def _render_launch_check(report: dict[str, Any]) -> str:
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SharipovAI · Launch Check</title><style>
 body{{margin:0;background:#070b12;color:#eef4ff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}}main{{padding:18px;max-width:1180px;margin:auto}}.card{{background:#111827;border:1px solid #243044;border-radius:18px;padding:16px;margin:12px 0;box-shadow:0 20px 60px rgba(0,0,0,.25)}}.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}}.stat{{background:#0b1220;border:1px solid #1f2a3d;border-radius:14px;padding:12px}}.stat small{{display:block;color:#8ea2c4}}.stat b{{font-size:22px}}table{{width:100%;border-collapse:collapse}}td,th{{padding:10px;border-bottom:1px solid #243044;text-align:left;vertical-align:top}}small{{display:block;color:#8ea2c4;margin-top:4px}}a{{color:#60a5fa;font-weight:800}}.ok{{display:inline-block;background:#10b981;color:#03130d;border-radius:999px;padding:7px 12px;font-weight:900}}.warn{{display:inline-block;background:#f59e0b;color:#120a02;border-radius:999px;padding:7px 12px;font-weight:900}}.bad{{display:inline-block;background:#ef4444;color:#fff;border-radius:999px;padding:7px 12px;font-weight:900}}@media(max-width:720px){{table{{font-size:13px}}td,th{{padding:8px}}}}
 </style></head><body><main>
-<section class="card"><span class="{badge_class}">{escape(status.upper())}</span><h1>Final Launch Check</h1><p>Одна страница для проверки всего перед/после деплоя.</p><p><a href="/">Главная</a> · <a href="/api/launch-check">JSON</a> · <a href="/paper-activity">Paper Activity</a> · <a href="/bot-network">Bot Network</a> · <a href="/telegram-check">Telegram Check</a></p></section>
+<section class="card"><span class="{badge_class}">{escape(status.upper())}</span><h1>Final Launch Check</h1><p>Одна страница для проверки всего перед/после деплоя.</p><p><a href="/">Главная</a> · <a href="/api/launch-check">JSON</a> · <a href="/operations">AI Doctor</a> · <a href="/paper-activity">Paper Activity</a> · <a href="/bot-network">Bot Network</a> · <a href="/telegram-check">Telegram Check</a></p></section>
 <section class="card"><div class="grid"><div class="stat"><small>Checks OK</small><b>{report.get('checks_ok', 0)} / {report.get('checks_total', 0)}</b></div><div class="stat"><small>Failed</small><b>{report.get('checks_failed', 0)}</b></div><div class="stat"><small>Warnings</small><b>{report.get('warnings', 0)}</b></div><div class="stat"><small>Ready for deploy</small><b>{'ДА' if report.get('ready_for_deploy') else 'НЕТ'}</b></div></div></section>
 <section class="card"><h2>Проверки</h2><table><thead><tr><th>Модуль</th><th>Статус</th><th>Описание</th><th>Деталь</th></tr></thead><tbody>{rows}</tbody></table></section>
 <section class="card"><h2>Что делать дальше</h2><ol>{steps}</ol></section>
@@ -214,6 +223,8 @@ def _detail(item: dict[str, Any]) -> str:
             return str(data.get("source_ai", "AI"))
         if data.get("summary") and isinstance(data.get("summary"), dict):
             summary = data.get("summary", {})
+            if "incident_count" in summary:
+                return f"incidents={summary.get('incident_count', 0)} high={summary.get('high', 0)} working={summary.get('working_agents', 0)}/{summary.get('total_agents', 0)}"
             return f"trades={summary.get('trade_count', 0)} open={summary.get('open_positions', 0)} reason={summary.get('last_reason', '')}"
         if data.get("full_mesh_possible") is not None:
             return f"full_mesh={data.get('full_mesh_possible')} bots={data.get('bot_count')} messages={data.get('message_count')}"
