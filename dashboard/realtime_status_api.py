@@ -1,8 +1,7 @@
 """Unified realtime status API for SharipovAI.
 
-This endpoint exists because every live surface must show the same truth:
-Mini App, website, and Telegram should not display fake/static state.
-Only account balance and order execution are virtual.
+Every live surface must show the same truth.  Reading this endpoint must not
+fabricate agent activity or decorative quality percentages.
 """
 
 from __future__ import annotations
@@ -13,6 +12,7 @@ from typing import Any
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 
+from agent_health import build_agent_health_snapshot
 from news_monitor.news_autorun import news_autorun_status, refresh_news_if_stale
 from news_monitor.storage import load_news_state
 from paper_activity_autorun import paper_activity_autorun_status
@@ -34,6 +34,10 @@ def install_realtime_status_api(app: FastAPI) -> None:
     def realtime_status() -> dict[str, Any]:
         return build_realtime_status()
 
+    @app.get("/api/agent-health")
+    def agent_health() -> dict[str, Any]:
+        return build_agent_health_snapshot()
+
     @app.get("/realtime-status", response_class=HTMLResponse)
     def realtime_status_page() -> HTMLResponse:
         status = build_realtime_status()
@@ -41,7 +45,12 @@ def install_realtime_status_api(app: FastAPI) -> None:
 
 
 def build_realtime_status() -> dict[str, Any]:
-    """Collect current background status for app/site/Telegram."""
+    """Collect the canonical current status for app/site/Telegram.
+
+    Backward compatibility currently keeps the bounded stale refresh/catch-up
+    behaviour.  A later worker migration will make this endpoint strictly
+    read-only; the response exposes that debt explicitly instead of hiding it.
+    """
 
     news_refresh = refresh_news_if_stale(reason="api_realtime_status_stale_check")
     account_payload = PaperActivityEngine().state(catch_up=True)
@@ -62,12 +71,20 @@ def build_realtime_status() -> dict[str, Any]:
     telegram = telegram_health()
     if telegram.get("verdict") != "working":
         warnings.append(f"Telegram не полностью working: {telegram.get('verdict')}")
+    agents = build_agent_health_snapshot()
+    if agents.get("status") != "ok":
+        summary = agents.get("summary", {})
+        warnings.append(
+            "AI agents not fully proven: "
+            f"working={summary.get('working', 0)}, degraded={summary.get('degraded', 0)}, unknown={summary.get('unknown', 0)}."
+        )
     return {
         "status": "ok" if not warnings else "warning",
         "generated_at": now_iso(),
         "uptime_seconds": int(time.time()) - STARTED_AT,
         "constitution": constitution_snapshot(),
         "warnings": warnings,
+        "agents": agents,
         "virtual_account": {
             "autorun": paper_activity_autorun_status(),
             "summary": account_summary,
@@ -101,8 +118,11 @@ def build_realtime_status() -> dict[str, Any]:
         "telegram": telegram,
         "truth": {
             "fake_static_activity_allowed": False,
+            "decorative_agent_scores_allowed": False,
+            "missing_evidence_status": "unknown",
             "virtual_account_only": True,
             "live_orders_allowed": False,
+            "known_architecture_debt": ["GET realtime status still performs bounded refresh/catch-up until worker migration"],
             "real_system_organs": ["News", "Risk", "Portfolio", "Learning", "Evidence", "Audit", "Telegram", "Mini App"],
             "visible_surfaces": ["Mini App", "website", "Telegram"],
         },
@@ -122,5 +142,6 @@ def _age(timestamp: object) -> int | None:
 def _render(status: dict[str, Any]) -> str:
     account = status.get("virtual_account", {})
     news = status.get("news", {})
+    agent_summary = (status.get("agents") or {}).get("summary", {})
     warnings = "".join(f"<li>{warning}</li>" for warning in status.get("warnings", [])) or "<li>Критичных предупреждений нет.</li>"
-    return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SharipovAI · Realtime Status</title><style>body{{margin:0;background:#07111f;color:#eef4ff;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}}main{{padding:18px;max-width:980px;margin:auto}}.card{{background:#111827;border:1px solid #263245;border-radius:20px;padding:18px;margin:14px 0}}.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}}.stat{{background:#0b1220;border:1px solid #1f2a3d;border-radius:14px;padding:12px}}small{{display:block;color:#9db0cc}}b{{font-size:20px}}.ok{{display:inline-block;background:#10b981;color:#03130d;border-radius:999px;padding:7px 12px;font-weight:900}}.warn{{display:inline-block;background:#f59e0b;color:#120a02;border-radius:999px;padding:7px 12px;font-weight:900}}a{{color:#60a5fa;font-weight:800}}</style></head><body><main><section class="card"><span class="{'ok' if status.get('status') == 'ok' else 'warn'}">{status.get('status')}</span><h1>Realtime Status</h1><p>Единая правда для сайта, Mini App и Telegram. Виртуален только счёт/исполнение; остальные органы AI должны работать как реальная система.</p><p><a href="/api/realtime/status">JSON</a> · <a href="/virtual-account">Virtual Account</a> · <a href="/api/social-news/rss/refresh">Refresh News</a></p></section><section class="card"><h2>Virtual Account Execution</h2><div class="grid"><div class="stat"><small>Trades</small><b>{account.get('trade_count')}</b></div><div class="stat"><small>Open</small><b>{account.get('open_positions')}</b></div><div class="stat"><small>Closed</small><b>{account.get('closed_positions')}</b></div><div class="stat"><small>Net PnL</small><b>{account.get('net_pnl')}</b></div><div class="stat"><small>Fees</small><b>{account.get('total_fees')}</b></div><div class="stat"><small>Last tick age</small><b>{account.get('last_tick_age_seconds')}</b></div><div class="stat"><small>Execution</small><b>{account.get('execution_mode')}</b></div><div class="stat"><small>Autorun</small><b>{(account.get('autorun') or {}).get('status')}</b></div></div></section><section class="card"><h2>News Monitor</h2><div class="grid"><div class="stat"><small>Items</small><b>{news.get('item_count')}</b></div><div class="stat"><small>Credibility</small><b>{news.get('average_credibility_percent')}%</b></div><div class="stat"><small>Needs confirmation</small><b>{news.get('needs_confirmation')}</b></div><div class="stat"><small>Last refresh age</small><b>{news.get('last_refresh_age_seconds')}</b></div><div class="stat"><small>Source mode</small><b>{news.get('source_mode')}</b></div><div class="stat"><small>Autorun</small><b>{(news.get('autorun') or {}).get('status')}</b></div></div></section><section class="card"><h2>Warnings</h2><ul>{warnings}</ul></section></main></body></html>"""
+    return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SharipovAI · Realtime Status</title><style>body{{margin:0;background:#07111f;color:#eef4ff;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}}main{{padding:18px;max-width:980px;margin:auto}}.card{{background:#111827;border:1px solid #263245;border-radius:20px;padding:18px;margin:14px 0}}.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}}.stat{{background:#0b1220;border:1px solid #1f2a3d;border-radius:14px;padding:12px}}small{{display:block;color:#9db0cc}}b{{font-size:20px}}.ok{{display:inline-block;background:#10b981;color:#03130d;border-radius:999px;padding:7px 12px;font-weight:900}}.warn{{display:inline-block;background:#f59e0b;color:#120a02;border-radius:999px;padding:7px 12px;font-weight:900}}a{{color:#60a5fa;font-weight:800}}</style></head><body><main><section class="card"><span class="{'ok' if status.get('status') == 'ok' else 'warn'}">{status.get('status')}</span><h1>Realtime Status</h1><p>Единая правда для сайта, Mini App и Telegram. Отсутствие доказательств показывается как unknown, а не как 97%.</p><p><a href="/api/realtime/status">JSON</a> · <a href="/api/agent-health">Agent health</a> · <a href="/virtual-account">Virtual Account</a></p></section><section class="card"><h2>AI agents</h2><div class="grid"><div class="stat"><small>Total</small><b>{agent_summary.get('total_bots')}</b></div><div class="stat"><small>Working</small><b>{agent_summary.get('working')}</b></div><div class="stat"><small>Degraded</small><b>{agent_summary.get('degraded')}</b></div><div class="stat"><small>Unknown</small><b>{agent_summary.get('unknown')}</b></div></div></section><section class="card"><h2>Virtual Account Execution</h2><div class="grid"><div class="stat"><small>Trades</small><b>{account.get('trade_count')}</b></div><div class="stat"><small>Open</small><b>{account.get('open_positions')}</b></div><div class="stat"><small>Closed</small><b>{account.get('closed_positions')}</b></div><div class="stat"><small>Net PnL</small><b>{account.get('net_pnl')}</b></div><div class="stat"><small>Fees</small><b>{account.get('total_fees')}</b></div><div class="stat"><small>Last tick age</small><b>{account.get('last_tick_age_seconds')}</b></div><div class="stat"><small>Execution</small><b>{account.get('execution_mode')}</b></div><div class="stat"><small>Autorun</small><b>{(account.get('autorun') or {}).get('status')}</b></div></div></section><section class="card"><h2>News Monitor</h2><div class="grid"><div class="stat"><small>Items</small><b>{news.get('item_count')}</b></div><div class="stat"><small>Credibility</small><b>{news.get('average_credibility_percent')}%</b></div><div class="stat"><small>Needs confirmation</small><b>{news.get('needs_confirmation')}</b></div><div class="stat"><small>Last refresh age</small><b>{news.get('last_refresh_age_seconds')}</b></div><div class="stat"><small>Source mode</small><b>{news.get('source_mode')}</b></div><div class="stat"><small>Autorun</small><b>{(news.get('autorun') or {}).get('status')}</b></div></div></section><section class="card"><h2>Warnings</h2><ul>{warnings}</ul></section></main></body></html>"""
