@@ -32,11 +32,8 @@ jobs:
           SHARIPOVAI_DISABLE_AUTH: '1'
           AUTH_SECRET: test-secret-for-ci-only
         run: |
-          set +e
-          python -m pytest -q > pytest-output.txt 2>&1
-          code=$?
-          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
-          exit 0
+          python -m pytest -q --maxfail=1 > pytest-output.txt 2>&1
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
 
       - name: Upload pytest output
         if: always()
