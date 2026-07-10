@@ -1,9 +1,8 @@
 """Canonical registry and architecture audit for SharipovAI.
 
-This module is intentionally declarative. It does not create new agents.
-It describes the agents that already exist in the repository, maps their
-responsibilities, and detects accidental capability duplication before new
-modules are added.
+The registry describes components that already exist. It never creates agents.
+Routing/source tags used by several specialized News AI are intentionally
+shared and are not treated as duplicate business ownership.
 """
 
 from __future__ import annotations
@@ -17,13 +16,12 @@ from news_monitor.agent_network import AGENTS as NEWS_AGENTS
 
 @dataclass(frozen=True, slots=True)
 class CapabilityOwner:
-    """One existing SharipovAI component and its owned capabilities."""
-
     component_id: str
     display_name: str
     kind: str
     priority: int
     capabilities: tuple[str, ...]
+    shared_tags: tuple[str, ...] = ()
 
 
 CORE_OWNERS: tuple[CapabilityOwner, ...] = (
@@ -42,14 +40,13 @@ CORE_OWNERS: tuple[CapabilityOwner, ...] = (
 
 
 def capability_registry() -> tuple[CapabilityOwner, ...]:
-    """Return one canonical list of current core and specialized agents."""
-
     specialized = tuple(
         CapabilityOwner(
             spec.id,
             spec.name,
             "specialized_news_ai",
             _priority_for_news_agent(spec.id),
+            (f"news_domain:{spec.id}",),
             ("specialized_news", *spec.categories, *spec.source_ids),
         )
         for spec in NEWS_AGENTS
@@ -58,13 +55,10 @@ def capability_registry() -> tuple[CapabilityOwner, ...]:
 
 
 def architecture_audit() -> dict[str, Any]:
-    """Audit ownership, missing registrations and harmful duplication."""
-
     owners = capability_registry()
     registered_ids = {owner.component_id for owner in owners}
     learning_missing = sorted(BOT_NAMES - registered_ids)
-    duplicates = _duplicate_capabilities(owners)
-    harmful = [item for item in duplicates if item["capability"] not in _SHARED_CAPABILITIES]
+    harmful = _duplicate_capabilities(owners)
     priorities = {
         priority: sorted(owner.component_id for owner in owners if owner.priority == priority)
         for priority in range(1, 5)
@@ -76,20 +70,17 @@ def architecture_audit() -> dict[str, Any]:
         "specialized_news_ai_count": len(NEWS_AGENTS),
         "learning_registry_missing": learning_missing,
         "harmful_duplicates": harmful,
-        "shared_capabilities": sorted(_SHARED_CAPABILITIES),
         "priorities": priorities,
         "policy": "Extend an existing owner before creating another AI with the same capability.",
     }
 
 
 def owner_for(capability: str) -> list[str]:
-    """Return current owners for a normalized capability."""
-
     normalized = _normalize(capability)
     return [
         owner.component_id
         for owner in capability_registry()
-        if normalized in {_normalize(item) for item in owner.capabilities}
+        if normalized in {_normalize(item) for item in (*owner.capabilities, *owner.shared_tags)}
     ]
 
 
@@ -97,8 +88,7 @@ def _duplicate_capabilities(owners: Iterable[CapabilityOwner]) -> list[dict[str,
     index: dict[str, list[str]] = {}
     for owner in owners:
         for capability in owner.capabilities:
-            normalized = _normalize(capability)
-            index.setdefault(normalized, []).append(owner.component_id)
+            index.setdefault(_normalize(capability), []).append(owner.component_id)
     return [
         {"capability": capability, "owners": sorted(component_ids)}
         for capability, component_ids in sorted(index.items())
@@ -116,6 +106,3 @@ def _priority_for_news_agent(agent_id: str) -> int:
 
 def _normalize(value: str) -> str:
     return value.strip().lower().replace("-", "_").replace(" ", "_")
-
-
-_SHARED_CAPABILITIES = frozenset({"specialized_news"})
