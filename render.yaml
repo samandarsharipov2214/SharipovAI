@@ -39,6 +39,12 @@ services:
         value: "240"
       - key: NEWS_LIMIT_PER_SOURCE
         value: "5"
+      - key: NEWS_AGENT_NETWORK_ENABLED
+        value: "1"
+      - key: NEWS_AGENT_MEMORY_LIMIT
+        value: "500"
+      - key: NEWS_AGENT_EVENT_LIMIT
+        value: "1000"
       - key: EXCHANGE_NAME
         value: bybit
       - key: EXCHANGE_MODE
