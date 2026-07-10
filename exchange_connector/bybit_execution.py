@@ -1,7 +1,8 @@
-"""Authenticated Bybit execution with hard stage and risk gates.
+"""Authenticated Bybit execution with hard stage, risk, and market-data gates.
 
 Sandbox orders may be sent only when testnet credentials are configured. Live orders
-require several independent unlock flags, small notional limits, and a kill switch.
+require independent unlock flags, a fresh WebSocket quote, recent multi-exchange
+consensus, bounded slippage, small notional limits, and a kill switch.
 """
 from __future__ import annotations
 
@@ -10,10 +11,13 @@ import hmac
 import json
 import os
 import time
+import uuid
 from dataclasses import dataclass, asdict
 from typing import Any
 
 import httpx
+
+from .live_execution_guard import LiveExecutionGuard
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +30,7 @@ class ExecutionResult:
     order_id: str | None
     message: str
     raw_code: int | None = None
+    client_order_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -42,9 +47,11 @@ class BybitExecutionClient:
         ).rstrip("/")
         self.api_key = os.getenv("EXCHANGE_API_KEY", "").strip()
         self.api_secret = os.getenv("EXCHANGE_API_SECRET", "").strip()
-        self.recv_window = "5000"
+        self.recv_window = str(max(int(os.getenv("EXECUTION_RECV_WINDOW_MS", "2500")), 1000))
         self.max_notional = max(float(os.getenv("EXECUTION_MAX_NOTIONAL_USDT", "25")), 1.0)
+        self.timeout_seconds = max(float(os.getenv("EXECUTION_HTTP_TIMEOUT_SECONDS", "3")), 1.0)
         self._client = client
+        self._live_guard = LiveExecutionGuard()
 
     def status(self) -> dict[str, Any]:
         credentials = bool(self.api_key and self.api_secret)
@@ -55,9 +62,13 @@ class BybitExecutionClient:
             "live_execution_enabled": self._live_unlocked(credentials),
             "kill_switch": _truthy("EXECUTION_KILL_SWITCH"),
             "max_notional_usdt": self.max_notional,
+            "live_market_guard_required": True,
+            "recv_window_ms": int(self.recv_window),
+            "http_timeout_seconds": self.timeout_seconds,
         }
 
-    def place_market_order(self, *, symbol: str, side: str, quantity: float, reference_price: float) -> ExecutionResult:
+    def place_market_order(self, *, symbol: str, side: str, quantity: float, reference_price: float,
+                           client_order_id: str | None = None) -> ExecutionResult:
         symbol = _symbol(symbol)
         side = side.strip().title()
         if side not in {"Buy", "Sell"}:
@@ -77,9 +88,13 @@ class BybitExecutionClient:
         elif self.mode == "live":
             if not self._live_unlocked(True):
                 raise RuntimeError("Live execution is locked by safety gates")
+            assessment = self._live_guard.assess(symbol=symbol, reference_price=reference_price)
+            if not assessment.allowed:
+                raise RuntimeError("Live market guard blocked order: " + "; ".join(assessment.blockers))
         else:
             raise RuntimeError("Exchange mode does not permit execution")
 
+        order_link_id = _client_order_id(client_order_id)
         body = {
             "category": "spot",
             "symbol": symbol,
@@ -87,6 +102,7 @@ class BybitExecutionClient:
             "orderType": "Market",
             "qty": _format_number(quantity),
             "marketUnit": "baseCoin",
+            "orderLinkId": order_link_id,
         }
         timestamp = str(int(time.time() * 1000))
         payload = json.dumps(body, separators=(",", ":"))
@@ -102,7 +118,7 @@ class BybitExecutionClient:
             "X-BAPI-SIGN": signature,
             "Content-Type": "application/json",
         }
-        client = self._client or httpx.Client(timeout=10.0)
+        client = self._client or httpx.Client(timeout=self.timeout_seconds)
         close_client = self._client is None
         try:
             response = client.post(f"{self.base_url}/v5/order/create", content=payload, headers=headers)
@@ -115,7 +131,8 @@ class BybitExecutionClient:
         if code != 0:
             raise RuntimeError(f"Bybit rejected order: {data.get('retMsg', 'unknown error')} ({code})")
         order_id = str(data.get("result", {}).get("orderId") or "") or None
-        return ExecutionResult("accepted", self.mode, symbol, side.upper(), quantity, order_id, "Order accepted by Bybit", code)
+        return ExecutionResult("accepted", self.mode, symbol, side.upper(), quantity, order_id,
+                               "Order accepted by Bybit", code, order_link_id)
 
     def _live_unlocked(self, credentials: bool) -> bool:
         return all((
@@ -144,6 +161,13 @@ def _symbol(value: str) -> str:
     if not clean.isalnum() or not clean:
         raise ValueError("invalid symbol")
     return clean
+
+
+def _client_order_id(value: str | None) -> str:
+    candidate = (value or f"sharipov-{uuid.uuid4().hex[:20]}").strip()
+    if not candidate or len(candidate) > 36 or not all(ch.isalnum() or ch in "-_" for ch in candidate):
+        raise ValueError("client_order_id must be 1-36 characters: letters, numbers, '-' or '_'")
+    return candidate
 
 
 def _format_number(value: float) -> str:
