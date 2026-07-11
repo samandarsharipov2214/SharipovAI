@@ -1,34 +1,37 @@
 param(
-    [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+    [string]$ProjectRoot = ""
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
+if (-not $ProjectRoot) {
+    $scriptDirectory = Split-Path -Parent $PSCommandPath
+    $ProjectRoot = [System.IO.Path]::GetFullPath((Join-Path $scriptDirectory "..\.."))
+}
+
 $startup = [Environment]::GetFolderPath("Startup")
 if (-not $startup) { throw "Windows Startup folder was not found." }
 
-$powershell = (Get-Command powershell.exe -ErrorAction Stop).Source
-$wsh = New-Object -ComObject WScript.Shell
+$agentScript = Join-Path $ProjectRoot "scripts\windows\start_pc_agent.ps1"
+if (-not (Test-Path $agentScript)) { throw "PC agent launcher was not found: $agentScript" }
 
-$items = @(
-    @{ Name = "SharipovAI PC Node.lnk"; Script = (Join-Path $ProjectRoot "scripts\windows\start_pc_node.ps1") },
-    @{ Name = "SharipovAI Backup.lnk"; Script = (Join-Path $ProjectRoot "scripts\windows\start_backup.ps1") }
-)
-
-foreach ($item in $items) {
-    if (-not (Test-Path $item.Script)) { throw "Startup script was not found: $($item.Script)" }
-    $shortcutPath = Join-Path $startup $item.Name
-    $shortcut = $wsh.CreateShortcut($shortcutPath)
-    $shortcut.TargetPath = $powershell
-    $shortcut.Arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$($item.Script)`" -ProjectRoot `"$ProjectRoot`""
-    $shortcut.WorkingDirectory = $ProjectRoot
-    $shortcut.WindowStyle = 7
-    $shortcut.Description = $item.Name.Replace(".lnk", "")
-    $shortcut.Save()
+$legacyNames = @("SharipovAI PC Node.lnk", "SharipovAI Backup.lnk")
+foreach ($name in $legacyNames) {
+    $legacyPath = Join-Path $startup $name
+    if (Test-Path $legacyPath) { Remove-Item $legacyPath -Force }
 }
 
-Write-Host "SharipovAI autostart was installed for the current user." -ForegroundColor Green
-Write-Host "Startup folder: $startup"
-Write-Host "Start now: .\scripts\windows\start_pc_node.ps1"
-Write-Host "Start backup now: .\scripts\windows\start_backup.ps1"
+$powershell = (Get-Command powershell.exe -ErrorAction Stop).Source
+$shortcutPath = Join-Path $startup "SharipovAI PC Agent.lnk"
+$wsh = New-Object -ComObject WScript.Shell
+$shortcut = $wsh.CreateShortcut($shortcutPath)
+$shortcut.TargetPath = $powershell
+$shortcut.Arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$agentScript`" -ProjectRoot `"$ProjectRoot`""
+$shortcut.WorkingDirectory = $ProjectRoot
+$shortcut.WindowStyle = 7
+$shortcut.Description = "SharipovAI PC Agent"
+$shortcut.Save()
+
+Write-Host "SharipovAI PC Agent autostart installed." -ForegroundColor Green
+Write-Host "Startup shortcut: $shortcutPath"
