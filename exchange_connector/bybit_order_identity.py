@@ -12,7 +12,8 @@ import os
 import re
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -45,6 +46,10 @@ _TRANSITIONS = {
     "New": {"New", "PartiallyFilled", "Filled", "Cancelled", "Rejected", "PartiallyFilledCanceled"},
     "PartiallyFilled": {"PartiallyFilled", "Filled", "Cancelled", "PartiallyFilledCanceled"},
 }
+_PATH_LOCKS: dict[str, threading.RLock] = {}
+_PATH_LOCKS_GUARD = threading.Lock()
+_LOCK_TIMEOUT_SECONDS = 10.0
+_STALE_LOCK_SECONDS = 60.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,10 +88,10 @@ class OrderIntent:
         market_unit: Any = None,
         attempt: Any = 1,
     ) -> "OrderIntent":
-        clean_environment = _choice(str(environment).strip().lower(), "environment", _ENVIRONMENTS)
-        clean_category = _choice(str(category).strip().lower(), "category", _CATEGORIES)
-        clean_side = _choice(str(side).strip().title(), "side", _SIDES)
-        clean_type = _choice(str(order_type).strip().title(), "order_type", _ORDER_TYPES)
+        clean_environment = _required_choice(environment, "environment", _ENVIRONMENTS, transform="lower")
+        clean_category = _required_choice(category, "category", _CATEGORIES, transform="lower")
+        clean_side = _required_choice(side, "side", _SIDES, transform="title")
+        clean_type = _required_choice(order_type, "order_type", _ORDER_TYPES, transform="title")
         clean_price = _optional_decimal(price, "price")
         clean_trigger = _optional_decimal(trigger_price, "trigger_price")
         if clean_trigger:
@@ -95,17 +100,17 @@ class OrderIntent:
         if clean_type == "Limit":
             if not clean_price:
                 raise ValueError("Limit order requires price")
-            tif = _choice(str(time_in_force or "GTC").strip(), "time_in_force", _TIME_IN_FORCE)
+            tif = _required_choice(time_in_force or "GTC", "time_in_force", _TIME_IN_FORCE)
         else:
             if clean_price:
                 raise ValueError("Market order must not include price")
-            tif = str(time_in_force or "IOC").strip()
+            tif = _required_text(time_in_force or "IOC", "time_in_force")
             if tif != "IOC":
                 raise ValueError("Market order time_in_force must be IOC")
 
         clean_reduce_only = _boolean(reduce_only, "reduce_only")
         clean_position_idx = _position_idx(position_idx)
-        requested_unit = str(market_unit or "").strip()
+        requested_unit = "" if market_unit is None else _optional_text(market_unit, "market_unit")
         if clean_category == "spot":
             if clean_reduce_only:
                 raise ValueError("spot orders cannot use reduce_only")
@@ -113,7 +118,7 @@ class OrderIntent:
                 raise ValueError("spot orders require position_idx=0")
             if clean_type == "Market":
                 clean_unit = requested_unit or ("quoteCoin" if clean_side == "Buy" else "baseCoin")
-                clean_unit = _choice(clean_unit, "market_unit", _MARKET_UNITS)
+                clean_unit = _required_choice(clean_unit, "market_unit", _MARKET_UNITS)
             else:
                 if requested_unit:
                     raise ValueError("spot Limit orders must not include market_unit")
@@ -164,20 +169,26 @@ class OrderIntent:
             raise RuntimeError("generated orderLinkId violates Bybit format")
         return value
 
+    @property
+    def execution_unit(self) -> str:
+        if self.category == "spot" and self.order_type == "Market" and self.market_unit == "quoteCoin":
+            return "quoteCoin"
+        return "baseCoin"
+
 
 class OrderIntentRegistry:
     """Persist reservations before POST and require reconciliation for retries."""
 
     def __init__(self, path: str | Path | None = None) -> None:
         self.path = Path(path or os.getenv("BYBIT_ORDER_INTENT_FILE", "data/bybit_order_intents.json"))
-        self._lock = threading.RLock()
+        self._thread_lock = _shared_path_lock(self.path)
 
     def reserve(self, intent: OrderIntent, *, now_ms: int | None = None) -> dict[str, Any]:
         if not isinstance(intent, OrderIntent):
             raise TypeError("intent must be an OrderIntent")
         current = _positive_int(now_ms if now_ms is not None else int(time.time() * 1000), "now_ms")
         link_id = intent.order_link_id
-        with self._lock:
+        with self._transaction():
             document = self._load()
             records = dict(document["records"])
             existing = records.get(link_id)
@@ -185,19 +196,14 @@ class OrderIntentRegistry:
                 if not isinstance(existing, Mapping) or str(existing.get("fingerprint", "")) != intent.fingerprint:
                     raise RuntimeError("orderLinkId collision or corrupt reservation")
                 return {
-                    "status": "duplicate",
-                    "safe_to_submit": False,
-                    "must_reconcile": True,
-                    "order_link_id": link_id,
-                    "record": dict(existing),
+                    "status": "duplicate", "safe_to_submit": False, "must_reconcile": True,
+                    "order_link_id": link_id, "record": dict(existing),
                 }
             if intent.attempt > 1:
                 previous = _previous_attempt(records, intent)
                 if previous is None or not _retry_safe(previous):
                     return {
-                        "status": "blocked",
-                        "safe_to_submit": False,
-                        "must_reconcile": True,
+                        "status": "blocked", "safe_to_submit": False, "must_reconcile": True,
                         "reason": "previous attempt is not proven terminal without execution",
                         "order_link_id": link_id,
                     }
@@ -209,35 +215,30 @@ class OrderIntentRegistry:
                 "status": "Reserved",
                 "exchange_order_id": "",
                 "cum_exec_qty": "0",
+                "cum_exec_value": "0",
                 "reserved_at_ms": current,
                 "updated_at_ms": current,
+                "revision": 1,
             }
             records[link_id] = record
             self._write({"records": records, "updated_at_ms": current})
             return {
-                "status": "reserved",
-                "safe_to_submit": True,
-                "must_reconcile": False,
-                "order_link_id": link_id,
-                "record": dict(record),
+                "status": "reserved", "safe_to_submit": True, "must_reconcile": False,
+                "order_link_id": link_id, "record": dict(record),
             }
 
     def bind_exchange_order(self, order_link_id: Any, order_id: Any, *, now_ms: int | None = None) -> dict[str, Any]:
         link_id = _link(order_link_id)
         exchange_id = _identifier(order_id, "order_id")
         current = _positive_int(now_ms if now_ms is not None else int(time.time() * 1000), "now_ms")
-        with self._lock:
+        with self._transaction():
             document = self._load()
             records = dict(document["records"])
             raw = records.get(link_id)
             if not isinstance(raw, Mapping):
                 raise KeyError("orderLinkId reservation not found")
             for other_link, other_raw in records.items():
-                if (
-                    other_link != link_id
-                    and isinstance(other_raw, Mapping)
-                    and str(other_raw.get("exchange_order_id", "")) == exchange_id
-                ):
+                if other_link != link_id and isinstance(other_raw, Mapping) and str(other_raw.get("exchange_order_id", "")) == exchange_id:
                     raise RuntimeError("orderId is already bound to another reservation")
             record = dict(raw)
             previous_updated = _positive_int(record.get("updated_at_ms"), "persisted updated_at_ms")
@@ -246,12 +247,16 @@ class OrderIntentRegistry:
             existing_exchange_id = str(record.get("exchange_order_id", ""))
             if existing_exchange_id and existing_exchange_id != exchange_id:
                 raise RuntimeError("reservation is already bound to another orderId")
+            changed = not existing_exchange_id
             record["exchange_order_id"] = exchange_id
             if str(record.get("status")) == "Reserved":
                 record["status"] = "Submitted"
-            record["updated_at_ms"] = current
+                changed = True
+            record["updated_at_ms"] = max(current, previous_updated)
+            if changed:
+                record["revision"] = _positive_int(record.get("revision", 1), "persisted revision") + 1
             records[link_id] = record
-            self._write({"records": records, "updated_at_ms": current})
+            self._write({"records": records, "updated_at_ms": record["updated_at_ms"]})
             return dict(record)
 
     def update_status(
@@ -260,12 +265,13 @@ class OrderIntentRegistry:
         status: Any,
         *,
         cum_exec_qty: Any | None = None,
+        cum_exec_value: Any | None = None,
         now_ms: int | None = None,
     ) -> dict[str, Any]:
         link_id = _link(order_link_id)
-        clean_status = _choice(str(status).strip(), "status", _ALLOWED_STATUSES)
+        clean_status = _required_choice(status, "status", _ALLOWED_STATUSES)
         current = _positive_int(now_ms if now_ms is not None else int(time.time() * 1000), "now_ms")
-        with self._lock:
+        with self._transaction():
             document = self._load()
             records = dict(document["records"])
             raw = records.get(link_id)
@@ -277,41 +283,46 @@ class OrderIntentRegistry:
             previous_updated = _positive_int(record.get("updated_at_ms"), "persisted updated_at_ms")
             if current < previous_updated:
                 raise RuntimeError("status update timestamp regressed")
-            previous_cum = _decimal_value(record.get("cum_exec_qty", "0"), "persisted cum_exec_qty")
-            next_cum = previous_cum if cum_exec_qty is None else _decimal_value(cum_exec_qty, "cum_exec_qty")
-            if next_cum < previous_cum:
-                raise RuntimeError("cum_exec_qty regressed")
+            previous_qty = _decimal_value(record.get("cum_exec_qty", "0"), "persisted cum_exec_qty")
+            previous_value = _decimal_value(record.get("cum_exec_value", "0"), "persisted cum_exec_value")
+            next_qty = previous_qty if cum_exec_qty is None else _decimal_value(cum_exec_qty, "cum_exec_qty")
+            next_value = previous_value if cum_exec_value is None else _decimal_value(cum_exec_value, "cum_exec_value")
+            if next_qty < previous_qty or next_value < previous_value:
+                raise RuntimeError("executed quantity or value regressed")
             if previous_status in _TERMINAL:
                 if clean_status != previous_status:
                     raise RuntimeError("terminal reservation cannot transition")
-                if next_cum != previous_cum:
+                if next_qty != previous_qty or next_value != previous_value:
                     raise RuntimeError("terminal reservation execution cannot change")
-            quantity = Decimal(intent.quantity)
-            _validate_execution(clean_status, next_cum, quantity)
+            _validate_execution(clean_status, intent, next_qty, next_value)
             if clean_status not in _TRANSITIONS.get(previous_status, {previous_status}):
                 raise RuntimeError(f"invalid status transition {previous_status}->{clean_status}")
-            if current == previous_updated and (clean_status != previous_status or next_cum != previous_cum):
-                raise RuntimeError("conflicting status at identical timestamp")
+            changed = clean_status != previous_status or next_qty != previous_qty or next_value != previous_value
             record["status"] = clean_status
-            record["cum_exec_qty"] = _canonical_decimal(next_cum)
-            record["updated_at_ms"] = current
+            record["cum_exec_qty"] = _canonical_decimal(next_qty)
+            record["cum_exec_value"] = _canonical_decimal(next_value)
+            record["updated_at_ms"] = max(current, previous_updated)
+            if changed:
+                record["revision"] = _positive_int(record.get("revision", 1), "persisted revision") + 1
             records[link_id] = record
-            self._write({"records": records, "updated_at_ms": current})
+            self._write({"records": records, "updated_at_ms": record["updated_at_ms"]})
             return dict(record)
 
     def snapshot(self) -> dict[str, Any]:
-        with self._lock:
+        with self._transaction():
             document = self._load()
         values = [dict(value) for value in document["records"].values()]
         unresolved = [value for value in values if str(value.get("status", "")) not in _TERMINAL]
         return {
-            "status": "ok",
-            "tracked_intents": len(values),
-            "unresolved_intents": unresolved,
-            "restart_safe": not unresolved,
-            "records": values,
-            "updated_at_ms": document.get("updated_at_ms"),
+            "status": "ok", "tracked_intents": len(values), "unresolved_intents": unresolved,
+            "restart_safe": not unresolved, "records": values, "updated_at_ms": document.get("updated_at_ms"),
         }
+
+    @contextmanager
+    def _transaction(self) -> Iterator[None]:
+        with self._thread_lock:
+            with _exclusive_lock_file(self.path):
+                yield
 
     def _load(self) -> dict[str, Any]:
         if not self.path.exists():
@@ -331,6 +342,42 @@ class OrderIntentRegistry:
         temporary.replace(self.path)
 
 
+def _shared_path_lock(path: Path) -> threading.RLock:
+    key = str(path.expanduser().resolve())
+    with _PATH_LOCKS_GUARD:
+        return _PATH_LOCKS.setdefault(key, threading.RLock())
+
+
+@contextmanager
+def _exclusive_lock_file(path: Path) -> Iterator[None]:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    deadline = time.monotonic() + _LOCK_TIMEOUT_SECONDS
+    descriptor: int | None = None
+    while descriptor is None:
+        try:
+            descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            os.write(descriptor, f"{os.getpid()}\n{time.time()}".encode())
+        except FileExistsError:
+            try:
+                if time.time() - lock_path.stat().st_mtime > _STALE_LOCK_SECONDS:
+                    lock_path.unlink(missing_ok=True)
+                    continue
+            except FileNotFoundError:
+                continue
+            if time.monotonic() >= deadline:
+                raise RuntimeError("timed out waiting for order intent registry lock")
+            time.sleep(0.01)
+    try:
+        yield
+    finally:
+        os.close(descriptor)
+        try:
+            lock_path.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def _previous_attempt(records: Mapping[str, Any], intent: OrderIntent) -> Mapping[str, Any] | None:
     target_attempt = intent.attempt - 1
     matches = []
@@ -338,7 +385,7 @@ def _previous_attempt(records: Mapping[str, Any], intent: OrderIntent) -> Mappin
         if not isinstance(raw, Mapping) or str(raw.get("root_fingerprint", "")) != intent.root_fingerprint:
             continue
         payload = raw.get("intent")
-        if isinstance(payload, Mapping) and int(payload.get("attempt", 0)) == target_attempt:
+        if isinstance(payload, Mapping) and _nonnegative_int(payload.get("attempt", 0), "persisted attempt") == target_attempt:
             matches.append(raw)
     if len(matches) > 1:
         raise RuntimeError("multiple previous-attempt reservations found")
@@ -347,8 +394,9 @@ def _previous_attempt(records: Mapping[str, Any], intent: OrderIntent) -> Mappin
 
 def _retry_safe(record: Mapping[str, Any]) -> bool:
     status = str(record.get("status", ""))
-    cum_exec = _decimal_value(record.get("cum_exec_qty", "0"), "persisted cum_exec_qty")
-    return status in {"Rejected", "Deactivated", "Cancelled"} and cum_exec == 0
+    cum_qty = _decimal_value(record.get("cum_exec_qty", "0"), "persisted cum_exec_qty")
+    cum_value = _decimal_value(record.get("cum_exec_value", "0"), "persisted cum_exec_value")
+    return status in {"Rejected", "Deactivated", "Cancelled"} and cum_qty == 0 and cum_value == 0
 
 
 def _validate_document(data: Any) -> None:
@@ -379,24 +427,26 @@ def _validate_document(data: Any) -> None:
             raise RuntimeError("persisted reservation status is invalid")
         reserved_at = _positive_int(record.get("reserved_at_ms"), "persisted reserved_at_ms")
         updated_at = _positive_int(record.get("updated_at_ms"), "persisted updated_at_ms")
+        _positive_int(record.get("revision", 1), "persisted revision")
         if updated_at < reserved_at:
             raise RuntimeError("persisted reservation timestamp regressed")
-        cum_exec = _decimal_value(record.get("cum_exec_qty", "0"), "persisted cum_exec_qty")
+        cum_qty = _decimal_value(record.get("cum_exec_qty", "0"), "persisted cum_exec_qty")
+        cum_value = _decimal_value(record.get("cum_exec_value", "0"), "persisted cum_exec_value")
         try:
-            _validate_execution(status, cum_exec, Decimal(intent.quantity))
+            _validate_execution(status, intent, cum_qty, cum_value)
         except ValueError as exc:
             raise RuntimeError(f"persisted execution state is inconsistent: {exc}") from exc
-        exchange_id = str(record.get("exchange_order_id", "")).strip()
-        if exchange_id:
+        exchange_id = record.get("exchange_order_id", "")
+        if exchange_id not in {"", None}:
             try:
-                exchange_id = _identifier(exchange_id, "exchange_order_id")
+                clean_exchange_id = _identifier(exchange_id, "exchange_order_id")
             except ValueError as exc:
                 raise RuntimeError("persisted exchange_order_id is invalid") from exc
-            existing = bound_order_ids.get(exchange_id)
+            existing = bound_order_ids.get(clean_exchange_id)
             if existing and existing != clean_link:
                 raise RuntimeError("one exchange orderId is bound to multiple reservations")
-            bound_order_ids[exchange_id] = clean_link
-        if status == "Submitted" and not exchange_id:
+            bound_order_ids[clean_exchange_id] = clean_link
+        elif status == "Submitted":
             raise RuntimeError("Submitted reservation lacks exchange_order_id")
 
 
@@ -410,17 +460,36 @@ def _intent_from_record(record: Mapping[str, Any]) -> OrderIntent:
         raise RuntimeError(f"persisted intent payload is invalid: {exc}") from exc
 
 
-def _validate_execution(status: str, cum_exec: Decimal, quantity: Decimal) -> None:
-    if cum_exec < 0 or cum_exec > quantity:
-        raise ValueError("cum_exec_qty is outside order quantity")
-    if status == "Filled" and cum_exec != quantity:
-        raise ValueError("Filled requires full executed quantity")
-    if status in {"PartiallyFilled", "PartiallyFilledCanceled"} and not (Decimal("0") < cum_exec < quantity):
-        raise ValueError(f"{status} requires partial executed quantity")
-    if status == "Cancelled" and cum_exec >= quantity:
-        raise ValueError("Cancelled cannot report full executed quantity")
-    if status in {"Reserved", "Submitted", "Untriggered", "Triggered", "New", "Rejected", "Deactivated"} and cum_exec != 0:
-        raise ValueError(f"{status} cannot report executed quantity")
+def _execution_progress(intent: OrderIntent, cum_qty: Decimal, cum_value: Decimal) -> Decimal:
+    return cum_value if intent.execution_unit == "quoteCoin" else cum_qty
+
+
+def _validate_execution(status: str, intent: OrderIntent, cum_qty: Decimal, cum_value: Decimal) -> None:
+    if cum_qty < 0 or cum_value < 0:
+        raise ValueError("executed quantity and value must not be negative")
+    target = Decimal(intent.quantity)
+    progress = _execution_progress(intent, cum_qty, cum_value)
+    if progress > target:
+        raise ValueError("executed progress exceeds order quantity")
+    if progress > 0 and cum_qty <= 0:
+        raise ValueError("executed base quantity is required after execution")
+    if status == "Filled" and progress != target:
+        raise ValueError("Filled requires full executed progress in the intent unit")
+    if status == "PartiallyFilled" and not (Decimal("0") < progress < target):
+        raise ValueError("PartiallyFilled requires partial executed progress")
+    if status == "PartiallyFilledCanceled":
+        if intent.category != "spot":
+            raise ValueError("PartiallyFilledCanceled is valid only for spot orders")
+        if not (Decimal("0") < progress < target):
+            raise ValueError("PartiallyFilledCanceled requires partial executed progress")
+    if status == "Cancelled":
+        if progress >= target:
+            raise ValueError("Cancelled cannot report full executed progress")
+        if intent.category == "spot" and progress > 0:
+            raise ValueError("partially filled spot cancellation requires PartiallyFilledCanceled")
+    if status in {"Reserved", "Submitted", "Untriggered", "Triggered", "New", "Rejected", "Deactivated"}:
+        if cum_qty != 0 or cum_value != 0:
+            raise ValueError(f"{status} cannot report executed quantity or value")
 
 
 def _fingerprint(payload: Mapping[str, Any]) -> str:
@@ -428,31 +497,53 @@ def _fingerprint(payload: Mapping[str, Any]) -> str:
     return hashlib.sha256(encoded.encode()).hexdigest()
 
 
-def _identifier(value: Any, name: str) -> str:
+def _required_text(value: Any, name: str) -> str:
+    if value is None or isinstance(value, bool):
+        raise ValueError(f"{name} is required")
     text = str(value).strip()
+    if not text or text.casefold() in {"none", "null"}:
+        raise ValueError(f"{name} is required")
+    return text
+
+
+def _optional_text(value: Any, name: str) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        raise TypeError(f"{name} must be text")
+    return str(value).strip()
+
+
+def _required_choice(value: Any, name: str, allowed: set[str], *, transform: str | None = None) -> str:
+    text = _required_text(value, name)
+    if transform == "lower":
+        text = text.lower()
+    elif transform == "title":
+        text = text.title()
+    if text not in allowed:
+        raise ValueError(f"{name} must be one of: {', '.join(sorted(allowed))}")
+    return text
+
+
+def _identifier(value: Any, name: str) -> str:
+    text = _required_text(value, name)
     if not _ID_RE.fullmatch(text):
         raise ValueError(f"{name} has invalid format")
     return text
 
 
 def _link(value: Any) -> str:
-    text = str(value).strip()
+    text = _required_text(value, "orderLinkId")
     if not _LINK_RE.fullmatch(text):
         raise ValueError("orderLinkId has invalid format")
     return text
 
 
 def _symbol(value: Any) -> str:
-    text = str(value).strip().upper().replace("/", "").replace("-", "")
-    if not text or len(text) > 30 or not text.isalnum():
+    text = _required_text(value, "symbol").upper().replace("/", "").replace("-", "")
+    if len(text) > 30 or not text.isalnum():
         raise ValueError("symbol has invalid format")
     return text
-
-
-def _choice(value: str, name: str, allowed: set[str]) -> str:
-    if value not in allowed:
-        raise ValueError(f"{name} must be one of: {', '.join(sorted(allowed))}")
-    return value
 
 
 def _boolean(value: Any, name: str) -> bool:
@@ -478,12 +569,15 @@ def _positive_int(value: Any, name: str) -> int:
 
 
 def _nonnegative_int(value: Any, name: str) -> int:
-    if isinstance(value, bool):
+    if value is None or isinstance(value, bool):
         raise TypeError(f"{name} must be an integer")
     try:
-        parsed = int(value)
-    except (TypeError, ValueError) as exc:
+        parsed_decimal = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError) as exc:
         raise TypeError(f"{name} must be an integer") from exc
+    if not parsed_decimal.is_finite() or parsed_decimal != parsed_decimal.to_integral_value():
+        raise ValueError(f"{name} must be a whole integer")
+    parsed = int(parsed_decimal)
     if parsed < 0:
         raise ValueError(f"{name} must not be negative")
     return parsed
@@ -497,13 +591,13 @@ def _decimal(value: Any, name: str, *, positive: bool = False) -> str:
 
 
 def _optional_decimal(value: Any, name: str) -> str:
-    if value is None or str(value).strip() == "":
+    if value is None or (isinstance(value, str) and not value.strip()):
         return ""
     return _decimal(value, name, positive=True)
 
 
 def _decimal_value(value: Any, name: str) -> Decimal:
-    if isinstance(value, bool):
+    if value is None or isinstance(value, bool):
         raise TypeError(f"{name} must be numeric")
     try:
         parsed = Decimal(str(value))
