@@ -49,9 +49,10 @@ jobs:
           PY
 
       - name: Run targeted stabilization tests
+        id: pytest
+        continue-on-error: true
         shell: bash
         run: |
-          set +e
           python -m pytest \
             dashboard/tests/test_canonical_agent_health.py \
             dashboard/tests/test_auth_security_flow.py \
@@ -59,24 +60,58 @@ jobs:
             dashboard/tests/test_dashboard.py \
             dashboard/tests/test_demo_api.py \
             -q --tb=short > pytest-targeted.log 2>&1
-          code=$?
+
+      - name: Build compact failure report
+        if: always()
+        run: |
           python - <<'PY'
           from pathlib import Path
-          lines = Path('pytest-targeted.log').read_text(encoding='utf-8', errors='replace').splitlines()
-          markers = ('ERROR collecting', 'FAILED ', 'E   ', 'short test summary', 'ModuleNotFoundError', 'ImportError', 'SyntaxError', 'TypeError')
+          source = Path('pytest-targeted.log')
+          lines = source.read_text(encoding='utf-8', errors='replace').splitlines() if source.exists() else ['pytest log missing']
+          markers = ('ERROR collecting', 'FAILED ', 'E   ', 'short test summary', 'ModuleNotFoundError', 'ImportError', 'SyntaxError', 'TypeError', 'AssertionError')
           selected = []
           for index, line in enumerate(lines):
               if any(marker in line for marker in markers):
-                  start = max(0, index - 3)
-                  end = min(len(lines), index + 12)
-                  selected.extend(lines[start:end])
-          selected.extend(lines[-80:])
-          seen = set()
+                  selected.extend(lines[max(0, index - 4):min(len(lines), index + 14)])
+          selected.extend(lines[-100:])
           compact = []
+          seen = set()
           for line in selected:
               if line not in seen:
                   seen.add(line)
                   compact.append(line)
-          print('\n'.join(compact[-220:]))
+          report = '\n'.join(compact[-240:])
+          Path('pytest-summary.txt').write_text(report, encoding='utf-8')
+          print(report)
           PY
-          exit $code
+
+      - name: Upload pytest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-pytest-report
+          path: |
+            pytest-targeted.log
+            pytest-summary.txt
+          if-no-files-found: error
+
+      - name: Fail job when tests failed
+        if: steps.pytest.outcome == 'failure'
+        run: exit 1
+
+  print-dashboard-failures:
+    if: always()
+    needs: targeted-dashboard-tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download pytest report
+        uses: actions/download-artifact@v4
+        with:
+          name: dashboard-pytest-report
+
+      - name: Exact dashboard failure summary
+        run: cat pytest-summary.txt
+
+      - name: Preserve failure status
+        if: needs.targeted-dashboard-tests.result != 'success'
+        run: exit 1
