@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from .app import app, create_app
 from .autonomous_trading_api import install_autonomous_trading_api
+from .bybit_account_api import install_bybit_account_api
 from .exceptions import DashboardError
 from .execution_stages_api import install_execution_stages_api
 from .market_data_api import install_market_data_api
@@ -16,6 +17,7 @@ install_news_agent_network_api(app)
 install_market_data_api(app)
 install_autonomous_trading_api(app)
 install_execution_stages_api(app)
+install_bybit_account_api(app)
 
 try:
     from .telegram_news_agents import install_telegram_news_agent_commands
