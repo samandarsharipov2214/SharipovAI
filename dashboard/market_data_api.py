@@ -1,9 +1,9 @@
-"""FastAPI endpoints for verified read-only market data."""
+"""FastAPI endpoints for verified read-only market data and order previews."""
 from __future__ import annotations
 
 from typing import Any, Callable
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Body, FastAPI, HTTPException
 
 from config.feature_flags import is_feature_enabled
 from exchange_connector.bybit_instrument_rules import (
@@ -12,10 +12,8 @@ from exchange_connector.bybit_instrument_rules import (
 )
 from exchange_connector.bybit_websocket_worker import BybitWebSocketWorker
 from exchange_connector.market_data import MarketDataService, MarketDataUnavailable
-from exchange_connector.multi_exchange_consensus import (
-    ConsensusUnavailable,
-    MultiExchangeConsensus,
-)
+from exchange_connector.multi_exchange_consensus import ConsensusUnavailable, MultiExchangeConsensus
+from exchange_connector.order_preview import OrderPreviewError, build_order_preview
 
 
 def install_market_data_api(app: FastAPI) -> None:
@@ -36,10 +34,7 @@ def install_market_data_api(app: FastAPI) -> None:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except MarketDataUnavailable as exc:
-            raise HTTPException(
-                status_code=503,
-                detail={"status": "unavailable", "verified": False, "synthetic_fallback_used": False, "message": str(exc)},
-            ) from exc
+            raise HTTPException(status_code=503, detail={"status": "unavailable", "verified": False, "synthetic_fallback_used": False, "message": str(exc)}) from exc
         return {**quote.to_dict(), "synthetic_fallback_used": False}
 
     @app.get("/api/market/bybit-websocket/status")
@@ -53,28 +48,19 @@ def install_market_data_api(app: FastAPI) -> None:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except RuntimeError as exc:
-            raise HTTPException(
-                status_code=503,
-                detail={"status": "unavailable", "verified": False, "synthetic_fallback_used": False, "message": str(exc)},
-            ) from exc
+            raise HTTPException(status_code=503, detail={"status": "unavailable", "verified": False, "synthetic_fallback_used": False, "message": str(exc)}) from exc
         return {**quote, "verified": True, "synthetic_fallback_used": False}
 
     @app.get("/api/market/consensus/{symbol}")
     def market_consensus(symbol: str) -> dict[str, Any]:
         if not is_feature_enabled("multi_exchange_consensus"):
-            raise HTTPException(
-                status_code=503,
-                detail={"status": "disabled", "verified": False, "synthetic_fallback_used": False},
-            )
+            raise HTTPException(status_code=503, detail={"status": "disabled", "verified": False, "synthetic_fallback_used": False})
         try:
             quote = app.state.multi_exchange_consensus.quote(symbol)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except ConsensusUnavailable as exc:
-            raise HTTPException(
-                status_code=503,
-                detail={"status": "unavailable", "verified": False, "synthetic_fallback_used": False, "message": str(exc)},
-            ) from exc
+            raise HTTPException(status_code=503, detail={"status": "unavailable", "verified": False, "synthetic_fallback_used": False, "message": str(exc)}) from exc
         return {**quote.to_dict(), "synthetic_fallback_used": False}
 
     @app.get("/api/market/instrument-rules/{category}/{symbol}")
@@ -84,11 +70,24 @@ def install_market_data_api(app: FastAPI) -> None:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except InstrumentRulesUnavailable as exc:
-            raise HTTPException(
-                status_code=503,
-                detail={"status": "unavailable", "verified": False, "message": str(exc)},
-            ) from exc
+            raise HTTPException(status_code=503, detail={"status": "unavailable", "verified": False, "message": str(exc)}) from exc
         return {**rules.to_dict(), "verified": True}
+
+    @app.post("/api/trading/order-preview")
+    def order_preview(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
+        if not is_feature_enabled("bybit_preview_engine"):
+            raise HTTPException(status_code=503, detail={"status": "disabled", "executed": False})
+        data = payload or {}
+        try:
+            symbol = str(data.get("symbol", ""))
+            category = str(data.get("category", "spot"))
+            rules = app.state.bybit_instrument_rules.get(symbol, category)
+            preview = build_order_preview(data, rules)
+        except (ValueError, OrderPreviewError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except InstrumentRulesUnavailable as exc:
+            raise HTTPException(status_code=503, detail={"status": "unavailable", "executed": False, "message": str(exc)}) from exc
+        return {"status": "ok", "preview": preview.to_dict()}
 
 
 def _register_lifecycle_handler(app: FastAPI, event: str, handler: Callable[[], None]) -> None:
