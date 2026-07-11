@@ -15,10 +15,12 @@ def configure_safe_runtime(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("EXECUTION_KILL_SWITCH", "1")
     monkeypatch.setenv("TESTNET_EXECUTION_ENABLED", "0")
     monkeypatch.setenv("AUTONOMOUS_TESTNET_ENABLED", "0")
+    monkeypatch.setenv("AUTONOMOUS_TESTNET_BRIDGE_ENABLED", "0")
     monkeypatch.setenv("EXCHANGE_LIVE_TRADING_ENABLED", "0")
     monkeypatch.setenv("FEATURE_BYBIT_PRIVATE_ORDER_WS", "0")
     monkeypatch.setenv("BYBIT_ALLOW_LEGACY_EXCHANGE_CREDENTIALS", "0")
     monkeypatch.setenv("EXCHANGE_MODE", "sandbox")
+    monkeypatch.setenv("AUTONOMOUS_TRADING_STAGE", "2")
     monkeypatch.setenv("EXCHANGE_BASE_URL", "https://api-testnet.bybit.com")
     monkeypatch.setenv("EXECUTION_JOURNAL_FILE", str(tmp_path / "execution-journal.json"))
     for name in (
@@ -57,11 +59,30 @@ def test_unsafe_render_testnet_value_is_detected(tmp_path: Path) -> None:
     assert seen["render_testnet_locked"][0] is False
 
 
-def test_missing_runtime_auth_and_enabled_live_are_blocked(monkeypatch) -> None:
-    for name in ("AUTH_SECRET", "ADMIN_USERNAME", "ADMIN_PASSWORD", "DATABASE_URL"):
+def test_enabled_render_bridge_is_detected(tmp_path: Path) -> None:
+    source = Path("render.yaml").read_text(encoding="utf-8")
+    unsafe = source.replace(
+        '- key: AUTONOMOUS_TESTNET_BRIDGE_ENABLED\n        value: "0"',
+        '- key: AUTONOMOUS_TESTNET_BRIDGE_ENABLED\n        value: "1"',
+        1,
+    )
+    (tmp_path / "render.yaml").write_text(unsafe, encoding="utf-8")
+    seen = {}
+
+    def record(name, passed, detail, **kwargs):
+        seen[name] = passed
+
+    _audit_blueprint(tmp_path, record)
+    assert seen["render_testnet_locked"] is False
+
+
+def test_missing_runtime_auth_kill_switch_and_enabled_live_are_blocked(monkeypatch) -> None:
+    for name in ("AUTH_SECRET", "ADMIN_USERNAME", "ADMIN_PASSWORD", "DATABASE_URL", "EXECUTION_KILL_SWITCH"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "1")
     monkeypatch.setenv("EXCHANGE_LIVE_TRADING_ENABLED", "1")
+    monkeypatch.setenv("EXCHANGE_MODE", "live")
+    monkeypatch.setenv("AUTONOMOUS_TRADING_STAGE", "4")
     seen = {}
 
     def record(name, passed, detail, **kwargs):
@@ -70,7 +91,10 @@ def test_missing_runtime_auth_and_enabled_live_are_blocked(monkeypatch) -> None:
     _audit_runtime_environment(record)
     assert seen["runtime_required_configuration"] is False
     assert seen["runtime_auth_enabled"] is False
+    assert seen["runtime_kill_switch"] is False
     assert seen["runtime_live_locked"] is False
+    assert seen["runtime_exchange_sandbox"] is False
+    assert seen["runtime_stage_safe"] is False
 
 
 def test_partial_credentials_and_mainnet_credentials_are_blocked(monkeypatch) -> None:
