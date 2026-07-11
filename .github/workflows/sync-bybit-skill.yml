@@ -34,47 +34,42 @@ jobs:
           import hashlib
           import json
           import pathlib
-          import re
           import urllib.request
 
-          user_agent = "bybit-skill/1.5.3 SharipovAI"
-          manifest_url = "https://api.bybit.com/skill/manifest"
-          source_url = "https://raw.githubusercontent.com/bybit-exchange/skills/main/SKILL.md"
+          version = "1.5.3"
+          upstream_commit = "0a0c9a7af9cbaeb0d29f3f90498043ff4b7b5179"
+          expected_sha256 = "ec311a0b4f21910af4068ac17084618b5f64a8233b8331a8b570ceae3add6fd1"
+          source_url = (
+              "https://raw.githubusercontent.com/bybit-exchange/skills/"
+              f"{upstream_commit}/SKILL.md"
+          )
           target = pathlib.Path("skills/bybit-trading/SKILL.md")
           metadata_target = pathlib.Path("skills/bybit-trading/SOURCE.json")
 
-          def fetch(url: str) -> bytes:
-              request = urllib.request.Request(url, headers={"User-Agent": user_agent})
-              with urllib.request.urlopen(request, timeout=30) as response:
-                  return response.read()
+          request = urllib.request.Request(
+              source_url,
+              headers={"User-Agent": "SharipovAI/bybit-skill-vendor"},
+          )
+          with urllib.request.urlopen(request, timeout=30) as response:
+              content = response.read()
 
-          manifest = json.loads(fetch(manifest_url).decode("utf-8"))
-          version = str(manifest.get("version", ""))
-          files = manifest.get("files")
-          if not re.fullmatch(r"\d+\.\d+\.\d+", version):
-              raise SystemExit(f"Invalid manifest version: {version!r}")
-          if not isinstance(files, dict):
-              raise SystemExit("Manifest files field is missing or invalid")
-
-          for path, checksum in files.items():
-              if not re.fullmatch(r"SKILL\.md|modules/[a-z0-9-]+\.(?:md|js)", path):
-                  raise SystemExit(f"Unsafe path in manifest: {path!r}")
-              if ".." in path or path.startswith(("/", "~")) or "\\" in path:
-                  raise SystemExit(f"Unsafe path in manifest: {path!r}")
-              if not isinstance(checksum, str) or not checksum.startswith("sha256:"):
-                  raise SystemExit(f"Unsupported checksum for {path!r}")
-
-          expected = files.get("SKILL.md")
-          if not isinstance(expected, str) or not expected.startswith("sha256:"):
-              raise SystemExit("SKILL.md checksum missing from manifest")
-
-          content = fetch(source_url)
-          actual = hashlib.sha256(content).hexdigest()
-          expected_digest = expected.removeprefix("sha256:")
-          if actual != expected_digest:
+          actual_sha256 = hashlib.sha256(content).hexdigest()
+          if actual_sha256 != expected_sha256:
               raise SystemExit(
-                  f"Checksum mismatch for SKILL.md: expected {expected_digest}, got {actual}"
+                  "Checksum mismatch for official Bybit SKILL.md: "
+                  f"expected {expected_sha256}, got {actual_sha256}"
               )
+
+          decoded = content.decode("utf-8")
+          required_markers = (
+              "name: bybit-trading",
+              "version: 1.5.3",
+              "## Security Rules",
+              "Structured Operation Confirmation",
+          )
+          missing = [marker for marker in required_markers if marker not in decoded]
+          if missing:
+              raise SystemExit(f"Required safety markers missing: {missing}")
 
           target.parent.mkdir(parents=True, exist_ok=True)
           target.write_bytes(content)
@@ -83,14 +78,16 @@ jobs:
                   {
                       "name": "bybit-trading",
                       "version": version,
-                      "source": source_url,
-                      "manifest": manifest_url,
-                      "sha256": actual,
                       "vendor": "Bybit",
+                      "upstream_repository": "bybit-exchange/skills",
+                      "upstream_commit": upstream_commit,
+                      "source": source_url,
+                      "sha256": actual_sha256,
                       "usage_policy": {
                           "default_environment": "testnet",
                           "mainnet_write_requires_human_confirm": True,
                           "withdraw_permission_forbidden": True,
+                          "secrets_must_not_be_committed": True,
                       },
                   },
                   ensure_ascii=False,
@@ -99,7 +96,7 @@ jobs:
               + "\n",
               encoding="utf-8",
           )
-          print(f"Verified Bybit skill v{version}: sha256:{actual}")
+          print(f"Verified official Bybit skill v{version}: sha256:{actual_sha256}")
           PY
 
       - name: Commit synchronized skill
