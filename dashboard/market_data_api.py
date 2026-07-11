@@ -1,9 +1,10 @@
 """FastAPI endpoints for verified read-only market data and order previews."""
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any, Callable
 
-from fastapi import Body, FastAPI, HTTPException
+from fastapi import Body, FastAPI, HTTPException, Query
 
 from config.feature_flags import is_feature_enabled
 from exchange_connector.bybit_instrument_rules import (
@@ -11,9 +12,13 @@ from exchange_connector.bybit_instrument_rules import (
     InstrumentRulesUnavailable,
 )
 from exchange_connector.bybit_websocket_worker import BybitWebSocketWorker
-from exchange_connector.market_data import MarketDataService, MarketDataUnavailable
+from exchange_connector.market_data import MarketDataService, MarketDataUnavailable, normalize_symbol
 from exchange_connector.multi_exchange_consensus import ConsensusUnavailable, MultiExchangeConsensus
 from exchange_connector.order_preview import OrderPreviewError, build_order_preview
+
+_BYBIT_MARKET_URL = "https://api.bybit.com/v5/market"
+_ALLOWED_INTERVALS = {"1", "3", "5", "15", "30", "60", "120", "240", "360", "720", "D", "W", "M"}
+_ALLOWED_CATEGORIES = {"spot", "linear", "inverse"}
 
 
 def install_market_data_api(app: FastAPI) -> None:
@@ -36,6 +41,82 @@ def install_market_data_api(app: FastAPI) -> None:
         except MarketDataUnavailable as exc:
             raise HTTPException(status_code=503, detail={"status": "unavailable", "verified": False, "synthetic_fallback_used": False, "message": str(exc)}) from exc
         return {**quote.to_dict(), "synthetic_fallback_used": False}
+
+    @app.get("/api/market/candles/{symbol}")
+    def market_candles(
+        symbol: str,
+        interval: str = Query(default="15"),
+        limit: int = Query(default=200, ge=20, le=1000),
+        category: str = Query(default="spot"),
+    ) -> dict[str, Any]:
+        clean_symbol = normalize_symbol(symbol)
+        clean_interval = str(interval).upper()
+        clean_category = str(category).lower()
+        if clean_interval not in _ALLOWED_INTERVALS:
+            raise HTTPException(status_code=400, detail="Неподдерживаемый интервал свечей")
+        if clean_category not in _ALLOWED_CATEGORIES:
+            raise HTTPException(status_code=400, detail="Неподдерживаемый тип рынка")
+        try:
+            payload = app.state.market_data_service.get_json(
+                f"{_BYBIT_MARKET_URL}/kline",
+                params={"category": clean_category, "symbol": clean_symbol, "interval": clean_interval, "limit": str(limit)},
+            )
+            if payload.get("retCode") != 0:
+                raise ValueError(payload.get("retMsg") or "Bybit вернул ошибку")
+            rows = payload.get("result", {}).get("list", [])
+            candles = [
+                {
+                    "time": int(row[0]),
+                    "open": float(row[1]),
+                    "high": float(row[2]),
+                    "low": float(row[3]),
+                    "close": float(row[4]),
+                    "volume": float(row[5]),
+                    "turnover": float(row[6]),
+                }
+                for row in reversed(rows)
+                if isinstance(row, list) and len(row) >= 7
+            ]
+            if not candles:
+                raise ValueError("Bybit не вернул свечи")
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail={"status": "unavailable", "verified": False, "synthetic_fallback_used": False, "message": str(exc)}) from exc
+        return {
+            "status": "ok",
+            "verified": True,
+            "synthetic_fallback_used": False,
+            "source": "Bybit",
+            "symbol": clean_symbol,
+            "category": clean_category,
+            "interval": clean_interval,
+            "received_at": datetime.now(UTC).isoformat(),
+            "candles": candles,
+        }
+
+    @app.get("/api/market/orderbook/{symbol}")
+    def market_orderbook(
+        symbol: str,
+        limit: int = Query(default=25, ge=1, le=200),
+        category: str = Query(default="spot"),
+    ) -> dict[str, Any]:
+        clean_symbol = normalize_symbol(symbol)
+        clean_category = str(category).lower()
+        if clean_category not in _ALLOWED_CATEGORIES:
+            raise HTTPException(status_code=400, detail="Неподдерживаемый тип рынка")
+        try:
+            payload = app.state.market_data_service.get_json(
+                f"{_BYBIT_MARKET_URL}/orderbook",
+                params={"category": clean_category, "symbol": clean_symbol, "limit": str(limit)},
+            )
+            if payload.get("retCode") != 0:
+                raise ValueError(payload.get("retMsg") or "Bybit вернул ошибку")
+            result = payload.get("result", {})
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail={"status": "unavailable", "verified": False, "message": str(exc)}) from exc
+        return {
+            "status": "ok", "verified": True, "source": "Bybit", "symbol": clean_symbol,
+            "received_at": datetime.now(UTC).isoformat(), "bids": result.get("b", []), "asks": result.get("a", []),
+        }
 
     @app.get("/api/market/bybit-websocket/status")
     def bybit_websocket_status() -> dict[str, Any]:
