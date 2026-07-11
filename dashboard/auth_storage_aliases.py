@@ -1,16 +1,20 @@
-"""Unify legacy and canonical authentication storage paths.
+"""Unify legacy and canonical authentication storage and session resolution.
 
 Older local tools and tests use ``AUTH_*_FILE`` while the current dashboard uses
-``SHARIPOVAI_*_FILE``.  Resolving them in different modules created split-brain
+``SHARIPOVAI_*_FILE``. Resolving them in different modules created split-brain
 authentication: login could read one users file while the signed-session verifier
-read another.  This adapter installs one dynamic resolver for both code paths.
+read another. This adapter installs one dynamic resolver for both code paths.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import importlib
 import os
+import time
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 _INSTALLED = False
 
@@ -32,7 +36,7 @@ def _resolved_path(
 
 
 def install_auth_storage_aliases() -> None:
-    """Install dynamic shared path resolvers exactly once per Python process."""
+    """Install shared path and signed-session resolvers exactly once."""
 
     global _INSTALLED
     if _INSTALLED:
@@ -62,9 +66,53 @@ def install_auth_storage_aliases() -> None:
             lambda: app_module._data_dir() / "security_events.jsonl",
         )
 
+    def session_username(request: Any) -> str | None:
+        """Validate the signed cookie against the shared users store.
+
+        The configured environment administrator remains authoritative after a
+        valid signature and TTL check. This prevents an accidental pending or
+        stale file record with the same username from locking out the owner.
+        """
+
+        raw = request.cookies.get(app_module.SESSION_COOKIE, "")
+        if not raw:
+            return None
+        try:
+            decoded = base64.urlsafe_b64decode(raw.encode())
+            payload, signature = decoded.rsplit(b".", 1)
+            expected = hmac.new(
+                app_module._auth_secret().encode(),
+                payload,
+                hashlib.sha256,
+            ).digest()
+            if not hmac.compare_digest(signature, expected):
+                return None
+
+            username, issued, _nonce = payload.decode().split(":", 2)
+            if int(time.time()) - int(issued) > app_module.SESSION_TTL_SECONDS:
+                return None
+
+            clean_username = app_module._clean_username(username)
+            configured_admin = app_module._clean_username(
+                os.getenv("ADMIN_USERNAME", "admin")
+            )
+            if clean_username == configured_admin:
+                return clean_username
+
+            user = app_module._user_record(app_module._load_users(), clean_username)
+            if user and (
+                not bool(user.get("active", True))
+                or str(user.get("role", "")) not in {"admin", "user"}
+            ):
+                return None
+            return clean_username
+        except Exception:
+            return None
+
     app_module._users_file = users_file
     app_module._access_requests_file = access_requests_file
     app_module._security_events_file = security_events_file
+    app_module._session_username = session_username
 
     compat_module._compat_users_file = users_file
     compat_module._compat_requests_file = access_requests_file
