@@ -12,6 +12,7 @@ from .auth_guard_middleware import AuthGuardMiddleware
 from .dashboard_contracts_middleware import install_dashboard_contracts_middleware
 from .evidence_access_compat import install_evidence_access_compat
 from .policy_guard import check_dashboard_action, guarded_response
+from .trade_gate_compat_api import install_trade_gate_compat_api
 
 
 RISKY_ENDPOINTS: dict[tuple[str, str], dict[str, str]] = {
@@ -50,6 +51,7 @@ def install_policy_guard_middleware(app_instance: Any) -> None:
         return
     app_instance.state.policy_guard_middleware_installed = True
     install_evidence_access_compat()
+    install_trade_gate_compat_api(app_instance)
     app_instance.add_middleware(AuthGuardMiddleware)
     app_instance.add_middleware(PolicyGuardMiddleware)
     install_dashboard_contracts_middleware(app_instance)
