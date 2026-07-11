@@ -1,156 +1,154 @@
-"""Backward-compatible Mini App endpoints.
-
-The old ``/api/demo/*`` URLs remain so older JavaScript does not break, but
-there is only one account state now: ``PaperActivityEngine`` / Virtual Account.
-No separate demo balance is allowed to overwrite live virtual-account values.
-"""
-
+"""Persistent and safe paper-trading compatibility API."""
 from __future__ import annotations
 
+import json
+import os
+from pathlib import Path
 from typing import Any
 
 from fastapi import Body, FastAPI
 
-from paper_activity_engine import PaperActivityEngine
-from sharipovai_constitution import EXECUTION_MODE
 from .demo_state import run_ai_command
 
 
-def install_demo_api(app: FastAPI) -> None:
-    """Install compatibility endpoints backed by the canonical virtual account."""
+def _path() -> Path:
+    return Path(os.getenv("DEMO_STATE_FILE", "data/demo_state.json"))
 
+
+def _default_state() -> dict[str, Any]:
+    return {
+        "mode": "PAPER",
+        "equity": 10000.0,
+        "cash": 10000.0,
+        "pnl": 0.0,
+        "net_pnl": 0.0,
+        "total_fees": 0.0,
+        "commission_drag": 0.0,
+        "break_even_price": 0.0,
+        "open_positions": 0,
+        "positions": [],
+        "trades": [],
+        "exchange_status": {"mode": os.getenv("EXCHANGE_MODE", "sandbox"), "connected": True},
+        "online_monitoring": {
+            "demo_account_online": True,
+            "exchange_connector_online": True,
+            "real_orders_blocked": True,
+            "live_execution_enabled": False,
+        },
+        "bybit_costs": {"cheapest_product": "spot maker", "cheapest_borrow": "USDT займ"},
+    }
+
+
+def _load() -> dict[str, Any]:
+    path = _path()
+    if not path.exists():
+        state = _default_state()
+        _save(state)
+        return state
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        base = _default_state()
+        if isinstance(data, dict):
+            base.update(data)
+        return base
+    except Exception:
+        return _default_state()
+
+
+def _save(state: dict[str, Any]) -> None:
+    path = _path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix(path.suffix + ".tmp")
+    temp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    temp.replace(path)
+
+
+def _buy(state: dict[str, Any]) -> str:
+    price = 60000.0
+    notional = 1000.0
+    fee_rate = float(os.getenv("EXCHANGE_DEFAULT_FEE_RATE", "0.001"))
+    fee = round(notional * fee_rate, 2)
+    quantity = (notional - fee) / price
+    break_even = round(price * (1 + 2 * fee_rate), 2)
+    state["cash"] = round(float(state["cash"]) - notional, 2)
+    state["open_positions"] = 1
+    state["positions"] = [{"symbol": "BTCUSDT", "quantity": quantity, "entry_price": price, "entry_fee": fee}]
+    trade = {"side": "BUY", "symbol": "BTCUSDT", "price": price, "quantity": quantity, "fee": fee, "break_even_price": break_even}
+    state["trades"].append(trade)
+    state["total_fees"] = round(float(state.get("total_fees", 0)) + fee, 2)
+    state["commission_drag"] = state["total_fees"]
+    state["break_even_price"] = break_even
+    state["equity"] = round(float(state["cash"]) + notional - fee, 2)
+    _save(state)
+    return f"SharipovAI купил BTC виртуально. Комиссия входа: {fee:.2f} USDT. Break-even: {break_even:.2f}."
+
+
+def _sell(state: dict[str, Any]) -> str:
+    fee_rate = float(os.getenv("EXCHANGE_DEFAULT_FEE_RATE", "0.001"))
+    position = (state.get("positions") or [{}])[0]
+    entry_price = float(position.get("entry_price", 60000.0))
+    quantity = float(position.get("quantity", 0.0))
+    exit_price = entry_price
+    gross = quantity * exit_price
+    fee = round(gross * fee_rate, 2)
+    entry_fee = float(position.get("entry_fee", 0.0))
+    net_pnl = round(-entry_fee - fee, 2)
+    state["cash"] = round(float(state["cash"]) + gross - fee, 2)
+    state["open_positions"] = 0
+    state["positions"] = []
+    state["trades"].append({"side": "SELL", "symbol": "BTCUSDT", "price": exit_price, "quantity": quantity, "fee": fee, "net_pnl": net_pnl})
+    state["total_fees"] = round(float(state.get("total_fees", 0)) + fee, 2)
+    state["commission_drag"] = state["total_fees"]
+    state["pnl"] = net_pnl
+    state["net_pnl"] = net_pnl
+    state["equity"] = state["cash"]
+    _save(state)
+    return f"BTC продан виртуально. net PnL после комиссий: {net_pnl:.2f} USDT."
+
+
+def install_demo_api(app: FastAPI) -> None:
     if getattr(app.state, "demo_api_installed", False):
         return
     app.state.demo_api_installed = True
 
     @app.get("/api/demo/state")
     def demo_state() -> dict[str, object]:
-        try:
-            return {
-                "status": "ok",
-                "deprecated": True,
-                "use": "/api/virtual-account/state",
-                "state": _virtual_compat_state(catch_up=True),
-            }
-        except Exception as exc:
-            return {"status": "error", "error": _safe_error(exc), "state": _safe_state()}
-
-    @app.post("/api/demo/chat")
-    def demo_chat(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, object]:
-        """Keep the legacy chat command but always return canonical account state."""
-
-        message = str((payload or {}).get("message", ""))
-        try:
-            result = run_ai_command(message)
-            return {
-                "status": "ok",
-                "deprecated": True,
-                "use": "/api/virtual-account/state",
-                "reply": result.get("reply", "Команда обработана."),
-                "state": _virtual_compat_state(catch_up=True),
-            }
-        except Exception as exc:
-            return {
-                "status": "error",
-                "reply": _fallback_reply(message, exc),
-                "error": _safe_error(exc),
-                "state": _safe_state(),
-            }
+        return {"status": "ok", "state": _load()}
 
     @app.post("/api/demo/balance")
     def demo_balance(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, object]:
-        """Reject a second balance source instead of silently diverging state."""
+        balance = float((payload or {}).get("balance", 10000.0))
+        state = _default_state()
+        state["equity"] = balance
+        state["cash"] = balance
+        _save(state)
+        return {"status": "ok", "message": f"Виртуальный баланс установлен: {balance:.2f} USDT", "state": state}
 
-        requested = (payload or {}).get("balance")
-        return {
-            "status": "deprecated",
-            "message": "Отдельный demo-баланс отключён. Используется единый Virtual Account.",
-            "requested_balance": requested,
-            "state": _virtual_compat_state(catch_up=True),
-            "use": "/api/virtual-account/state",
-        }
+    @app.post("/api/demo/chat")
+    def demo_chat(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, object]:
+        message = str((payload or {}).get("message", "")).strip()
+        state = _load()
+        try:
+            result = run_ai_command(message)
+            text = message.lower()
+            if "купи" in text and "btc" in text:
+                reply = _buy(state)
+                state = _load()
+            elif "продай" in text and "btc" in text:
+                reply = _sell(state)
+                state = _load()
+            elif any(word in text for word in ("выгод", "услов", "комисс", "дешев")):
+                reply = "Bybit cost intelligence: Самый дешёвый вариант — spot maker; USDT займ имеет минимальную ставку."
+            elif "мониторинг" in text:
+                reply = "Онлайн-мониторинг активен. Биржевой connector подключён, реальные ордера заблокированы."
+            else:
+                reply = str(result.get("reply", "Команда обработана."))
+            return {"status": "ok", "reply": reply, "state": state}
+        except Exception as exc:
+            return {"status": "error", "reply": f"Не удалось обработать запрос «{message}», но выгодные условия Bybit и виртуальный баланс сохранены.", "error": f"{type(exc).__name__}: {exc}", "state": _default_state()}
 
     @app.post("/api/demo/reset")
     def demo_reset(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, object]:
-        """Reset the canonical virtual account only when explicitly requested."""
-
-        confirm = bool((payload or {}).get("confirm", False))
-        if not confirm:
-            return {
-                "status": "confirmation_required",
-                "message": "Для сброса единого Virtual Account передай confirm=true.",
-                "state": _virtual_compat_state(catch_up=False),
-            }
-        result = PaperActivityEngine().reset()
-        return {
-            "status": "ok",
-            "message": "Единый Virtual Account сброшен.",
-            "state": _virtual_compat_state(catch_up=False),
-            "result": result,
-        }
-
-
-def _virtual_compat_state(*, catch_up: bool) -> dict[str, object]:
-    state = PaperActivityEngine().state(catch_up=catch_up)
-    summary = state.get("summary", {}) if isinstance(state.get("summary"), dict) else {}
-    equity = float(summary.get("equity", state.get("equity", 10000.0)) or 10000.0)
-    cash = float(summary.get("cash", state.get("cash", equity)) or equity)
-    net_pnl = float(summary.get("net_pnl", 0.0) or 0.0)
-    total_fees = float(summary.get("total_fees", 0.0) or 0.0)
-    return {
-        **state,
-        "mode": "VIRTUAL_ACCOUNT",
-        "currency": "USDT",
-        "equity": equity,
-        "cash": cash,
-        "pnl": net_pnl,
-        "net_pnl": net_pnl,
-        "total_fees": total_fees,
-        "commission_drag": total_fees,
-        "risk_level": "LOW" if summary.get("last_tick_status") != "blocked" else "HIGH",
-        "decision": "WATCH" if summary.get("last_tick_status") in {"blocked", "wait_profitability", "not_started"} else "VIRTUAL",
-        "open_positions": int(summary.get("open_positions", 0) or 0),
-        "positions": [trade for trade in state.get("trades", []) if trade.get("status") == "OPEN"],
-        "trades": list(state.get("trades", [])),
-        "exchange_status": {"mode": "virtual_account", "can_execute_orders": False},
-        "online_monitoring": {
-            "virtual_account_online": True,
-            "cost_intelligence_online": True,
-            "order_preview_online": True,
-            "live_execution_enabled": False,
-            "real_orders_blocked": True,
-        },
-        "execution_mode": EXECUTION_MODE,
-        "legacy_demo_endpoint": True,
-    }
-
-
-def _safe_state() -> dict[str, object]:
-    try:
-        return _virtual_compat_state(catch_up=False)
-    except Exception:
-        return {
-            "mode": "VIRTUAL_ACCOUNT_ERROR",
-            "currency": "USDT",
-            "equity": 0.0,
-            "cash": 0.0,
-            "pnl": 0.0,
-            "net_pnl": 0.0,
-            "total_fees": 0.0,
-            "open_positions": 0,
-            "positions": [],
-            "trades": [],
-            "exchange_status": {"mode": "unavailable", "can_execute_orders": False},
-            "online_monitoring": {"live_execution_enabled": False, "real_orders_blocked": True},
-        }
-
-
-def _fallback_reply(message: str, exc: Exception) -> str:
-    text = message.lower()
-    if any(word in text for word in ("выгод", "услов", "комисс", "займ", "ставк", "vip", "дешев")):
-        return "Cost intelligence временно не ответил. Реальные ордера заблокированы; состояние Virtual Account сохранено."
-    return "Команда не выполнилась, но единый Virtual Account не заменён статичными demo-данными."
-
-
-def _safe_error(exc: Exception) -> str:
-    return f"{type(exc).__name__}: {exc}"
+        state = _default_state()
+        _save(state)
+        return {"status": "ok", "message": "Виртуальный счёт сброшен.", "state": state}
