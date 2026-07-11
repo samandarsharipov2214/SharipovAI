@@ -1,7 +1,7 @@
 """Canonical evidence journal for testnet and guarded live executions.
 
-PostgreSQL/SQLite is the source of truth. The JSON file remains an append-only
-backup for local recovery and operator inspection.
+PostgreSQL/SQLite is the source of truth. The JSON file remains a recoverable
+operator backup and never controls whether an execution record exists.
 """
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from storage import ProjectDatabase, list_json_items
+from storage import ProjectDatabase, VersionConflict, list_json_items
 
 
 class ExecutionJournal:
@@ -31,17 +31,23 @@ class ExecutionJournal:
         if not isinstance(entry, dict):
             raise TypeError("execution journal entry must be an object")
         now_ms = int(time.time() * 1000)
-        event_id = str(entry.get("journal_event_id") or uuid.uuid4())
+        event_id = _event_id(entry.get("journal_event_id") or str(uuid.uuid4()))
         item = {
+            **entry,
             "journal_event_id": event_id,
             "recorded_at": datetime.fromtimestamp(now_ms / 1000, UTC).isoformat(),
             "recorded_at_ms": now_ms,
-            **entry,
         }
-        # allow_nan=False is enforced by ProjectDatabase.
+        # ProjectDatabase serializes with allow_nan=False and expected_version=0,
+        # so one immutable event ID can never be silently overwritten.
         self.database.put_json(self.namespace, event_id, item, expected_version=0)
-        self._write_backup()
-        return item
+        try:
+            self._write_backup()
+        except Exception as exc:
+            # DB commit already succeeded. Returning a backup warning prevents a
+            # caller from retrying the same financial event as if it were absent.
+            return {**item, "backup_status": "error", "backup_error": f"{type(exc).__name__}: {exc}"}
+        return {**item, "backup_status": "ok"}
 
     def load(self) -> dict[str, Any]:
         items = [record["value"] for record in list_json_items(self.database, self.namespace)]
@@ -66,8 +72,7 @@ class ExecutionJournal:
         }
 
     def _migrate_legacy_once(self) -> None:
-        marker = self.database.get_json("migrations", "execution_journal_json_v1")
-        if marker is not None:
+        if self.database.get_json("migrations", "execution_journal_json_v1") is not None:
             return
         imported = 0
         if self.path.exists():
@@ -81,26 +86,31 @@ class ExecutionJournal:
                     continue
                 canonical = json.dumps(entry, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
                 event_id = "legacy_" + hashlib.sha256(f"{index}:{canonical}".encode()).hexdigest()[:40]
+                recorded_at = str(entry.get("recorded_at") or "")
                 item = {
-                    "journal_event_id": event_id,
-                    "recorded_at": str(entry.get("recorded_at") or ""),
-                    "recorded_at_ms": _legacy_timestamp(entry.get("recorded_at"), fallback=index + 1),
                     **entry,
+                    "journal_event_id": event_id,
+                    "recorded_at": recorded_at,
+                    "recorded_at_ms": _legacy_timestamp(recorded_at, fallback=index + 1),
                 }
                 try:
                     self.database.put_json(self.namespace, event_id, item, expected_version=0)
                     imported += 1
-                except Exception:
-                    # Existing deterministic event is an idempotent migration outcome.
+                except VersionConflict:
                     if self.database.get_json(self.namespace, event_id) is None:
                         raise
-        self.database.put_json(
-            "migrations",
-            "execution_journal_json_v1",
-            {"completed": True, "imported": imported, "completed_at_ms": int(time.time() * 1000)},
-            expected_version=0,
-        )
-        self._write_backup()
+        marker = {"completed": True, "imported": imported, "completed_at_ms": int(time.time() * 1000)}
+        try:
+            self.database.put_json("migrations", "execution_journal_json_v1", marker, expected_version=0)
+        except VersionConflict:
+            if self.database.get_json("migrations", "execution_journal_json_v1") is None:
+                raise
+        try:
+            self._write_backup()
+        except Exception:
+            # Migration is complete in the source of truth. A later append or
+            # operator repair will refresh the non-authoritative JSON backup.
+            pass
 
     def _write_backup(self) -> None:
         with self._lock:
@@ -116,6 +126,13 @@ class ExecutionJournal:
                 os.replace(temp, self.path)
             finally:
                 temp.unlink(missing_ok=True)
+
+
+def _event_id(value: Any) -> str:
+    text = str(value).strip()
+    if not text or len(text) > 200 or not all(char.isalnum() or char in "._:-" for char in text):
+        raise ValueError("invalid journal_event_id")
+    return text
 
 
 def _legacy_timestamp(value: Any, *, fallback: int) -> int:
