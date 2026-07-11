@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Body, FastAPI
+from fastapi.responses import HTMLResponse
 
 from .demo_state import run_ai_command
 from .stabilization_compat import install_stabilization_compat
@@ -74,8 +75,7 @@ def _buy(state: dict[str, Any]) -> str:
     state["cash"] = round(float(state["cash"]) - notional, 2)
     state["open_positions"] = 1
     state["positions"] = [{"symbol": "BTCUSDT", "quantity": quantity, "entry_price": price, "entry_fee": fee}]
-    trade = {"side": "BUY", "symbol": "BTCUSDT", "price": price, "quantity": quantity, "fee": fee, "break_even_price": break_even}
-    state["trades"].append(trade)
+    state["trades"].append({"side": "BUY", "symbol": "BTCUSDT", "price": price, "quantity": quantity, "fee": fee, "break_even_price": break_even})
     state["total_fees"] = round(float(state.get("total_fees", 0)) + fee, 2)
     state["commission_drag"] = state["total_fees"]
     state["break_even_price"] = break_even
@@ -112,6 +112,10 @@ def install_demo_api(app: FastAPI) -> None:
     if getattr(app.state, "demo_api_installed", False):
         return
     app.state.demo_api_installed = True
+
+    @app.get("/login", response_class=HTMLResponse)
+    def compatibility_login_page() -> HTMLResponse:
+        return HTMLResponse("""<!doctype html><html lang='ru'><head><meta charset='utf-8'><title>Вход в SharipovAI</title></head><body><main><h1>Вход в SharipovAI</h1><form method='post' action='/login'><input name='username' placeholder='Логин'><input name='password' type='password' placeholder='Пароль'><button type='submit'>Войти</button></form><h2>Запросить доступ</h2><form method='post' action='/register'><input name='username' placeholder='Новый логин'><input name='contact' placeholder='Контакт'><textarea name='reason' placeholder='Причина'></textarea><button type='submit'>Запросить доступ</button></form></main></body></html>""")
 
     @app.get("/api/demo/state")
     def demo_state() -> dict[str, object]:
