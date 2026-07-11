@@ -8,14 +8,19 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import asdict, dataclass
+from decimal import Decimal, InvalidOperation
 from math import isclose, isfinite
 from typing import Any, Mapping
 
 from exchange_connector.order_preview import OrderPreview
 from trading_candidate import (
     CandidateValidation,
+    MarketRegime,
     TradingCandidate,
+    TradingCategory,
     TradingDecision,
+    TradingEnvironment,
+    TradingSide,
     TrustedSecurityApproval,
     validate_trading_candidate,
 )
@@ -83,6 +88,7 @@ def bind_preview_to_candidate(
     else:
         errors.append("preview must be an OrderPreview")
 
+    errors.extend(_candidate_type_errors(candidate))
     evidence = candidate.signal_evidence
     if not isinstance(evidence, (tuple, list)):
         errors.append("candidate signal_evidence must be a list or tuple")
@@ -100,41 +106,46 @@ def bind_preview_to_candidate(
     if isinstance(preview, OrderPreview):
         if preview.symbol != candidate.symbol:
             errors.append("preview and candidate symbol mismatch")
-        if preview.category != candidate.category.value:
-            errors.append("preview and candidate category mismatch")
-        if preview.side.title() != candidate.side.value:
-            errors.append("preview and candidate side mismatch")
+        if isinstance(candidate.category, TradingCategory):
+            if preview.category != candidate.category.value:
+                errors.append("preview and candidate category mismatch")
+        if isinstance(candidate.side, TradingSide):
+            if preview.side.title() != candidate.side.value:
+                errors.append("preview and candidate side mismatch")
         if not _same(preview.reference_price, candidate.reference_price):
             errors.append("preview and candidate reference price mismatch")
 
-        expected_fees = preview.estimated_entry_fee + preview.estimated_exit_fee_at_stop
-        if not _same(expected_fees, candidate.estimated_fees):
-            errors.append("preview and candidate estimated fees mismatch")
+        if _finite(preview.estimated_entry_fee) and _finite(preview.estimated_exit_fee_at_stop):
+            expected_fees = float(preview.estimated_entry_fee) + float(preview.estimated_exit_fee_at_stop)
+            if not _same(expected_fees, candidate.estimated_fees):
+                errors.append("preview and candidate estimated fees mismatch")
+        else:
+            errors.append("preview estimated fees are invalid")
         if not _same(preview.estimated_slippage, candidate.estimated_slippage):
             errors.append("preview and candidate estimated slippage mismatch")
 
-    try:
-        if isinstance(max_instrument_rules_age_ms, bool):
-            raise TypeError
-        configured_rules_age = int(max_instrument_rules_age_ms)
-    except (TypeError, ValueError):
+    configured_rules_age = _positive_integer(max_instrument_rules_age_ms)
+    if configured_rules_age is None:
         configured_rules_age = 60_000
         errors.append("max_instrument_rules_age_ms is invalid")
     effective_rules_age = min(max(configured_rules_age, 1_000), 300_000)
-    if now_ms <= 0:
-        errors.append("now_ms must be positive")
+    safe_now_ms = _positive_integer(now_ms)
+    if safe_now_ms is None:
+        safe_now_ms = 0
+        errors.append("now_ms must be a positive integer")
     if isinstance(preview, OrderPreview):
-        if preview.instrument_rules_fetched_at_ms <= 0:
+        rules_time = _positive_integer(preview.instrument_rules_fetched_at_ms)
+        if rules_time is None:
             errors.append("preview instrument rules timestamp is invalid")
-        elif preview.instrument_rules_fetched_at_ms > now_ms + 1_000:
+        elif rules_time > safe_now_ms + 1_000:
             errors.append("preview instrument rules timestamp is in the future")
-        elif now_ms - preview.instrument_rules_fetched_at_ms > effective_rules_age:
+        elif safe_now_ms - rules_time > effective_rules_age:
             errors.append("preview instrument rules are stale")
 
     try:
         validation = validate_trading_candidate(
             candidate,
-            now_ms=now_ms,
+            now_ms=safe_now_ms,
             trusted_security_approvals=trusted_security_approvals,
         )
     except (TypeError, ValueError, AttributeError) as exc:
@@ -161,11 +172,24 @@ def bind_preview_to_candidate(
     )
 
 
+def _candidate_type_errors(candidate: TradingCandidate) -> list[str]:
+    checks = (
+        (candidate.category, TradingCategory, "candidate category must be a TradingCategory"),
+        (candidate.side, TradingSide, "candidate side must be a TradingSide"),
+        (candidate.environment, TradingEnvironment, "candidate environment must be a TradingEnvironment"),
+        (candidate.market_regime, MarketRegime, "candidate market_regime must be a MarketRegime"),
+        (candidate.decision, TradingDecision, "candidate decision must be a TradingDecision"),
+    )
+    return [message for value, expected_type, message in checks if not isinstance(value, expected_type)]
+
+
 def _preview_errors(preview: OrderPreview) -> list[str]:
     errors: list[str] = []
     if any((preview.risk_approved, preview.executable, preview.executed, preview.sends_order)):
         errors.append("preview contains an execution or approval flag")
-    if not preview.symbol or preview.symbol != preview.symbol.upper() or not preview.symbol.isalnum():
+    if any((preview.funding_included, preview.liquidation_checked, preview.correlation_checked)):
+        errors.append("preview self-asserts external safety checks")
+    if not isinstance(preview.symbol, str) or not preview.symbol or preview.symbol != preview.symbol.upper() or not preview.symbol.isalnum():
         errors.append("preview symbol is invalid")
     if preview.category not in {"spot", "linear"}:
         errors.append("preview category is invalid")
@@ -192,28 +216,87 @@ def _preview_errors(preview: OrderPreview) -> list[str]:
         if not _finite(value) or float(value) < 0:
             errors.append(f"preview {name} must be a non-negative finite number")
 
-    if _finite(preview.quantity) and _finite(preview.entry_price) and _finite(preview.notional):
-        if not _same(preview.notional, preview.quantity * preview.entry_price):
-            errors.append("preview notional is inconsistent")
-    if _finite(preview.maximum_loss) and _finite(preview.potential_reward) and _finite(preview.risk_reward_ratio):
-        if preview.maximum_loss > 0 and not _same(
-            preview.risk_reward_ratio,
-            preview.potential_reward / preview.maximum_loss,
-        ):
-            errors.append("preview risk_reward_ratio is inconsistent")
-    if preview.order_type == "limit" and not _same(preview.estimated_slippage, 0.0):
-        errors.append("limit preview must have zero estimated slippage")
-    if preview.order_type == "market" and all(
-        _finite(value) for value in (preview.quantity, preview.entry_price, preview.reference_price, preview.estimated_slippage)
+    if not _all_finite(
+        preview.quantity, preview.reference_price, preview.entry_price, preview.notional,
+        preview.estimated_entry_fee, preview.estimated_exit_fee_at_stop,
+        preview.estimated_slippage, preview.stop_loss, preview.take_profit,
+        preview.maximum_loss, preview.potential_reward, preview.risk_reward_ratio,
+        preview.risk_percent_of_equity, preview.max_risk_percent, preview.leverage,
+        preview.required_capital, preview.available_balance,
     ):
-        expected_slippage = preview.quantity * abs(preview.entry_price - preview.reference_price)
+        return errors
+
+    quantity = float(preview.quantity)
+    reference = float(preview.reference_price)
+    entry = float(preview.entry_price)
+    stop = float(preview.stop_loss)
+    take = float(preview.take_profit)
+    entry_fee = float(preview.estimated_entry_fee)
+    stop_exit_fee = float(preview.estimated_exit_fee_at_stop)
+
+    expected_notional = quantity * entry
+    if not _same(preview.notional, expected_notional):
+        errors.append("preview notional is inconsistent")
+
+    expected_maximum_loss = quantity * abs(entry - stop) + entry_fee + stop_exit_fee
+    if not _same(preview.maximum_loss, expected_maximum_loss):
+        errors.append("preview maximum_loss is inconsistent")
+
+    exit_fee_rate = stop_exit_fee / (quantity * stop) if quantity > 0 and stop > 0 else 0.0
+    expected_take_exit_fee = quantity * take * exit_fee_rate
+    expected_reward = quantity * abs(take - entry) - entry_fee - expected_take_exit_fee
+    if not _same(preview.potential_reward, expected_reward):
+        errors.append("preview potential_reward is inconsistent")
+    if expected_maximum_loss > 0 and not _same(preview.risk_reward_ratio, expected_reward / expected_maximum_loss):
+        errors.append("preview risk_reward_ratio is inconsistent")
+
+    if float(preview.risk_percent_of_equity) > float(preview.max_risk_percent):
+        errors.append("preview exceeds max_risk_percent")
+    if float(preview.required_capital) > float(preview.available_balance):
+        errors.append("preview required_capital exceeds available_balance")
+
+    if preview.category == "spot":
+        if not _same(preview.leverage, 1.0):
+            errors.append("spot preview requires leverage=1")
+        expected_capital = expected_notional + entry_fee if preview.side == "buy" else 0.0
+    else:
+        expected_capital = expected_notional / float(preview.leverage) + entry_fee
+    if not _same(preview.required_capital, expected_capital):
+        errors.append("preview required_capital is inconsistent")
+
+    if preview.order_type == "limit":
+        if not _same(preview.estimated_slippage, 0.0):
+            errors.append("limit preview must have zero estimated slippage")
+    else:
+        expected_slippage = quantity * abs(entry - reference)
         if not _same(preview.estimated_slippage, expected_slippage):
             errors.append("market preview estimated slippage is inconsistent")
-    if preview.side == "buy" and not (preview.stop_loss < preview.entry_price < preview.take_profit):
+        if preview.side == "buy" and entry < reference:
+            errors.append("market buy preview must use adverse entry slippage")
+        if preview.side == "sell" and entry > reference:
+            errors.append("market sell preview must use adverse entry slippage")
+
+    if preview.side == "buy" and not (stop < entry < take):
         errors.append("buy preview price ordering is invalid")
-    if preview.side == "sell" and not (preview.take_profit < preview.entry_price < preview.stop_loss):
+    if preview.side == "sell" and not (take < entry < stop):
         errors.append("sell preview price ordering is invalid")
     return errors
+
+
+def _positive_integer(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    if not parsed.is_finite() or parsed != parsed.to_integral_value() or parsed <= 0:
+        return None
+    return int(parsed)
+
+
+def _all_finite(*values: Any) -> bool:
+    return all(_finite(value) for value in values)
 
 
 def _finite(value: Any) -> bool:
