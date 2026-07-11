@@ -66,13 +66,21 @@ services:
       - key: EXECUTION_MAX_NOTIONAL_USDT
         value: "25"
       - key: EXECUTION_KILL_SWITCH
-        value: "0"
+        value: "1"
       - key: AUTONOMOUS_TRADING_STAGE
         value: "2"
       - key: EXCHANGE_API_KEY
         sync: false
       - key: EXCHANGE_API_SECRET
         sync: false
+      - key: BYBIT_ACCOUNT_SYNC_ENABLED
+        value: "1"
+      - key: BYBIT_ACCOUNT_SYNC_SECONDS
+        value: "15"
+      - key: BYBIT_ACCOUNT_STATE_FILE
+        value: /var/data/bybit_account.json
+      - key: BYBIT_ACCOUNT_BASE_URL
+        value: https://api.bybit.eu
       - key: VIRTUAL_ACCOUNT_AUTORUN_ENABLED
         value: "1"
       - key: VIRTUAL_ACCOUNT_TICK_SECONDS
