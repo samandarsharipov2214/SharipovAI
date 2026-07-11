@@ -86,14 +86,9 @@ def test_missing_wrong_or_multiple_digest_tokens_block():
     item = preview()
     missing = candidate(item, signal_evidence=("momentum-confirmed",))
     assert bind_preview_to_candidate(item, missing, now_ms=NOW).valid is False
-
     wrong = candidate(item, signal_evidence=("preview_sha256:" + "0" * 64,))
     assert bind_preview_to_candidate(item, wrong, now_ms=NOW).valid is False
-
-    multiple = candidate(
-        item,
-        signal_evidence=(evidence_token(item), "preview_sha256:" + "1" * 64),
-    )
+    multiple = candidate(item, signal_evidence=(evidence_token(item), "preview_sha256:" + "1" * 64))
     result = bind_preview_to_candidate(item, multiple, now_ms=NOW)
     assert result.valid is False
     assert any("exactly one" in error for error in result.errors)
@@ -119,12 +114,7 @@ def test_nonfinite_or_derived_field_tampering_blocks_without_exception():
 
 def test_identity_and_cost_mismatches_block():
     item = preview()
-    wrong = candidate(
-        item,
-        symbol="ETHUSDT",
-        estimated_fees=99.0,
-        estimated_slippage=99.0,
-    )
+    wrong = candidate(item, symbol="ETHUSDT", estimated_fees=99.0, estimated_slippage=99.0)
     result = bind_preview_to_candidate(item, wrong, now_ms=NOW)
     assert result.valid is False
     assert any("symbol mismatch" in error for error in result.errors)
@@ -142,10 +132,8 @@ def test_preview_execution_flags_block():
 def test_stale_future_and_unsafe_env_age_cap_block():
     stale = replace(preview(), instrument_rules_fetched_at_ms=NOW - 60_001)
     assert bind_preview_to_candidate(stale, candidate(stale), now_ms=NOW).valid is False
-
     future = replace(preview(), instrument_rules_fetched_at_ms=NOW + 1_001)
     assert bind_preview_to_candidate(future, candidate(future), now_ms=NOW).valid is False
-
     hard_cap = replace(preview(), instrument_rules_fetched_at_ms=NOW - 300_001)
     result = bind_preview_to_candidate(
         hard_cap,
@@ -154,6 +142,18 @@ def test_stale_future_and_unsafe_env_age_cap_block():
         max_instrument_rules_age_ms=999_999_999,
     )
     assert result.valid is False
+
+
+def test_invalid_config_and_malformed_evidence_fail_closed():
+    item = preview()
+    malformed = candidate(item, signal_evidence=None)
+    result = bind_preview_to_candidate(
+        item, malformed, now_ms=NOW, max_instrument_rules_age_ms="invalid"
+    )
+    assert result.valid is False
+    assert result.decision is TradingDecision.BLOCK
+    assert any("signal_evidence" in error for error in result.errors)
+    assert any("age_ms is invalid" in error for error in result.errors)
 
 
 def test_candidate_validator_block_is_preserved():
