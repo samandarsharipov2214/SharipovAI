@@ -9,7 +9,7 @@ Set-StrictMode -Version Latest
 Set-Location $ProjectRoot
 
 function Import-LocalEnv([string]$Path) {
-    if (-not (Test-Path $Path)) { throw "Не найден $Path. Сначала запустите setup_pc.ps1." }
+    if (-not (Test-Path $Path)) { throw "Missing $Path. Run setup_pc.ps1 first." }
     foreach ($line in Get-Content $Path) {
         $trimmed = $line.Trim()
         if (-not $trimmed -or $trimmed.StartsWith("#")) { continue }
@@ -21,23 +21,23 @@ function Import-LocalEnv([string]$Path) {
 
 function Test-ManagedProcess([string]$PidFile, [string]$Name, [System.Collections.Generic.List[string]]$Problems) {
     if (-not (Test-Path $PidFile)) {
-        $Problems.Add("Не найден PID-файл процесса ${Name}: $PidFile")
+        $Problems.Add("Missing PID file for ${Name}: $PidFile")
         return $false
     }
     try {
         $pidValue = [int](Get-Content $PidFile -Raw).Trim()
         $process = Get-Process -Id $pidValue -ErrorAction Stop
-        Write-Host "[OK] $Name запущен, PID=$($process.Id)"
+        Write-Host "[OK] $Name is running, PID=$($process.Id)"
         return $true
     } catch {
-        $Problems.Add("Процесс $Name из PID-файла не работает: $($_.Exception.Message)")
+        $Problems.Add("Process $Name from PID file is not running: $($_.Exception.Message)")
         return $false
     }
 }
 
 function Test-AgentStatus([string]$StatusFile, [int]$MaximumAgeSeconds, [System.Collections.Generic.List[string]]$Problems) {
     if (-not (Test-Path $StatusFile)) {
-        $Problems.Add("Не найден статус PC Agent: $StatusFile")
+        $Problems.Add("Missing PC Agent status: $StatusFile")
         return
     }
     try {
@@ -45,22 +45,22 @@ function Test-AgentStatus([string]$StatusFile, [int]$MaximumAgeSeconds, [System.
         $updated = [DateTimeOffset]::Parse($status.updated_at)
         $age = ([DateTimeOffset]::UtcNow - $updated.ToUniversalTime()).TotalSeconds
         if ($age -gt $MaximumAgeSeconds) {
-            $Problems.Add("Статус PC Agent устарел: $([math]::Round($age, 1)) сек.")
+            $Problems.Add("PC Agent status is stale: $([math]::Round($age, 1)) sec.")
         }
         if (-not [bool]$status.web_healthy) {
-            $Problems.Add("PC Agent сообщает: Dashboard нездоров")
+            $Problems.Add("PC Agent reports unhealthy Dashboard")
         }
         if (-not [bool]$status.backup_healthy) {
-            $Problems.Add("PC Agent сообщает: backup нездоров")
+            $Problems.Add("PC Agent reports unhealthy backup")
         }
         if ($status.last_error) {
-            Write-Host "[WARN] Последняя ошибка PC Agent: $($status.last_error)" -ForegroundColor Yellow
+            Write-Host "[WARN] PC Agent last error: $($status.last_error)" -ForegroundColor Yellow
         }
         if (($age -le $MaximumAgeSeconds) -and [bool]$status.web_healthy -and [bool]$status.backup_healthy) {
-            Write-Host "[OK] PC Agent status свежий: $([math]::Round($age, 1)) сек."
+            Write-Host "[OK] PC Agent status is fresh: $([math]::Round($age, 1)) sec."
         }
     } catch {
-        $Problems.Add("Не удалось прочитать статус PC Agent: $($_.Exception.Message)")
+        $Problems.Add("Could not read PC Agent status: $($_.Exception.Message)")
     }
 }
 
@@ -76,9 +76,9 @@ try {
     $probe = Join-Path $dataDir ".pc-node-write-test"
     [DateTime]::UtcNow.ToString("o") | Set-Content -Path $probe -Encoding UTF8
     Remove-Item $probe -Force
-    Write-Host "[OK] Запись в data доступна"
+    Write-Host "[OK] Data directory is writable"
 } catch {
-    $problems.Add("Нет безопасной записи в data: $($_.Exception.Message)")
+    $problems.Add("Data directory write check failed: $($_.Exception.Message)")
 }
 
 $manifestPath = Join-Path $backupDir "current\manifest.json"
@@ -87,20 +87,20 @@ try {
     $created = [DateTimeOffset]::Parse($manifest.created_at)
     $age = ([DateTimeOffset]::UtcNow - $created.ToUniversalTime()).TotalSeconds
     if ($age -gt $MaximumBackupAgeSeconds) {
-        $problems.Add("Резервная копия устарела: $([math]::Round($age, 1)) сек.")
+        $problems.Add("Backup is stale: $([math]::Round($age, 1)) sec.")
     } else {
-        Write-Host "[OK] Резервная копия свежая: $([math]::Round($age, 1)) сек., файлов: $($manifest.file_count)"
+        Write-Host "[OK] Backup is fresh: $([math]::Round($age, 1)) sec., files: $($manifest.file_count)"
     }
 } catch {
-    $problems.Add("Не удалось проверить backup manifest: $($_.Exception.Message)")
+    $problems.Add("Backup manifest check failed: $($_.Exception.Message)")
 }
 
 try {
     $response = Invoke-WebRequest -UseBasicParsing -Uri "http://$hostAddress`:$port/health" -TimeoutSec 5
     if ($response.StatusCode -ne 200) { throw "HTTP $($response.StatusCode)" }
-    Write-Host "[OK] SharipovAI отвечает: http://$hostAddress`:$port"
+    Write-Host "[OK] SharipovAI responds at http://$hostAddress`:$port"
 } catch {
-    $problems.Add("SharipovAI web node не отвечает: $($_.Exception.Message)")
+    $problems.Add("SharipovAI web node is not responding: $($_.Exception.Message)")
 }
 
 if ($RequireManagedProcesses) {
@@ -113,7 +113,7 @@ if ($RequireManagedProcesses) {
 
 $stderrLog = Join-Path $ProjectRoot "runtime\logs\pc_agent.stderr.log"
 if ((Test-Path $stderrLog) -and (Get-Item $stderrLog).Length -gt 0) {
-    Write-Host "[WARN] В stderr-журнале PC Agent есть данные: $stderrLog" -ForegroundColor Yellow
+    Write-Host "[WARN] PC Agent stderr log contains data: $stderrLog" -ForegroundColor Yellow
 }
 
 if ($problems.Count -gt 0) {
@@ -121,5 +121,5 @@ if ($problems.Count -gt 0) {
     exit 1
 }
 
-Write-Host "Все проверки PC node пройдены." -ForegroundColor Green
+Write-Host "All PC node checks passed." -ForegroundColor Green
 exit 0
