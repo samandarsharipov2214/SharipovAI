@@ -56,6 +56,40 @@ Runtime endpoints:
 - `POST /api/news-agents/run-all`
 - `GET /news-agents`
 
+## Crypto trading and Bybit
+The project-wide source of truth is `docs/crypto-trading-ai-architecture.md`.
+Every chat, Codex task and implementation touching crypto trading must read it
+before proposing or adding components.
+
+The official `skills/bybit-trading/SKILL.md` is a Bybit transport/protocol skill,
+not a new decision-making AI. It must stay behind the canonical organs and must
+never bypass Risk Engine, Decision Quality, General Controller or Security Guard.
+
+Ownership rules:
+- market feeds, orderbook, funding, open interest and regime → `market_intelligence`;
+- crypto news and market-impact evidence → `news_intelligence`;
+- limits, drawdown, leverage, liquidity and stress blocking → `risk_engine`;
+- balance, exposure, fees, funding, slippage and reports → `portfolio_engine`;
+- confidence, consensus and Trade Gate → `decision_quality`;
+- virtual/paper lifecycle → `virtual_execution`;
+- lessons, backtests and rule proposals → `learning_engine`;
+- API permissions, secrets, account-data access, confirmation and kill switch → `security_guard`;
+- orchestration, health and recovery → `general_controller`.
+
+Do not create top-level AIs named Technical AI, Liquidity AI, Exchange Cost AI,
+Trade Gate AI, Execution AI, Backtest AI or Bybit AI when the capability belongs
+to one of the owners above. Implement them as submodules/services with explicit
+inputs, outputs, freshness, evidence and health.
+
+Trading invariants:
+- no LLM response may call an order-create endpoint directly;
+- missing/stale/unverified required data means `BLOCK`;
+- instrument limits must be loaded dynamically, never hard-coded as permanent;
+- every order needs a unique `orderLinkId` and asynchronous status confirmation;
+- Testnet and Mainnet writes require separate gates;
+- Mainnet remains locked without manual approval, kill-switch checks and evidence;
+- API keys must not have Withdraw permission and secrets must never be logged.
+
 ## Failure isolation
 One failed AI must not crash the whole audit, Telegram webhook, dashboard startup,
 or other agents. Report the failed module with its exact error and continue.
