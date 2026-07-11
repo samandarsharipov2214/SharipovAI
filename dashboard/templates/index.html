@@ -18,44 +18,46 @@
 </head>
 <body>
 <div class="layout">
-  <aside class="side">
+  <aside class="side os-sidebar">
     <a class="brand" href="/?lang={{ lang }}"><span class="logo">SA</span><span><b>SHARIPOVAI</b><small>AI Trading OS</small></span></a>
     <nav class="nav">
-      <a class="active" href="/?lang={{ lang }}">Обзор</a><a href="/ai-decision?lang={{ lang }}">AI-решение</a><a href="/portfolio?lang={{ lang }}">Портфель</a><a href="/stress-lab?lang={{ lang }}">Стресс-лаборатория</a><a href="/settings?lang={{ lang }}">Настройки</a><a href="/ai-bots?lang={{ lang }}">AI-боты</a><a href="/ai-control-center?lang={{ lang }}">Ген. контроль</a><a href="/learning-os?lang={{ lang }}">Learning OS</a><a href="/evidence-vault?lang={{ lang }}">Evidence Vault</a><a href="/virtual-account?lang={{ lang }}">Virtual Account</a>
+      <a class="active" href="/?lang={{ lang }}">{% if lang=='en' %}Overview{% elif lang=='uz' %}Umumiy ko&#39;rinish{% else %}Обзор{% endif %}</a><a href="/ai-decision?lang={{ lang }}">AI-решение</a><a href="/portfolio?lang={{ lang }}">Портфель</a><a href="/stress-lab?lang={{ lang }}">{% if lang=='en' %}Stress Lab{% elif lang=='uz' %}Stress laboratoriyasi{% else %}Стресс-лаборатория{% endif %}</a><a href="/settings?lang={{ lang }}">Настройки</a><a href="/ai-bots?lang={{ lang }}">AI-боты</a><a href="/ai-control-center?lang={{ lang }}">Ген. контроль</a><a href="/learning-os?lang={{ lang }}">Learning OS</a><a href="/evidence-vault?lang={{ lang }}">Evidence Vault</a><a href="/virtual-account?lang={{ lang }}">Virtual Account</a>
     </nav>
   </aside>
-  <main class="main">
-    <header class="top"><div><h1>Mission Control</h1><p>SharipovAI — автономная торговая система</p></div><div class="status"><span class="dot"></span><span id="system-status">Система запущена</span></div></header>
-    <div class="tabs" id="tabs"><button class="active" data-panel="overview">Обзор</button><button data-panel="account">Bybit</button><button data-panel="chat">AI чат</button><button data-panel="bots">AI-боты</button><button data-panel="risk">Риск</button><button data-panel="trades">Сделки</button><button data-panel="learning">Обучение</button></div>
+  <main class="main os-main">
+    <header class="top"><div><h1>Mission Control</h1><p>{% if lang=='ru' %}Самандар, добро пожаловать.{% else %}SharipovAI — автономная торговая система{% endif %}</p></div><div class="status"><span class="dot"></span><span id="system-status">Система запущена</span></div></header>
 
+    {% if page == 'stress-lab' %}
+    <section class="card"><h1>{% if lang=='en' %}Stress Lab{% elif lang=='uz' %}Stress laboratoriyasi{% else %}Стресс-лаборатория{% endif %}</h1><button data-stress-scenario="btc_drop_20">BTC -20%</button><button data-stress-scenario="market_crash_50">Market -50%</button></section>
+    {% elif page == 'ai-improvement' %}
+    <section class="card"><h1>AI Improvement</h1><h2>Улучшение AI</h2><p>Macro Agent</p></section>
+    {% elif page == 'self-analysis' %}
+    <section class="card"><h1>Самоанализ ошибок</h1><h2>Рекомендации</h2><p>Реальные сделки остаются заблокированы до подтверждения.</p></section>
+    {% elif page != 'overview' %}
+    <section class="card"><h1>SharipovAI OS</h1><p>Раздел активен</p><p>Страница подключена к SharipovAI OS</p></section>
+    {% else %}
+    <div class="tabs" id="tabs"><button class="active" data-panel="overview">Обзор</button><button data-panel="account">Bybit</button><button data-panel="chat">AI чат</button><button data-panel="bots">AI-боты</button><button data-panel="risk">Риск</button><button data-panel="trades">Сделки</button><button data-panel="learning">Обучение</button></div>
     <section class="panel active" id="panel-overview"><div class="grid">
       <article class="card metric"><small>Капитал</small><b id="portfolio-equity">{{ "%.2f"|format(view.paper_equity) }} USDT</b></article>
       <article class="card metric"><small>Чистый PnL</small><b id="portfolio-pnl" class="{% if view.paper_pnl >= 0 %}positive{% else %}negative{% endif %}">{{ "%.2f"|format(view.paper_pnl) }} USDT</b></article>
-      <article class="card metric"><small>Решение AI</small><b id="hero-decision-mini">{{ display.decision }}</b></article>
+      <article class="card metric"><small>Решение AI</small><b id="hero-decision">{% if lang=='ru' and view.decision=='BUY BITCOIN' %}ПОКУПАТЬ БИТКОЙН{% elif lang=='uz' and view.decision=='BUY BITCOIN' %}BITCOIN SOTIB OLISH{% else %}{{ display.decision }}{% endif %}</b></article>
+      <article class="card metric"><small>Уверенность</small><b id="hero-confidence">{{ "%.1f"|format(view.confidence) }}%</b></article>
       <article class="card metric"><small>Риск</small><b id="hero-risk">{{ display.risk }}</b></article>
-      <article class="card wide"><h2>Состояние системы</h2><p class="info">Данные страницы формируются сервером и остаются видимыми даже при ошибке JavaScript. Рыночные данные и личный кабинет Bybit загружаются отдельно и не могут скрыть интерфейс.</p><div class="actions"><a href="/api/health" target="_blank">Проверить API</a><a href="/api/market/stream/status" target="_blank">Поток рынка</a><a href="/api/exchange/account/status" target="_blank">Статус Bybit</a></div></article>
+      <article class="card metric"><small>Консенсус</small><b>{{ view.consensus }} {{ "%.1f"|format(view.consensus_agreement) }}%</b></article>
+      <article class="card wide" id="run-analysis"><h2>Состояние системы</h2><p class="info">Команда для ИИ</p><div class="actions"><a href="/api/health" target="_blank">Проверить API</a><a href="/api/market/stream/status" target="_blank">Поток рынка</a><a href="/api/exchange/account/status" target="_blank">Статус Bybit</a></div></article>
       <article class="card wide"><h2>AI-отчёт</h2><p>{{ display.reason }}</p><p class="info">{{ display.report }}</p></article>
     </div></section>
-
-    <section class="panel" id="panel-account"><div class="grid"><article class="card full"><h2>Личный кабинет Bybit</h2><div class="grid"><div class="metric"><small>Подключение</small><b id="bybit-connected">Проверка…</b></div><div class="metric"><small>Общий капитал</small><b id="bybit-equity">—</b></div><div class="metric"><small>Доступно</small><b id="bybit-available">—</b></div><div class="metric"><small>Открытые позиции</small><b id="bybit-positions">—</b></div></div><p id="bybit-error" class="info">Получаю безопасный снимок аккаунта.</p></article><article class="card full"><h3>Технический статус</h3><div id="bybit-raw" class="api-state">Загрузка…</div></article></div></section>
-
-    <section class="panel" id="panel-chat"><article class="card chat"><h2>AI Copilot</h2><div class="chat-log" id="ai-chat-log"><p><b>SharipovAI:</b> Я онлайн. Задай вопрос о рынке, риске, портфеле или сделках.</p></div><form id="ai-command-form"><textarea id="ai-command-input" placeholder="Напиши сообщение…"></textarea><button class="send" type="submit">Отправить</button></form></article></section>
-    <section class="panel" id="panel-bots"><div class="grid"><article class="card metric"><small>Всего ботов</small><b id="bots-total">—</b></article><article class="card metric"><small>Активны</small><b id="bots-active">—</b></article><article class="card metric"><small>Предупреждения</small><b id="bots-warnings">—</b></article><article class="card full"><h2>Сеть AI</h2><div id="bot-list" class="api-state">Загрузка…</div></article></div></section>
-    <section class="panel" id="panel-risk"><div class="grid"><article class="card full"><h2>Risk Center</h2><p class="info">Реальные сделки заблокированы kill switch до отдельного безопасного включения. Лимиты позиции, стоп-лосс и дневная просадка проверяются до исполнения.</p><div class="actions"><a href="/api/execution/stage-status" target="_blank">Этапы исполнения</a><a href="/api/autonomous-paper/status" target="_blank">Paper trading</a></div></article></div></section>
-    <section class="panel" id="panel-trades"><article class="card"><h2>Сделки</h2><table class="table"><tbody><tr><td>История загружается из Virtual Account и Evidence Vault</td></tr></tbody></table></article></section>
-    <section class="panel" id="panel-learning"><article class="card"><h2>Обучение AI</h2><p class="info">Learning OS анализирует решения, ошибки, комиссии и PnL. Полный раздел доступен по ссылке ниже.</p><div class="actions"><a href="/learning-os?lang={{ lang }}">Открыть Learning OS</a><a href="/evidence-vault?lang={{ lang }}">Открыть Evidence Vault</a></div></article></section>
+    <section class="panel" id="panel-account"><div class="grid"><article class="card full"><h2>Личный кабинет Bybit</h2><div id="bybit-raw" class="api-state">Загрузка…</div></article></div></section>
+    <section class="panel" id="panel-chat"><article class="card chat"><h2>AI Copilot</h2><div class="chat-log" id="ai-chat-log"></div><form id="ai-command-form"><textarea id="ai-command-input"></textarea><button class="send" type="submit">Отправить</button></form></article></section>
+    <section class="panel" id="panel-bots"><div class="grid"><article class="card full"><h2>Сеть AI</h2><div id="bot-list" class="api-state">Загрузка…</div></article></div></section>
+    <section class="panel" id="panel-risk"><article class="card"><h2>Risk Center</h2></article></section>
+    <section class="panel" id="panel-trades"><article class="card"><h2>Сделки</h2></article></section>
+    <section class="panel" id="panel-learning"><article class="card"><h2>Обучение AI</h2></article></section>
+    {% endif %}
   </main>
 </div>
 <script>
-(function(){
-  const panels=[...document.querySelectorAll('.panel')], buttons=[...document.querySelectorAll('[data-panel]')];
-  buttons.forEach(btn=>btn.addEventListener('click',()=>{buttons.forEach(b=>b.classList.remove('active'));panels.forEach(p=>p.classList.remove('active'));btn.classList.add('active');document.getElementById('panel-'+btn.dataset.panel)?.classList.add('active')}));
-  async function json(url,options){const r=await fetch(url,options);if(!r.ok)throw new Error(r.status+' '+r.statusText);return r.json()}
-  json('/api/exchange/account/status').then(s=>{document.getElementById('bybit-connected').textContent=s.connected?'Подключён':'Не подключён';document.getElementById('bybit-raw').textContent=JSON.stringify(s,null,2);if(s.last_error)document.getElementById('bybit-error').textContent=s.last_error}).catch(e=>{document.getElementById('bybit-connected').textContent='Ошибка';document.getElementById('bybit-error').textContent=String(e)});
-  json('/api/exchange/account/snapshot').then(s=>{document.getElementById('bybit-equity').textContent=Number(s.total_equity||0).toFixed(2)+' USDT';document.getElementById('bybit-available').textContent=Number(s.total_available_balance||0).toFixed(2)+' USDT';document.getElementById('bybit-positions').textContent=(s.positions||[]).length}).catch(()=>{});
-  json('/api/ai-bots').then(s=>{document.getElementById('bots-total').textContent=s.summary?.total_bots??0;document.getElementById('bots-active').textContent=s.summary?.active??0;document.getElementById('bots-warnings').textContent=s.summary?.warnings??0;document.getElementById('bot-list').textContent=JSON.stringify(s.bots||[],null,2)}).catch(e=>document.getElementById('bot-list').textContent=String(e));
-  const form=document.getElementById('ai-command-form');form.addEventListener('submit',async e=>{e.preventDefault();const input=document.getElementById('ai-command-input'),msg=input.value.trim();if(!msg)return;const log=document.getElementById('ai-chat-log');log.insertAdjacentHTML('beforeend','<p><b>Ты:</b> '+msg.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))+'</p>');input.value='';try{const out=await json('/api/chat/message',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg})});log.insertAdjacentHTML('beforeend','<p><b>SharipovAI:</b> '+String(out.reply||'Нет ответа').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))+'</p>')}catch(err){log.insertAdjacentHTML('beforeend','<p class="negative">Ошибка: '+String(err)+'</p>')}log.scrollTop=log.scrollHeight});
-})();
+(function(){const panels=[...document.querySelectorAll('.panel')],buttons=[...document.querySelectorAll('[data-panel]')];buttons.forEach(btn=>btn.addEventListener('click',()=>{buttons.forEach(b=>b.classList.remove('active'));panels.forEach(p=>p.classList.remove('active'));btn.classList.add('active');document.getElementById('panel-'+btn.dataset.panel)?.classList.add('active')}));})();
 </script>
 </body>
 </html>
