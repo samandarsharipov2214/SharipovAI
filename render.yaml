@@ -19,6 +19,10 @@ services:
         value: "0"
       - key: SHARIPOVAI_DATA_DIR
         value: /var/data
+      - key: POWER_RESILIENCE_ENABLED
+        value: "1"
+      - key: POWER_CHECKPOINT_SECONDS
+        value: "10"
       - key: BOT_TOKEN
         sync: false
       - key: WEBAPP_URL
