@@ -35,6 +35,15 @@ def _resolved_path(
     return default_factory()
 
 
+def _unquote_cookie_value(value: str) -> str:
+    """Remove one valid outer quote pair added by HTTP cookie serialization."""
+
+    normalized = value.strip()
+    if len(normalized) >= 2 and normalized[0] == normalized[-1] and normalized[0] in {"\"", "'"}:
+        return normalized[1:-1]
+    return normalized
+
+
 def install_auth_storage_aliases() -> None:
     """Install shared path and signed-session resolvers exactly once."""
 
@@ -69,12 +78,14 @@ def install_auth_storage_aliases() -> None:
     def session_username(request: Any) -> str | None:
         """Validate the signed cookie against the shared users store.
 
-        The configured environment administrator remains authoritative after a
-        valid signature and TTL check. This prevents an accidental pending or
-        stale file record with the same username from locking out the owner.
+        HTTP cookie serializers may preserve a surrounding quote pair around a
+        padded base64 value. Only that outer transport quoting is removed before
+        HMAC validation; the signed payload itself is never altered.
         """
 
-        raw = request.cookies.get(app_module.SESSION_COOKIE, "")
+        raw = _unquote_cookie_value(
+            request.cookies.get(app_module.SESSION_COOKIE, "")
+        )
         if not raw:
             return None
         try:
