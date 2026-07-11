@@ -1,0 +1,15 @@
+{
+  "name": "bybit-trading",
+  "version": "1.5.3",
+  "vendor": "Bybit",
+  "upstream_repository": "bybit-exchange/skills",
+  "upstream_commit": "0a0c9a7af9cbaeb0d29f3f90498043ff4b7b5179",
+  "source": "https://raw.githubusercontent.com/bybit-exchange/skills/0a0c9a7af9cbaeb0d29f3f90498043ff4b7b5179/SKILL.md",
+  "sha256": "ec311a0b4f21910af4068ac17084618b5f64a8233b8331a8b570ceae3add6fd1",
+  "usage_policy": {
+    "default_environment": "testnet",
+    "mainnet_write_requires_human_confirm": true,
+    "withdraw_permission_forbidden": true,
+    "secrets_must_not_be_committed": true
+  }
+}
