@@ -1,1 +1,48 @@
-<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SharipovAI</title><link rel="stylesheet" href="/static/web2/web2.css"></head><body><div class="app"><aside><img src="/static/web2/logo.svg" class="logo" alt="SharipovAI"><nav id="nav"></nav><div class="ai-state"><span></span><div><b>AI-режим активен</b><small>Безопасное исполнение</small></div></div></aside><main><header><div><p>Привет, Самандар 👋</p><small>SharipovAI — единый центр анализа и управления</small></div><div class="header-state"><b><i></i> Система работает</b><button id="refresh">Обновить</button></div></header><div id="notice" class="notice hidden"></div><section id="content"></section></main></div><script src="/static/web2/web2.js"></script><script>(()=>{const fix=n=>{if(n.nodeType===3){n.nodeValue=n.nodeValue.replaceAll('SharipoAI','SharipovAI').replaceAll('SHARIPOAI','SHARIPOVAI')}else if(n.nodeType===1){for(const c of n.childNodes)fix(c)}};fix(document.body);new MutationObserver(ms=>ms.forEach(m=>m.addedNodes.forEach(fix))).observe(document.body,{childList:true,subtree:true})})();</script></body></html>
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SharipovAI</title>
+  <link rel="stylesheet" href="/static/web2/web2.css?v=4">
+</head>
+<body>
+  <div class="app">
+    <aside>
+      <img src="/static/web2/logo.svg?v=4" class="logo" alt="SharipovAI">
+      <nav id="nav" aria-label="Главное меню">
+        <button class="active" data-page="Обзор">Обзор</button>
+        <button data-page="Рынок">Рынок</button>
+        <button data-page="AI-решение">AI-решение</button>
+        <button data-page="Портфель">Портфель</button>
+        <button data-page="Сделки">Сделки</button>
+        <button data-page="AI-боты">AI-боты</button>
+        <button data-page="AI-чат">AI-чат</button>
+        <button data-page="Новости">Новости</button>
+        <button data-page="Risk Center">Risk Center</button>
+        <button data-page="Bybit">Bybit</button>
+        <button data-page="Настройки">Настройки</button>
+      </nav>
+      <div class="ai-state"><span></span><div><b>AI-режим активен</b><small>Безопасное исполнение</small></div></div>
+    </aside>
+    <main>
+      <header>
+        <div><p>Привет, Самандар 👋</p><small>SharipovAI — единый центр анализа и управления</small></div>
+        <div class="header-state"><b><i></i> Система работает</b><button id="refresh" type="button">Обновить</button></div>
+      </header>
+      <div id="notice" class="notice hidden"></div>
+      <section id="content">
+        <div class="title"><h1>Mission Control</h1><p>Живое состояние SharipovAI</p></div>
+        <section class="metrics">
+          <article class="card"><span>Общий баланс</span><strong>Загрузка…</strong><small>Подключение к API</small></article>
+          <article class="card"><span>Прибыль сегодня</span><strong class="positive">—</strong><small>Данные обновляются</small></article>
+          <article class="card"><span>Открытые позиции</span><strong>—</strong><small>Под контролем AI</small></article>
+          <article class="card"><span>Риск системы</span><strong class="positive">НИЗКИЙ</strong><small>Risk Center</small></article>
+        </section>
+        <article class="panel wide"><small>SHARIPOVAI</small><h2>Система загружается</h2><p>Меню уже доступно. Данные появятся после подключения API.</p></article>
+      </section>
+    </main>
+  </div>
+  <script defer src="/static/web2/web2.js?v=4"></script>
+</body>
+</html>
