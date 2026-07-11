@@ -1,7 +1,7 @@
 'use client';
 
 import Image from 'next/image';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Activity, Bot, BrainCircuit, CandlestickChart, CircleDollarSign, LayoutDashboard,
   MessageSquareText, Newspaper, PieChart, Settings, ShieldCheck, WalletCards,
@@ -59,7 +59,7 @@ export default function Home() {
   ]);
   const [message, setMessage] = useState('');
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setError('');
     const results = await Promise.allSettled([
       fetch(apiUrl('/api/health')).then(r => r.ok ? r.json() : Promise.reject(new Error(`health ${r.status}`))),
@@ -72,9 +72,12 @@ export default function Home() {
     if (results[2].status === 'fulfilled') setBots(results[2].value as Json);
     if (results[3].status === 'fulfilled') setNews(results[3].value as Json);
     if (results.every(x => x.status === 'rejected')) setError('Backend временно недоступен');
-  };
+  }, []);
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void load(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
 
   const equity = useMemo(() => asNumber(account?.total_equity, 24356.22), [account]);
   const available = asNumber(account?.total_available_balance, 18640.42);
