@@ -1,14 +1,29 @@
+databases:
+  - name: sharipovai-db
+    databaseName: sharipovai
+    user: sharipovai
+    ipAllowList: []
+
 services:
   - type: web
     name: sharipovai-web
     env: python
     buildCommand: pip install -r requirements.txt
+    preDeployCommand: python scripts/migrate_project_db.py
     startCommand: uvicorn dashboard:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeployTrigger: checksPass
     disk:
       name: sharipovai-data
       mountPath: /var/data
       sizeGB: 1
     envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: sharipovai-db
+          property: connectionString
+      - key: SHARIPOVAI_DATABASE_REQUIRED
+        value: "1"
       - key: AUTH_SECRET
         sync: false
       - key: ADMIN_USERNAME
@@ -69,10 +84,22 @@ services:
         value: "1"
       - key: AUTONOMOUS_TRADING_STAGE
         value: "2"
-      - key: EXCHANGE_API_KEY
+      - key: BYBIT_READONLY_API_KEY
         sync: false
-      - key: EXCHANGE_API_SECRET
+      - key: BYBIT_READONLY_API_SECRET
         sync: false
+      - key: BYBIT_TESTNET_API_KEY
+        sync: false
+      - key: BYBIT_TESTNET_API_SECRET
+        sync: false
+      - key: BYBIT_MAINNET_API_KEY
+        sync: false
+      - key: BYBIT_MAINNET_API_SECRET
+        sync: false
+      - key: BYBIT_ALLOW_LEGACY_EXCHANGE_CREDENTIALS
+        value: "0"
+      - key: FEATURE_BYBIT_PRIVATE_ORDER_WS
+        value: "0"
       - key: BYBIT_ACCOUNT_SYNC_ENABLED
         value: "1"
       - key: BYBIT_ACCOUNT_SYNC_SECONDS
@@ -121,7 +148,7 @@ services:
     buildCommand: npm install --no-audit --no-fund && npm run build
     startCommand: npm run start
     healthCheckPath: /
-    autoDeploy: true
+    autoDeployTrigger: checksPass
     envVars:
       - key: NODE_VERSION
         value: "22"
@@ -133,6 +160,7 @@ services:
     env: python
     buildCommand: pip install -r requirements.txt
     startCommand: python -c "print('telegram webhook mode')"
+    autoDeployTrigger: checksPass
     envVars:
       - key: TELEGRAM_POLLING_ENABLED
         value: "0"
