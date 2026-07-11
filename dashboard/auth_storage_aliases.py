@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 _INSTALLED = False
+_HMAC_DIGEST_SIZE = hashlib.sha256().digest_size
 
 
 def _resolved_path(
@@ -42,6 +43,31 @@ def _unquote_cookie_value(value: str) -> str:
     if len(normalized) >= 2 and normalized[0] == normalized[-1] and normalized[0] in {"\"", "'"}:
         return normalized[1:-1]
     return normalized
+
+
+def _decode_legacy_session(raw: str) -> tuple[bytes, bytes] | None:
+    """Decode ``base64(payload + '.' + sha256_hmac)`` without ambiguous splitting.
+
+    The original format stores a raw binary HMAC after the separator. A raw HMAC
+    may itself contain ``b'.'``, so ``rsplit`` is incorrect. SHA-256 signatures
+    are always 32 bytes; therefore the separator is exactly byte ``-33``.
+    """
+
+    try:
+        decoded = base64.urlsafe_b64decode(raw.encode())
+    except Exception:
+        return None
+    minimum_size = _HMAC_DIGEST_SIZE + 2
+    if len(decoded) < minimum_size:
+        return None
+    separator_index = len(decoded) - _HMAC_DIGEST_SIZE - 1
+    if decoded[separator_index:separator_index + 1] != b".":
+        return None
+    payload = decoded[:separator_index]
+    signature = decoded[separator_index + 1:]
+    if len(signature) != _HMAC_DIGEST_SIZE:
+        return None
+    return payload, signature
 
 
 def install_auth_storage_aliases() -> None:
@@ -76,21 +102,18 @@ def install_auth_storage_aliases() -> None:
         )
 
     def session_username(request: Any) -> str | None:
-        """Validate the signed cookie against the shared users store.
-
-        HTTP cookie serializers may preserve a surrounding quote pair around a
-        padded base64 value. Only that outer transport quoting is removed before
-        HMAC validation; the signed payload itself is never altered.
-        """
+        """Validate the signed cookie against the shared users store."""
 
         raw = _unquote_cookie_value(
             request.cookies.get(app_module.SESSION_COOKIE, "")
         )
         if not raw:
             return None
+        decoded = _decode_legacy_session(raw)
+        if decoded is None:
+            return None
+        payload, signature = decoded
         try:
-            decoded = base64.urlsafe_b64decode(raw.encode())
-            payload, signature = decoded.rsplit(b".", 1)
             expected = hmac.new(
                 app_module._auth_secret().encode(),
                 payload,
