@@ -69,7 +69,7 @@ class BybitAccountClient:
                 wallet = self._private_get(base_url, "/v5/account/wallet-balance", {"accountType": "UNIFIED"})
                 positions = self._private_get(base_url, "/v5/position/list", {"category": "linear", "settleCoin": "USDT"})
                 spot_orders = self._private_get(base_url, "/v5/order/realtime", {"category": "spot", "openOnly": 0})
-                linear_orders = self._private_get(base_url, "/v5/order/realtime", {"category": "linear", "settleCoin": "USDT", "openOnly": 0})
+                linear_orders = self._private_get(base_url, "/v5/order/realtime", {"category": "linear", "openOnly": 0, "settleCoin": "USDT"})
                 return self._normalize(base_url, wallet, positions, spot_orders, linear_orders)
             except Exception as exc:
                 errors.append(f"{base_url}: {type(exc).__name__}: {exc}")
@@ -97,7 +97,7 @@ class BybitAccountClient:
         client = self._client or httpx.Client(timeout=self.timeout)
         close_client = self._client is None
         try:
-            response = client.get(f"{base_url}{path}", params=params, headers=headers)
+            response = client.get(f"{base_url}{path}?{query}", headers=headers)
             response.raise_for_status()
             data = response.json()
         finally:
