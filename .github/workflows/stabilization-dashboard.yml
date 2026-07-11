@@ -35,8 +35,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+          python -m pip install -q --upgrade pip
+          python -m pip install -q -r requirements.txt
 
       - name: Compile dashboard imports
         run: |
@@ -49,11 +49,34 @@ jobs:
           PY
 
       - name: Run targeted stabilization tests
+        shell: bash
         run: |
+          set +e
           python -m pytest \
             dashboard/tests/test_canonical_agent_health.py \
             dashboard/tests/test_auth_security_flow.py \
             dashboard/tests/test_crash_hardening.py \
             dashboard/tests/test_dashboard.py \
             dashboard/tests/test_demo_api.py \
-            -q --tb=long
+            -q --tb=short > pytest-targeted.log 2>&1
+          code=$?
+          python - <<'PY'
+          from pathlib import Path
+          lines = Path('pytest-targeted.log').read_text(encoding='utf-8', errors='replace').splitlines()
+          markers = ('ERROR collecting', 'FAILED ', 'E   ', 'short test summary', 'ModuleNotFoundError', 'ImportError', 'SyntaxError', 'TypeError')
+          selected = []
+          for index, line in enumerate(lines):
+              if any(marker in line for marker in markers):
+                  start = max(0, index - 3)
+                  end = min(len(lines), index + 12)
+                  selected.extend(lines[start:end])
+          selected.extend(lines[-80:])
+          seen = set()
+          compact = []
+          for line in selected:
+              if line not in seen:
+                  seen.add(line)
+                  compact.append(line)
+          print('\n'.join(compact[-220:]))
+          PY
+          exit $code
