@@ -2,11 +2,13 @@
 .env
 .env.*
 !.env.example
+!.env.local.example
 
 # Runtime data
 data/*.json
 data/*.db
 data/*.sqlite
+runtime/
 
 # Python
 __pycache__/
