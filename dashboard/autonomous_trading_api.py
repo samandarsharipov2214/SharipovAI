@@ -6,7 +6,13 @@ from typing import Any
 
 from fastapi import FastAPI
 
-from autonomous_trading import AutonomousPaperLoop, AutonomousTestnetBridge, MarketStream, PowerResilienceManager
+from autonomous_trading import (
+    AutonomousPaperLoop,
+    AutonomousTestnetBridge,
+    MarketStream,
+    PowerResilienceManager,
+    bootstrap_storage,
+)
 
 
 def install_autonomous_trading_api(app: FastAPI) -> None:
@@ -21,11 +27,16 @@ def install_autonomous_trading_api(app: FastAPI) -> None:
     app.state.autonomous_paper_loop = loop
     app.state.autonomous_testnet_bridge = testnet_bridge
     app.state.power_resilience = power_resilience
+    app.state.startup_readiness = {"status": "not_started", "trading_ready": False}
 
     @app.on_event("startup")
     def start_autonomous_runtime() -> None:
+        recovery_result = {"status": "disabled", "failed": []}
         if _truthy("POWER_RESILIENCE_ENABLED", default=True):
-            app.state.power_recovery = power_resilience.start()
+            power_start = power_resilience.start()
+            app.state.power_recovery = power_start
+            recovery_result = power_start.get("recovery", recovery_result)
+        app.state.startup_readiness = bootstrap_storage(recovery_result)
         if _truthy("MARKET_STREAM_ENABLED", default=True):
             stream.start()
         if _truthy("AUTONOMOUS_PAPER_ENABLED", default=True):
@@ -40,6 +51,10 @@ def install_autonomous_trading_api(app: FastAPI) -> None:
         stream.stop()
         if _truthy("POWER_RESILIENCE_ENABLED", default=True):
             app.state.power_shutdown_checkpoint = power_resilience.stop()
+
+    @app.get("/api/system/startup-readiness")
+    def startup_readiness() -> dict[str, Any]:
+        return dict(app.state.startup_readiness)
 
     @app.get("/api/market/stream/status")
     def market_stream_status() -> dict[str, Any]:
@@ -73,7 +88,9 @@ def install_autonomous_trading_api(app: FastAPI) -> None:
 
     @app.post("/api/system/power-resilience/recover")
     def power_resilience_recover() -> dict[str, Any]:
-        return power_resilience.recover_all()
+        recovery = power_resilience.recover_all()
+        app.state.startup_readiness = bootstrap_storage(recovery)
+        return {"recovery": recovery, "readiness": app.state.startup_readiness}
 
 
 def _truthy(name: str, *, default: bool = False) -> bool:
