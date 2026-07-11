@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import math
+import time
 
 import pytest
 
 from exchange_connector.bybit_websocket_state import BybitWebSocketState, ReconnectPolicy
 
 
-NOW = 1_800_000_000_000
+NOW = int(time.time() * 1000)
 
 
 def _ticker(**changes):
@@ -22,7 +23,7 @@ def _ticker(**changes):
     return payload
 
 
-def test_valid_quote_requires_confirmed_connection(monkeypatch) -> None:
+def test_valid_quote_requires_confirmed_connection() -> None:
     state = BybitWebSocketState()
     quote = state.ingest_ticker(_ticker(), received_at_ms=NOW)
     assert quote.price == 64000.5
@@ -72,7 +73,7 @@ def test_sequence_must_advance() -> None:
         state.ingest_ticker(_ticker(cs=10, ts=NOW), received_at_ms=NOW + 1)
 
 
-def test_disconnect_and_staleness_make_cached_quote_unusable(monkeypatch) -> None:
+def test_disconnect_and_staleness_make_cached_quote_unusable() -> None:
     state = BybitWebSocketState()
     state.ingest_ticker(_ticker(), received_at_ms=NOW)
     state.mark_connected()
