@@ -24,7 +24,9 @@ if (-not (Test-Path $venvPython)) {
 }
 
 & $venvPython -m pip install --upgrade pip
+if ($LASTEXITCODE -ne 0) { throw "Не удалось обновить pip в .venv" }
 & $venvPython -m pip install -r (Join-Path $ProjectRoot "requirements.txt")
+if ($LASTEXITCODE -ne 0) { throw "Не удалось установить зависимости в .venv" }
 
 $dataDir = Join-Path $ProjectRoot "data"
 $runtimeDir = Join-Path $ProjectRoot "runtime"
@@ -62,11 +64,13 @@ Password: $adminPassword
 }
 
 & $venvPython (Join-Path $ProjectRoot "tools\pc_node_backup.py") --source $dataDir --backup-root $backupDir --once
+if ($LASTEXITCODE -ne 0) { throw "Первичная резервная копия не создана" }
 & $venvPython -m pytest -q (Join-Path $ProjectRoot "tests\test_pc_node_backup.py")
+if ($LASTEXITCODE -ne 0) { throw "Тест резервного копирования не пройден" }
 
 Write-Host "SharipovAI PC node подготовлен." -ForegroundColor Green
 Write-Host "Локальный env: $envFile"
 if (Test-Path $credentialsFile) {
     Write-Host "Начальные данные администратора: $credentialsFile" -ForegroundColor Yellow
 }
-Write-Host "Следующий шаг: .\scripts\windows\install_autostart.ps1"
+Write-Host "Для полного запуска: .\scripts\windows\bootstrap_pc_node.ps1 -SkipSetup"
