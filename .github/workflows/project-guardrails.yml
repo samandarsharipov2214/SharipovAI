@@ -11,7 +11,7 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       PYTHONUNBUFFERED: "1"
       PYTHONDONTWRITEBYTECODE: "1"
@@ -19,6 +19,8 @@ jobs:
       ADMIN_PASSWORD: ci-test-password
       AUTH_SECRET: ci-test-secret
       SHARIPOVAI_DISABLE_AUTH: "1"
+      DATABASE_URL: sqlite:////tmp/sharipovai-shared.db
+      SHARIPOVAI_DATABASE_REQUIRED: "1"
       MARKET_STREAM_ENABLED: "0"
       AUTONOMOUS_PAPER_ENABLED: "0"
       AUTONOMOUS_TESTNET_ENABLED: "0"
@@ -27,6 +29,8 @@ jobs:
       EXCHANGE_LIVE_TRADING_ENABLED: "0"
       FEATURE_BYBIT_LIVE_EXECUTION: "0"
       FEATURE_BYBIT_TESTNET_EXECUTION: "0"
+      FEATURE_BYBIT_PRIVATE_ORDER_WS: "0"
+      BYBIT_ALLOW_LEGACY_EXCHANGE_CREDENTIALS: "0"
       EXECUTION_KILL_SWITCH: "1"
       EXCHANGE_MODE: sandbox
       BYBIT_ACCOUNT_SYNC_ENABLED: "0"
@@ -50,11 +54,25 @@ jobs:
           python -m pip install --upgrade pip --quiet
           pip install -r requirements.txt --quiet
 
+      - name: Initialize canonical project database
+        run: python scripts/migrate_project_db.py
+
       - name: Compile all Python modules
         run: python -m compileall -q .
 
       - name: Import application safely
         run: python -c "import dashboard; assert dashboard.app is not None; print('dashboard import: ok')"
+
+      - name: Verify execution remains locked
+        run: |
+          python - <<'PY'
+          from exchange_connector.bybit_execution import BybitExecutionClient
+          status = BybitExecutionClient().status()
+          assert status["kill_switch"] is True
+          assert status["testnet_execution_enabled"] is False
+          assert status["live_execution_enabled"] is False
+          print(status)
+          PY
 
       - name: Run regression tests
         id: pytest
