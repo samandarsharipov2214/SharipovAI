@@ -1,13 +1,20 @@
 # SharipovAI Windows PC Node
 
-SharipovAI can run on a Windows PC as a managed local node with:
+SharipovAI can run on a Windows PC through one self-healing supervisor: **PC Agent**.
+
+PC Agent watches and restarts:
 
 - Dashboard/FastAPI on `http://127.0.0.1:8000`;
+- the persistent backup loop;
+- health and backup freshness status.
+
+It also provides:
+
 - an isolated `.venv` Python environment;
-- a persistent backup loop;
-- PID files that prevent duplicate processes;
-- startup and error logs under `runtime/logs`;
-- automatic health verification;
+- a single-instance lock;
+- observable PID and status files;
+- startup/error logs under `runtime/logs`;
+- automatic verification after setup and updates;
 - safe ZIP updates with rollback.
 
 ## One-command installation
@@ -18,14 +25,14 @@ Run from the project directory:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\bootstrap_pc_node.ps1
 ```
 
-The bootstrap performs setup, installs Windows autostart for the current user, starts the backup loop and web node, then verifies:
+The bootstrap performs setup, installs Windows autostart for the current user, launches PC Agent, and verifies:
 
 - writable persistent data;
 - a fresh verified backup manifest;
-- the `/health` endpoint;
-- managed PC Node and Backup PIDs.
+- the Dashboard `/health` endpoint;
+- a live and fresh PC Agent status.
 
-The final installation report is stored at:
+The installation report is stored at:
 
 ```text
 runtime/pc_node_installation.json
@@ -34,29 +41,29 @@ runtime/pc_node_installation.json
 ## Runtime files
 
 ```text
-runtime/pids/pc_node.pid
-runtime/pids/backup.pid
-runtime/logs/pc_node.stdout.log
-runtime/logs/pc_node.stderr.log
-runtime/logs/backup.stdout.log
-runtime/logs/backup.stderr.log
-runtime/pc_node_status.json
-runtime/backup_status.json
+runtime/pids/pc_agent.pid
+runtime/pc_agent_status.json
+runtime/logs/pc_agent.stdout.log
+runtime/logs/pc_agent.stderr.log
+runtime/logs/pc_agent.jsonl
+runtime/logs/pc_node.log
+runtime/logs/pc_backup.log
 ```
 
-Repeated startup commands are safe: an already healthy process is reused instead of starting a duplicate.
+Repeated start commands are safe. A healthy agent is reused instead of starting a duplicate.
 
 ## Manual start and verification
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\start_backup.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\start_pc_node.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\start_pc_agent.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\check_pc_node.ps1 -RequireManagedProcesses
 ```
 
+The older `start_pc_node.ps1` and `start_backup.ps1` remain available only as emergency/manual launchers. Normal operation and autostart should use PC Agent.
+
 ## Safe updater
 
-The Windows updater installs a ZIP archive of the repository without touching local secrets or runtime state.
+The Windows updater installs a ZIP archive without touching local secrets or runtime state.
 
 Protected top-level paths:
 
@@ -73,7 +80,7 @@ Before changing code it creates a rollback snapshot under:
 runtime/update_backups/<UTC timestamp>
 ```
 
-After copying the update it validates all Python files. If validation fails, the previous code is restored automatically.
+After copying the update it validates all Python files. If validation fails, the previous code is restored automatically. A successful update restarts the unified PC Agent and runs the managed health check.
 
 Usage:
 
