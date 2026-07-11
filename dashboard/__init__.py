@@ -16,6 +16,7 @@ from .execution_stages_api import install_execution_stages_api
 from .global_auth_guard import install_global_auth_guard
 from .market_data_api import install_market_data_api
 from .news_agent_network_api import install_news_agent_network_api
+from .web2_host import install_web2_host
 
 install_news_agent_network_api(app)
 install_market_data_api(app)
@@ -25,6 +26,7 @@ install_bybit_account_api(app)
 install_control_plane_api(app)
 install_dashboard2_api(app)
 install_database_api(app)
+install_web2_host(app)
 install_global_auth_guard(app)
 
 try:
