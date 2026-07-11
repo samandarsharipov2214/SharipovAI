@@ -7,10 +7,17 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 
 from config.feature_flags import is_feature_enabled
+from exchange_connector.bybit_instrument_rules import (
+    BybitInstrumentRulesService,
+    InstrumentRulesUnavailable,
+)
 from exchange_connector.bybit_websocket_worker import BybitWebSocketWorker
 from exchange_connector.market_data import MarketDataService, MarketDataUnavailable
 from exchange_connector.multi_exchange_consensus import ConsensusUnavailable, MultiExchangeConsensus
 from exchange_connector.order_preview import OrderPreviewError, build_order_preview
+
+
+_MANUAL_RULE_FIELDS = {"tick_size", "qty_step", "min_qty", "min_notional"}
 
 
 def install_market_data_api(app: FastAPI) -> None:
@@ -19,6 +26,7 @@ def install_market_data_api(app: FastAPI) -> None:
     app.state.market_data_api_installed = True
     app.state.market_data_service = MarketDataService()
     app.state.market_consensus = MultiExchangeConsensus(app.state.market_data_service)
+    app.state.bybit_instrument_rules = BybitInstrumentRulesService()
     app.state.bybit_websocket_worker = BybitWebSocketWorker()
     _register_lifecycle_handler(app, "startup", app.state.bybit_websocket_worker.start)
     _register_lifecycle_handler(app, "shutdown", app.state.bybit_websocket_worker.stop)
@@ -64,18 +72,54 @@ def install_market_data_api(app: FastAPI) -> None:
             ) from exc
         return {**quote.to_dict(), "synthetic_fallback_used": False}
 
+    @app.get("/api/market/instrument-rules/{category}/{symbol}")
+    def instrument_rules(category: str, symbol: str) -> dict[str, Any]:
+        try:
+            rules = app.state.bybit_instrument_rules.get(symbol, category)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except InstrumentRulesUnavailable as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={"status": "unavailable", "verified": False, "message": str(exc)},
+            ) from exc
+        return {"status": "verified", "verified": True, **rules.to_dict()}
+
     @app.post("/api/trading/order-preview")
     def order_preview(payload: dict[str, Any]) -> dict[str, Any]:
         if not is_feature_enabled("bybit_preview_engine"):
             raise HTTPException(status_code=503, detail={"status": "disabled", "executed": False})
+        manual = sorted(_MANUAL_RULE_FIELDS.intersection(payload))
+        if manual:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "status": "blocked",
+                    "executed": False,
+                    "message": f"manual instrument rules are forbidden: {', '.join(manual)}",
+                },
+            )
         try:
-            preview = build_order_preview(payload)
-        except OrderPreviewError as exc:
+            category = str(payload.get("category", "spot")).strip().lower()
+            rules = app.state.bybit_instrument_rules.get(payload.get("symbol"), category)
+            merged = {**payload, **rules.preview_fields()}
+            preview = build_order_preview(merged)
+        except (OrderPreviewError, ValueError) as exc:
             raise HTTPException(
                 status_code=400,
                 detail={"status": "blocked", "executed": False, "message": str(exc)},
             ) from exc
-        return {"status": "preview", "executed": False, **preview.to_dict()}
+        except InstrumentRulesUnavailable as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={"status": "blocked", "executed": False, "message": str(exc)},
+            ) from exc
+        return {
+            "status": "preview",
+            "executed": False,
+            "instrument_rules": rules.to_dict(),
+            **preview.to_dict(),
+        }
 
     @app.get("/api/market/websocket/status")
     def websocket_status() -> dict[str, Any]:
