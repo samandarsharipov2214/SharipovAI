@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import Body, FastAPI
 from fastapi.responses import HTMLResponse
 
+from .dashboard_contracts_middleware import install_dashboard_contracts_middleware
 from .demo_state import run_ai_command
 from .stabilization_compat import install_stabilization_compat
 
@@ -109,6 +110,7 @@ def _sell(state: dict[str, Any]) -> str:
 
 def install_demo_api(app: FastAPI) -> None:
     install_stabilization_compat(app)
+    install_dashboard_contracts_middleware(app)
     if getattr(app.state, "demo_api_installed", False):
         return
     app.state.demo_api_installed = True
