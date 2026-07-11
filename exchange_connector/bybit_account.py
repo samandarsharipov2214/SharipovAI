@@ -10,12 +10,14 @@ import hmac
 import json
 import os
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
 import httpx
+
+from .bybit_retry import request_with_safe_get_retries
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +57,7 @@ class BybitAccountClient:
             "trading_enabled": _truthy("EXCHANGE_LIVE_TRADING_ENABLED"),
             "kill_switch": _truthy("EXECUTION_KILL_SWITCH", default=True),
             "candidate_hosts": self._candidate_base_urls(),
+            "safe_get_retries": max(int(os.getenv("BYBIT_GET_MAX_ATTEMPTS", "3")), 1),
         }
 
     def fetch_snapshot(self) -> AccountSnapshot:
@@ -85,24 +88,29 @@ class BybitAccountClient:
 
     def _private_get(self, base_url: str, path: str, params: dict[str, Any]) -> dict[str, Any]:
         query = urlencode(sorted((key, value) for key, value in params.items() if value is not None))
-        timestamp = str(int(time.time() * 1000))
-        signature_payload = f"{timestamp}{self.api_key}{self.recv_window}{query}"
-        signature = hmac.new(self.api_secret.encode(), signature_payload.encode(), hashlib.sha256).hexdigest()
-        headers = {
-            "X-BAPI-API-KEY": self.api_key,
-            "X-BAPI-TIMESTAMP": timestamp,
-            "X-BAPI-RECV-WINDOW": self.recv_window,
-            "X-BAPI-SIGN": signature,
-        }
         client = self._client or httpx.Client(timeout=self.timeout)
         close_client = self._client is None
+
+        def request() -> httpx.Response:
+            timestamp = str(int(time.time() * 1000))
+            signature_payload = f"{timestamp}{self.api_key}{self.recv_window}{query}"
+            signature = hmac.new(self.api_secret.encode(), signature_payload.encode(), hashlib.sha256).hexdigest()
+            headers = {
+                "X-BAPI-API-KEY": self.api_key,
+                "X-BAPI-TIMESTAMP": timestamp,
+                "X-BAPI-RECV-WINDOW": self.recv_window,
+                "X-BAPI-SIGN": signature,
+            }
+            return client.get(f"{base_url}{path}?{query}", headers=headers)
+
         try:
-            response = client.get(f"{base_url}{path}?{query}", headers=headers)
+            response = request_with_safe_get_retries(request)
             response.raise_for_status()
             data = response.json()
         finally:
             if close_client:
                 client.close()
+
         code = int(data.get("retCode", -1))
         if code != 0:
             raise RuntimeError(f"Bybit rejected request: {data.get('retMsg', 'unknown error')} ({code})")
