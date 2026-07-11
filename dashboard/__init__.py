@@ -10,6 +10,7 @@ from .autonomous_trading_api import install_autonomous_trading_api
 from .bybit_account_api import install_bybit_account_api
 from .exceptions import DashboardError
 from .execution_stages_api import install_execution_stages_api
+from .global_auth_guard import install_global_auth_guard
 from .market_data_api import install_market_data_api
 from .news_agent_network_api import install_news_agent_network_api
 
@@ -18,6 +19,7 @@ install_market_data_api(app)
 install_autonomous_trading_api(app)
 install_execution_stages_api(app)
 install_bybit_account_api(app)
+install_global_auth_guard(app)
 
 try:
     from .telegram_news_agents import install_telegram_news_agent_commands
