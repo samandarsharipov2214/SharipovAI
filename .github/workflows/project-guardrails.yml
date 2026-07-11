@@ -74,6 +74,11 @@ jobs:
           print(status)
           PY
 
+      - name: Run fail-closed release audit
+        env:
+          SHARIPOVAI_DISABLE_AUTH: "0"
+        run: python scripts/release_audit.py --runtime --json
+
       - name: Run regression tests
         id: pytest
         continue-on-error: true
