@@ -1,0 +1,59 @@
+name: Dashboard Stabilization
+
+on:
+  push:
+    branches:
+      - stabilization/dashboard-runtime-v2
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'dashboard/**'
+      - 'agent_health.py'
+      - 'learning_engine/**'
+      - 'runner/**'
+      - 'telegram_bot.py'
+      - '.github/workflows/stabilization-dashboard.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  targeted-dashboard-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Compile dashboard imports
+        run: |
+          python -m compileall -q dashboard agent_health.py
+          python - <<'PY'
+          import agent_health
+          from dashboard.app import create_app
+          app = create_app()
+          print('IMPORT_OK', app.title)
+          PY
+
+      - name: Run targeted stabilization tests
+        run: |
+          python -m pytest \
+            dashboard/tests/test_canonical_agent_health.py \
+            dashboard/tests/test_auth_security_flow.py \
+            dashboard/tests/test_crash_hardening.py \
+            dashboard/tests/test_dashboard.py \
+            dashboard/tests/test_demo_api.py \
+            -q --tb=long
