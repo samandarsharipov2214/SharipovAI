@@ -39,6 +39,8 @@ jobs:
           python -m pip install -r requirements.txt
 
       - name: Validate PowerShell syntax
+        id: psparse
+        continue-on-error: true
         shell: pwsh
         run: |
           $errors = @()
@@ -51,13 +53,16 @@ jobs:
               [ref]$parseErrors
             )
             if ($parseErrors.Count -gt 0) {
-              $errors += $parseErrors | ForEach-Object { "$($_.Extent.File):$($_.Extent.StartLineNumber) $($_.Message)" }
+              $errors += $parseErrors | ForEach-Object { "$($_.Extent.File):$($_.Extent.StartLineNumber):$($_.Extent.StartColumnNumber) $($_.Message)" }
             }
           }
-          if ($errors.Count -gt 0) {
-            $errors | ForEach-Object { Write-Error $_ }
-            exit 1
+          if ($errors.Count -eq 0) {
+            'PowerShell syntax OK' | Set-Content powershell-syntax-errors.txt -Encoding UTF8
+            exit 0
           }
+          $errors | Set-Content powershell-syntax-errors.txt -Encoding UTF8
+          $errors | ForEach-Object { Write-Host $_ }
+          exit 1
 
       - name: Run PC node tests
         shell: pwsh
@@ -82,9 +87,24 @@ jobs:
           if ($LASTEXITCODE -gt 7) { exit $LASTEXITCODE }
           Compress-Archive -Path (Join-Path $stage '*') -DestinationPath SharipovAI-Windows-Agent.zip -Force
 
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows-Agent-Diagnostics
+          path: powershell-syntax-errors.txt
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Upload verified package
+        if: steps.psparse.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: SharipovAI-Windows-Agent
           path: SharipovAI-Windows-Agent.zip
           retention-days: 30
+
+      - name: Fail when PowerShell syntax failed
+        if: steps.psparse.outcome == 'failure'
+        shell: pwsh
+        run: exit 1
