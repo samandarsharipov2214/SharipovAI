@@ -17,6 +17,7 @@ from typing import Any
 
 import httpx
 
+from autonomous_trading.storage_bootstrap import trading_storage_ready
 from .live_execution_guard import LiveExecutionGuard
 
 
@@ -55,14 +56,17 @@ class BybitExecutionClient:
 
     def status(self) -> dict[str, Any]:
         credentials = bool(self.api_key and self.api_secret)
+        storage_ready, storage_reason = trading_storage_ready()
         return {
             "mode": self.mode,
             "credentials_configured": credentials,
             "testnet_execution_enabled": self.mode == "sandbox" and credentials and _truthy("TESTNET_EXECUTION_ENABLED"),
-            "live_execution_enabled": self._live_unlocked(credentials),
+            "live_execution_enabled": self._live_unlocked(credentials) and storage_ready,
             "kill_switch": _truthy("EXECUTION_KILL_SWITCH"),
             "max_notional_usdt": self.max_notional,
             "live_market_guard_required": True,
+            "storage_recovery_ready": storage_ready,
+            "storage_recovery_reason": storage_reason,
             "recv_window_ms": int(self.recv_window),
             "http_timeout_seconds": self.timeout_seconds,
         }
@@ -88,6 +92,9 @@ class BybitExecutionClient:
         elif self.mode == "live":
             if not self._live_unlocked(True):
                 raise RuntimeError("Live execution is locked by safety gates")
+            storage_ready, storage_reason = trading_storage_ready()
+            if not storage_ready:
+                raise RuntimeError("Live execution blocked by startup recovery: " + storage_reason)
             assessment = self._live_guard.assess(symbol=symbol, reference_price=reference_price)
             if not assessment.allowed:
                 raise RuntimeError("Live market guard blocked order: " + "; ".join(assessment.blockers))
