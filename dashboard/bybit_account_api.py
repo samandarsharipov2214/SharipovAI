@@ -9,6 +9,7 @@ from typing import Any, Callable
 from fastapi import FastAPI, HTTPException, Request
 
 from exchange_connector.bybit_account import BybitAccountClient
+from exchange_connector.bybit_preflight import run_bybit_preflight
 
 
 class BybitAccountSync:
@@ -16,6 +17,7 @@ class BybitAccountSync:
         self.client = client or BybitAccountClient()
         self.interval = max(float(os.getenv("BYBIT_ACCOUNT_SYNC_SECONDS", "15")), 5.0)
         self._snapshot: dict[str, Any] | None = None
+        self._preflight: dict[str, Any] | None = None
         self._last_error: str | None = None
         self._last_attempt_ms: int | None = None
         self._lock = threading.RLock()
@@ -40,10 +42,12 @@ class BybitAccountSync:
     def sync_now(self) -> dict[str, Any]:
         self._last_attempt_ms = int(time.time() * 1000)
         try:
+            preflight = run_bybit_preflight(self.client)
             snapshot = self.client.fetch_snapshot()
             self.client.save_snapshot(snapshot)
             data = snapshot.to_dict()
             with self._lock:
+                self._preflight = preflight
                 self._snapshot = data
                 self._last_error = None
             return data
@@ -56,6 +60,7 @@ class BybitAccountSync:
     def status(self) -> dict[str, Any]:
         with self._lock:
             snapshot = dict(self._snapshot) if self._snapshot else None
+            preflight = dict(self._preflight) if self._preflight else None
             error = self._last_error
         age_seconds: float | None = None
         if snapshot:
@@ -65,6 +70,8 @@ class BybitAccountSync:
             "worker_running": bool(self._thread and self._thread.is_alive()),
             "last_attempt_ms": self._last_attempt_ms,
             "last_error": error,
+            "preflight": preflight,
+            "preflight_passed": preflight is not None,
             "connected": bool(snapshot and snapshot.get("status") == "connected"),
             "snapshot_age_seconds": age_seconds,
             "snapshot_available": snapshot is not None,
