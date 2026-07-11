@@ -6,6 +6,11 @@ on:
       - feat/bybit-trading-skill
     paths:
       - .github/workflows/sync-bybit-skill.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/sync-bybit-skill.yml
   workflow_dispatch:
 
 permissions:
