@@ -7,6 +7,7 @@ evidence is ``unknown`` rather than a decorative percentage.
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -20,12 +21,38 @@ from paper_activity_autorun import paper_activity_autorun_status
 from paper_activity_engine import PaperActivityEngine
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class AgentDefinition:
+    """Agent definition supporting both legacy 3-field and canonical 4-field calls."""
+
     id: str
     name: str
     responsibility: str
     check: Callable[[], dict[str, Any]]
+
+    def __init__(
+        self,
+        id_or_name: str,
+        name_or_responsibility: str,
+        responsibility_or_check: str | Callable[[], dict[str, Any]],
+        check: Callable[[], dict[str, Any]] | None = None,
+    ) -> None:
+        if check is None:
+            name = id_or_name
+            responsibility = name_or_responsibility
+            resolved_check = responsibility_or_check
+            if not callable(resolved_check):
+                raise TypeError("check must be callable")
+            agent_id = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or "agent"
+        else:
+            agent_id = id_or_name
+            name = name_or_responsibility
+            responsibility = str(responsibility_or_check)
+            resolved_check = check
+        object.__setattr__(self, "id", agent_id)
+        object.__setattr__(self, "name", name)
+        object.__setattr__(self, "responsibility", responsibility)
+        object.__setattr__(self, "check", resolved_check)
 
 
 def _safe_check(check: Callable[[], dict[str, Any]]) -> dict[str, Any]:
@@ -195,25 +222,23 @@ def build_agent_health_snapshot() -> dict[str, Any]:
         else:
             status = "unknown"
             score = None
-        agents.append(
-            {
-                "id": definition.id,
-                "name": definition.name,
-                "responsibility": definition.responsibility,
-                "status": status,
-                "quality_score": score,
-                "health_score": score,
-                "checked_at": check["checked_at"],
-                "changed_at": check["checked_at"],
-                "last_seen": check["checked_at"],
-                "last_action": check.get("last_action"),
-                "last_error": check.get("last_error"),
-                "evidence": check.get("evidence", []),
-                "evidence_count": evidence_count,
-                "stale": False,
-                "details": check.get("details", {}),
-            }
-        )
+        agents.append({
+            "id": definition.id,
+            "name": definition.name,
+            "responsibility": definition.responsibility,
+            "status": status,
+            "quality_score": score,
+            "health_score": score,
+            "checked_at": check["checked_at"],
+            "changed_at": check["checked_at"],
+            "last_seen": check["checked_at"],
+            "last_action": check.get("last_action"),
+            "last_error": check.get("last_error"),
+            "evidence": check.get("evidence", []),
+            "evidence_count": evidence_count,
+            "stale": False,
+            "details": check.get("details", {}),
+        })
     working = len([agent for agent in agents if agent["status"] == "working"])
     degraded = len([agent for agent in agents if agent["status"] == "degraded"])
     unknown = len([agent for agent in agents if agent["status"] == "unknown"])
@@ -231,5 +256,5 @@ def build_agent_health_snapshot() -> dict[str, Any]:
         },
         "agents": agents,
         "bots": agents,
-        "truth_policy": "Nine canonical AI organs only; missing evidence is unknown, never decorative.",
+        "truth_policy": "No decorative score: missing evidence is shown as unknown. Nine canonical AI organs only.",
     }
