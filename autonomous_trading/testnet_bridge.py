@@ -8,8 +8,10 @@ from pathlib import Path
 from typing import Any
 
 from exchange_connector.bybit_execution import BybitExecutionClient
+
 from .execution_journal import ExecutionJournal
 from .stage_controller import StageController
+from .trade_identity import paper_trade_id, raw_trade_fingerprint
 
 
 class AutonomousTestnetBridge:
@@ -45,6 +47,7 @@ class AutonomousTestnetBridge:
 
     def tick(self) -> None:
         trades = self._paper_trades()
+        self._migrate_processed_ids(trades)
         if not _truthy("AUTONOMOUS_TESTNET_ENABLED"):
             self._baseline(trades, "disabled")
             return
@@ -54,12 +57,28 @@ class AutonomousTestnetBridge:
             self._baseline(trades, "blocked_by_stage_evidence")
             return
 
-        processed = min(int(self._state.get("processed_trade_count", 0)), len(trades))
-        for index, trade in enumerate(trades[processed:], start=processed):
-            if trade.get("side") not in {"BUY", "SELL"}:
-                self._state["processed_trade_count"] = index + 1
-                self._persist()
+        processed = set(self._state.get("processed_trade_ids", []))
+        for index, trade in enumerate(trades):
+            trade_key = self._trade_key(trade)
+            if trade_key in processed:
                 continue
+            if not isinstance(trade, dict) or trade.get("side") not in {"BUY", "SELL"}:
+                self._mark_processed(trade_key)
+                continue
+            try:
+                candidate_id = paper_trade_id(trade)
+            except (TypeError, ValueError) as exc:
+                self.journal.append({
+                    "status": "blocked_or_error",
+                    "mode": self.client.mode,
+                    "paper_trade_index": index,
+                    "paper_trade_id": trade_key,
+                    "message": f"Invalid paper trade identity: {exc}",
+                    "origin": "autonomous_bridge",
+                })
+                self._mark_processed(trade_key)
+                continue
+
             price = float(trade.get("price", 0) or 0)
             paper_quantity = float(trade.get("quantity", 0) or 0)
             safe_quantity = min(paper_quantity, self.client.max_notional / price) if price > 0 else 0
@@ -71,15 +90,17 @@ class AutonomousTestnetBridge:
                     "side": trade.get("side"),
                     "quantity": safe_quantity,
                     "paper_trade_index": index,
+                    "paper_trade_id": candidate_id,
                     "message": "Invalid paper trade price or quantity",
                     "origin": "autonomous_bridge",
                 })
-                self._state["processed_trade_count"] = index + 1
+                self._mark_processed(candidate_id)
                 self._state["last_status"] = "skipped_invalid_trade"
                 self._persist()
                 continue
             try:
                 result = self.client.place_market_order(
+                    candidate_id=candidate_id,
                     symbol=str(trade.get("symbol", "")),
                     side=str(trade.get("side", "")),
                     quantity=safe_quantity,
@@ -88,12 +109,13 @@ class AutonomousTestnetBridge:
                 self.journal.append({
                     **result.to_dict(),
                     "paper_trade_index": index,
+                    "paper_trade_id": candidate_id,
                     "paper_quantity": paper_quantity,
                     "mirrored_quantity": safe_quantity,
                     "signal_reason": trade.get("reason"),
                     "origin": "autonomous_bridge",
                 })
-                self._state["processed_trade_count"] = index + 1
+                self._mark_processed(candidate_id)
                 self._state["last_status"] = "accepted"
                 self._state["last_order_id"] = result.order_id
                 self._state["last_error"] = ""
@@ -106,6 +128,7 @@ class AutonomousTestnetBridge:
                     "side": trade.get("side"),
                     "quantity": safe_quantity,
                     "paper_trade_index": index,
+                    "paper_trade_id": candidate_id,
                     "message": f"{type(exc).__name__}: {exc}",
                     "origin": "autonomous_bridge",
                 })
@@ -116,9 +139,31 @@ class AutonomousTestnetBridge:
 
     def _baseline(self, trades: list[dict[str, Any]], status: str) -> None:
         if not _truthy("TESTNET_REPLAY_HISTORICAL_TRADES"):
-            self._state["processed_trade_count"] = len(trades)
+            for trade in trades:
+                self._mark_processed(self._trade_key(trade))
         self._state["last_status"] = status
         self._persist()
+
+    def _migrate_processed_ids(self, trades: list[dict[str, Any]]) -> None:
+        if isinstance(self._state.get("processed_trade_ids"), list):
+            return
+        count = min(max(int(self._state.get("processed_trade_count", 0) or 0), 0), len(trades))
+        self._state["processed_trade_ids"] = [self._trade_key(trade) for trade in trades[:count]]
+        self._state["processed_trade_count"] = len(self._state["processed_trade_ids"])
+
+    def _mark_processed(self, trade_id: str) -> None:
+        values = [str(item) for item in self._state.get("processed_trade_ids", []) if str(item)]
+        if trade_id not in values:
+            values.append(trade_id)
+        self._state["processed_trade_ids"] = values[-5000:]
+        self._state["processed_trade_count"] = len(self._state["processed_trade_ids"])
+
+    @staticmethod
+    def _trade_key(trade: Any) -> str:
+        try:
+            return paper_trade_id(trade)
+        except (TypeError, ValueError):
+            return raw_trade_fingerprint(trade)
 
     def _run(self) -> None:
         while not self._stop.wait(self.interval):
@@ -146,7 +191,12 @@ class AutonomousTestnetBridge:
                     return data
             except Exception:
                 pass
-        return {"processed_trade_count": 0, "last_status": "initialized", "last_error": ""}
+        return {
+            "processed_trade_count": 0,
+            "processed_trade_ids": [],
+            "last_status": "initialized",
+            "last_error": "",
+        }
 
     def _persist(self) -> None:
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
