@@ -114,6 +114,20 @@ services:
       - key: EXCHANGE_LIVE_TRADING_ENABLED
         value: "0"
 
+  - type: web
+    name: sharipoai-web2
+    env: node
+    rootDir: web2
+    buildCommand: npm install --no-audit --no-fund && npm run build
+    startCommand: npm run start
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NEXT_PUBLIC_API_BASE_URL
+        value: https://sharipovai-bot.onrender.com
+
   - type: worker
     name: sharipovai-telegram-worker
     env: python
