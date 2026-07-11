@@ -2,74 +2,60 @@
 <html lang="{{ lang }}">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="color-scheme" content="dark light">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <title>SharipovAI OS</title>
   <link rel="icon" href="/favicon.ico" type="image/svg+xml">
-  <script src="https://telegram.org/js/telegram-web-app.js?62"></script>
-  <link rel="stylesheet" href="/static/style.css?v=20260709-01">
-  <link rel="stylesheet" href="/static/mobile-fix.css?v=20260710-security-01">
-  <link rel="stylesheet" href="/static/mini-app-mobile-overrides.css?v=20260710-modal-close-01">
   <style>
-    .os-main{min-height:100vh}
-    .os-main .mini-app-shell{display:block!important;visibility:visible!important;opacity:1!important;width:100%!important;min-height:640px;position:relative!important;transform:none!important}
-    .os-main .mini-section{display:none!important;visibility:hidden!important;opacity:0!important}
-    .os-main .mini-section.active-panel,.os-main #overview-section.active-panel{display:block!important;visibility:visible!important;opacity:1!important;position:relative!important;transform:none!important}
-    .os-main .mini-top,.os-main .mini-tabs{display:flex!important;visibility:visible!important;opacity:1!important}
-    @media(min-width:981px){.os-main .mini-app-shell{max-width:1320px;margin:0 auto}}
+    :root{color-scheme:dark;--bg:#030811;--panel:#091522;--line:#183a55;--text:#eef6ff;--muted:#8fa4b8;--blue:#2496ff;--cyan:#19d3ff;--green:#35d07f;--red:#ff647c}
+    *{box-sizing:border-box}html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif}a{color:inherit;text-decoration:none}button,input,textarea{font:inherit}
+    .layout{display:grid;grid-template-columns:260px minmax(0,1fr);min-height:100vh}.side{position:sticky;top:0;height:100vh;padding:22px 18px;border-right:1px solid var(--line);background:#06101a}.brand{display:flex;align-items:center;gap:12px;padding:14px;border:1px solid #2496ff66;border-radius:20px;background:#0a1b2b}.logo{display:grid;place-items:center;width:58px;height:58px;border-radius:16px;background:linear-gradient(145deg,#123b61,#071626);font-size:28px;font-weight:1000}.brand b{font-size:17px;letter-spacing:.08em}.brand small{display:block;margin-top:4px;color:var(--muted)}.nav{display:grid;gap:7px;margin-top:20px}.nav a{padding:12px 14px;border-radius:12px;color:#d5e2ef;font-weight:750}.nav a:hover,.nav a.active{background:#0d2942;border-left:4px solid var(--blue)}
+    .main{padding:24px;min-width:0}.top{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:20px;padding:18px 20px;border:1px solid var(--line);border-radius:20px;background:linear-gradient(135deg,#081521,#0a2237)}.top h1{margin:0;font-size:clamp(27px,4vw,44px)}.top p{margin:7px 0 0;color:var(--muted)}.status{display:flex;align-items:center;gap:9px;padding:10px 13px;border:1px solid #35d07f55;border-radius:999px;background:#092319;color:#8bf0b8;font-weight:800}.dot{width:10px;height:10px;border-radius:50%;background:var(--green);box-shadow:0 0 14px var(--green)}
+    .tabs{display:flex;gap:9px;overflow:auto;padding-bottom:10px}.tabs button{white-space:nowrap;border:1px solid var(--line);border-radius:12px;background:#091522;color:#cbd9e6;padding:10px 14px;font-weight:800;cursor:pointer}.tabs button.active{background:linear-gradient(135deg,#126bd1,#12b9e8);color:#fff;border-color:#36bfff}
+    .panel{display:none}.panel.active{display:block}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.card{display:block!important;visibility:visible!important;opacity:1!important;min-height:120px;padding:18px;border:1px solid var(--line);border-radius:18px;background:linear-gradient(180deg,#0a1928,#07111c);box-shadow:0 14px 34px #0005}.card h2,.card h3{margin:0 0 13px}.metric small{display:block;color:var(--muted);margin-bottom:8px}.metric b{font-size:24px}.positive{color:var(--green)}.negative{color:var(--red)}.wide{grid-column:span 2}.full{grid-column:1/-1}.info{padding:13px;border:1px solid #2496ff44;border-radius:13px;background:#071d31;color:#cbd9e6;line-height:1.5}.actions{display:flex;flex-wrap:wrap;gap:9px}.actions a,.actions button,.send{border:1px solid #2496ff66;border-radius:11px;background:#0d2942;color:#e9f5ff;padding:10px 13px;font-weight:800;cursor:pointer}.chat{display:grid;gap:12px}.chat-log{min-height:180px;max-height:360px;overflow:auto;padding:14px;border:1px solid var(--line);border-radius:14px;background:#050d16}.chat form{display:grid;grid-template-columns:1fr auto;gap:9px}.chat textarea{min-height:70px;resize:vertical;border:1px solid var(--line);border-radius:12px;background:#06111d;color:#fff;padding:12px}.table{width:100%;border-collapse:collapse}.table td,.table th{padding:11px;border-bottom:1px solid #17354e;text-align:left}.api-state{font-family:ui-monospace,Consolas,monospace;font-size:13px;white-space:pre-wrap;word-break:break-word;color:#a9c7df}
+    @media(max-width:1000px){.layout{grid-template-columns:1fr}.side{position:relative;height:auto}.nav{grid-template-columns:repeat(2,minmax(0,1fr))}.main{padding:14px}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.top{align-items:flex-start;flex-direction:column}}
+    @media(max-width:600px){.grid{grid-template-columns:1fr}.wide{grid-column:auto}.nav{grid-template-columns:1fr 1fr}.main{padding:10px}.top{padding:15px}.card{padding:15px}.chat form{grid-template-columns:1fr}}
   </style>
 </head>
 <body>
-  <aside class="os-sidebar">
-    <a class="os-brand" href="/?lang={{ lang }}" aria-label="SharipovAI OS"><span class="sa-logo"><span class="sa-logo-text">SA</span></span><span class="brand-copy"><b>SHARIPOV<span>AI</span></b><small>AI TRADING OS</small></span></a>
-    <nav class="os-nav" aria-label="Main navigation">{% for item in nav_items %}<a class="{% if page == item.page %}active{% endif %}" href="{{ item.href }}">{{ t[item.key] }}</a>{% endfor %}<a href="/ai-bots?lang={{ lang }}">AI-боты</a><a href="/ai-control-center?lang={{ lang }}">Ген. контроль</a><a href="/learning-os?lang={{ lang }}">Learning OS</a><a href="/evidence-vault?lang={{ lang }}">Evidence Vault</a><a href="/virtual-account?lang={{ lang }}">Virtual Account</a></nav>
+<div class="layout">
+  <aside class="side">
+    <a class="brand" href="/?lang={{ lang }}"><span class="logo">SA</span><span><b>SHARIPOVAI</b><small>AI Trading OS</small></span></a>
+    <nav class="nav">
+      <a class="active" href="/?lang={{ lang }}">Обзор</a><a href="/ai-decision?lang={{ lang }}">AI-решение</a><a href="/portfolio?lang={{ lang }}">Портфель</a><a href="/stress-lab?lang={{ lang }}">Стресс-лаборатория</a><a href="/settings?lang={{ lang }}">Настройки</a><a href="/ai-bots?lang={{ lang }}">AI-боты</a><a href="/ai-control-center?lang={{ lang }}">Ген. контроль</a><a href="/learning-os?lang={{ lang }}">Learning OS</a><a href="/evidence-vault?lang={{ lang }}">Evidence Vault</a><a href="/virtual-account?lang={{ lang }}">Virtual Account</a>
+    </nav>
   </aside>
+  <main class="main">
+    <header class="top"><div><h1>Mission Control</h1><p>SharipovAI — автономная торговая система</p></div><div class="status"><span class="dot"></span><span id="system-status">Система запущена</span></div></header>
+    <div class="tabs" id="tabs"><button class="active" data-panel="overview">Обзор</button><button data-panel="account">Bybit</button><button data-panel="chat">AI чат</button><button data-panel="bots">AI-боты</button><button data-panel="risk">Риск</button><button data-panel="trades">Сделки</button><button data-panel="learning">Обучение</button></div>
 
-  <main class="os-main approved-shell">
-    <section class="mini-app-shell" aria-label="SharipovAI Mini App">
-      <header class="mini-top">
-        <div class="mini-brand"><div class="mini-logo">SA</div><div class="mini-title"><b>SharipovAI</b><small>Mission Control · виртуальный счёт</small></div><button class="mini-pill" type="button" data-mini-tab="settings-section">Настройки</button></div>
-      </header>
+    <section class="panel active" id="panel-overview"><div class="grid">
+      <article class="card metric"><small>Капитал</small><b id="portfolio-equity">{{ "%.2f"|format(view.paper_equity) }} USDT</b></article>
+      <article class="card metric"><small>Чистый PnL</small><b id="portfolio-pnl" class="{% if view.paper_pnl >= 0 %}positive{% else %}negative{% endif %}">{{ "%.2f"|format(view.paper_pnl) }} USDT</b></article>
+      <article class="card metric"><small>Решение AI</small><b id="hero-decision-mini">{{ display.decision }}</b></article>
+      <article class="card metric"><small>Риск</small><b id="hero-risk">{{ display.risk }}</b></article>
+      <article class="card wide"><h2>Состояние системы</h2><p class="info">Данные страницы формируются сервером и остаются видимыми даже при ошибке JavaScript. Рыночные данные и личный кабинет Bybit загружаются отдельно и не могут скрыть интерфейс.</p><div class="actions"><a href="/api/health" target="_blank">Проверить API</a><a href="/api/market/stream/status" target="_blank">Поток рынка</a><a href="/api/exchange/account/status" target="_blank">Статус Bybit</a></div></article>
+      <article class="card wide"><h2>AI-отчёт</h2><p>{{ display.reason }}</p><p class="info">{{ display.report }}</p></article>
+    </div></section>
 
-      <nav class="mini-tabs" aria-label="Разделы Mini App">
-        <button class="active" type="button" data-mini-tab="overview-section">Обзор</button>
-        <button type="button" data-mini-tab="chat-section">AI чат</button>
-        <button type="button" data-mini-tab="bots-section">AI-боты</button>
-        <button type="button" data-mini-tab="risk-section">Риск</button>
-        <button type="button" data-mini-tab="trades-section">Сделки</button>
-        <button type="button" data-mini-tab="exchange-section">Биржа</button>
-        <button type="button" data-mini-tab="stress-section">Стресс</button>
-        <button type="button" data-mini-tab="learning-section">Обучение</button>
-        <button type="button" data-mini-tab="reports-section">Отчёты</button>
-      </nav>
+    <section class="panel" id="panel-account"><div class="grid"><article class="card full"><h2>Личный кабинет Bybit</h2><div class="grid"><div class="metric"><small>Подключение</small><b id="bybit-connected">Проверка…</b></div><div class="metric"><small>Общий капитал</small><b id="bybit-equity">—</b></div><div class="metric"><small>Доступно</small><b id="bybit-available">—</b></div><div class="metric"><small>Открытые позиции</small><b id="bybit-positions">—</b></div></div><p id="bybit-error" class="info">Получаю безопасный снимок аккаунта.</p></article><article class="card full"><h3>Технический статус</h3><div id="bybit-raw" class="api-state">Загрузка…</div></article></div></section>
 
-      <article class="mini-card mini-section active-panel" id="overview-section"><h2>Mission Control</h2><small>Виртуальный счёт</small><div class="mini-balance" id="portfolio-equity">{{ "%.2f"|format(view.paper_equity) }} USDT</div><div class="mini-grid"><div class="mini-stat"><small>Чистый PnL</small><b id="portfolio-pnl" class="positive">{{ "%.2f"|format(view.paper_pnl) }} USDT</b></div><div class="mini-stat"><small>Риск</small><b id="hero-risk">{{ display.risk }}</b></div><div class="mini-stat"><small>Решение AI</small><b id="hero-decision-mini">{{ display.decision }}</b></div><div class="mini-stat"><small>Исполнение</small><b id="overview-exchange">Виртуальный счёт</b></div></div><p class="info-box">Виртуальны только баланс и сделки. Органы AI — новости, риск, портфель, Learning, Evidence, аудит и Telegram — должны работать как реальная система.</p></article>
-
-      <article class="mini-card mini-section" id="chat-section"><h2>AI Copilot</h2><div class="mini-chat-log" id="ai-chat-log"><div class="mini-message assistant-message"><div class="mini-avatar">SA</div><div class="mini-bubble"><b>SharipovAI</b><p>Я онлайн. Могу объяснить сделку, спросить любого агента, проверить риск, новости, комиссии и цель дня.</p></div></div></div><form id="ai-command-form" class="mini-form"><label class="sr-only" for="ai-command-input">Сообщение для SharipovAI</label><textarea id="ai-command-input" placeholder="Например: спроси Risk Engine почему BUY заблокирован..." autocomplete="off"></textarea><button class="mini-send" type="submit" aria-label="Отправить сообщение">➤</button></form><div class="quick-chat-actions"><button type="button" data-prompt="Покажи портфель">Портфель</button><button type="button" data-prompt="Почему AI не покупает BTC?">Почему WAIT?</button><button type="button" data-prompt="Проверь всех ботов">Боты</button><button type="button" data-prompt="Отчёт по сделке BTC">Сделка BTC</button></div></article>
-
-      <article class="mini-card mini-section" id="bots-section"><h2>AI Agent Control</h2><div class="mini-grid"><div class="mini-stat"><small>Всего</small><b id="bots-total">0</b></div><div class="mini-stat"><small>Активны</small><b id="bots-active">0</b></div><div class="mini-stat"><small>Требуют внимания</small><b id="bots-warnings">0</b></div></div><div class="bot-grid" id="bot-list"><div class="bot-row"><div><b>Загрузка AI-ботов...</b><small>Проверяю состояние модулей</small></div><span class="bot-state">...</span></div></div></article>
-
-      <article class="mini-card mini-section risk-panel" id="risk-section"><h2>Risk Center</h2><label class="risk-row">Риск на сделку <output>2%</output><input data-range-output type="range" min="0" max="10" value="2"></label><label class="risk-row">Макс. просадка <output>10%</output><input data-range-output type="range" min="0" max="50" value="10"></label><label class="risk-row">Уверенность AI <output>78%</output><input data-range-output type="range" min="0" max="100" value="78"></label><button class="save-button" type="button" id="save-settings">✓ Сохранить изменения</button><p class="info-box" id="save-status">Настройки сохраняются для виртуального счёта. Реальное исполнение заблокировано.</p></article>
-
-      <article class="mini-card mini-section" id="trades-section"><h2>Сделки</h2><table class="mini-table"><tbody><tr><td>Сделок пока нет</td><td>0.00</td></tr></tbody></table><p class="info-box">Нажми на сделку, чтобы открыть полный отчёт: кто голосовал, почему вошли, почему вышли, комиссии и ошибки.</p></article>
-
-      <article class="mini-card mini-section" id="exchange-section"><h2>Биржа и комиссии</h2><div class="mini-grid"><div class="mini-stat"><small>Режим</small><b id="exchange-mode">Virtual Account</b></div><div class="mini-stat"><small>Предпросмотр</small><b id="exchange-preview">...</b></div><div class="mini-stat"><small>Реальные сделки</small><b id="exchange-live">Выкл.</b></div><div class="mini-stat"><small>Комиссии</small><b id="exchange-fees">0.00 USDT</b></div><div class="mini-stat"><small>Потери от комиссий</small><b id="exchange-drag">0.00 USDT</b></div><div class="mini-stat"><small>Безубыток BTC</small><b id="exchange-breakeven">0.00 USDT</b></div><div class="mini-stat"><small>Лучшие условия</small><b id="cost-best-venue">...</b></div><div class="mini-stat"><small>Круговая комиссия</small><b id="cost-roundtrip">0.00 USDT</b></div><div class="mini-stat"><small>Движение до безубытка</small><b id="cost-breakeven-move">0.0000%</b></div><div class="mini-stat"><small>Экономия</small><b id="cost-saving">0.00 USDT</b></div></div><p class="info-box" id="exchange-message">Реальные ордера заблокированы. AI считает комиссии, займы, VIP и чистый PnL.</p></article>
-
-      <article class="mini-card mini-section" id="stress-section"><h2>Stress Lab</h2></article>
-      <article class="mini-card mini-section" id="learning-section"><h2>Обучение AI</h2><p class="info-box">Загружаю live-аудит ошибок из сделок, tick, PnL и Learning OS...</p></article>
-      <article class="mini-card mini-section" id="reports-section"><h2>Отчёты</h2></article>
-      <article class="mini-card mini-section" id="settings-section"><h2>Настройки</h2><div class="quick-chat-actions"><button type="button" data-mini-tab="risk-section">Риск</button><button type="button" data-mini-tab="exchange-section">Биржа</button><button type="button" data-mini-tab="bots-section">AI-боты</button><a class="mini-link-button" href="/learning-os?lang={{ lang }}">Learning OS</a><a class="mini-link-button" href="/evidence-vault?lang={{ lang }}">Evidence Vault</a><a class="mini-link-button" href="/virtual-account?lang={{ lang }}">Virtual Account</a><button type="button" data-mini-tab="reports-section">Отчёты</button></div><p class="info-box">Mini App использует тему, safe-area и проверенную авторизацию Telegram.</p></article>
-      <div class="bottom-safe"></div>
-    </section>
-
-    <section class="legacy-test-hooks"><h2 id="hero-decision">{{ display.decision }}</h2><button id="run-analysis">{{ t.run_analysis }}</button><span id="hero-confidence">{{ "%.1f"|format(view.confidence) }}%</span><span id="hero-consensus">{{ display.consensus }} {{ "%.1f"|format(view.consensus_agreement) }}%</span><span id="decision-reason">{{ display.reason }}</span><span>{{ display.report }}</span><span>{{ display.risk }}</span><span>{{ "%.2f"|format(view.paper_cash) }} USDT</span><span>AI Control Center</span><a href="/learning-os?lang={{ lang }}">Learning OS</a><a href="/evidence-vault?lang={{ lang }}">Evidence Vault</a><a href="/api/evidence-vault/snapshot">JSON Evidence Vault</a></section>
+    <section class="panel" id="panel-chat"><article class="card chat"><h2>AI Copilot</h2><div class="chat-log" id="ai-chat-log"><p><b>SharipovAI:</b> Я онлайн. Задай вопрос о рынке, риске, портфеле или сделках.</p></div><form id="ai-command-form"><textarea id="ai-command-input" placeholder="Напиши сообщение…"></textarea><button class="send" type="submit">Отправить</button></form></article></section>
+    <section class="panel" id="panel-bots"><div class="grid"><article class="card metric"><small>Всего ботов</small><b id="bots-total">—</b></article><article class="card metric"><small>Активны</small><b id="bots-active">—</b></article><article class="card metric"><small>Предупреждения</small><b id="bots-warnings">—</b></article><article class="card full"><h2>Сеть AI</h2><div id="bot-list" class="api-state">Загрузка…</div></article></div></section>
+    <section class="panel" id="panel-risk"><div class="grid"><article class="card full"><h2>Risk Center</h2><p class="info">Реальные сделки заблокированы kill switch до отдельного безопасного включения. Лимиты позиции, стоп-лосс и дневная просадка проверяются до исполнения.</p><div class="actions"><a href="/api/execution/stage-status" target="_blank">Этапы исполнения</a><a href="/api/autonomous-paper/status" target="_blank">Paper trading</a></div></article></div></section>
+    <section class="panel" id="panel-trades"><article class="card"><h2>Сделки</h2><table class="table"><tbody><tr><td>История загружается из Virtual Account и Evidence Vault</td></tr></tbody></table></article></section>
+    <section class="panel" id="panel-learning"><article class="card"><h2>Обучение AI</h2><p class="info">Learning OS анализирует решения, ошибки, комиссии и PnL. Полный раздел доступен по ссылке ниже.</p><div class="actions"><a href="/learning-os?lang={{ lang }}">Открыть Learning OS</a><a href="/evidence-vault?lang={{ lang }}">Открыть Evidence Vault</a></div></article></section>
   </main>
-  <script src="/static/telegram-miniapp.js?v=20260710-auth-01" defer></script>
-  <script src="/static/mini-app-live.js?v=20260709-paper-autorun-01" defer></script>
-  <script src="/static/mini-app-all-trades.js?v=20260709-all-trades-time-01" defer></script>
-  <script src="/static/mini-app-learning-live.js?v=20260709-learning-live-01" defer></script>
-  <script src="/static/virtual-account-live.js?v=20260709-virtual-equity-guard-02" defer></script>
-  <script src="/static/mini-app-agent-persistence.js?v=20260709-agent-persistence-01" defer></script>
-  <script src="/static/mini-app-mobile-fixes.js?v=20260710-modal-close-01" defer></script>
+</div>
+<script>
+(function(){
+  const panels=[...document.querySelectorAll('.panel')], buttons=[...document.querySelectorAll('[data-panel]')];
+  buttons.forEach(btn=>btn.addEventListener('click',()=>{buttons.forEach(b=>b.classList.remove('active'));panels.forEach(p=>p.classList.remove('active'));btn.classList.add('active');document.getElementById('panel-'+btn.dataset.panel)?.classList.add('active')}));
+  async function json(url,options){const r=await fetch(url,options);if(!r.ok)throw new Error(r.status+' '+r.statusText);return r.json()}
+  json('/api/exchange/account/status').then(s=>{document.getElementById('bybit-connected').textContent=s.connected?'Подключён':'Не подключён';document.getElementById('bybit-raw').textContent=JSON.stringify(s,null,2);if(s.last_error)document.getElementById('bybit-error').textContent=s.last_error}).catch(e=>{document.getElementById('bybit-connected').textContent='Ошибка';document.getElementById('bybit-error').textContent=String(e)});
+  json('/api/exchange/account/snapshot').then(s=>{document.getElementById('bybit-equity').textContent=Number(s.total_equity||0).toFixed(2)+' USDT';document.getElementById('bybit-available').textContent=Number(s.total_available_balance||0).toFixed(2)+' USDT';document.getElementById('bybit-positions').textContent=(s.positions||[]).length}).catch(()=>{});
+  json('/api/ai-bots').then(s=>{document.getElementById('bots-total').textContent=s.summary?.total_bots??0;document.getElementById('bots-active').textContent=s.summary?.active??0;document.getElementById('bots-warnings').textContent=s.summary?.warnings??0;document.getElementById('bot-list').textContent=JSON.stringify(s.bots||[],null,2)}).catch(e=>document.getElementById('bot-list').textContent=String(e));
+  const form=document.getElementById('ai-command-form');form.addEventListener('submit',async e=>{e.preventDefault();const input=document.getElementById('ai-command-input'),msg=input.value.trim();if(!msg)return;const log=document.getElementById('ai-chat-log');log.insertAdjacentHTML('beforeend','<p><b>Ты:</b> '+msg.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))+'</p>');input.value='';try{const out=await json('/api/chat/message',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg})});log.insertAdjacentHTML('beforeend','<p><b>SharipovAI:</b> '+String(out.reply||'Нет ответа').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))+'</p>')}catch(err){log.insertAdjacentHTML('beforeend','<p class="negative">Ошибка: '+String(err)+'</p>')}log.scrollTop=log.scrollHeight});
+})();
+</script>
 </body>
 </html>
