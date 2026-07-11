@@ -1,8 +1,4 @@
-"""Authenticated Bybit execution with hard stage and risk gates.
-
-Sandbox orders may be sent only when testnet credentials are configured. Live orders
-require several independent unlock flags, small notional limits, and a kill switch.
-"""
+"""Authenticated Bybit execution with hard stage, risk, and identity gates."""
 from __future__ import annotations
 
 import hashlib
@@ -16,6 +12,7 @@ from typing import Any
 import httpx
 
 from .bybit_hosts import validate_bybit_base_url
+from .bybit_order_identity import OrderIntent, OrderIntentRegistry
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,15 +27,21 @@ class ExecutionResult:
     raw_code: int | None = None
     category: str = "spot"
     order_link_id: str | None = None
+    candidate_id: str = ""
+    attempt: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
 class BybitExecutionClient:
-    """Send market orders only after all configured safety gates pass."""
+    """Send market orders only after all safety and idempotency gates pass."""
 
-    def __init__(self, client: httpx.Client | None = None) -> None:
+    def __init__(
+        self,
+        client: httpx.Client | None = None,
+        intent_registry: OrderIntentRegistry | None = None,
+    ) -> None:
         self.mode = os.getenv("EXCHANGE_MODE", "sandbox").strip().lower()
         configured_url = os.getenv(
             "EXCHANGE_BASE_URL",
@@ -50,6 +53,7 @@ class BybitExecutionClient:
         self.recv_window = "5000"
         self.max_notional = max(float(os.getenv("EXECUTION_MAX_NOTIONAL_USDT", "25")), 1.0)
         self._client = client
+        self.intent_registry = intent_registry or OrderIntentRegistry()
 
     def status(self) -> dict[str, Any]:
         credentials = bool(self.api_key and self.api_secret)
@@ -65,10 +69,12 @@ class BybitExecutionClient:
     def place_market_order(
         self,
         *,
+        candidate_id: Any,
         symbol: str,
         side: str,
         quantity: float,
         reference_price: float,
+        attempt: Any = 1,
         order_link_id: str | None = None,
     ) -> ExecutionResult:
         symbol = _symbol(symbol)
@@ -87,13 +93,35 @@ class BybitExecutionClient:
         if self.mode == "sandbox":
             if not _truthy("TESTNET_EXECUTION_ENABLED"):
                 raise RuntimeError("Testnet execution is locked")
+            environment = "testnet"
         elif self.mode == "live":
             if not self._live_unlocked(True):
                 raise RuntimeError("Live execution is locked by safety gates")
+            environment = "mainnet"
         else:
             raise RuntimeError("Exchange mode does not permit execution")
 
-        clean_link_id = _order_link_id(order_link_id)
+        intent = OrderIntent.create(
+            candidate_id=candidate_id,
+            environment=environment,
+            category="spot",
+            symbol=symbol,
+            side=side,
+            order_type="Market",
+            quantity=_format_number(quantity),
+            time_in_force="IOC",
+            reduce_only=False,
+            position_idx=0,
+            market_unit="baseCoin",
+            attempt=attempt,
+        )
+        reservation = self.intent_registry.reserve(intent)
+        if reservation.get("safe_to_submit") is not True:
+            raise RuntimeError("Order intent is already reserved; reconciliation is required before retry")
+        reserved_link_id = str(reservation["order_link_id"])
+        if order_link_id is not None and _order_link_id(order_link_id) != reserved_link_id:
+            raise RuntimeError("Caller orderLinkId does not match the deterministic reservation")
+
         base_url = validate_bybit_base_url(self.base_url, environment=self.mode)
         body = {
             "category": "spot",
@@ -102,7 +130,7 @@ class BybitExecutionClient:
             "orderType": "Market",
             "qty": _format_number(quantity),
             "marketUnit": "baseCoin",
-            "orderLinkId": clean_link_id,
+            "orderLinkId": reserved_link_id,
         }
         timestamp = str(int(time.time() * 1000))
         payload = json.dumps(body, separators=(",", ":"))
@@ -129,8 +157,12 @@ class BybitExecutionClient:
                 client.close()
         code = int(data.get("retCode", -1))
         if code != 0:
+            self.intent_registry.update_status(reserved_link_id, "Rejected")
             raise RuntimeError(f"Bybit rejected order: {data.get('retMsg', 'unknown error')} ({code})")
         order_id = str(data.get("result", {}).get("orderId") or "") or None
+        if not order_id:
+            raise RuntimeError("Bybit accepted the request without orderId; reconciliation is required")
+        self.intent_registry.bind_exchange_order(reserved_link_id, order_id)
         return ExecutionResult(
             status="accepted",
             mode=self.mode,
@@ -141,7 +173,9 @@ class BybitExecutionClient:
             message="Order accepted by Bybit",
             raw_code=code,
             category="spot",
-            order_link_id=clean_link_id,
+            order_link_id=reserved_link_id,
+            candidate_id=intent.candidate_id,
+            attempt=intent.attempt,
         )
 
     def _live_unlocked(self, credentials: bool) -> bool:
