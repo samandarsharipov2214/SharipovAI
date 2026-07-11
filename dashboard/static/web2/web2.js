@@ -2,91 +2,92 @@
   'use strict';
   const $ = id => document.getElementById(id);
   const nav = $('nav'), content = $('content'), notice = $('notice'), refresh = $('refresh');
-  const systemLabel = $('systemLabel'), modeText = $('modeText');
-  const state = { health:null, run:null, account:null, market:null, bots:null, news:null, learning:null, evidence:null, virtual:null, report:null };
+  const state = { health:null, run:null, account:null, bots:null, news:null, learning:null, evidence:null, virtual:null, report:null };
+  const market = { symbol:'BTCUSDT', interval:'15', candles:[], quote:null, orderbook:null, timer:null };
+  let lang = localStorage.getItem('sharipovai-lang') || 'ru';
+  let page = 'overview';
   if (!nav || !content) return;
 
-  const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const num = v => Number(v || 0).toLocaleString('ru-RU',{maximumFractionDigits:2});
+  const L = {
+    ru:{nav:['Обзор','Рынок','Решение ИИ','Портфель','Сделки','ИИ-модули','ИИ-чат','Новости','Центр рисков','Bybit','Центр обучения','Главное управление','Хранилище доказательств','Виртуальный счёт','Отчёты','Настройки'],hello:'Привет, Самандар 👋',sub:'SharipovAI — единый центр анализа, управления и контроля',refresh:'Обновить',starting:'Система запускается',safe:'Безопасное исполнение',active:'Режим ИИ активен'},
+    en:{nav:['Overview','Market','AI decision','Portfolio','Trades','AI modules','AI chat','News','Risk center','Bybit','Learning center','Main control','Evidence vault','Virtual account','Reports','Settings'],hello:'Hello, Samandar 👋',sub:'SharipovAI — unified analysis, control and monitoring center',refresh:'Refresh',starting:'System is starting',safe:'Safe execution',active:'AI mode active'},
+    uz:{nav:['Umumiy ko‘rinish','Bozor','AI qarori','Portfel','Bitimlar','AI modullari','AI chat','Yangiliklar','Xavf markazi','Bybit','O‘qitish markazi','Bosh boshqaruv','Dalillar ombori','Virtual hisob','Hisobotlar','Sozlamalar'],hello:'Salom, Samandar 👋',sub:'SharipovAI — tahlil, boshqaruv va nazorat markazi',refresh:'Yangilash',starting:'Tizim ishga tushmoqda',safe:'Xavfsiz ijro',active:'AI rejimi faol'}
+  };
+  const pages = ['overview','market','decision','portfolio','trades','bots','chat','news','risk','bybit','learning','control','evidence','virtual','reports','settings'];
+  const esc = v => String(v ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const num = v => Number(v||0).toLocaleString(lang==='en'?'en-US':'ru-RU',{maximumFractionDigits:8});
   const title = (h,p) => `<div class="title"><h1>${esc(h)}</h1><p>${esc(p)}</p></div>`;
   const card = (l,v,n,c='') => `<article class="card"><span>${esc(l)}</span><strong class="${c}">${esc(v)}</strong><small>${esc(n)}</small></article>`;
   const panel = (h,b,c='') => `<article class="panel ${c}"><small>SHARIPOVAI</small><h2>${esc(h)}</h2>${b}</article>`;
-  const empty = text => `<div class="empty">${esc(text)}</div>`;
-  const status = (label,value,ok=true) => `<div><span>${esc(label)}</span><b class="${ok?'positive':'negative'}">${esc(value)}</b></div>`;
-  const apiLabel = value => value ? 'ONLINE' : 'НЕТ ДАННЫХ';
+  const empty = t => `<div class="empty">${esc(t)}</div>`;
+  const status = (l,v,ok=true) => `<div><span>${esc(l)}</span><b class="${ok?'positive':'negative'}">${esc(v)}</b></div>`;
+  const tr = (ru,en,uz) => lang==='en'?en:lang==='uz'?uz:ru;
 
-  function accountData(){
-    const raw = state.account || {};
-    const nested = raw.snapshot || raw.account || raw.result || raw;
-    return {
-      equity: nested.total_equity ?? nested.totalEquity ?? nested.equity,
-      available: nested.total_available_balance ?? nested.totalAvailableBalance ?? nested.available_balance,
-      positions: Array.isArray(nested.positions) ? nested.positions : [],
-      connected: Boolean(state.account && !state.account.error)
-    };
+  function applyLanguage(){
+    const d=L[lang]; document.documentElement.lang=lang;
+    [...nav.querySelectorAll('button[data-page]')].forEach((b,i)=>b.textContent=d.nav[i]);
+    $('helloLabel').textContent=d.hello; $('subtitleLabel').textContent=d.sub; refresh.textContent=d.refresh;
+    $('aiModeLabel').textContent=d.active; if(!$('modeText').dataset.dynamic)$('modeText').textContent=d.safe;
+    document.querySelectorAll('[data-lang]').forEach(b=>b.classList.toggle('active',b.dataset.lang===lang));
+    render();
   }
 
-  function marketRows(){
-    const candidates = state.market?.symbols || state.market?.tickers || state.market?.data || [];
-    if (!Array.isArray(candidates) || !candidates.length) return empty('Живые котировки пока не получены. SharipovAI не подставляет выдуманные цены.');
-    return candidates.slice(0,12).map(x => {
-      const symbol=x.symbol||x.name||'—', price=x.price||x.lastPrice||x.last_price||'—', change=x.change24h||x.price24hPcnt||x.change||'—';
-      const neg=String(change).startsWith('-');
-      return `<div class="row"><b>${esc(symbol)}</b><span>${esc(price)}</span><em class="${neg?'negative':'positive'}">${esc(change)}</em></div>`;
-    }).join('');
+  function account(){ const x=state.account?.snapshot||state.account?.account||state.account?.result||state.account||{}; return {equity:x.total_equity??x.totalEquity??x.equity,available:x.total_available_balance??x.totalAvailableBalance??x.available_balance,positions:Array.isArray(x.positions)?x.positions:[],connected:Boolean(state.account&&!state.account.error)}; }
+  function overview(){ const a=account(); const r=state.run||{}; return title(tr('Центр управления','Control center','Boshqaruv markazi'),tr('Фактическое состояние системы без выдуманных показателей','Verified system state without invented figures','To‘qima raqamlarsiz tizim holati'))+`<section class="metrics">${card(tr('Общий баланс','Total balance','Umumiy balans'),a.equity!=null?`${num(a.equity)} USDT`:'—',a.connected?'Bybit':'')}${card(tr('Доступно','Available','Mavjud'),a.available!=null?`${num(a.available)} USDT`:'—','')}${card(tr('Открытые позиции','Open positions','Ochiq pozitsiyalar'),a.positions.length,'')}${card(tr('Решение ИИ','AI decision','AI qarori'),r.decision||'—','')}${card(tr('Риск','Risk','Xavf'),r.risk_level||'—','')}</section>${panel(tr('Рынок','Market','Bozor'),market.quote?`${card(market.symbol,`${num(market.quote.price)} USDT`,`${market.quote.source} · ${new Date(market.quote.received_at).toLocaleTimeString()}`)}`:empty(tr('Котировка загружается','Quote is loading','Kotirovka yuklanmoqda')),'wide')}`; }
+
+  function marketPage(){
+    const q=market.quote||{}; const c=market.candles||[]; const latest=c[c.length-1]||{};
+    return title(tr('Рынок','Market','Bozor'),tr('Реальные свечи и котировки с Bybit','Real candles and quotes from Bybit','Bybit dan haqiqiy shamlar va kotirovkalar'))+
+    `<div class="market-toolbar"><select id="symbolSelect">${['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT'].map(s=>`<option ${s===market.symbol?'selected':''}>${s}</option>`).join('')}</select><div class="intervals">${['1','5','15','60','240','D'].map(i=>`<button data-interval="${i}" class="${i===market.interval?'active':''}">${i==='D'?'1Д':i+'м'}</button>`).join('')}</div><span class="source-badge">Bybit · ${q.received_at?new Date(q.received_at).toLocaleTimeString():'—'}</span></div>`+
+    `<section class="metrics">${card(tr('Последняя цена','Last price','Oxirgi narx'),q.price!=null?`${num(q.price)} USDT`:'—',tr('Проверенная котировка','Verified quote','Tasdiqlangan kotirovka'))}${card(tr('Изменение за 24 часа','24h change','24 soatlik o‘zgarish'),q.change_24h_percent!=null?`${num(q.change_24h_percent)}%`:'—','',Number(q.change_24h_percent)>=0?'positive':'negative')}${card(tr('Объём за 24 часа','24h volume','24 soatlik hajm'),q.volume_24h!=null?num(q.volume_24h):'—','USDT')}${card(tr('Последняя свеча','Latest candle','Oxirgi sham'),latest.close!=null?num(latest.close):'—',market.interval)}</section>`+
+    `${panel(tr('Свечной график','Candlestick chart','Shamlar grafigi'),`<div class="chart-wrap"><canvas id="candleChart" height="420"></canvas><div id="chartMessage" class="chart-message hidden"></div></div>`,'wide')}`+
+    `<section class="grid">${panel(tr('Объём','Volume','Hajm'),`<canvas id="volumeChart" height="170"></canvas>`,'wide')}${panel(tr('Книга заявок','Order book','Buyurtmalar kitobi'),orderBookHtml())}</section>`;
   }
 
-  function overview(){
-    const a=accountData(), bots=state.bots?.bots || [], decision=state.run?.decision || 'ОЖИДАНИЕ', risk=state.run?.risk_level || 'НЕ ОПРЕДЕЛЁН';
-    return title('Mission Control','Реальное состояние SharipovAI без выдуманных показателей')+
-      `<section class="metrics">
-        ${card('Общий баланс',a.equity!=null?`${num(a.equity)} USDT`:'—',a.connected?'Данные Bybit':'Биржа не подключена')}
-        ${card('Доступно',a.available!=null?`${num(a.available)} USDT`:'—','Свободные средства')}
-        ${card('Открытые позиции',a.positions.length,'Только фактические позиции')}
-        ${card('AI-решение',decision,'Текущий консенсус',decision==='BUY'?'positive':decision==='SELL'?'negative':'')}
-        ${card('Риск',risk,'Risk Center',String(risk).toLowerCase().includes('low')?'positive':'')}
-      </section>
-      <section class="grid">
-        ${panel('Рынок',marketRows(),'wide')}
-        ${panel('Контур исполнения',`<div class="status-list">${status('Backend',apiLabel(state.health),!!state.health)}${status('Bybit',a.connected?'ПОДКЛЮЧЁН':'НЕ ПОДКЛЮЧЁН',a.connected)}${status('AI-модули',bots.length?`${bots.length} обнаружено`:'НЕТ ДАННЫХ',!!bots.length)}${status('Kill Switch','ВКЛЮЧЁН',true)}</div>`)}
-        ${panel('Что делает AI',`<div class="status-list">${['Анализ рынка','Проверка новостей','Оценка риска','Контроль позиций','Обучение на результатах'].map(x=>status(x,'АКТИВНО',true)).join('')}</div>`)}
-        ${panel('Последнее объяснение AI',state.run?.reason?`<p>${esc(state.run.reason)}</p>`:empty('Объяснение решения пока не получено.'),'wide')}
-      </section>`;
+  function orderBookHtml(){ const o=market.orderbook; if(!o)return empty(tr('Загрузка книги заявок','Loading order book','Buyurtmalar kitobi yuklanmoqda')); const rows=[]; const asks=(o.asks||[]).slice(0,8).reverse(); const bids=(o.bids||[]).slice(0,8); asks.forEach(x=>rows.push(`<div class="book-row ask"><span>${num(x[0])}</span><span>${num(x[1])}</span></div>`)); bids.forEach(x=>rows.push(`<div class="book-row bid"><span>${num(x[0])}</span><span>${num(x[1])}</span></div>`)); return `<div class="book-head"><span>${tr('Цена','Price','Narx')}</span><span>${tr('Количество','Amount','Miqdor')}</span></div>${rows.join('')}`; }
+
+  function simplePage(key){
+    const a=account(), r=state.run||{}, bots=state.bots?.bots||[];
+    if(key==='decision')return title(tr('Решение ИИ','AI decision','AI qarori'),tr('Консенсус и объяснение','Consensus and explanation','Konsensus va izoh'))+panel(tr('Текущее решение','Current decision','Joriy qaror'),`<div class="status-list">${status(tr('Решение','Decision','Qaror'),r.decision||'—',true)}${status(tr('Уверенность','Confidence','Ishonch'),r.confidence!=null?r.confidence+'%':'—',true)}${status(tr('Риск','Risk','Xavf'),r.risk_level||'—',true)}</div><p>${esc(r.reason||tr('Объяснение пока не получено','No explanation yet','Izoh hali olinmadi'))}</p>`,'wide');
+    if(key==='portfolio')return title(tr('Портфель','Portfolio','Portfel'),'')+`<section class="metrics">${card(tr('Капитал','Equity','Kapital'),a.equity!=null?num(a.equity)+' USDT':'—','')}${card(tr('Доступно','Available','Mavjud'),a.available!=null?num(a.available)+' USDT':'—','')}${card(tr('Позиции','Positions','Pozitsiyalar'),a.positions.length,'')}</section>`;
+    if(key==='trades')return title(tr('Сделки','Trades','Bitimlar'),'')+panel(tr('История','History','Tarix'),empty(tr('Отображаются только подтверждённые сделки','Only verified trades are shown','Faqat tasdiqlangan bitimlar ko‘rsatiladi')),'wide');
+    if(key==='bots')return title(tr('ИИ-модули','AI modules','AI modullari'),'')+(bots.length?`<section class="bot-grid">${bots.map(b=>panel(b.name||tr('ИИ-модуль','AI module','AI moduli'),`<div class="status-list">${status(tr('Статус','Status','Holat'),b.heartbeat_age_seconds!=null&&b.heartbeat_age_seconds<60?tr('Подтверждён','Verified','Tasdiqlangan'):tr('Не подтверждён','Unverified','Tasdiqlanmagan'),b.heartbeat_age_seconds!=null&&b.heartbeat_age_seconds<60)}${status(tr('Качество','Quality','Sifat'),b.metrics_verified&&b.quality_score!=null?b.quality_score+'%':tr('Нет измерений','No measurements','O‘lchov yo‘q'),Boolean(b.metrics_verified))}${status(tr('Последнее действие','Last action','Oxirgi amal'),b.evidence_id&&b.last_action?b.last_action:tr('Нет подтверждённого события','No verified event','Tasdiqlangan hodisa yo‘q'),Boolean(b.evidence_id))}</div>`)).join('')}</section>`:panel(tr('Нет данных','No data','Ma’lumot yo‘q'),empty(tr('Список модулей не получен','Module list was not received','Modullar ro‘yxati olinmadi')),'wide'));
+    if(key==='risk')return title(tr('Центр рисков','Risk center','Xavf markazi'),'')+panel(tr('Проверки','Checks','Tekshiruvlar'),`<div class="status-list">${status(tr('Вывод средств','Withdrawals','Pul yechish'),tr('Запрещён','Blocked','Taqiqlangan'),true)}${status(tr('Лимиты позиции','Position limits','Pozitsiya limitlari'),tr('Активны','Active','Faol'),true)}</div>`,'wide');
+    if(key==='bybit')return title('Bybit','')+`<section class="metrics">${card(tr('Подключение','Connection','Ulanish'),a.connected?tr('Подключён','Connected','Ulangan'):tr('Не подключён','Not connected','Ulanmagan'),'',a.connected?'positive':'negative')}${card(tr('Капитал','Equity','Kapital'),a.equity!=null?num(a.equity)+' USDT':'—','')}</section>`;
+    if(key==='settings')return title(tr('Настройки','Settings','Sozlamalar'),tr('Язык, безопасность и интерфейс','Language, security and interface','Til, xavfsizlik va interfeys'))+panel(tr('Язык интерфейса','Interface language','Interfeys tili'),`<p>Русский · English · O‘zbek</p>`,'wide');
+    if(key==='chat')return title(tr('ИИ-чат','AI chat','AI chat'),'')+panel('SharipovAI',`<div class="chat"><div id="messages" class="messages"><div class="bubble">${tr('Я онлайн. Спроси о рынке или портфеле.','I am online. Ask about the market or portfolio.','Men onlaynman. Bozor yoki portfel haqida so‘rang.')}</div></div><form id="chatForm"><input id="msg"><button class="action">${tr('Отправить','Send','Yuborish')}</button></form></div>`,'wide');
+    const names={news:tr('Новости','News','Yangiliklar'),learning:tr('Центр обучения','Learning center','O‘qitish markazi'),control:tr('Главное управление','Main control','Bosh boshqaruv'),evidence:tr('Хранилище доказательств','Evidence vault','Dalillar ombori'),virtual:tr('Виртуальный счёт','Virtual account','Virtual hisob'),reports:tr('Отчёты','Reports','Hisobotlar')};
+    return title(names[key]||'',tr('Раздел использует только подтверждённые данные','This section uses verified data only','Bu bo‘lim faqat tasdiqlangan ma’lumotlardan foydalanadi'))+panel(names[key]||'',empty(tr('Данные пока не получены','No data received yet','Ma’lumot hali olinmadi')),'wide');
   }
 
-  function marketPage(){ return title('Рынок','Живые котировки и состояние потоков')+`<section class="metrics">${card('Источник',state.market?'API':'—','Без тестовых цен')}${card('Обновление',state.market?.updated_at||state.market?.timestamp||'—','Последний пакет')}${card('Инструменты',Array.isArray(state.market?.symbols)?state.market.symbols.length:'—','В потоке')}</section>${panel('Котировки',marketRows(),'wide')}`; }
-  function decisionPage(){ const r=state.run||{}; return title('AI-решение','Консенсус модулей и причины')+`<section class="metrics">${card('Решение',r.decision||'ОЖИДАНИЕ','Текущий сигнал')}${card('Уверенность',r.confidence!=null?`${r.confidence}%`:'—','Только из API')}${card('Риск',r.risk_level||'—','Оценка риска')}${card('Режим',r.run_mode||r.mode||'—','Исполнение')}</section>${panel('Обоснование',r.reason?`<p>${esc(r.reason)}</p>`:empty('Причина решения пока не сформирована.'),'wide')}`; }
-  function portfolioPage(){ const a=accountData(); return title('Портфель','Баланс, доступные средства и фактические позиции')+`<section class="metrics">${card('Капитал',a.equity!=null?`${num(a.equity)} USDT`:'—','Bybit')}${card('Доступно',a.available!=null?`${num(a.available)} USDT`:'—','Свободно')}${card('Позиции',a.positions.length,'Открыто')}</section>${panel('Позиции',a.positions.length?`<table class="table"><tr><th>Инструмент</th><th>Сторона</th><th>Размер</th><th>PnL</th></tr>${a.positions.map(p=>`<tr><td>${esc(p.symbol||'—')}</td><td>${esc(p.side||'—')}</td><td>${esc(p.size||p.qty||'—')}</td><td>${esc(p.unrealisedPnl||p.unrealized_pnl||'—')}</td></tr>`).join('')}</table>`:empty('Открытых позиций нет или API недоступен.'),'wide')}`; }
-  function tradesPage(){ const trades=state.account?.trades||state.account?.orders||[]; return title('Сделки','Журнал исполнения и причины входа/выхода')+panel('История',Array.isArray(trades)&&trades.length?`<table class="table"><tr><th>Пара</th><th>Сторона</th><th>Статус</th><th>Результат</th></tr>${trades.slice(0,30).map(t=>`<tr><td>${esc(t.symbol||'—')}</td><td>${esc(t.side||'—')}</td><td>${esc(t.status||'—')}</td><td>${esc(t.pnl||t.closedPnl||'—')}</td></tr>`).join('')}</table>`:empty('Торговый журнал пока пуст. Выдуманные сделки не отображаются.'),'wide'); }
-  function botsPage(){ const bots=state.bots?.bots||[]; return title('AI-боты','Сеть действующих модулей SharipovAI')+(bots.length?`<section class="bot-grid">${bots.map(b=>panel(b.name||'AI-модуль',`<div class="status-list">${status('Статус',b.status||'Работает',String(b.status||'').toLowerCase()!=='error')}${status('Качество',b.quality_score!=null?`${b.quality_score}%`:'—',true)}${status('Последнее действие',b.last_action||'—',true)}</div>`)).join('')}</section>`:panel('Нет данных',empty('API AI-модулей не вернул список. Интерфейс остаётся рабочим.'),'wide')); }
-  function newsPage(){ const rows=state.news?.news||[]; return title('Новости','Источники, важность и влияние на рынок')+(rows.length?`<section class="news-grid">${rows.slice(0,20).map(n=>panel(n.title||'Новость',`<p>${esc(n.summary||n.description||'')}</p><div class="tags"><span>${esc(n.source||'Источник')}</span><span>${esc(n.impact||n.sentiment||'Оценка AI')}</span></div>`)).join('')}</section>`:panel('Новости недоступны',empty('News AI пока не получил подтверждённые материалы.'),'wide')); }
-  function riskPage(){ const r=state.run||{}; return title('Risk Center','Лимиты, блокировки и дисциплина капитала')+`<section class="metrics">${card('Kill Switch','ВКЛЮЧЁН','Защита исполнения','positive')}${card('Риск',r.risk_level||'—','Текущая оценка')}${card('Режим',r.run_mode||r.mode||'—','Paper/Testnet/Mainnet')}${card('Открытые позиции',accountData().positions.length,'Фактические')}</section>${panel('Проверки',`<div class="status-list">${status('Вывод средств','ЗАПРЕЩЁН',true)}${status('Лимиты позиции','АКТИВНЫ',true)}${status('Проверка сигнала','ОБЯЗАТЕЛЬНА',true)}${status('Журнал доказательств','ВКЛЮЧЁН',true)}</div>`,'wide')}`; }
-  function bybitPage(){ const a=accountData(); return title('Bybit','Личный кабинет и состояние API')+`<section class="metrics">${card('Подключение',a.connected?'ПОДКЛЮЧЁН':'НЕ ПОДКЛЮЧЁН',a.connected?'API отвечает':'Проверь ключ/доступ',a.connected?'positive':'negative')}${card('Капитал',a.equity!=null?`${num(a.equity)} USDT`:'—','Unified Account')}${card('Доступно',a.available!=null?`${num(a.available)} USDT`:'—','Свободные средства')}${card('Позиции',a.positions.length,'Открытые')}</section>${panel('Безопасность','<p>SharipovAI не показывает секреты API и не использует право вывода средств. Ошибки подключения отображаются понятным статусом.</p>','wide')}`; }
-  function learningPage(){ const l=state.learning||{}; return title('Learning OS','Ошибки, закономерности и улучшения моделей')+`<section class="metrics">${card('Состояние',state.learning?'ONLINE':'НЕТ ДАННЫХ','Контур обучения')}${card('Наблюдения',l.observations?.length||l.count||'—','Сохранено')}${card('Версия',l.version||'—','Модель')}</section>${panel('Последние выводы',Array.isArray(l.insights)&&l.insights.length?`<div class="status-list">${l.insights.slice(0,12).map(x=>status(x.title||x,'СОХРАНЕНО',true)).join('')}</div>`:empty('Контур обучения пока не вернул выводы.'),'wide')}`; }
-  function controlPage(){ const bots=state.bots?.bots||[]; return title('Генеральный контроль','Единая координация всех AI-модулей')+`<section class="metrics">${card('Модулей',bots.length||'—','В сети')}${card('Backend',apiLabel(state.health),'Система',!!state.health)}${card('Решение',state.run?.decision||'—','Последнее')}${card('Риск',state.run?.risk_level||'—','Контроль')}</section>${panel('Цепочка управления',`<div class="status-list">${status('General Controller','ГЛАВНЫЙ',true)}${status('Market AI','ПОДЧИНЁН',true)}${status('News AI','ПОДЧИНЁН',true)}${status('Risk AI','ИМЕЕТ ПРАВО ВЕТО',true)}${status('Execution AI','ИСПОЛНЯЕТ ПОСЛЕ ПРОВЕРКИ',true)}</div>`,'wide')}`; }
-  function evidencePage(){ const e=state.evidence||{}; const rows=e.items||e.records||[]; return title('Evidence Vault','Доказательства решений и действий системы')+panel('Журнал',Array.isArray(rows)&&rows.length?`<table class="table"><tr><th>Время</th><th>Событие</th><th>Источник</th></tr>${rows.slice(0,30).map(x=>`<tr><td>${esc(x.time||x.created_at||'—')}</td><td>${esc(x.event||x.action||'—')}</td><td>${esc(x.source||'—')}</td></tr>`).join('')}</table>`:empty('Записи Evidence Vault пока не получены.'),'wide'); }
-  function virtualPage(){ const v=state.virtual||{}; return title('Virtual Account','Безопасная тренировочная торговля')+`<section class="metrics">${card('Баланс',v.balance!=null?`${num(v.balance)} USDT`:'—','Виртуальный')}${card('PnL',v.pnl!=null?`${num(v.pnl)} USDT`:'—','Результат')}${card('Сделки',v.trades?.length||v.trade_count||'—','История')}${card('Режим',v.mode||'PAPER','Без реального риска','positive')}</section>${panel('Назначение','<p>Virtual Account позволяет проверять стратегии, комиссии, проскальзывание и риск без использования реального капитала.</p>','wide')}`; }
-  function reportsPage(){ const r=state.report||state.run||{}; return title('Отчёты','Понятная отчётность вместо технического JSON')+`<section class="grid">${panel('Сводка',`<div class="status-list">${status('Решение',r.decision||'—',true)}${status('Уверенность',r.confidence!=null?`${r.confidence}%`:'—',true)}${status('Риск',r.risk_level||'—',true)}${status('Режим',r.run_mode||r.mode||'—',true)}</div>`)}${panel('Комментарий',r.report?`<p>${esc(r.report)}</p>`:empty('Отчёт пока не сформирован.'),'wide')}</section>`; }
-  function settingsPage(){ return title('Настройки','Биржи, уведомления, язык и безопасность')+`<section class="grid">${panel('Интерфейс',`<div class="status-list">${status('Тема','Тёмная',true)}${status('Язык','Русский',true)}${status('Адаптивность','ПК + телефон',true)}</div>`)}${panel('Безопасность',`<div class="status-list">${status('Секреты API','СКРЫТЫ',true)}${status('Вывод средств','ОТКЛЮЧЁН',true)}${status('Kill Switch','ВКЛЮЧЁН',true)}</div>`)}${panel('Инфраструктура','<p>Frontend и backend работают в одном существующем Render-сервисе без второго платного сервиса.</p>','wide')}</section>`; }
-  function chatPage(){ return title('AI-чат','Диалог с SharipovAI')+panel('AI Copilot','<div class="chat"><div class="messages" id="messages"><div class="bubble">Я онлайн. Спроси о рынке, риске, портфеле или состоянии системы.</div></div><form id="chatForm"><input id="msg" autocomplete="off" placeholder="Напиши сообщение"><button class="action" type="submit">Отправить</button></form></div>','wide'); }
+  function render(){ content.innerHTML=page==='market'?marketPage():page==='overview'?overview():simplePage(page); if(page==='market'){bindMarketControls(); requestAnimationFrame(drawCharts);} if(page==='chat')bindChat(); }
+  function bindMarketControls(){ const s=$('symbolSelect'); if(s)s.onchange=()=>{market.symbol=s.value;loadMarket(true)}; document.querySelectorAll('[data-interval]').forEach(b=>b.onclick=()=>{market.interval=b.dataset.interval;loadMarket(true)}); }
+  function bindChat(){ const f=$('chatForm'); if(!f)return; f.onsubmit=async e=>{e.preventDefault();const i=$('msg'),m=$('messages'),t=i.value.trim();if(!t)return;m.insertAdjacentHTML('beforeend',`<div class="bubble user">${esc(t)}</div>`);i.value='';try{const j=await get('/api/chat/message',{method:'POST'});m.insertAdjacentHTML('beforeend',`<div class="bubble">${esc(j.reply||'—')}</div>`)}catch{m.insertAdjacentHTML('beforeend',`<div class="bubble">${tr('ИИ временно недоступен','AI is temporarily unavailable','AI vaqtincha mavjud emas')}</div>`)}}; }
 
-  const renderers={'Обзор':overview,'Рынок':marketPage,'AI-решение':decisionPage,'Портфель':portfolioPage,'Сделки':tradesPage,'AI-боты':botsPage,'AI-чат':chatPage,'Новости':newsPage,'Risk Center':riskPage,'Bybit':bybitPage,'Learning OS':learningPage,'Ген. контроль':controlPage,'Evidence Vault':evidencePage,'Virtual Account':virtualPage,'Отчёты':reportsPage,'Настройки':settingsPage};
-  function activate(name,button){ nav.querySelectorAll('button').forEach(x=>x.classList.remove('active')); if(button)button.classList.add('active'); content.innerHTML=(renderers[name]||settingsPage)(); if(name==='AI-чат')bindChat(); history.replaceState(null,'',`#${encodeURIComponent(name)}`); }
-  nav.querySelectorAll('button[data-page]').forEach(b=>b.addEventListener('click',()=>activate(b.dataset.page,b)));
+  function drawCharts(){ drawCandleCanvas($('candleChart'),market.candles); drawVolumeCanvas($('volumeChart'),market.candles); }
+  function prepCanvas(canvas){ if(!canvas)return null; const dpr=window.devicePixelRatio||1,w=canvas.clientWidth||900,h=Number(canvas.getAttribute('height'))||400; canvas.width=w*dpr;canvas.height=h*dpr;const ctx=canvas.getContext('2d');ctx.scale(dpr,dpr);return {ctx,w,h}; }
+  function drawCandleCanvas(canvas,data){ const p=prepCanvas(canvas); if(!p)return; const {ctx,w,h}=p;ctx.clearRect(0,0,w,h);if(!data.length){ctx.fillStyle='#7f93a8';ctx.fillText(tr('Нет свечей','No candles','Shamlar yo‘q'),20,30);return;} const pad={l:16,r:72,t:20,b:28}, plotW=w-pad.l-pad.r,plotH=h-pad.t-pad.b;const lo=Math.min(...data.map(x=>x.low)),hi=Math.max(...data.map(x=>x.high)),range=hi-lo||1;const y=v=>pad.t+(hi-v)/range*plotH;ctx.strokeStyle='#173957';ctx.lineWidth=1;for(let i=0;i<5;i++){const yy=pad.t+i*plotH/4;ctx.beginPath();ctx.moveTo(pad.l,yy);ctx.lineTo(w-pad.r,yy);ctx.stroke();ctx.fillStyle='#7f93a8';ctx.font='11px sans-serif';ctx.fillText(num(hi-i*range/4),w-pad.r+6,yy+4);} const step=plotW/data.length,body=Math.max(2,step*.62);data.forEach((c,i)=>{const x=pad.l+i*step+step/2,up=c.close>=c.open;color=up?'#3be08f':'#ff6f7d';ctx.strokeStyle=color;ctx.fillStyle=color;ctx.beginPath();ctx.moveTo(x,y(c.high));ctx.lineTo(x,y(c.low));ctx.stroke();const top=Math.min(y(c.open),y(c.close)),bh=Math.max(1,Math.abs(y(c.open)-y(c.close)));ctx.fillRect(x-body/2,top,body,bh);}); }
+  function drawVolumeCanvas(canvas,data){ const p=prepCanvas(canvas); if(!p)return;const {ctx,w,h}=p;ctx.clearRect(0,0,w,h);if(!data.length)return;const max=Math.max(...data.map(x=>x.volume))||1,step=w/data.length,bw=Math.max(2,step*.65);data.forEach((c,i)=>{ctx.fillStyle=c.close>=c.open?'#3be08f88':'#ff6f7d88';const bh=(c.volume/max)*(h-20);ctx.fillRect(i*step+(step-bw)/2,h-bh,bw,bh);}); }
 
-  function bindChat(){ const form=$('chatForm'); if(!form)return; form.addEventListener('submit',async e=>{e.preventDefault();const input=$('msg'),messages=$('messages'),text=input.value.trim();if(!text)return;messages.insertAdjacentHTML('beforeend',`<div class="bubble user">${esc(text)}</div>`);input.value='';try{const r=await fetch('/api/chat/message',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text})});const j=await r.json();messages.insertAdjacentHTML('beforeend',`<div class="bubble">${esc(j.reply||'Ответ не получен')}</div>`)}catch{messages.insertAdjacentHTML('beforeend','<div class="bubble">AI API временно недоступен.</div>')}}); }
-  async function get(url){ const r=await fetch(url,{credentials:'same-origin',cache:'no-store'}); if(!r.ok)throw new Error(`${url}: ${r.status}`); return r.json(); }
-  async function load(){
+  async function get(url,opts){ const r=await fetch(url,{credentials:'same-origin',cache:'no-store',...(opts||{})}); if(!r.ok)throw new Error(`${url}: ${r.status}`);return r.json(); }
+  async function loadMarket(force=false){
+    if(force){market.candles=[];render();}
+    const [q,c,o]=await Promise.allSettled([get(`/api/market/quote/${market.symbol}`),get(`/api/market/candles/${market.symbol}?interval=${market.interval}&limit=180&category=spot`),get(`/api/market/orderbook/${market.symbol}?limit=25&category=spot`)]);
+    if(q.status==='fulfilled')market.quote=q.value;if(c.status==='fulfilled')market.candles=c.value.candles||[];if(o.status==='fulfilled')market.orderbook=o.value;
+    if(page==='market'||page==='overview')render();
+  }
+  async function loadBase(){
     if(notice)notice.classList.add('hidden');
-    const endpoints={health:'/api/health',run:'/api/run',account:'/api/exchange/account/snapshot',market:'/api/market-data/status',bots:'/api/ai-bots',news:'/api/social-news',learning:'/api/learning-os/status',evidence:'/api/evidence-vault/recent',virtual:'/api/virtual-account/state',report:'/api/ai-control-center/daily-report'};
-    const entries=Object.entries(endpoints), results=await Promise.allSettled(entries.map(([,u])=>get(u)));
-    results.forEach((r,i)=>{if(r.status==='fulfilled')state[entries[i][0]]=r.value});
-    const ok=results.filter(x=>x.status==='fulfilled').length;
-    if(systemLabel)systemLabel.textContent=ok?`Система работает · ${ok}/${entries.length} API`:'API недоступен';
-    if(modeText)modeText.textContent=state.run?.run_mode||state.run?.mode||'Безопасное исполнение';
-    if(ok<entries.length&&notice){notice.textContent=`Часть источников недоступна (${ok}/${entries.length}). Интерфейс продолжает работать, отсутствующие данные отмечены честно.`;notice.classList.remove('hidden')}
-    const hash=decodeURIComponent(location.hash.slice(1)||'Обзор'); const button=[...nav.querySelectorAll('button')].find(x=>x.dataset.page===hash)||nav.querySelector('[data-page="Обзор"]'); activate(button.dataset.page,button);
+    const endpoints={health:'/api/health',run:'/api/run',account:'/api/exchange/account/snapshot',bots:'/api/ai-bots',news:'/api/social-news',learning:'/api/learning-os/status',evidence:'/api/evidence-vault/recent',virtual:'/api/virtual-account/state',report:'/api/ai-control-center/daily-report'};
+    const entries=Object.entries(endpoints),rs=await Promise.allSettled(entries.map(([,u])=>get(u)));rs.forEach((r,i)=>{if(r.status==='fulfilled')state[entries[i][0]]=r.value});const ok=rs.filter(x=>x.status==='fulfilled').length;
+    $('systemLabel').textContent=ok?tr(`Система работает · ${ok}/${entries.length} API`,`System online · ${ok}/${entries.length} APIs`,`Tizim ishlamoqda · ${ok}/${entries.length} API`):tr('API недоступен','API unavailable','API mavjud emas');
+    if(ok<entries.length&&notice){notice.textContent=tr(`Часть источников недоступна (${ok}/${entries.length}).`,`Some sources are unavailable (${ok}/${entries.length}).`,`Ayrim manbalar mavjud emas (${ok}/${entries.length}).`);notice.classList.remove('hidden');}
+    render();
   }
-  if(refresh)refresh.addEventListener('click',load);
-  load().catch(err=>{console.error('SharipovAI startup error',err);if(notice){notice.textContent='Не удалось загрузить API. Навигация и статические разделы остаются доступны.';notice.classList.remove('hidden')}activate('Обзор',nav.querySelector('[data-page="Обзор"]'))});
+
+  nav.querySelectorAll('button[data-page]').forEach(b=>b.onclick=()=>{nav.querySelectorAll('button').forEach(x=>x.classList.remove('active'));b.classList.add('active');page=b.dataset.page;render();});
+  document.querySelectorAll('[data-lang]').forEach(b=>b.onclick=()=>{lang=b.dataset.lang;localStorage.setItem('sharipovai-lang',lang);applyLanguage();});
+  refresh.onclick=()=>{loadBase();loadMarket(true)};
+  window.addEventListener('resize',()=>{if(page==='market')drawCharts()});
+  applyLanguage();loadBase();loadMarket();market.timer=setInterval(()=>loadMarket(false),5000);
 })();
