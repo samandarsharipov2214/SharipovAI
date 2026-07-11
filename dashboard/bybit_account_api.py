@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException, Request
 
 from exchange_connector.bybit_account import BybitAccountClient
 from exchange_connector.bybit_preflight import run_bybit_preflight
-from .admin_guard import require_admin
+from .admin_guard import install_sensitive_api_guard, require_admin
 
 
 class BybitAccountSync:
@@ -96,6 +96,7 @@ def install_bybit_account_api(app: FastAPI) -> None:
     if getattr(app.state, "bybit_account_api_installed", False):
         return
     app.state.bybit_account_api_installed = True
+    install_sensitive_api_guard(app)
     app.state.bybit_account_sync = BybitAccountSync()
     _register_lifecycle_handler(app, "startup", app.state.bybit_account_sync.start)
     _register_lifecycle_handler(app, "shutdown", app.state.bybit_account_sync.stop)
