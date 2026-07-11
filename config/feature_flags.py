@@ -31,6 +31,11 @@ FEATURES: dict[str, FeatureFlag] = {
         default=False,
         description="Stream Bybit market/account updates over WebSocket.",
     ),
+    "multi_exchange_consensus": FeatureFlag(
+        "FEATURE_MULTI_EXCHANGE_CONSENSUS",
+        default=False,
+        description="Compare independent public exchange quotes without executing trades.",
+    ),
     "bybit_rsa_auth": FeatureFlag(
         "FEATURE_BYBIT_RSA_AUTH",
         default=False,
