@@ -109,8 +109,8 @@ def _sell(state: dict[str, Any]) -> str:
 
 
 def install_demo_api(app: FastAPI) -> None:
-    install_stabilization_compat(app)
     install_dashboard_contracts_middleware(app)
+    install_stabilization_compat(app)
     if getattr(app.state, "demo_api_installed", False):
         return
     app.state.demo_api_installed = True
