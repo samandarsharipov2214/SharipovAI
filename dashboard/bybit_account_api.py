@@ -6,7 +6,7 @@ import threading
 import time
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 
 from exchange_connector.bybit_account import BybitAccountClient
 
@@ -95,22 +95,38 @@ def install_bybit_account_api(app: FastAPI) -> None:
     app.add_event_handler("shutdown", app.state.bybit_account_sync.stop)
 
     @app.get("/api/exchange/account/status")
-    def account_status() -> dict[str, Any]:
+    def account_status(request: Request) -> dict[str, Any]:
+        _require_admin(request)
         return app.state.bybit_account_sync.status()
 
     @app.get("/api/exchange/account/snapshot")
-    def account_snapshot() -> dict[str, Any]:
+    def account_snapshot(request: Request) -> dict[str, Any]:
+        _require_admin(request)
         try:
             return app.state.bybit_account_sync.snapshot()
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail={"status": "unavailable", "message": str(exc)}) from exc
 
     @app.post("/api/exchange/account/sync")
-    def account_sync_now() -> dict[str, Any]:
+    def account_sync_now(request: Request) -> dict[str, Any]:
+        _require_admin(request)
         try:
             return app.state.bybit_account_sync.sync_now()
         except Exception as exc:
             raise HTTPException(status_code=503, detail={"status": "unavailable", "message": str(exc)}) from exc
+
+
+def _require_admin(request: Request) -> str:
+    """Allow live account data only to an authenticated SharipovAI admin."""
+    # Imported lazily to avoid a circular import while dashboard.app is built.
+    from .app import _is_admin_request, _session_username
+
+    username = _session_username(request)
+    if not username:
+        raise HTTPException(status_code=401, detail={"status": "unauthorized"})
+    if not _is_admin_request(request):
+        raise HTTPException(status_code=403, detail={"status": "forbidden"})
+    return username
 
 
 def _truthy(name: str, *, default: bool = False) -> bool:
