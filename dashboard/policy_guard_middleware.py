@@ -9,7 +9,13 @@ from fastapi.responses import JSONResponse
 from starlette.requests import Request
 
 from .auth_guard_middleware import AuthGuardMiddleware
+from .chat_contract_middleware import install_chat_contract_middleware
+from .dashboard_contracts_middleware import install_dashboard_contracts_middleware
+from .evidence_access_compat import install_evidence_access_compat
 from .policy_guard import check_dashboard_action, guarded_response
+from .runtime_contract_patches import install_runtime_contract_patches
+from .static_contracts_middleware import install_static_contracts_middleware
+from .trade_gate_compat_api import install_trade_gate_compat_api
 
 
 RISKY_ENDPOINTS: dict[tuple[str, str], dict[str, str]] = {
@@ -42,10 +48,16 @@ class PolicyGuardMiddleware:
 
 
 def install_policy_guard_middleware(app_instance: Any) -> None:
-    """Install authentication and policy guards exactly once."""
+    """Install authentication, policy, and stable contract guards exactly once."""
 
     if getattr(app_instance.state, "policy_guard_middleware_installed", False):
         return
     app_instance.state.policy_guard_middleware_installed = True
+    install_evidence_access_compat()
+    install_runtime_contract_patches()
+    install_trade_gate_compat_api(app_instance)
     app_instance.add_middleware(AuthGuardMiddleware)
     app_instance.add_middleware(PolicyGuardMiddleware)
+    install_dashboard_contracts_middleware(app_instance)
+    install_static_contracts_middleware(app_instance)
+    install_chat_contract_middleware(app_instance)

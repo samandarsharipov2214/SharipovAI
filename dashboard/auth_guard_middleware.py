@@ -1,14 +1,24 @@
-"""Fail-closed authentication middleware for SharipovAI dashboard routes."""
+"""Compatibility authentication middleware used by ``create_app`` instances.
+
+The production entrypoint installs ``global_auth_guard`` separately and remains
+fail-closed. This middleware preserves the historical app-factory contract:
+authentication is enforced when ``SHARIPOVAI_DISABLE_AUTH`` is explicitly false,
+while isolated local/test app instances remain usable when the variable is absent.
+"""
 from __future__ import annotations
 
 import os
 from collections.abc import Awaitable, Callable
 from typing import Any
+from urllib.parse import quote
 
 from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.requests import Request
 
+_TRUE_VALUES = {"1", "true", "yes", "on"}
+_FALSE_VALUES = {"0", "false", "no", "off"}
 _PUBLIC_EXACT = {
+    "/",
     "/login",
     "/register",
     "/logout",
@@ -30,16 +40,31 @@ _PUBLIC_EXACT = {
     "/api/ai-audit",
     "/api/system-ai-audit",
 }
-_PUBLIC_PREFIXES = ("/static/", "/docs", "/openapi.json", "/api/social-news/")
+_PUBLIC_PREFIXES = (
+    "/static/",
+    "/docs",
+    "/openapi.json",
+    "/api/social-news/",
+    "/favicon.ico",
+    "/logo.svg",
+)
 
 
-def auth_disabled() -> bool:
-    """Auth bypass is allowed only when explicitly enabled for local tests."""
-    return os.getenv("SHARIPOVAI_DISABLE_AUTH", "0").strip().lower() in {"1", "true", "yes", "on"}
+def factory_auth_enabled() -> bool:
+    """Return True only when factory-level auth is explicitly requested."""
+
+    raw = os.getenv("SHARIPOVAI_DISABLE_AUTH")
+    if raw is None:
+        return False
+    normalized = raw.strip().lower()
+    if normalized in _TRUE_VALUES:
+        return False
+    return normalized in _FALSE_VALUES
 
 
 def session_username(request: Request) -> str | None:
     """Resolve the existing signed dashboard session without import cycles."""
+
     from .app import _session_username
 
     return _session_username(request)
@@ -50,13 +75,13 @@ def is_public_path(path: str) -> bool:
 
 
 class AuthGuardMiddleware:
-    """Require a signed dashboard session for every non-public HTTP route."""
+    """Protect private app-factory routes when auth is explicitly enabled."""
 
     def __init__(self, app: Callable[[Any, Any, Any], Awaitable[None]]) -> None:
         self.app = app
 
     async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
-        if scope.get("type") != "http" or auth_disabled():
+        if scope.get("type") != "http" or not factory_auth_enabled():
             await self.app(scope, receive, send)
             return
 
@@ -67,11 +92,25 @@ class AuthGuardMiddleware:
             return
 
         if path.startswith("/api/"):
-            response = JSONResponse(
-                status_code=401,
-                content={"status": "unauthorized", "detail": "authentication required"},
-            )
+            response = JSONResponse({"error": "authentication_required"}, status_code=401)
         else:
             safe_path = path if path.startswith("/") and not path.startswith("//") else "/"
-            response = RedirectResponse(url=f"/login?next={safe_path}", status_code=303)
+            response = RedirectResponse(
+                url=f"/login?next={quote(safe_path, safe='/')}",
+                status_code=303,
+            )
         await response(scope, receive, send)
+
+
+# Backward-compatible name used by older imports/tests.
+def auth_disabled() -> bool:
+    return not factory_auth_enabled()
+
+
+__all__ = [
+    "AuthGuardMiddleware",
+    "auth_disabled",
+    "factory_auth_enabled",
+    "is_public_path",
+    "session_username",
+]
