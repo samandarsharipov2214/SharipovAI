@@ -9,7 +9,7 @@ from typing import Any, Callable
 from fastapi import FastAPI, HTTPException, Request
 
 from exchange_connector.bybit_account import BybitAccountClient
-
+from exchange_connector.bybit_preflight import run_bybit_preflight
 from .admin_guard import require_admin
 
 
@@ -18,6 +18,7 @@ class BybitAccountSync:
         self.client = client or BybitAccountClient()
         self.interval = max(float(os.getenv("BYBIT_ACCOUNT_SYNC_SECONDS", "15")), 5.0)
         self._snapshot: dict[str, Any] | None = None
+        self._last_preflight: dict[str, Any] | None = None
         self._last_error: str | None = None
         self._last_attempt_ms: int | None = None
         self._lock = threading.RLock()
@@ -42,11 +43,13 @@ class BybitAccountSync:
     def sync_now(self) -> dict[str, Any]:
         self._last_attempt_ms = int(time.time() * 1000)
         try:
+            preflight = run_bybit_preflight(self.client)
             snapshot = self.client.fetch_snapshot()
             self.client.save_snapshot(snapshot)
             data = snapshot.to_dict()
             with self._lock:
                 self._snapshot = data
+                self._last_preflight = dict(preflight)
                 self._last_error = None
             return data
         except Exception as exc:
@@ -58,6 +61,7 @@ class BybitAccountSync:
     def status(self) -> dict[str, Any]:
         with self._lock:
             snapshot = dict(self._snapshot) if self._snapshot else None
+            preflight = dict(self._last_preflight) if self._last_preflight else None
             error = self._last_error
         age_seconds: float | None = None
         if snapshot:
@@ -70,6 +74,7 @@ class BybitAccountSync:
             "connected": bool(snapshot and snapshot.get("status") == "connected"),
             "snapshot_age_seconds": age_seconds,
             "snapshot_available": snapshot is not None,
+            "preflight": preflight,
         }
 
     def snapshot(self) -> dict[str, Any]:
@@ -92,7 +97,6 @@ def install_bybit_account_api(app: FastAPI) -> None:
         return
     app.state.bybit_account_api_installed = True
     app.state.bybit_account_sync = BybitAccountSync()
-
     _register_lifecycle_handler(app, "startup", app.state.bybit_account_sync.start)
     _register_lifecycle_handler(app, "shutdown", app.state.bybit_account_sync.stop)
 
@@ -119,18 +123,15 @@ def install_bybit_account_api(app: FastAPI) -> None:
 
 
 def _register_lifecycle_handler(app: FastAPI, event: str, handler: Callable[[], None]) -> None:
-    """Register startup/shutdown handlers across FastAPI/Starlette versions."""
     legacy = getattr(app, "add_event_handler", None)
     if callable(legacy):
         legacy(event, handler)
         return
-
     router = getattr(app, "router", None)
     handlers = getattr(router, f"on_{event}", None) if router is not None else None
     if isinstance(handlers, list):
         handlers.append(handler)
         return
-
     if event == "startup":
         handler()
 
