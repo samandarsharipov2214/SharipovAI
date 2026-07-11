@@ -1,6 +1,6 @@
 param(
     [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path,
-    [int]$MaximumBackupAgeSeconds = 30,
+    [int]$MaximumBackupAgeSeconds = 45,
     [switch]$RequireManagedProcesses
 )
 
@@ -22,14 +22,45 @@ function Import-LocalEnv([string]$Path) {
 function Test-ManagedProcess([string]$PidFile, [string]$Name, [System.Collections.Generic.List[string]]$Problems) {
     if (-not (Test-Path $PidFile)) {
         $Problems.Add("Не найден PID-файл процесса $Name: $PidFile")
-        return
+        return $false
     }
     try {
         $pidValue = [int](Get-Content $PidFile -Raw).Trim()
         $process = Get-Process -Id $pidValue -ErrorAction Stop
         Write-Host "[OK] $Name запущен, PID=$($process.Id)"
+        return $true
     } catch {
         $Problems.Add("Процесс $Name из PID-файла не работает: $($_.Exception.Message)")
+        return $false
+    }
+}
+
+function Test-AgentStatus([string]$StatusFile, [int]$MaximumAgeSeconds, [System.Collections.Generic.List[string]]$Problems) {
+    if (-not (Test-Path $StatusFile)) {
+        $Problems.Add("Не найден статус PC Agent: $StatusFile")
+        return
+    }
+    try {
+        $status = Get-Content $StatusFile -Raw | ConvertFrom-Json
+        $updated = [DateTimeOffset]::Parse($status.updated_at)
+        $age = ([DateTimeOffset]::UtcNow - $updated.ToUniversalTime()).TotalSeconds
+        if ($age -gt $MaximumAgeSeconds) {
+            $Problems.Add("Статус PC Agent устарел: $([math]::Round($age, 1)) сек.")
+        }
+        if (-not [bool]$status.web_healthy) {
+            $Problems.Add("PC Agent сообщает: Dashboard нездоров")
+        }
+        if (-not [bool]$status.backup_healthy) {
+            $Problems.Add("PC Agent сообщает: backup нездоров")
+        }
+        if ($status.last_error) {
+            Write-Host "[WARN] Последняя ошибка PC Agent: $($status.last_error)" -ForegroundColor Yellow
+        }
+        if (($age -le $MaximumAgeSeconds) -and [bool]$status.web_healthy -and [bool]$status.backup_healthy) {
+            Write-Host "[OK] PC Agent status свежий: $([math]::Round($age, 1)) сек."
+        }
+    } catch {
+        $Problems.Add("Не удалось прочитать статус PC Agent: $($_.Exception.Message)")
     }
 }
 
@@ -73,17 +104,16 @@ try {
 }
 
 if ($RequireManagedProcesses) {
-    $pidsDir = Join-Path $ProjectRoot "runtime\pids"
-    Test-ManagedProcess (Join-Path $pidsDir "pc_node.pid") "PC Node" $problems
-    Test-ManagedProcess (Join-Path $pidsDir "backup.pid") "Backup" $problems
+    $runtimeDir = Join-Path $ProjectRoot "runtime"
+    $agentPid = Join-Path $runtimeDir "pids\pc_agent.pid"
+    $agentStatus = Join-Path $runtimeDir "pc_agent_status.json"
+    [void](Test-ManagedProcess $agentPid "PC Agent" $problems)
+    Test-AgentStatus $agentStatus 90 $problems
 }
 
-$stderrLog = Join-Path $ProjectRoot "runtime\logs\pc_node.stderr.log"
-if (Test-Path $stderrLog) {
-    $errorSize = (Get-Item $stderrLog).Length
-    if ($errorSize -gt 0) {
-        Write-Host "[WARN] В stderr-журнале есть данные: $stderrLog" -ForegroundColor Yellow
-    }
+$stderrLog = Join-Path $ProjectRoot "runtime\logs\pc_agent.stderr.log"
+if ((Test-Path $stderrLog) -and (Get-Item $stderrLog).Length -gt 0) {
+    Write-Host "[WARN] В stderr-журнале PC Agent есть данные: $stderrLog" -ForegroundColor Yellow
 }
 
 if ($problems.Count -gt 0) {
