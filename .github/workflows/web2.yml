@@ -25,7 +25,20 @@ jobs:
       - name: Install dependencies
         run: npm install --silent --no-audit --no-fund
       - name: Lint
-        run: npm run lint -- --format stylish
+        id: lint
+        shell: bash
+        run: |
+          set +e
+          npx eslint . --format json > lint-report.json
+          code=$?
+          node -e "const fs=require('fs');const r=JSON.parse(fs.readFileSync('lint-report.json','utf8'));const out=[];for(const f of r){for(const m of f.messages){out.push(`${f.filePath}:${m.line}:${m.column} ${m.severity===2?'error':'warning'} ${m.ruleId||''} ${m.message}`)}}console.log(out.slice(0,80).join('\n')||'No lint issues');"
+          exit $code
+      - name: Upload lint report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web2-lint-report
+          path: web2/lint-report.json
       - name: Production build
         run: npm run build
         env:
