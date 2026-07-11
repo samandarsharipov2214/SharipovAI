@@ -1,13 +1,10 @@
-"""Authenticated Bybit execution with hard stage and risk gates.
-
-Sandbox orders may be sent only when testnet credentials are configured. Live orders
-require several independent unlock flags, small notional limits, and a kill switch.
-"""
+"""Authenticated Bybit execution with hard stage, risk, host and credential gates."""
 from __future__ import annotations
 
 import hashlib
 import hmac
 import json
+import math
 import os
 import time
 from dataclasses import asdict, dataclass
@@ -15,6 +12,7 @@ from typing import Any
 
 import httpx
 
+from .bybit_credentials import execution_credentials
 from .bybit_hosts import validate_bybit_base_url
 
 
@@ -34,7 +32,7 @@ class ExecutionResult:
 
 
 class BybitExecutionClient:
-    """Send market orders only after all configured safety gates pass."""
+    """Send market orders only after every configured safety gate passes."""
 
     def __init__(self, client: httpx.Client | None = None) -> None:
         self.mode = os.getenv("EXCHANGE_MODE", "sandbox").strip().lower()
@@ -43,16 +41,19 @@ class BybitExecutionClient:
             "https://api-testnet.bybit.com" if self.mode == "sandbox" else "https://api.bybit.com",
         )
         self.base_url = validate_bybit_base_url(configured_url, environment=self.mode)
-        self.api_key = os.getenv("EXCHANGE_API_KEY", "").strip()
-        self.api_secret = os.getenv("EXCHANGE_API_SECRET", "").strip()
+        credentials = execution_credentials(self.mode)
+        self.api_key = credentials.api_key
+        self.api_secret = credentials.api_secret
+        self.credential_profile = credentials.profile
         self.recv_window = "5000"
-        self.max_notional = max(float(os.getenv("EXECUTION_MAX_NOTIONAL_USDT", "25")), 1.0)
+        self.max_notional = _bounded_positive_env("EXECUTION_MAX_NOTIONAL_USDT", default=25.0, maximum=1000.0)
         self._client = client
 
     def status(self) -> dict[str, Any]:
         credentials = bool(self.api_key and self.api_secret)
         return {
             "mode": self.mode,
+            "credential_profile": self.credential_profile,
             "credentials_configured": credentials,
             "testnet_execution_enabled": self.mode == "sandbox" and credentials and _truthy("TESTNET_EXECUTION_ENABLED"),
             "live_execution_enabled": self._live_unlocked(credentials),
@@ -68,12 +69,14 @@ class BybitExecutionClient:
         quantity = _positive(quantity, "quantity")
         reference_price = _positive(reference_price, "reference_price")
         notional = quantity * reference_price
+        if not math.isfinite(notional):
+            raise ValueError("order notional must be finite")
         if notional > self.max_notional:
             raise RuntimeError(f"Order notional {notional:.2f} exceeds safety cap {self.max_notional:.2f} USDT")
         if _truthy("EXECUTION_KILL_SWITCH"):
             raise RuntimeError("Execution kill switch is active")
         if not self.api_key or not self.api_secret:
-            raise RuntimeError("Exchange credentials are not configured")
+            raise RuntimeError(f"{self.credential_profile} credentials are not configured")
         if self.mode == "sandbox":
             if not _truthy("TESTNET_EXECUTION_ENABLED"):
                 raise RuntimeError("Testnet execution is locked")
@@ -124,6 +127,7 @@ class BybitExecutionClient:
     def _live_unlocked(self, credentials: bool) -> bool:
         return all((
             self.mode == "live",
+            self.credential_profile == "mainnet_execution",
             credentials,
             _truthy("EXCHANGE_LIVE_TRADING_ENABLED"),
             _truthy("LIVE_EXECUTION_MANUAL_UNLOCK"),
@@ -138,9 +142,19 @@ def _truthy(name: str) -> bool:
 
 def _positive(value: Any, name: str) -> float:
     parsed = float(value)
-    if parsed <= 0:
-        raise ValueError(f"{name} must be greater than zero")
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise ValueError(f"{name} must be a finite number greater than zero")
     return parsed
+
+
+def _bounded_positive_env(name: str, *, default: float, maximum: float) -> float:
+    try:
+        parsed = float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(parsed) or parsed <= 0:
+        return default
+    return min(parsed, maximum)
 
 
 def _symbol(value: str) -> str:
