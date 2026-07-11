@@ -10,6 +10,7 @@ from starlette.requests import Request
 
 from .auth_guard_middleware import AuthGuardMiddleware
 from .dashboard_contracts_middleware import install_dashboard_contracts_middleware
+from .evidence_access_compat import install_evidence_access_compat
 from .policy_guard import check_dashboard_action, guarded_response
 
 
@@ -48,8 +49,7 @@ def install_policy_guard_middleware(app_instance: Any) -> None:
     if getattr(app_instance.state, "policy_guard_middleware_installed", False):
         return
     app_instance.state.policy_guard_middleware_installed = True
+    install_evidence_access_compat()
     app_instance.add_middleware(AuthGuardMiddleware)
     app_instance.add_middleware(PolicyGuardMiddleware)
-    # Installed last so the narrow local/test contract can run before the
-    # legacy evidence preflight. Production auth is installed outside create_app.
     install_dashboard_contracts_middleware(app_instance)
