@@ -8,7 +8,7 @@ services:
   - type: web
     name: sharipovai-web
     env: python
-    buildCommand: pip install -r requirements.txt
+    buildCommand: cd web2 && npm install --no-audit --no-fund && npm run build && cd .. && pip install -r requirements.txt
     preDeployCommand: python scripts/migrate_project_db.py
     startCommand: uvicorn dashboard:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
@@ -141,26 +141,8 @@ services:
       - key: EXCHANGE_LIVE_TRADING_ENABLED
         value: "0"
 
-  - type: web
-    name: sharipoai-web2
-    env: node
-    rootDir: web2
-    buildCommand: npm install --no-audit --no-fund && npm run build
-    startCommand: npm run start
-    healthCheckPath: /
-    autoDeployTrigger: checksPass
-    envVars:
-      - key: NODE_VERSION
-        value: "22"
-      - key: NEXT_PUBLIC_API_BASE_URL
-        value: https://sharipovai-bot.onrender.com
-
   - type: worker
     name: sharipovai-telegram-worker
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: python -c "print('telegram webhook mode')"
-    autoDeployTrigger: checksPass
-    envVars:
-      - key: TELEGRAM_POLLING_ENABLED
-        value: "0"
+    startCommand: python scripts/run_telegram_worker.py
