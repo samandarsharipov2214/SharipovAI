@@ -30,8 +30,8 @@ def install_global_auth_guard(app: FastAPI) -> None:
     """Require a valid session for every non-public route.
 
     The bypass defaults to disabled. Sensitive Bybit routes retain their own
-    administrator guard and remain protected even when this global middleware
-    is explicitly bypassed for local tests.
+    administrator guard and therefore remain protected even when this global
+    middleware is explicitly bypassed for tests.
     """
     if getattr(app.state, "global_auth_guard_installed", False):
         return
@@ -52,7 +52,10 @@ def install_global_auth_guard(app: FastAPI) -> None:
             return await call_next(request)
 
         if path.startswith("/api/"):
-            return JSONResponse({"error": "authentication_required"}, status_code=401)
+            return JSONResponse(
+                {"status": "unauthorized", "detail": "authentication required"},
+                status_code=401,
+            )
 
         safe_next = path if path.startswith("/") and not path.startswith("//") else "/"
         return RedirectResponse(url=f"/login?next={quote(safe_next, safe='/')}", status_code=303)
