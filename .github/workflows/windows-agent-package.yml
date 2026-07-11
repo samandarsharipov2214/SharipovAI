@@ -3,6 +3,16 @@ name: Windows Agent Package
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/windows/**'
+      - 'tools/pc_node_agent.py'
+      - 'tools/pc_node_backup.py'
+      - 'tools/pc_node_update.py'
+      - 'tests/test_pc_node_*.py'
+      - 'requirements.txt'
+      - '.github/workflows/windows-agent-package.yml'
   workflow_dispatch:
 
 permissions:
@@ -11,6 +21,7 @@ permissions:
 jobs:
   test-and-package:
     runs-on: windows-latest
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -19,17 +30,48 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: pip
 
       - name: Install dependencies
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          python -m pip install -r requirements.txt
+
+      - name: Validate PowerShell syntax
+        id: psparse
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $errors = @()
+          Get-ChildItem scripts/windows/*.ps1 | ForEach-Object {
+            $tokens = $null
+            $parseErrors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName,
+              [ref]$tokens,
+              [ref]$parseErrors
+            )
+            if ($parseErrors.Count -gt 0) {
+              $errors += $parseErrors | ForEach-Object { "$($_.Extent.File):$($_.Extent.StartLineNumber):$($_.Extent.StartColumnNumber) $($_.Message)" }
+            }
+          }
+          if ($errors.Count -eq 0) {
+            'PowerShell syntax OK' | Set-Content powershell-syntax-errors.txt -Encoding UTF8
+            exit 0
+          }
+          $errors | Set-Content powershell-syntax-errors.txt -Encoding UTF8
+          $errors | ForEach-Object { Write-Host $_ }
+          exit 1
 
       - name: Run PC node tests
         shell: pwsh
         run: |
-          pytest -q tests/test_pc_node_backup.py tests/test_pc_node_agent.py tests/test_pc_node_update.py
+          python -m pytest -q `
+            tests/test_pc_node_backup.py `
+            tests/test_pc_node_agent.py `
+            tests/test_pc_node_update.py `
+            tests/test_pc_node_runtime_scripts.py
 
       - name: Validate Python syntax
         shell: pwsh
@@ -39,15 +81,90 @@ jobs:
       - name: Build Windows package
         shell: pwsh
         run: |
-          $stage = Join-Path $env:RUNNER_TEMP 'SharipovAI-Windows-Agent'
-          New-Item -ItemType Directory -Force -Path $stage | Out-Null
-          robocopy . $stage /E /XD .git .venv data runtime __pycache__ .pytest_cache /XF *.pyc | Out-Null
-          if ($LASTEXITCODE -gt 7) { exit $LASTEXITCODE }
-          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath SharipovAI-Windows-Agent.zip -Force
+          @'
+          from __future__ import annotations
+
+          import os
+          import zipfile
+          from pathlib import Path
+
+          root = Path.cwd().resolve()
+          output = root / "SharipovAI-Windows-Agent.zip"
+          excluded_dirs = {
+              ".git",
+              ".venv",
+              "data",
+              "runtime",
+              "__pycache__",
+              ".pytest_cache",
+              ".ci-data",
+              ".mypy_cache",
+              ".ruff_cache",
+          }
+          excluded_suffixes = {".pyc", ".pyo"}
+          file_count = 0
+
+          if output.exists():
+              output.unlink()
+
+          with zipfile.ZipFile(
+              output,
+              mode="w",
+              compression=zipfile.ZIP_DEFLATED,
+              allowZip64=True,
+          ) as archive:
+              for current, directories, filenames in os.walk(root):
+                  directories[:] = [
+                      name for name in directories if name not in excluded_dirs
+                  ]
+                  current_path = Path(current)
+                  for filename in filenames:
+                      source = current_path / filename
+                      if source == output or source.suffix.lower() in excluded_suffixes:
+                          continue
+                      relative = source.relative_to(root)
+                      if any(part in excluded_dirs for part in relative.parts):
+                          continue
+                      archive.write(source, relative.as_posix())
+                      file_count += 1
+
+          if file_count < 20:
+              raise RuntimeError(f"package contains too few files: {file_count}")
+
+          with zipfile.ZipFile(output, mode="r") as archive:
+              broken = archive.testzip()
+              if broken is not None:
+                  raise RuntimeError(f"corrupt ZIP member: {broken}")
+
+          print(
+              f"Windows package ready: {output.name}; "
+              f"files={file_count}; bytes={output.stat().st_size}"
+          )
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path 'SharipovAI-Windows-Agent.zip')) {
+            throw 'Windows package was not created.'
+          }
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows-Agent-Diagnostics
+          path: powershell-syntax-errors.txt
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Upload verified package
+        if: steps.psparse.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: SharipovAI-Windows-Agent
           path: SharipovAI-Windows-Agent.zip
+          if-no-files-found: error
           retention-days: 30
+
+      - name: Fail when PowerShell syntax failed
+        if: steps.psparse.outcome == 'failure'
+        shell: pwsh
+        run: exit 1

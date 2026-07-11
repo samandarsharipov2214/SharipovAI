@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from starlette.requests import Request
 
 from .auth_guard_middleware import AuthGuardMiddleware
+from .auth_storage_aliases import install_auth_storage_aliases
 from .chat_contract_middleware import install_chat_contract_middleware
 from .dashboard_contracts_middleware import install_dashboard_contracts_middleware
 from .evidence_access_compat import install_evidence_access_compat
@@ -53,6 +54,7 @@ def install_policy_guard_middleware(app_instance: Any) -> None:
     if getattr(app_instance.state, "policy_guard_middleware_installed", False):
         return
     app_instance.state.policy_guard_middleware_installed = True
+    install_auth_storage_aliases()
     install_evidence_access_compat()
     install_runtime_contract_patches()
     install_trade_gate_compat_api(app_instance)
