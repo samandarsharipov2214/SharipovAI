@@ -197,11 +197,13 @@ def reconcile_execution_journal(journal: Mapping[str, Any], snapshot: Mapping[st
                 raise RuntimeError("tracker snapshot contains duplicate order_link_id")
             by_link[link_id] = index
 
+    if any(not isinstance(row, Mapping) for row in journal_rows):
+        raise RuntimeError("execution journal contains an invalid row")
     unresolved: list[dict[str, Any]] = []
     matched_open: list[str] = []
     matched_terminal: list[str] = []
     matched_indices: set[int] = set()
-    accepted = [row for row in journal_rows if isinstance(row, Mapping) and row.get("status") == "accepted"]
+    accepted = [row for row in journal_rows if row.get("status") == "accepted"]
     for index, row in enumerate(accepted):
         order_id = str(row.get("order_id", "")).strip()
         link_id = str(row.get("order_link_id", "")).strip()
@@ -259,7 +261,7 @@ def _normalize(
     if not isinstance(row, Mapping):
         raise TypeError("order event must be an object")
     order_id = _optional_identifier(row.get("orderId"), "orderId")
-    link_id = _optional_identifier(row.get("orderLinkId"), "orderLinkId")
+    link_id = _optional_order_link_id(row.get("orderLinkId"))
     if not order_id and not link_id:
         raise ValueError("orderId or orderLinkId is required")
     category = str(row.get("category", "")).strip().lower()
@@ -376,9 +378,9 @@ def _merge(existing_raw: Any, new: OrderState) -> tuple[str, OrderState]:
     if existing.terminal:
         if not same_execution:
             raise ValueError("terminal order cannot change")
-        if merged.updated_time_ms == existing.updated_time_ms and not identity_enriched:
-            return "duplicate", existing
-        return "accepted", merged
+        if identity_enriched:
+            return "accepted", merged
+        return "duplicate", existing
 
     if merged.updated_time_ms == existing.updated_time_ms:
         if same_execution and identity_enriched:
@@ -428,11 +430,9 @@ def _validate_document(data: Any, *, environment: str) -> None:
             raise RuntimeError("order state contains an invalid record") from exc
         if state.environment != environment:
             raise RuntimeError("persisted order environment mismatch")
-        if not state.order_id and not state.order_link_id:
-            raise RuntimeError("persisted order has no identity")
         try:
-            _validate_state_semantics(state)
-        except ValueError as exc:
+            _validate_persisted_state(state, canonical=canonical)
+        except (TypeError, ValueError) as exc:
             raise RuntimeError(f"persisted order state is inconsistent: {exc}") from exc
         for alias in ([f"order:{state.order_id}"] if state.order_id else []) + (
             [f"link:{state.order_link_id}"] if state.order_link_id else []
@@ -446,6 +446,38 @@ def _validate_document(data: Any, *, environment: str) -> None:
         raise RuntimeError("order state aliases are invalid")
     if aliases != expected_aliases:
         raise RuntimeError("order state aliases do not match order records")
+
+
+def _validate_persisted_state(state: OrderState, *, canonical: str) -> None:
+    order_id = _optional_identifier(state.order_id, "persisted orderId")
+    link_id = _optional_order_link_id(state.order_link_id)
+    if not order_id and not link_id:
+        raise ValueError("persisted order has no identity")
+    valid_keys = ({f"order:{order_id}"} if order_id else set()) | ({f"link:{link_id}"} if link_id else set())
+    if canonical not in valid_keys:
+        raise ValueError("canonical key does not match persisted identifiers")
+    if state.category not in _CATEGORIES:
+        raise ValueError("invalid category")
+    if not state.symbol or len(state.symbol) > 80 or not all(char.isalnum() or char in "-_" for char in state.symbol):
+        raise ValueError("invalid symbol")
+    if state.symbol != state.symbol.upper():
+        raise ValueError("symbol must be uppercase")
+    if state.side not in _SIDES:
+        raise ValueError("invalid side")
+    if state.status not in _ALLOWED:
+        raise ValueError("invalid order status")
+    _number(state.qty, "persisted qty", positive=True)
+    _number(state.cum_exec_qty, "persisted cum_exec_qty")
+    _number(state.avg_price, "persisted avg_price")
+    created = _positive_int(state.created_time_ms, "persisted created_time_ms")
+    updated = _positive_int(state.updated_time_ms, "persisted updated_time_ms")
+    message_time = _positive_int(state.message_creation_time_ms, "persisted message_creation_time_ms")
+    if updated < created:
+        raise ValueError("updated_time_ms precedes created_time_ms")
+    if updated > message_time + 5_000:
+        raise ValueError("updated_time_ms is ahead of message_creation_time_ms")
+    _optional_identifier(state.message_id, "persisted message_id")
+    _validate_state_semantics(state)
 
 
 def _reconciliation_mismatches(journal: Mapping[str, Any], tracked: Mapping[str, Any]) -> list[str]:
@@ -484,6 +516,15 @@ def _optional_identifier(value: Any, name: str) -> str:
         return ""
     if len(text) > 128 or not all(char.isalnum() or char in "._:-" for char in text):
         raise ValueError(f"{name} has invalid format")
+    return text
+
+
+def _optional_order_link_id(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if len(text) > 36 or not all(char.isalnum() or char in "_-" for char in text):
+        raise ValueError("orderLinkId has invalid format")
     return text
 
 
