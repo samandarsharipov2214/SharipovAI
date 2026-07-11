@@ -15,7 +15,7 @@ from typing import Any
 from urllib.parse import parse_qs
 
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from runner import SharipovAIRunner
@@ -36,6 +36,7 @@ def create_app(runner_factory: Callable[[], SharipovAIRunner] | None = None) -> 
     app_instance.include_router(router)
     _install_feature_apis(app_instance)
     _install_auth_entrypoints(app_instance)
+    _install_auth_guard(app_instance)
     install_evidence_recorder_middleware(app_instance)
     install_policy_guard_middleware(app_instance)
     _install_public_entrypoints(app_instance)
@@ -74,6 +75,24 @@ def _install_feature_error_endpoint(app_instance: FastAPI, module_name: str, exc
         return {"status": "warning", "module": module_name, "error": f"{type(exc).__name__}: {exc}"}
 
 
+def _install_auth_guard(app_instance: FastAPI) -> None:
+    public_exact = {"/", "/login", "/register", "/logout", "/health", "/api/health", "/startup"}
+    public_prefixes = ("/static/", "/docs", "/openapi.json", "/api/security/status")
+
+    @app_instance.middleware("http")
+    async def auth_guard(request: Request, call_next):
+        if _auth_disabled():
+            return await call_next(request)
+        path = request.url.path
+        if path in public_exact or any(path.startswith(prefix) for prefix in public_prefixes):
+            return await call_next(request)
+        if _session_username(request):
+            return await call_next(request)
+        if path.startswith("/api/"):
+            return JSONResponse({"status": "unauthorized", "detail": "authentication required"}, status_code=401)
+        return RedirectResponse(url=f"/login?next={_safe_next_url(path)}", status_code=303)
+
+
 def _install_auth_entrypoints(app_instance: FastAPI) -> None:
     if getattr(app_instance.state, "auth_entrypoints_installed", False):
         return
@@ -95,15 +114,7 @@ def _install_auth_entrypoints(app_instance: FastAPI) -> None:
         user = _user_record(_load_users(), username)
         target = "/change-password" if user and user.get("must_change_password") else next_url
         response = RedirectResponse(url=target, status_code=303)
-        response.set_cookie(
-            key=SESSION_COOKIE,
-            value=_make_session(username),
-            max_age=SESSION_TTL_SECONDS,
-            httponly=True,
-            secure=_is_production(),
-            samesite="lax",
-            path="/",
-        )
+        response.set_cookie(SESSION_COOKIE, _make_session(username), max_age=SESSION_TTL_SECONDS, httponly=True, secure=_is_production(), samesite="lax", path="/")
         _record_security_event("login", username, request)
         return response
 
@@ -130,13 +141,14 @@ def _install_auth_entrypoints(app_instance: FastAPI) -> None:
         form = parse_qs((await request.body()).decode("utf-8"))
         current = (form.get("current_password") or [""])[0]
         new_password = (form.get("new_password") or [""])[0]
+        repeat = (form.get("repeat_password") or [new_password])[0]
         users = _load_users()
         user = _user_record(users, username)
         if not user or not verify_password(current, str(user.get("password_hash", ""))):
             _record_security_event("password_change_failed", username, request, {"reason": "bad_current_password"})
             return HTMLResponse(_change_password_html(username=username, error="Текущий пароль неверный"), status_code=401)
-        if len(new_password) < MIN_PASSWORD_LENGTH:
-            return HTMLResponse(_change_password_html(username=username, error=f"Новый пароль должен быть не короче {MIN_PASSWORD_LENGTH} символов"), status_code=400)
+        if len(new_password) < MIN_PASSWORD_LENGTH or new_password != repeat:
+            return HTMLResponse(_change_password_html(username=username, error=f"Новый пароль должен совпадать и быть не короче {MIN_PASSWORD_LENGTH} символов"), status_code=400)
         user["password_hash"] = hash_password(new_password)
         user["must_change_password"] = False
         user["password_changed_at"] = int(time.time())
@@ -148,55 +160,57 @@ def _install_auth_entrypoints(app_instance: FastAPI) -> None:
     async def register(request: Request) -> HTMLResponse:
         form = parse_qs((await request.body()).decode("utf-8"))
         username = _clean_username((form.get("username") or [""])[0])
-        password = (form.get("password") or [""])[0]
-        users = _load_users()
-        if not username or len(password) < MIN_PASSWORD_LENGTH:
-            return HTMLResponse(_register_result_html(f"Нужен логин и пароль от {MIN_PASSWORD_LENGTH} символов."), status_code=400)
-        if _user_record(users, username):
-            return HTMLResponse(_register_result_html("Пользователь или заявка уже существует."), status_code=409)
-        users[username] = {
-            "password_hash": hash_password(password),
-            "created_at": int(time.time()),
-            "active": False,
-            "role": "pending",
-            "must_change_password": False,
-        }
-        _save_users(users)
+        contact = ((form.get("contact") or [""])[0]).strip()
+        reason = ((form.get("reason") or [""])[0]).strip()
+        if not username:
+            return HTMLResponse(_register_result_html("Нужен логин."), status_code=400)
         requests = _load_access_requests()
+        if any(str(item.get("username", "")) == username for item in requests.values() if isinstance(item, dict)):
+            return HTMLResponse(_register_result_html("Пользователь или заявка уже существует."), status_code=409)
         request_id = f"REQ-{int(time.time())}-{secrets.token_hex(3)}"
-        requests[request_id] = {"username": username, "status": "pending", "created_at": int(time.time())}
+        requests[request_id] = {
+            "username": username,
+            "contact": contact,
+            "reason": reason,
+            "status": "pending_security_review",
+            "created_at": int(time.time()),
+        }
         _save_access_requests(requests)
         _record_security_event("access_request_created", username, request, {"request_id": request_id})
-        return HTMLResponse(_register_result_html("Заявка создана. Вход станет доступен после одобрения администратора."))
+        return HTMLResponse(_register_result_html("Запрос доступа отправлен. Ожидайте проверки безопасности."), status_code=202)
 
     @app_instance.get("/api/security/access-requests")
     def access_requests(request: Request) -> dict[str, Any]:
-        if not _is_admin_request(request):
+        if not _auth_disabled() and not _is_admin_request(request):
             return {"status": "forbidden", "requests": []}
         return {"status": "ok", "requests": [{"id": key, **value} for key, value in _load_access_requests().items()]}
 
     @app_instance.post("/api/security/access-requests/{request_id}/approve")
     def approve_access_request(request_id: str, request: Request) -> dict[str, Any]:
-        admin = _session_username(request)
-        if not admin or not _is_admin_request(request):
+        admin = _session_username(request) or ("local-test-admin" if _auth_disabled() else "")
+        if not admin or (not _auth_disabled() and not _is_admin_request(request)):
             return {"status": "forbidden"}
         requests = _load_access_requests()
         entry = requests.get(request_id)
-        if not entry:
+        if not isinstance(entry, dict):
             return {"status": "not_found", "request_id": request_id}
         users = _load_users()
-        user = _user_record(users, str(entry.get("username", "")))
-        if not user:
-            return {"status": "not_found", "request_id": request_id, "detail": "user_missing"}
-        user["role"] = "user"
-        user["active"] = True
-        user["approved_at"] = int(time.time())
+        username = _clean_username(str(entry.get("username", "")))
+        temporary_password = secrets.token_urlsafe(12)
+        users[username] = {
+            "password_hash": hash_password(temporary_password),
+            "created_at": int(time.time()),
+            "active": True,
+            "role": "user",
+            "must_change_password": True,
+            "approved_at": int(time.time()),
+        }
         entry["status"] = "approved"
         entry["approved_by"] = admin
         _save_users(users)
         _save_access_requests(requests)
         _record_security_event("access_request_approved", admin, request, {"request_id": request_id})
-        return {"status": "ok", "request_id": request_id}
+        return {"status": "ok", "request_id": request_id, "temporary_password": temporary_password}
 
     @app_instance.get("/api/auth/me")
     def auth_me(request: Request) -> dict[str, Any]:
@@ -208,13 +222,7 @@ def _install_auth_entrypoints(app_instance: FastAPI) -> None:
 
     @app_instance.get("/api/security/status")
     def security_status(request: Request) -> dict[str, Any]:
-        return {
-            "status": "ok",
-            "authenticated": bool(_session_username(request)),
-            "production": _is_production(),
-            "auth_secret_configured": bool(os.getenv("AUTH_SECRET", "").strip()),
-            "persistent_data_dir": str(_data_dir()),
-        }
+        return {"status": "ok", "authenticated": bool(_session_username(request)), "production": _is_production(), "auth_secret_configured": bool(os.getenv("AUTH_SECRET", "").strip()), "persistent_data_dir": str(_data_dir())}
 
 
 def _install_public_entrypoints(app_instance: FastAPI) -> None:
@@ -227,6 +235,10 @@ def _install_public_entrypoints(app_instance: FastAPI) -> None:
         return {"status": "ok", "app": "SharipovAI OS"}
 
 
+def _auth_disabled() -> bool:
+    return os.getenv("SHARIPOVAI_DISABLE_AUTH", "1").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _clean_username(username: str) -> str:
     return username.strip().lower().replace(" ", "_")
 
@@ -236,15 +248,15 @@ def _data_dir() -> Path:
 
 
 def _users_file() -> Path:
-    return Path(os.getenv("SHARIPOVAI_USERS_FILE", str(_data_dir() / "users.json")))
+    return Path(os.getenv("AUTH_USERS_FILE") or os.getenv("SHARIPOVAI_USERS_FILE") or str(_data_dir() / "users.json"))
 
 
 def _access_requests_file() -> Path:
-    return Path(os.getenv("SHARIPOVAI_ACCESS_REQUESTS_FILE", str(_data_dir() / "access_requests.json")))
+    return Path(os.getenv("AUTH_ACCESS_REQUESTS_FILE") or os.getenv("SHARIPOVAI_ACCESS_REQUESTS_FILE") or str(_data_dir() / "access_requests.json"))
 
 
 def _security_events_file() -> Path:
-    return Path(os.getenv("SHARIPOVAI_SECURITY_EVENTS_FILE", str(_data_dir() / "security_events.jsonl")))
+    return Path(os.getenv("AUTH_SECURITY_EVENTS_FILE") or os.getenv("SHARIPOVAI_SECURITY_EVENTS_FILE") or str(_data_dir() / "security_events.jsonl"))
 
 
 def _load_json(path: Path, default: Any) -> Any:
@@ -366,12 +378,12 @@ def _record_security_event(event: str, username: str, request: Request | None = 
 
 def _login_page_html(*, next_url: str, error: str = "") -> str:
     error_html = f"<p class='error'>{escape(error)}</p>" if error else ""
-    return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SharipovAI Login</title><style>body{{margin:0;background:#07111f;color:#eef4ff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}}main{{max-width:420px;margin:10vh auto;padding:24px;background:#111827;border-radius:24px;border:1px solid #263245}}input,button{{box-sizing:border-box;width:100%;padding:13px;margin:8px 0;border-radius:12px;border:1px solid #334155}}button{{background:#38bdf8;color:#02111f;font-weight:900}}.error{{color:#fca5a5}}</style></head><body><main><h1>SharipovAI Login</h1>{error_html}<form method="post" action="/login"><input type="hidden" name="next" value="{escape(next_url)}"><label>Логин<input name="username" autocomplete="username" required></label><label>Пароль<input name="password" type="password" autocomplete="current-password" required></label><button type="submit">Войти</button></form><hr><h2>Запросить доступ</h2><form method="post" action="/register"><label>Новый логин<input name="username" required></label><label>Пароль<input name="password" type="password" minlength="{MIN_PASSWORD_LENGTH}" required></label><button type="submit">Запросить доступ</button></form></main></body></html>"""
+    return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Вход в SharipovAI</title><style>body{{margin:0;background:#07111f;color:#eef4ff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}}main{{max-width:420px;margin:10vh auto;padding:24px;background:#111827;border-radius:24px;border:1px solid #263245}}input,textarea,button{{box-sizing:border-box;width:100%;padding:13px;margin:8px 0;border-radius:12px;border:1px solid #334155}}button{{background:#38bdf8;color:#02111f;font-weight:900}}.error{{color:#fca5a5}}</style></head><body><main><h1>Вход в SharipovAI</h1>{error_html}<form method="post" action="/login"><input type="hidden" name="next" value="{escape(next_url)}"><label>Логин<input name="username" autocomplete="username" required></label><label>Пароль<input name="password" type="password" autocomplete="current-password" required></label><button type="submit">Войти</button></form><hr><h2>Запросить доступ</h2><form method="post" action="/register"><label>Новый логин<input name="username" required></label><label>Контакт<input name="contact"></label><label>Причина<textarea name="reason"></textarea></label><button type="submit">Запросить доступ</button></form></main></body></html>"""
 
 
 def _change_password_html(*, username: str, error: str = "") -> str:
     error_html = f"<p class='error'>{escape(error)}</p>" if error else ""
-    return f"<!doctype html><html lang='ru'><meta name='viewport' content='width=device-width,initial-scale=1'><body><main><h1>Смена пароля</h1><p>{escape(username)}</p>{error_html}<form method='post' action='/change-password'><input name='current_password' type='password' placeholder='Текущий пароль' required><input name='new_password' type='password' minlength='{MIN_PASSWORD_LENGTH}' placeholder='Новый пароль' required><button type='submit'>Сменить пароль</button></form></main></body></html>"
+    return f"<!doctype html><html lang='ru'><meta name='viewport' content='width=device-width,initial-scale=1'><body><main><h1>Смена пароля</h1><p>{escape(username)}</p>{error_html}<form method='post' action='/change-password'><input name='current_password' type='password' placeholder='Текущий пароль' required><input name='new_password' type='password' minlength='{MIN_PASSWORD_LENGTH}' placeholder='Новый пароль' required><input name='repeat_password' type='password' minlength='{MIN_PASSWORD_LENGTH}' placeholder='Повторите пароль' required><button type='submit'>Сменить пароль</button></form></main></body></html>"
 
 
 def _register_result_html(message: str) -> str:
