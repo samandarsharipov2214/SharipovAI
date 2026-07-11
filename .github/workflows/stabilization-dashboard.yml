@@ -90,6 +90,8 @@ jobs:
         shell: bash
         run: |
           python -m pytest \
+            dashboard/tests/test_admin_secure_app_roles.py \
+            dashboard/tests/test_password_change_flow.py \
             dashboard/tests/test_canonical_agent_health.py \
             dashboard/tests/test_auth_security_flow.py \
             dashboard/tests/test_crash_hardening.py \
