@@ -6,7 +6,7 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $startup = [Environment]::GetFolderPath("Startup")
-if (-not $startup) { throw "Не удалось определить папку автозагрузки Windows." }
+if (-not $startup) { throw "Windows Startup folder was not found." }
 
 $powershell = (Get-Command powershell.exe -ErrorAction Stop).Source
 $wsh = New-Object -ComObject WScript.Shell
@@ -17,7 +17,7 @@ $items = @(
 )
 
 foreach ($item in $items) {
-    if (-not (Test-Path $item.Script)) { throw "Не найден файл запуска: $($item.Script)" }
+    if (-not (Test-Path $item.Script)) { throw "Startup script was not found: $($item.Script)" }
     $shortcutPath = Join-Path $startup $item.Name
     $shortcut = $wsh.CreateShortcut($shortcutPath)
     $shortcut.TargetPath = $powershell
@@ -28,7 +28,7 @@ foreach ($item in $items) {
     $shortcut.Save()
 }
 
-Write-Host "Автозапуск SharipovAI установлен для текущего пользователя." -ForegroundColor Green
-Write-Host "Папка автозагрузки: $startup"
-Write-Host "Запуск сейчас: .\scripts\windows\start_pc_node.ps1"
-Write-Host "Резервирование сейчас: .\scripts\windows\start_backup.ps1"
+Write-Host "SharipovAI autostart was installed for the current user." -ForegroundColor Green
+Write-Host "Startup folder: $startup"
+Write-Host "Start now: .\scripts\windows\start_pc_node.ps1"
+Write-Host "Start backup now: .\scripts\windows\start_backup.ps1"
