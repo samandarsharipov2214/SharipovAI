@@ -19,6 +19,7 @@ from runner import SharipovAIRunner
 
 from .app import _clean_username, _login_page_html, _record_security_event, _safe_next_url, _valid_credentials, create_app
 from .security_guard import DEFAULT_LOCK_SECONDS, DEFAULT_MAX_FAILED_ATTEMPTS, LoginAttemptGuard
+from .user_admin import verify_password
 
 
 def create_secure_app(runner_factory: Any | None = None) -> FastAPI:
@@ -37,7 +38,6 @@ def create_secure_app(runner_factory: Any | None = None) -> FastAPI:
 
 def login_attempt_guard() -> LoginAttemptGuard:
     """Build login attempt guard from environment settings."""
-
     path = Path(os.getenv("AUTH_LOGIN_ATTEMPTS_FILE", "data/login_attempts.json"))
     max_failed_attempts = _int_env("AUTH_MAX_FAILED_ATTEMPTS", DEFAULT_MAX_FAILED_ATTEMPTS)
     lock_seconds = _int_env("AUTH_LOCK_SECONDS", DEFAULT_LOCK_SECONDS)
@@ -69,7 +69,7 @@ class LoginLockoutMiddleware:
             await _html_login_error(scope, receive, send, next_url, f"Вход временно заблокирован. Осталось примерно {max(1, seconds_left // 60)} мин.", 423)
             return
 
-        if not _valid_credentials(username, password):
+        if not _valid_secure_credentials(username, password):
             result = guard.record_failure(username)
             _record_security_event("failed_login", username, request, {"reason": "bad_credentials", "failed_attempts": result.get("failed_attempts", 0)})
             if result.get("status") == "locked":
@@ -81,6 +81,18 @@ class LoginLockoutMiddleware:
 
         guard.record_success(username)
         await self.app(scope, _replay_receive(body), send)
+
+
+def _valid_secure_credentials(username: str, password: str) -> bool:
+    if _valid_credentials(username, password):
+        return True
+    try:
+        from . import stabilization_compat as compat
+
+        user = compat._load_users().get(_clean_username(username), {})
+        return bool(user.get("active")) and verify_password(password, str(user.get("password_hash", "")))
+    except Exception:
+        return False
 
 
 async def _read_body(receive: Receive) -> bytes:

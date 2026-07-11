@@ -28,6 +28,8 @@ class ExecutionResult:
     order_id: str | None
     message: str
     raw_code: int | None = None
+    category: str = "spot"
+    order_link_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -60,7 +62,15 @@ class BybitExecutionClient:
             "max_notional_usdt": self.max_notional,
         }
 
-    def place_market_order(self, *, symbol: str, side: str, quantity: float, reference_price: float) -> ExecutionResult:
+    def place_market_order(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        quantity: float,
+        reference_price: float,
+        order_link_id: str | None = None,
+    ) -> ExecutionResult:
         symbol = _symbol(symbol)
         side = side.strip().title()
         if side not in {"Buy", "Sell"}:
@@ -83,6 +93,7 @@ class BybitExecutionClient:
         else:
             raise RuntimeError("Exchange mode does not permit execution")
 
+        clean_link_id = _order_link_id(order_link_id)
         base_url = validate_bybit_base_url(self.base_url, environment=self.mode)
         body = {
             "category": "spot",
@@ -91,6 +102,7 @@ class BybitExecutionClient:
             "orderType": "Market",
             "qty": _format_number(quantity),
             "marketUnit": "baseCoin",
+            "orderLinkId": clean_link_id,
         }
         timestamp = str(int(time.time() * 1000))
         payload = json.dumps(body, separators=(",", ":"))
@@ -119,7 +131,18 @@ class BybitExecutionClient:
         if code != 0:
             raise RuntimeError(f"Bybit rejected order: {data.get('retMsg', 'unknown error')} ({code})")
         order_id = str(data.get("result", {}).get("orderId") or "") or None
-        return ExecutionResult("accepted", self.mode, symbol, side.upper(), quantity, order_id, "Order accepted by Bybit", code)
+        return ExecutionResult(
+            status="accepted",
+            mode=self.mode,
+            symbol=symbol,
+            side=side.upper(),
+            quantity=quantity,
+            order_id=order_id,
+            message="Order accepted by Bybit",
+            raw_code=code,
+            category="spot",
+            order_link_id=clean_link_id,
+        )
 
     def _live_unlocked(self, credentials: bool) -> bool:
         return all((
@@ -147,6 +170,17 @@ def _symbol(value: str) -> str:
     clean = str(value).strip().upper().replace("/", "").replace("-", "")
     if not clean.isalnum() or not clean:
         raise ValueError("invalid symbol")
+    return clean
+
+
+def _order_link_id(value: Any) -> str:
+    clean = str(value or "").strip()
+    if not clean:
+        raise RuntimeError("A deterministic orderLinkId reservation is required before execution")
+    if len(clean) > 36 or not all(char.isalnum() or char in "_-" for char in clean):
+        raise ValueError("orderLinkId has invalid format")
+    if not clean.startswith("sai_"):
+        raise ValueError("orderLinkId must belong to SharipovAI")
     return clean
 
 

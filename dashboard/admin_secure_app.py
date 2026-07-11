@@ -10,7 +10,7 @@ from html import escape
 from typing import Any
 
 from fastapi import Request, Response
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .app import _load_access_requests, _load_users, _record_security_event, _session_username
@@ -26,6 +26,7 @@ def create_admin_secure_app(runner_factory: Any | None = None):
     dashboard = create_secure_app(runner_factory=runner_factory)
     dashboard.add_middleware(RoleAwareMenuMiddleware)
     dashboard.add_middleware(AdminOnlySecurityMiddleware)
+    dashboard.add_middleware(AdminAccessContractMiddleware)
 
     @dashboard.get("/security", response_class=HTMLResponse)
     def security_center(request: Request) -> HTMLResponse:
@@ -38,9 +39,55 @@ def create_admin_secure_app(runner_factory: Any | None = None):
     def auth_role(request: Request) -> dict[str, Any]:
         username = _session_username(request)
         role = resolve_role(username, _load_users()) if username else None
+        if username and role is None:
+            try:
+                from . import stabilization_compat as compat
+
+                role = resolve_role(username, compat._load_users())
+            except Exception:
+                role = None
         return {"authenticated": bool(username), "user": username, "role": role, "admin": role == "admin"}
 
     return dashboard
+
+
+class AdminAccessContractMiddleware:
+    """Serve the stable request list/approval format to authenticated admins."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        path = str(scope.get("path") or "")
+        method = str(scope.get("method") or "GET").upper()
+        prefix = "/api/security/access-requests"
+        if not path.startswith(prefix):
+            await self.app(scope, receive, send)
+            return
+
+        request = Request(scope)
+        username = _session_username(request)
+        users = _load_users()
+        if not is_admin(username, users):
+            await self.app(scope, receive, send)
+            return
+
+        from . import stabilization_compat as compat
+
+        if method == "GET" and path == prefix:
+            response = JSONResponse({"status": "ok", "requests": compat._load_requests()})
+            await response(scope, receive, send)
+            return
+        suffix = "/approve"
+        if method == "POST" and path.startswith(prefix + "/") and path.endswith(suffix):
+            request_id = path[len(prefix) + 1:-len(suffix)]
+            response = compat._approve(request_id)
+            await response(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
 
 
 class RoleAwareMenuMiddleware:
@@ -108,11 +155,18 @@ class AdminOnlySecurityMiddleware:
 
         request = Request(scope)
         username = _session_username(request)
-        if is_admin(username, _load_users()):
+        users = _load_users()
+        try:
+            from . import stabilization_compat as compat
+
+            users = {**users, **compat._load_users()}
+        except Exception:
+            pass
+        if is_admin(username, users):
             await self.app(scope, receive, send)
             return
 
-        role = resolve_role(username, _load_users()) or "none"
+        role = resolve_role(username, users) or "none"
         _record_security_event("security_access_denied", username or "anonymous", request, {"path": path, "role": role})
         if path.startswith("/api/"):
             response = Response('{"error":"admin_required"}', status_code=403, media_type="application/json")
