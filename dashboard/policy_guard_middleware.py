@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from starlette.requests import Request
 
 from .auth_guard_middleware import AuthGuardMiddleware
+from .dashboard_contracts_middleware import install_dashboard_contracts_middleware
 from .policy_guard import check_dashboard_action, guarded_response
 
 
@@ -42,10 +43,13 @@ class PolicyGuardMiddleware:
 
 
 def install_policy_guard_middleware(app_instance: Any) -> None:
-    """Install authentication and policy guards exactly once."""
+    """Install authentication, policy, and stable contract guards exactly once."""
 
     if getattr(app_instance.state, "policy_guard_middleware_installed", False):
         return
     app_instance.state.policy_guard_middleware_installed = True
     app_instance.add_middleware(AuthGuardMiddleware)
     app_instance.add_middleware(PolicyGuardMiddleware)
+    # Installed last so the narrow local/test contract can run before the
+    # legacy evidence preflight. Production auth is installed outside create_app.
+    install_dashboard_contracts_middleware(app_instance)
