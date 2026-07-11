@@ -91,12 +91,7 @@ def test_new_attempt_requires_zero_execution_terminal_previous_attempt(tmp_path)
     other = OrderIntentRegistry(tmp_path / "partial.json")
     other.reserve(intent(), now_ms=NOW)
     other.update_status(intent().order_link_id, "PartiallyFilled", cum_exec_qty="0.004", now_ms=NOW + 1)
-    other.update_status(
-        intent().order_link_id,
-        "PartiallyFilledCanceled",
-        cum_exec_qty="0.004",
-        now_ms=NOW + 2,
-    )
+    other.update_status(intent().order_link_id, "Cancelled", cum_exec_qty="0.004", now_ms=NOW + 2)
     partial_retry = other.reserve(intent(attempt=2), now_ms=NOW + 3)
     assert partial_retry["safe_to_submit"] is False
     assert "without execution" in partial_retry["reason"]
@@ -181,4 +176,5 @@ def test_persisted_record_contains_canonical_supported_intent(tmp_path):
     assert saved["intent"]["price"] == "64000"
     assert saved["intent"]["trigger_price"] == ""
     assert saved["cum_exec_qty"] == "0"
+    assert saved["cum_exec_value"] == "0"
     assert saved["fingerprint"] == full.fingerprint
