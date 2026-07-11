@@ -6,8 +6,10 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 
+from config.feature_flags import is_feature_enabled
 from exchange_connector.bybit_websocket_worker import BybitWebSocketWorker
 from exchange_connector.market_data import MarketDataService, MarketDataUnavailable
+from exchange_connector.multi_exchange_consensus import ConsensusUnavailable, MultiExchangeConsensus
 
 
 def install_market_data_api(app: FastAPI) -> None:
@@ -15,6 +17,7 @@ def install_market_data_api(app: FastAPI) -> None:
         return
     app.state.market_data_api_installed = True
     app.state.market_data_service = MarketDataService()
+    app.state.market_consensus = MultiExchangeConsensus(app.state.market_data_service)
     app.state.bybit_websocket_worker = BybitWebSocketWorker()
     _register_lifecycle_handler(app, "startup", app.state.bybit_websocket_worker.start)
     _register_lifecycle_handler(app, "shutdown", app.state.bybit_websocket_worker.stop)
@@ -26,6 +29,29 @@ def install_market_data_api(app: FastAPI) -> None:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except MarketDataUnavailable as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "status": "unavailable",
+                    "verified": False,
+                    "synthetic_fallback_used": False,
+                    "message": str(exc),
+                },
+            ) from exc
+        return {**quote.to_dict(), "synthetic_fallback_used": False}
+
+    @app.get("/api/market/consensus/{symbol}")
+    def market_consensus(symbol: str) -> dict[str, Any]:
+        if not is_feature_enabled("multi_exchange_consensus"):
+            raise HTTPException(
+                status_code=503,
+                detail={"status": "disabled", "verified": False, "synthetic_fallback_used": False},
+            )
+        try:
+            quote = app.state.market_consensus.quote(symbol)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ConsensusUnavailable as exc:
             raise HTTPException(
                 status_code=503,
                 detail={
