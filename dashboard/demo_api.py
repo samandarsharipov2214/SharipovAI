@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import Body, FastAPI
 
 from .demo_state import run_ai_command
+from .stabilization_compat import install_stabilization_compat
 
 
 def _path() -> Path:
@@ -107,6 +108,7 @@ def _sell(state: dict[str, Any]) -> str:
 
 
 def install_demo_api(app: FastAPI) -> None:
+    install_stabilization_compat(app)
     if getattr(app.state, "demo_api_installed", False):
         return
     app.state.demo_api_installed = True
