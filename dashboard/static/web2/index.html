@@ -4,52 +4,51 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#06111d">
-  <title>SharipovAI — Trading OS</title>
-  <link rel="stylesheet" href="/static/web2/web2.css?v=6">
+  <title>SharipovAI — торговая система</title>
+  <link rel="stylesheet" href="/static/web2/web2.css?v=7">
 </head>
 <body>
   <div class="app">
     <aside>
       <img src="/static/web2/logo.svg?v=6" class="logo" alt="SharipovAI">
       <nav id="nav" aria-label="Главное меню">
-        <button class="active" data-page="Обзор">Обзор</button>
-        <button data-page="Рынок">Рынок</button>
-        <button data-page="AI-решение">AI-решение</button>
-        <button data-page="Портфель">Портфель</button>
-        <button data-page="Сделки">Сделки</button>
-        <button data-page="AI-боты">AI-боты</button>
-        <button data-page="AI-чат">AI-чат</button>
-        <button data-page="Новости">Новости</button>
-        <button data-page="Risk Center">Risk Center</button>
-        <button data-page="Bybit">Bybit</button>
-        <button data-page="Learning OS">Learning OS</button>
-        <button data-page="Ген. контроль">Ген. контроль</button>
-        <button data-page="Evidence Vault">Evidence Vault</button>
-        <button data-page="Virtual Account">Virtual Account</button>
-        <button data-page="Отчёты">Отчёты</button>
-        <button data-page="Настройки">Настройки</button>
+        <button class="active" data-page="overview">Обзор</button>
+        <button data-page="market">Рынок</button>
+        <button data-page="decision">Решение ИИ</button>
+        <button data-page="portfolio">Портфель</button>
+        <button data-page="trades">Сделки</button>
+        <button data-page="bots">ИИ-модули</button>
+        <button data-page="chat">ИИ-чат</button>
+        <button data-page="news">Новости</button>
+        <button data-page="risk">Центр рисков</button>
+        <button data-page="bybit">Bybit</button>
+        <button data-page="learning">Центр обучения</button>
+        <button data-page="control">Главное управление</button>
+        <button data-page="evidence">Хранилище доказательств</button>
+        <button data-page="virtual">Виртуальный счёт</button>
+        <button data-page="reports">Отчёты</button>
+        <button data-page="settings">Настройки</button>
       </nav>
-      <div class="ai-state"><span></span><div><b>AI-режим активен</b><small id="modeText">Безопасное исполнение</small></div></div>
+      <div class="language-switcher" aria-label="Язык интерфейса">
+        <button data-lang="ru" class="active">RU</button>
+        <button data-lang="en">EN</button>
+        <button data-lang="uz">UZ</button>
+      </div>
+      <div class="ai-state"><span></span><div><b id="aiModeLabel">Режим ИИ активен</b><small id="modeText">Безопасное исполнение</small></div></div>
     </aside>
     <main>
       <header>
-        <div><p>Привет, Самандар 👋</p><small>SharipovAI — единый центр анализа, управления и контроля</small></div>
+        <div><p id="helloLabel">Привет, Самандар 👋</p><small id="subtitleLabel">SharipovAI — единый центр анализа, управления и контроля</small></div>
         <div class="header-state"><b><i></i> <span id="systemLabel">Система запускается</span></b><button id="refresh" type="button">Обновить</button></div>
       </header>
       <div id="notice" class="notice hidden"></div>
       <section id="content" aria-live="polite">
-        <div class="title"><h1>Mission Control</h1><p>Загрузка состояния SharipovAI</p></div>
-        <section class="metrics">
-          <article class="card"><span>Backend</span><strong>Проверка…</strong><small>API</small></article>
-          <article class="card"><span>Биржа</span><strong>Проверка…</strong><small>Bybit</small></article>
-          <article class="card"><span>AI-модули</span><strong>Проверка…</strong><small>Сеть агентов</small></article>
-          <article class="card"><span>Риск</span><strong>Проверка…</strong><small>Risk Center</small></article>
-        </section>
-        <article class="panel wide"><small>SHARIPOVAI</small><h2>Интерфейс готов</h2><p>Данные появятся после ответа API. Меню остаётся доступным даже при сбоях backend.</p></article>
+        <div class="title"><h1>Центр управления</h1><p>Загрузка состояния SharipovAI</p></div>
+        <article class="panel wide"><small>SHARIPOVAI</small><h2>Интерфейс готов</h2><p>Данные появятся после ответа API.</p></article>
       </section>
     </main>
   </div>
-  <script defer src="/static/web2/web2.js?v=6"></script>
+  <script defer src="/static/web2/web2.js?v=7"></script>
   <script defer src="/static/web2/truth_guard.js?v=6"></script>
 </body>
 </html>
