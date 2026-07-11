@@ -36,13 +36,18 @@ def _set_auth_env(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AUTH_LOGIN_ATTEMPTS_FILE", str(tmp_path / "login_attempts.json"))
 
 
-def _login_admin(client: TestClient) -> None:
+def _login_admin(client: TestClient):
     login = client.post(
         "/login",
         data={"username": "Samandar2212", "password": "AdminPassword2026!"},
         follow_redirects=False,
     )
     assert login.status_code == 303
+    assert "sharipovai_session" in client.cookies, {
+        "set_cookie": login.headers.get("set-cookie"),
+        "cookies": dict(client.cookies),
+    }
+    return login
 
 
 def test_admin_can_open_security_center(tmp_path: Path, monkeypatch) -> None:
@@ -68,13 +73,27 @@ def test_regular_user_cannot_open_security_center(tmp_path: Path, monkeypatch) -
     admin_client = TestClient(app)
     user_client = TestClient(app)
 
-    user_client.post(
+    register = user_client.post(
         "/register",
         data={"username": "pilot03", "contact": "@pilot03", "reason": "Need access"},
     )
+    assert register.status_code in {200, 202}, register.text
 
-    _login_admin(admin_client)
-    request_id = admin_client.get("/api/security/access-requests").json()["requests"][0]["id"]
+    login = _login_admin(admin_client)
+    access_response = admin_client.get("/api/security/access-requests")
+    access_payload = access_response.json()
+    assert access_response.status_code == 200, {
+        "body": access_response.text,
+        "cookies": dict(admin_client.cookies),
+        "login_set_cookie": login.headers.get("set-cookie"),
+    }
+    assert "requests" in access_payload, {
+        "payload": access_payload,
+        "cookies": dict(admin_client.cookies),
+        "login_set_cookie": login.headers.get("set-cookie"),
+    }
+    assert access_payload["requests"], access_payload
+    request_id = access_payload["requests"][0]["id"]
     approved = admin_client.post(f"/api/security/access-requests/{request_id}/approve").json()
     temporary_password = approved["temporary_password"]
 
