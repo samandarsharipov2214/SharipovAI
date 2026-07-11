@@ -58,6 +58,9 @@ def test_lifecycle_partial_fill_cancel_and_duplicate_terminal(tmp_path, monkeypa
     assert state.ingest_message(cancelled, received_at_ms=NOW + 100)["accepted"]
     duplicate = state.ingest_message(cancelled, received_at_ms=NOW + 100)
     assert duplicate["duplicates"]
+    later_duplicate = event(status="Cancelled", executed="0.4", updated=NOW + 200)
+    later_duplicate["creationTime"] = NOW + 200
+    assert state.ingest_message(later_duplicate, received_at_ms=NOW + 200)["duplicates"]
     snapshot = state.snapshot()
     assert snapshot["terminal_orders"][0]["cum_exec_qty"] == 0.4
 
@@ -68,13 +71,11 @@ def test_replay_future_and_stale_row_are_blocked(tmp_path, monkeypatch):
     replay["creationTime"] = NOW - 31_000
     with pytest.raises(ValueError, match="too old"):
         state.ingest_message(replay, received_at_ms=NOW)
-
     future = event(updated=NOW + 6000)
     future["creationTime"] = NOW
     result = state.ingest_message(future, received_at_ms=NOW)
     assert result["status"] == "blocked"
     assert "future" in result["rejected"][0]["reason"]
-
     wrapped_old_row = event(updated=NOW - 31_000)
     wrapped_old_row["creationTime"] = NOW
     wrapped_old_row["data"][0]["createdTime"] = NOW - 40_000
@@ -108,11 +109,9 @@ def test_alias_collision_immutable_mutation_and_topic_mismatch_are_blocked(tmp_p
     state = store(tmp_path, monkeypatch)
     state.ingest_message(event(order_id="oid-1", link_id="link-1"), received_at_ms=NOW)
     state.ingest_message(event(order_id="oid-2", link_id="link-2"), received_at_ms=NOW)
-
     collision = event(order_id="oid-1", link_id="link-2", updated=NOW)
     collision["creationTime"] = NOW
     assert state.ingest_message(collision, received_at_ms=NOW)["status"] == "blocked"
-
     mutated = event(
         order_id="oid-1",
         link_id="link-1",
@@ -125,7 +124,6 @@ def test_alias_collision_immutable_mutation_and_topic_mismatch_are_blocked(tmp_p
     result = state.ingest_message(mutated, received_at_ms=NOW)
     assert result["status"] == "blocked"
     assert "symbol" in result["rejected"][0]["reason"]
-
     mismatch = event(category="spot", topic="order.linear")
     result = state.ingest_message(mismatch, received_at_ms=NOW)
     assert result["status"] == "blocked"
@@ -137,11 +135,9 @@ def test_out_of_order_and_execution_regression_are_blocked(tmp_path, monkeypatch
     partial = event(status="PartiallyFilled", executed="0.5", updated=NOW)
     partial["creationTime"] = NOW
     state.ingest_message(partial, received_at_ms=NOW)
-
     old = event(status="PartiallyFilled", executed="0.6", updated=NOW - 1)
     old["creationTime"] = NOW
     assert state.ingest_message(old, received_at_ms=NOW)["status"] == "blocked"
-
     regression = event(status="PartiallyFilled", executed="0.4", updated=NOW + 1)
     regression["creationTime"] = NOW + 1
     assert state.ingest_message(regression, received_at_ms=NOW + 1)["status"] == "blocked"
@@ -150,14 +146,15 @@ def test_out_of_order_and_execution_regression_are_blocked(tmp_path, monkeypatch
 def test_status_execution_semantics_are_strict(tmp_path, monkeypatch):
     state = store(tmp_path, monkeypatch)
     invalid_filled = event(status="Filled", executed="0.9")
-    assert state.ingest_message(invalid_filled, received_at_ms=NOW)["status"] == "blocked"
-
+    result = state.ingest_message(invalid_filled, received_at_ms=NOW)
+    assert result["status"] == "blocked"
     invalid_partial = event(status="PartiallyFilled", executed="0")
-    assert state.ingest_message(invalid_partial, received_at_ms=NOW)["status"] == "blocked"
-
+    result = state.ingest_message(invalid_partial, received_at_ms=NOW)
+    assert result["status"] == "blocked"
     no_avg = event(status="PartiallyFilled", executed="0.4")
     no_avg["data"][0]["avgPrice"] = ""
-    assert state.ingest_message(no_avg, received_at_ms=NOW)["status"] == "blocked"
+    result = state.ingest_message(no_avg, received_at_ms=NOW)
+    assert result["status"] == "blocked"
 
 
 def test_reconciliation_requires_all_fields_and_no_unknown_open_orders(tmp_path, monkeypatch):
@@ -175,12 +172,10 @@ def test_reconciliation_requires_all_fields_and_no_unknown_open_orders(tmp_path,
     }]}
     matched = reconcile_execution_journal(journal, state.snapshot())
     assert matched["restart_safe"] is True
-
     journal["orders"][0]["quantity"] = 2
     blocked = reconcile_execution_journal(journal, state.snapshot())
     assert blocked["restart_safe"] is False
     assert "qty" in blocked["unresolved"][0]["fields"]
-
     empty_journal = reconcile_execution_journal({"orders": []}, state.snapshot())
     assert empty_journal["restart_safe"] is False
     assert "missing from execution journal" in empty_journal["unresolved"][0]["reason"]
@@ -209,13 +204,27 @@ def test_corrupt_storage_and_alias_targets_fail_closed(tmp_path, monkeypatch):
     state = BybitOrderStateStore(path, environment="testnet")
     with pytest.raises(RuntimeError, match="unreadable"):
         state.snapshot()
-
     path.write_text(
         json.dumps({"orders": {}, "aliases": {"order:oid": "order:missing"}, "updated_at_ms": NOW}),
         encoding="utf-8",
     )
     with pytest.raises(RuntimeError, match="aliases"):
         state.snapshot()
+
+    path.unlink()
+    valid = store(tmp_path, monkeypatch)
+    valid.ingest_message(event(), received_at_ms=NOW)
+    document = json.loads(path.read_text(encoding="utf-8"))
+    record = next(iter(document["orders"].values()))
+    record["status"] = "MadeUp"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="invalid order status"):
+        valid.snapshot()
+
+
+def test_invalid_journal_row_fails_closed():
+    with pytest.raises(RuntimeError, match="invalid row"):
+        reconcile_execution_journal({"orders": ["broken"]}, {"orders": []})
 
 
 def test_persisted_alias_document_is_atomic_and_structured(tmp_path, monkeypatch):
