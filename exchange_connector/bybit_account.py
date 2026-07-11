@@ -17,6 +17,7 @@ from urllib.parse import urlencode
 
 import httpx
 
+from .bybit_hosts import approved_live_base_urls, validate_bybit_base_url
 from .bybit_retry import request_with_safe_get_retries
 
 
@@ -86,6 +87,7 @@ class BybitAccountClient:
         return path
 
     def _private_get(self, base_url: str, path: str, params: dict[str, Any]) -> dict[str, Any]:
+        base_url = validate_bybit_base_url(base_url, environment="live_read_only")
         query = urlencode(sorted((key, value) for key, value in params.items() if value is not None))
         client = self._client or httpx.Client(timeout=self.timeout)
         close_client = self._client is None
@@ -119,11 +121,18 @@ class BybitAccountClient:
 
     def _candidate_base_urls(self) -> list[str]:
         configured = os.getenv("BYBIT_ACCOUNT_BASE_URL", "").strip() or os.getenv("EXCHANGE_BASE_URL", "").strip()
-        candidates = [configured, "https://api.bybit.eu", "https://api.bybit.com", "https://api.bybit.nl"]
+        candidates = [configured, *approved_live_base_urls()]
         result: list[str] = []
         for value in candidates:
-            clean = value.rstrip("/")
-            if clean and "testnet" not in clean and clean not in result:
+            if not value:
+                continue
+            try:
+                clean = validate_bybit_base_url(value, environment="live_read_only")
+            except ValueError:
+                if value == configured:
+                    raise
+                continue
+            if clean not in result:
                 result.append(clean)
         return result
 

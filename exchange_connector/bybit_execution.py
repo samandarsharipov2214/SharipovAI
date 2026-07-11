@@ -10,10 +10,12 @@ import hmac
 import json
 import os
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from typing import Any
 
 import httpx
+
+from .bybit_hosts import validate_bybit_base_url
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,10 +38,11 @@ class BybitExecutionClient:
 
     def __init__(self, client: httpx.Client | None = None) -> None:
         self.mode = os.getenv("EXCHANGE_MODE", "sandbox").strip().lower()
-        self.base_url = os.getenv(
+        configured_url = os.getenv(
             "EXCHANGE_BASE_URL",
             "https://api-testnet.bybit.com" if self.mode == "sandbox" else "https://api.bybit.com",
-        ).rstrip("/")
+        )
+        self.base_url = validate_bybit_base_url(configured_url, environment=self.mode)
         self.api_key = os.getenv("EXCHANGE_API_KEY", "").strip()
         self.api_secret = os.getenv("EXCHANGE_API_SECRET", "").strip()
         self.recv_window = "5000"
@@ -80,6 +83,7 @@ class BybitExecutionClient:
         else:
             raise RuntimeError("Exchange mode does not permit execution")
 
+        base_url = validate_bybit_base_url(self.base_url, environment=self.mode)
         body = {
             "category": "spot",
             "symbol": symbol,
@@ -105,7 +109,7 @@ class BybitExecutionClient:
         client = self._client or httpx.Client(timeout=10.0)
         close_client = self._client is None
         try:
-            response = client.post(f"{self.base_url}/v5/order/create", content=payload, headers=headers)
+            response = client.post(f"{base_url}/v5/order/create", content=payload, headers=headers)
             response.raise_for_status()
             data = response.json()
         finally:
