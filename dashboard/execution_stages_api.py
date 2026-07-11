@@ -3,10 +3,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 
 from autonomous_trading import ExecutionJournal, StageController
 from exchange_connector.bybit_execution import BybitExecutionClient
+
+from .admin_guard import require_admin
 
 
 def install_execution_stages_api(app: FastAPI) -> None:
@@ -18,7 +20,8 @@ def install_execution_stages_api(app: FastAPI) -> None:
     app.state.stage_controller = StageController(journal=app.state.execution_journal)
 
     @app.get("/api/execution/stage-status")
-    def stage_status() -> dict[str, Any]:
+    def stage_status(request: Request) -> dict[str, Any]:
+        require_admin(request)
         return {
             "status": "ok",
             "assessment": app.state.stage_controller.assess().to_dict(),
@@ -28,7 +31,8 @@ def install_execution_stages_api(app: FastAPI) -> None:
         }
 
     @app.post("/api/execution/testnet-order")
-    def testnet_order(payload: dict[str, Any]) -> dict[str, Any]:
+    def testnet_order(payload: dict[str, Any], request: Request) -> dict[str, Any]:
+        require_admin(request)
         client: BybitExecutionClient = app.state.execution_client
         if client.mode != "sandbox":
             raise HTTPException(status_code=409, detail="Endpoint is available only in sandbox mode")
