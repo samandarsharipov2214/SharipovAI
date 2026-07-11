@@ -9,7 +9,6 @@ import argparse
 import json
 import os
 import re
-import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -94,7 +93,11 @@ def _audit_architecture(record: Any) -> None:
         unique = len(ids) == len(set(ids))
         record("canonical_ai_organs", ids == EXPECTED_ORGANS and unique, f"found={ids}")
         owners = [capability for organ in CANONICAL_AI_ORGANS for capability in organ.owns]
-        record("ai_organ_responsibilities", bool(owners) and all(organ.responsibility.strip() for organ in CANONICAL_AI_ORGANS), "all organs have responsibilities")
+        record(
+            "ai_organ_responsibilities",
+            bool(owners) and all(organ.responsibility.strip() for organ in CANONICAL_AI_ORGANS),
+            "all organs have responsibilities",
+        )
     except Exception as exc:
         record("canonical_ai_organs", False, f"{type(exc).__name__}: {exc}")
 
@@ -114,9 +117,14 @@ def _audit_blueprint(root: Path, record: Any) -> None:
         "render_telegram_worker": "startCommand: python scripts/run_telegram_worker.py" in text,
         "render_database_required": _env_value(text, "SHARIPOVAI_DATABASE_REQUIRED") == "1",
         "render_auth_enabled": _env_value(text, "SHARIPOVAI_DISABLE_AUTH") == "0",
-        "render_testnet_locked": _env_value(text, "TESTNET_EXECUTION_ENABLED") == "0" and _env_value(text, "AUTONOMOUS_TESTNET_ENABLED") == "0",
+        "render_testnet_locked": all(
+            _env_value(text, name) == "0"
+            for name in ("TESTNET_EXECUTION_ENABLED", "AUTONOMOUS_TESTNET_ENABLED", "AUTONOMOUS_TESTNET_BRIDGE_ENABLED")
+        ),
         "render_live_locked": _env_value(text, "EXCHANGE_LIVE_TRADING_ENABLED") == "0",
         "render_kill_switch": _env_value(text, "EXECUTION_KILL_SWITCH") == "1",
+        "render_exchange_sandbox": _env_value(text, "EXCHANGE_MODE") == "sandbox",
+        "render_stage_safe": _env_value(text, "AUTONOMOUS_TRADING_STAGE") == "2",
         "render_private_ws_default_off": _env_value(text, "FEATURE_BYBIT_PRIVATE_ORDER_WS") == "0",
         "render_legacy_keys_locked": _env_value(text, "BYBIT_ALLOW_LEGACY_EXCHANGE_CREDENTIALS") == "0",
         "render_telegram_polling_off": _env_value(text, "TELEGRAM_POLLING_ENABLED") == "0",
@@ -140,7 +148,8 @@ def _audit_workflows(root: Path, record: Any) -> None:
         "python -m compileall",
         "Run regression tests",
         "Verify execution remains locked",
-    )), "migration, compile, execution lock and pytest gates")
+        "Run fail-closed release audit",
+    )), "migration, compile, execution lock, release audit and pytest gates")
     record("ci_full_suite", "python -m pytest" in full and "Fail when full suite failed" in full, "full pytest gate")
     record("ci_windows_agent", "runs-on: windows-latest" in windows and "pytest" in windows.lower(), "Windows agent verification gate")
 
@@ -181,7 +190,11 @@ def _audit_database_and_journal(record: Any) -> None:
 
         summary = ExecutionJournal().summary()
         passed = summary.get("database_backed") is True and summary.get("retention_truncated") is False
-        record("execution_journal_database", passed, f"database_backed={summary.get('database_backed')}, retention_truncated={summary.get('retention_truncated')}")
+        record(
+            "execution_journal_database",
+            passed,
+            f"database_backed={summary.get('database_backed')}, retention_truncated={summary.get('retention_truncated')}",
+        )
     except Exception as exc:
         record("execution_journal_database", False, f"{type(exc).__name__}: {exc}")
 
@@ -192,9 +205,16 @@ def _audit_runtime_environment(record: Any) -> None:
     record("runtime_required_configuration", not missing, f"missing={missing}" if missing else "required configuration present")
     record("runtime_auth_enabled", not _truthy("SHARIPOVAI_DISABLE_AUTH"), "SHARIPOVAI_DISABLE_AUTH must be 0")
     record("runtime_database_required", _truthy("SHARIPOVAI_DATABASE_REQUIRED"), "SHARIPOVAI_DATABASE_REQUIRED must be 1")
-    record("runtime_kill_switch", _truthy("EXECUTION_KILL_SWITCH", default=True), "EXECUTION_KILL_SWITCH must be 1")
-    record("runtime_testnet_locked", not _truthy("TESTNET_EXECUTION_ENABLED") and not _truthy("AUTONOMOUS_TESTNET_ENABLED"), "Testnet execution must remain disabled")
+    record("runtime_kill_switch", _truthy("EXECUTION_KILL_SWITCH"), "EXECUTION_KILL_SWITCH must be explicitly 1")
+    record(
+        "runtime_testnet_locked",
+        not any(_truthy(name) for name in ("TESTNET_EXECUTION_ENABLED", "AUTONOMOUS_TESTNET_ENABLED", "AUTONOMOUS_TESTNET_BRIDGE_ENABLED")),
+        "Testnet execution and bridge must remain disabled",
+    )
     record("runtime_live_locked", not _truthy("EXCHANGE_LIVE_TRADING_ENABLED"), "Live execution must remain disabled")
+    record("runtime_exchange_sandbox", os.getenv("EXCHANGE_MODE", "").strip().lower() == "sandbox", "EXCHANGE_MODE must be sandbox")
+    stage = _integer_env("AUTONOMOUS_TRADING_STAGE")
+    record("runtime_stage_safe", stage in {0, 1, 2}, f"AUTONOMOUS_TRADING_STAGE must be 0..2, found {stage}")
     record("runtime_private_ws_default_off", not _truthy("FEATURE_BYBIT_PRIVATE_ORDER_WS"), "Private stream must remain off until operator activation")
     record("runtime_legacy_keys_locked", not _truthy("BYBIT_ALLOW_LEGACY_EXCHANGE_CREDENTIALS"), "Legacy exchange credential fallback must remain disabled")
     mainnet_present = bool(os.getenv("BYBIT_MAINNET_API_KEY", "").strip() or os.getenv("BYBIT_MAINNET_API_SECRET", "").strip())
@@ -225,6 +245,13 @@ def _read(path: Path) -> str:
 def _truthy(name: str, *, default: bool = False) -> bool:
     raw = os.getenv(name, "1" if default else "0")
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _integer_env(name: str) -> int | None:
+    try:
+        return int(os.getenv(name, ""))
+    except (TypeError, ValueError):
+        return None
 
 
 def main(argv: list[str] | None = None) -> int:
