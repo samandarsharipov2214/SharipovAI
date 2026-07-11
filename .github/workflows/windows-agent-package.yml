@@ -81,11 +81,70 @@ jobs:
       - name: Build Windows package
         shell: pwsh
         run: |
-          $stage = Join-Path $env:RUNNER_TEMP 'SharipovAI-Windows-Agent'
-          New-Item -ItemType Directory -Force -Path $stage | Out-Null
-          robocopy . $stage /E /XD .git .venv data runtime __pycache__ .pytest_cache /XF *.pyc | Out-Null
-          if ($LASTEXITCODE -gt 7) { exit $LASTEXITCODE }
-          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath SharipovAI-Windows-Agent.zip -Force
+          @'
+          from __future__ import annotations
+
+          import os
+          import zipfile
+          from pathlib import Path
+
+          root = Path.cwd().resolve()
+          output = root / "SharipovAI-Windows-Agent.zip"
+          excluded_dirs = {
+              ".git",
+              ".venv",
+              "data",
+              "runtime",
+              "__pycache__",
+              ".pytest_cache",
+              ".ci-data",
+              ".mypy_cache",
+              ".ruff_cache",
+          }
+          excluded_suffixes = {".pyc", ".pyo"}
+          file_count = 0
+
+          if output.exists():
+              output.unlink()
+
+          with zipfile.ZipFile(
+              output,
+              mode="w",
+              compression=zipfile.ZIP_DEFLATED,
+              allowZip64=True,
+          ) as archive:
+              for current, directories, filenames in os.walk(root):
+                  directories[:] = [
+                      name for name in directories if name not in excluded_dirs
+                  ]
+                  current_path = Path(current)
+                  for filename in filenames:
+                      source = current_path / filename
+                      if source == output or source.suffix.lower() in excluded_suffixes:
+                          continue
+                      relative = source.relative_to(root)
+                      if any(part in excluded_dirs for part in relative.parts):
+                          continue
+                      archive.write(source, relative.as_posix())
+                      file_count += 1
+
+          if file_count < 20:
+              raise RuntimeError(f"package contains too few files: {file_count}")
+
+          with zipfile.ZipFile(output, mode="r") as archive:
+              broken = archive.testzip()
+              if broken is not None:
+                  raise RuntimeError(f"corrupt ZIP member: {broken}")
+
+          print(
+              f"Windows package ready: {output.name}; "
+              f"files={file_count}; bytes={output.stat().st_size}"
+          )
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path 'SharipovAI-Windows-Agent.zip')) {
+            throw 'Windows package was not created.'
+          }
 
       - name: Upload diagnostics
         if: always()
@@ -102,6 +161,7 @@ jobs:
         with:
           name: SharipovAI-Windows-Agent
           path: SharipovAI-Windows-Agent.zip
+          if-no-files-found: error
           retention-days: 30
 
       - name: Fail when PowerShell syntax failed
