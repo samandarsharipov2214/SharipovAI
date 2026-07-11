@@ -48,6 +48,42 @@ jobs:
           print('IMPORT_OK', app.title)
           PY
 
+      - name: Diagnose access-request routing
+        run: |
+          python - <<'PY'
+          import os
+          import tempfile
+          from pathlib import Path
+          from fastapi.testclient import TestClient
+          from dashboard.app import create_app
+
+          with tempfile.TemporaryDirectory() as directory:
+              root = Path(directory)
+              os.environ['AUTH_ACCESS_REQUESTS_FILE'] = str(root / 'access_requests.json')
+              os.environ['AUTH_SECURITY_EVENTS_FILE'] = str(root / 'security_events.jsonl')
+              os.environ.pop('SHARIPOVAI_DISABLE_AUTH', None)
+              app = create_app()
+              client = TestClient(app)
+              register = client.post('/register', data={
+                  'username': 'diagnostic_user',
+                  'contact': '@diagnostic',
+                  'reason': 'route diagnostic',
+              })
+              access = client.get('/api/security/access-requests')
+              lines = [
+                  f"RENDER={os.getenv('RENDER')!r}",
+                  f"ENVIRONMENT={os.getenv('ENVIRONMENT')!r}",
+                  f"AUTH_ACCESS_REQUESTS_FILE={os.getenv('AUTH_ACCESS_REQUESTS_FILE')!r}",
+                  'MIDDLEWARE=' + ','.join(getattr(item.cls, '__name__', str(item.cls)) for item in app.user_middleware),
+                  f"REGISTER_STATUS={register.status_code}",
+                  f"REGISTER_BODY={register.text}",
+                  f"ACCESS_STATUS={access.status_code}",
+                  f"ACCESS_BODY={access.text}",
+              ]
+              Path('access-diagnostic.txt').write_text('\n'.join(lines), encoding='utf-8')
+              print('\n'.join(lines))
+          PY
+
       - name: Run targeted stabilization tests
         id: pytest
         continue-on-error: true
@@ -91,6 +127,7 @@ jobs:
         with:
           name: dashboard-pytest-report
           path: |
+            access-diagnostic.txt
             pytest-targeted.log
             pytest-summary.txt
           if-no-files-found: error
@@ -108,6 +145,9 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: dashboard-pytest-report
+
+      - name: Access-request diagnostic
+        run: cat access-diagnostic.txt
 
       - name: Exact dashboard failure summary
         run: cat pytest-summary.txt
