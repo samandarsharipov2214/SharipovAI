@@ -8,13 +8,14 @@ from fastapi import FastAPI, HTTPException, Request
 from autonomous_trading import ExecutionJournal, StageController
 from exchange_connector.bybit_execution import BybitExecutionClient
 
-from .admin_guard import require_admin
+from .admin_guard import install_sensitive_api_guard, require_admin
 
 
 def install_execution_stages_api(app: FastAPI) -> None:
     if getattr(app.state, "execution_stages_api_installed", False):
         return
     app.state.execution_stages_api_installed = True
+    install_sensitive_api_guard(app)
     app.state.execution_client = BybitExecutionClient()
     app.state.execution_journal = ExecutionJournal()
     app.state.stage_controller = StageController(journal=app.state.execution_journal)
