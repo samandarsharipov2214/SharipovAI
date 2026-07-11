@@ -1,4 +1,4 @@
-"""FastAPI endpoints for verified read-only market data."""
+"""FastAPI endpoints for verified read-only market data and order previews."""
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -10,6 +10,7 @@ from config.feature_flags import is_feature_enabled
 from exchange_connector.bybit_websocket_worker import BybitWebSocketWorker
 from exchange_connector.market_data import MarketDataService, MarketDataUnavailable
 from exchange_connector.multi_exchange_consensus import ConsensusUnavailable, MultiExchangeConsensus
+from exchange_connector.order_preview import OrderPreviewError, build_order_preview
 
 
 def install_market_data_api(app: FastAPI) -> None:
@@ -62,6 +63,19 @@ def install_market_data_api(app: FastAPI) -> None:
                 },
             ) from exc
         return {**quote.to_dict(), "synthetic_fallback_used": False}
+
+    @app.post("/api/trading/order-preview")
+    def order_preview(payload: dict[str, Any]) -> dict[str, Any]:
+        if not is_feature_enabled("bybit_preview_engine"):
+            raise HTTPException(status_code=503, detail={"status": "disabled", "executed": False})
+        try:
+            preview = build_order_preview(payload)
+        except OrderPreviewError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"status": "blocked", "executed": False, "message": str(exc)},
+            ) from exc
+        return {"status": "preview", "executed": False, **preview.to_dict()}
 
     @app.get("/api/market/websocket/status")
     def websocket_status() -> dict[str, Any]:
