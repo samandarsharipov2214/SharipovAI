@@ -3,6 +3,16 @@ name: Windows Agent Package
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/windows/**'
+      - 'tools/pc_node_agent.py'
+      - 'tools/pc_node_backup.py'
+      - 'tools/pc_node_update.py'
+      - 'tests/test_pc_node_*.py'
+      - 'requirements.txt'
+      - '.github/workflows/windows-agent-package.yml'
   workflow_dispatch:
 
 permissions:
@@ -11,6 +21,7 @@ permissions:
 jobs:
   test-and-package:
     runs-on: windows-latest
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -19,17 +30,43 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: pip
 
       - name: Install dependencies
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          python -m pip install -r requirements.txt
+
+      - name: Validate PowerShell syntax
+        shell: pwsh
+        run: |
+          $errors = @()
+          Get-ChildItem scripts/windows/*.ps1 | ForEach-Object {
+            $tokens = $null
+            $parseErrors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName,
+              [ref]$tokens,
+              [ref]$parseErrors
+            )
+            if ($parseErrors.Count -gt 0) {
+              $errors += $parseErrors | ForEach-Object { "$($_.Extent.File):$($_.Extent.StartLineNumber) $($_.Message)" }
+            }
+          }
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_ }
+            exit 1
+          }
 
       - name: Run PC node tests
         shell: pwsh
         run: |
-          pytest -q tests/test_pc_node_backup.py tests/test_pc_node_agent.py tests/test_pc_node_update.py
+          python -m pytest -q `
+            tests/test_pc_node_backup.py `
+            tests/test_pc_node_agent.py `
+            tests/test_pc_node_update.py `
+            tests/test_pc_node_runtime_scripts.py
 
       - name: Validate Python syntax
         shell: pwsh
