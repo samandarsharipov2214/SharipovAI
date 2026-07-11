@@ -12,6 +12,7 @@ from .auth_guard_middleware import AuthGuardMiddleware
 from .dashboard_contracts_middleware import install_dashboard_contracts_middleware
 from .evidence_access_compat import install_evidence_access_compat
 from .policy_guard import check_dashboard_action, guarded_response
+from .static_contracts_middleware import install_static_contracts_middleware
 from .trade_gate_compat_api import install_trade_gate_compat_api
 
 
@@ -55,3 +56,4 @@ def install_policy_guard_middleware(app_instance: Any) -> None:
     app_instance.add_middleware(AuthGuardMiddleware)
     app_instance.add_middleware(PolicyGuardMiddleware)
     install_dashboard_contracts_middleware(app_instance)
+    install_static_contracts_middleware(app_instance)
