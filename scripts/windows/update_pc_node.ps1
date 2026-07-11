@@ -1,24 +1,86 @@
 param(
-    [Parameter(Mandatory = $true)]
-    [string]$Archive,
-    [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+    [string]$Archive = "",
+    [string]$ProjectRoot = ""
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-$archivePath = (Resolve-Path $Archive).Path
+function Resolve-ProjectRoot {
+    param([string]$RequestedRoot)
+
+    if ($RequestedRoot -and (Test-Path $RequestedRoot)) {
+        return (Resolve-Path $RequestedRoot).Path
+    }
+
+    $scriptPath = $MyInvocation.ScriptName
+    if (-not $scriptPath) {
+        $scriptPath = $PSCommandPath
+    }
+    if ($scriptPath) {
+        $candidate = [System.IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $scriptPath) "..\.."))
+        if (Test-Path (Join-Path $candidate "requirements.txt")) {
+            return $candidate
+        }
+    }
+
+    $knownRoots = @(
+        "D:\SharipovAI_Server\SharipovAI",
+        (Join-Path $env:USERPROFILE "SharipovAI"),
+        (Join-Path $env:USERPROFILE "Desktop\SharipovAI")
+    )
+    foreach ($candidate in $knownRoots) {
+        if ($candidate -and (Test-Path (Join-Path $candidate "requirements.txt"))) {
+            return (Resolve-Path $candidate).Path
+        }
+    }
+
+    throw "SharipovAI project folder was not found."
+}
+
+function Resolve-UpdateArchive {
+    param([string]$RequestedArchive)
+
+    if ($RequestedArchive) {
+        if (-not (Test-Path $RequestedArchive -PathType Leaf)) {
+            throw "Update ZIP was not found: $RequestedArchive"
+        }
+        return (Resolve-Path $RequestedArchive).Path
+    }
+
+    $searchFolders = @(
+        (Join-Path $env:USERPROFILE "Downloads"),
+        (Join-Path $env:USERPROFILE "Desktop"),
+        (Join-Path $env:USERPROFILE "OneDrive\Downloads"),
+        (Join-Path $env:USERPROFILE "OneDrive\Desktop"),
+        "D:\Downloads",
+        "D:\Загрузки"
+    ) | Where-Object { $_ -and (Test-Path $_) }
+
+    $archive = Get-ChildItem -Path $searchFolders -Filter "SharipovAI*.zip" -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notlike "*Updater_Bootstrap*" -and $_.Name -notlike "*Windows_Paper_Fix*" } |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+
+    if (-not $archive) {
+        throw "No SharipovAI update ZIP was found in Downloads or Desktop."
+    }
+    return $archive.FullName
+}
+
+$ProjectRoot = Resolve-ProjectRoot -RequestedRoot $ProjectRoot
+$archivePath = Resolve-UpdateArchive -RequestedArchive $Archive
 $python = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
 $updater = Join-Path $ProjectRoot "tools\pc_node_update.py"
+$checkScript = Join-Path $ProjectRoot "scripts\windows\check_pc_node.ps1"
 
-if (-not (Test-Path $python)) {
-    throw "Python environment not found: $python"
-}
-if (-not (Test-Path $updater)) {
-    throw "Updater not found: $updater"
-}
+if (-not (Test-Path $python)) { throw "Python environment not found: $python" }
+if (-not (Test-Path $updater)) { throw "Updater not found: $updater" }
+if (-not (Test-Path $checkScript)) { throw "Health-check script not found: $checkScript" }
 
-Write-Host "Stopping SharipovAI processes before update..."
+Write-Host "Project: $ProjectRoot"
+Write-Host "Update ZIP: $archivePath"
+Write-Host "Stopping SharipovAI processes..."
 Get-CimInstance Win32_Process |
     Where-Object {
         $_.CommandLine -and
@@ -44,8 +106,8 @@ Write-Host "Starting SharipovAI PC node and backup..."
 Start-Process powershell.exe -WorkingDirectory $ProjectRoot -ArgumentList "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$ProjectRoot\scripts\windows\start_pc_node.ps1`" -ProjectRoot `"$ProjectRoot`""
 Start-Process powershell.exe -WorkingDirectory $ProjectRoot -ArgumentList "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$ProjectRoot\scripts\windows\start_backup.ps1`" -ProjectRoot `"$ProjectRoot`""
 
-Start-Sleep -Seconds 8
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $ProjectRoot "scripts\windows\check_pc_node.ps1") -ProjectRoot $ProjectRoot
+Start-Sleep -Seconds 10
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $checkScript -ProjectRoot $ProjectRoot
 if ($LASTEXITCODE -ne 0) {
     throw "Update was installed, but the final PC node health check failed."
 }
