@@ -10,6 +10,9 @@ _SENSITIVE_PATHS = {
     "/api/exchange/account/status",
     "/api/exchange/account/snapshot",
     "/api/exchange/account/sync",
+    "/api/exchange/private-order-ws/status",
+    "/api/exchange/private-order-ws/snapshot",
+    "/api/exchange/private-order-ws/reconcile",
     "/api/execution/stage-status",
     "/api/execution/testnet-order",
 }
@@ -17,14 +20,9 @@ _SENSITIVE_PATHS = {
 
 def require_admin(request: Request) -> str:
     """Require explicit auth configuration and an active administrator."""
-    if not all(
-        os.getenv(name, "").strip()
-        for name in ("AUTH_SECRET", "ADMIN_USERNAME", "ADMIN_PASSWORD")
-    ):
+    if not all(os.getenv(name, "").strip() for name in ("AUTH_SECRET", "ADMIN_USERNAME", "ADMIN_PASSWORD")):
         raise HTTPException(status_code=503, detail={"status": "auth_not_configured"})
-
     from .app import _is_admin_request, _session_username
-
     username = _session_username(request)
     if not username:
         raise HTTPException(status_code=401, detail={"status": "unauthorized"})
