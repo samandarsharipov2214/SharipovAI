@@ -1,13 +1,10 @@
-"""Read-only access to the owner's Bybit account.
-
-This module never submits, amends, or cancels orders. It signs private GET
-requests and normalizes wallet, position, and open-order data for SharipovAI.
-"""
+"""Read-only access to the owner's Bybit account."""
 from __future__ import annotations
 
 import hashlib
 import hmac
 import json
+import math
 import os
 import time
 from dataclasses import asdict, dataclass
@@ -17,6 +14,9 @@ from urllib.parse import urlencode
 
 import httpx
 
+from storage import ProjectDatabase
+
+from .bybit_credentials import account_credentials
 from .bybit_hosts import approved_live_base_urls, validate_bybit_base_url
 from .bybit_retry import request_with_safe_get_retries
 
@@ -40,19 +40,22 @@ class AccountSnapshot:
 
 
 class BybitAccountClient:
-    """Fetch a verified account snapshot without trading permissions."""
+    """Fetch a verified account snapshot without trading operations."""
 
     def __init__(self, client: httpx.Client | None = None) -> None:
-        self.api_key = os.getenv("EXCHANGE_API_KEY", "").strip()
-        self.api_secret = os.getenv("EXCHANGE_API_SECRET", "").strip()
+        credentials = account_credentials()
+        self.api_key = credentials.api_key
+        self.api_secret = credentials.api_secret
+        self.credential_profile = credentials.profile
         self.recv_window = os.getenv("BYBIT_RECV_WINDOW", "5000").strip() or "5000"
-        self.timeout = max(float(os.getenv("BYBIT_ACCOUNT_TIMEOUT_SECONDS", "10")), 1.0)
+        self.timeout = _bounded_positive_env("BYBIT_ACCOUNT_TIMEOUT_SECONDS", default=10.0, maximum=30.0)
         self._client = client
 
     def status(self) -> dict[str, Any]:
         return {
             "provider": "bybit",
             "mode": "live_read_only",
+            "credential_profile": self.credential_profile,
             "credentials_configured": bool(self.api_key and self.api_secret),
             "sync_enabled": _truthy("BYBIT_ACCOUNT_SYNC_ENABLED", default=True),
             "trading_enabled": _truthy("EXCHANGE_LIVE_TRADING_ENABLED"),
@@ -62,7 +65,7 @@ class BybitAccountClient:
 
     def fetch_snapshot(self) -> AccountSnapshot:
         if not self.api_key or not self.api_secret:
-            raise RuntimeError("Bybit account credentials are not configured")
+            raise RuntimeError("Bybit read-only account credentials are not configured")
         if not _truthy("BYBIT_ACCOUNT_SYNC_ENABLED", default=True):
             raise RuntimeError("Bybit account synchronization is disabled")
 
@@ -79,10 +82,15 @@ class BybitAccountClient:
         raise RuntimeError("Unable to authenticate with Bybit personal account; " + " | ".join(errors))
 
     def save_snapshot(self, snapshot: AccountSnapshot) -> Path:
+        payload = snapshot.to_dict()
+        database = ProjectDatabase()
+        database.initialize()
+        database.put_json("bybit_account", "latest", payload)
+
         path = Path(os.getenv("BYBIT_ACCOUNT_STATE_FILE", "/var/data/bybit_account.json"))
         path.parent.mkdir(parents=True, exist_ok=True)
         temp = path.with_suffix(path.suffix + ".tmp")
-        temp.write_text(json.dumps(snapshot.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
+        temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
         temp.replace(path)
         return path
 
@@ -95,9 +103,7 @@ class BybitAccountClient:
         def perform_get() -> httpx.Response:
             timestamp = str(int(time.time() * 1000))
             signature_payload = f"{timestamp}{self.api_key}{self.recv_window}{query}"
-            signature = hmac.new(
-                self.api_secret.encode(), signature_payload.encode(), hashlib.sha256
-            ).hexdigest()
+            signature = hmac.new(self.api_secret.encode(), signature_payload.encode(), hashlib.sha256).hexdigest()
             headers = {
                 "X-BAPI-API-KEY": self.api_key,
                 "X-BAPI-TIMESTAMP": timestamp,
@@ -120,7 +126,7 @@ class BybitAccountClient:
         return data
 
     def _candidate_base_urls(self) -> list[str]:
-        configured = os.getenv("BYBIT_ACCOUNT_BASE_URL", "").strip() or os.getenv("EXCHANGE_BASE_URL", "").strip()
+        configured = os.getenv("BYBIT_ACCOUNT_BASE_URL", "").strip()
         candidates = [configured, *approved_live_base_urls()]
         result: list[str] = []
         for value in candidates:
@@ -176,6 +182,7 @@ class BybitAccountClient:
             for item in payload.get("result", {}).get("list", []) or []:
                 normalized_orders.append({
                     "order_id": str(item.get("orderId", "")),
+                    "order_link_id": str(item.get("orderLinkId", "")),
                     "symbol": str(item.get("symbol", "")),
                     "side": str(item.get("side", "")),
                     "order_type": str(item.get("orderType", "")),
@@ -203,9 +210,20 @@ class BybitAccountClient:
 
 def _number(value: Any) -> float:
     try:
-        return float(value or 0)
+        parsed = float(value or 0)
     except (TypeError, ValueError):
         return 0.0
+    return parsed if math.isfinite(parsed) else 0.0
+
+
+def _bounded_positive_env(name: str, *, default: float, maximum: float) -> float:
+    try:
+        parsed = float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(parsed) or parsed <= 0:
+        return default
+    return min(parsed, maximum)
 
 
 def _truthy(name: str, *, default: bool = False) -> bool:
