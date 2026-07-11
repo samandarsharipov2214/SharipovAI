@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 import threading
 import time
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import FastAPI, HTTPException
 
@@ -91,8 +91,8 @@ def install_bybit_account_api(app: FastAPI) -> None:
     app.state.bybit_account_api_installed = True
     app.state.bybit_account_sync = BybitAccountSync()
 
-    app.add_event_handler("startup", app.state.bybit_account_sync.start)
-    app.add_event_handler("shutdown", app.state.bybit_account_sync.stop)
+    _register_lifecycle_handler(app, "startup", app.state.bybit_account_sync.start)
+    _register_lifecycle_handler(app, "shutdown", app.state.bybit_account_sync.stop)
 
     @app.get("/api/exchange/account/status")
     def account_status() -> dict[str, Any]:
@@ -111,6 +111,23 @@ def install_bybit_account_api(app: FastAPI) -> None:
             return app.state.bybit_account_sync.sync_now()
         except Exception as exc:
             raise HTTPException(status_code=503, detail={"status": "unavailable", "message": str(exc)}) from exc
+
+
+def _register_lifecycle_handler(app: FastAPI, event: str, handler: Callable[[], None]) -> None:
+    """Register startup/shutdown handlers across FastAPI/Starlette versions."""
+    legacy = getattr(app, "add_event_handler", None)
+    if callable(legacy):
+        legacy(event, handler)
+        return
+
+    router = getattr(app, "router", None)
+    handlers = getattr(router, f"on_{event}", None) if router is not None else None
+    if isinstance(handlers, list):
+        handlers.append(handler)
+        return
+
+    if event == "startup":
+        handler()
 
 
 def _truthy(name: str, *, default: bool = False) -> bool:
