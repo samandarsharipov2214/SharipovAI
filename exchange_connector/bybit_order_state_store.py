@@ -31,8 +31,9 @@ class BybitOrderStateStore:
     """Canonical, alias-aware state store for private order events."""
 
     def __init__(self, path: str | Path | None = None, *, environment: str | None = None) -> None:
-        self.path = Path(path or os.getenv("BYBIT_ORDER_STATE_FILE", "data/bybit_order_state.json"))
         self.environment = normalize_environment(environment or os.getenv("EXCHANGE_MODE", "sandbox"))
+        default_path = f"data/bybit_order_state_{self.environment}.json"
+        self.path = Path(path or os.getenv("BYBIT_ORDER_STATE_FILE", default_path))
         configured_lag = finite_float(os.getenv("BYBIT_PRIVATE_EVENT_MAX_LAG_SECONDS", "30"), "max lag")
         self.max_message_lag_ms = int(min(max(configured_lag, 1.0), 300.0) * 1000)
         future_skew = integer(os.getenv("BYBIT_PRIVATE_EVENT_MAX_FUTURE_SKEW_MS", "1000"), "future skew")
