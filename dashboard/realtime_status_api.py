@@ -30,9 +30,20 @@ def install_realtime_status_api(app: FastAPI) -> None:
         return
     app.state.realtime_status_api_installed = True
 
+    # The main dashboard installer has changed several times. Keep the
+    # specialized News AI network attached to this guaranteed runtime
+    # entrypoint so its routes and startup workers cannot silently disappear.
+    try:
+        from .news_agent_network_api import install_news_agent_network_api
+
+        install_news_agent_network_api(app)
+        app.state.news_agent_network_install_error = None
+    except Exception as exc:  # failure isolation: realtime status must survive
+        app.state.news_agent_network_install_error = f"{type(exc).__name__}: {exc}"
+
     @app.get("/api/realtime/status")
     def realtime_status() -> dict[str, Any]:
-        return build_realtime_status()
+        return build_realtime_status(app)
 
     @app.get("/api/agent-health")
     def agent_health() -> dict[str, Any]:
@@ -40,10 +51,10 @@ def install_realtime_status_api(app: FastAPI) -> None:
 
     @app.get("/realtime-status", response_class=HTMLResponse)
     def realtime_status_page() -> HTMLResponse:
-        return HTMLResponse(_render(build_realtime_status()))
+        return HTMLResponse(_render(build_realtime_status(app)))
 
 
-def build_realtime_status() -> dict[str, Any]:
+def build_realtime_status(app: FastAPI | None = None) -> dict[str, Any]:
     news_refresh = refresh_news_if_stale(reason="api_realtime_status_stale_check")
     account_payload = PaperActivityEngine().state(catch_up=True)
     account_summary = account_payload.get("summary", {})
@@ -54,6 +65,10 @@ def build_realtime_status() -> dict[str, Any]:
     specialized_news = network_status(run_due=True)
     news_bridge = bridge_status()
     warnings: list[str] = []
+
+    install_error = getattr(app.state, "news_agent_network_install_error", None) if app is not None else None
+    if install_error:
+        warnings.append(f"Specialized News AI API startup error: {install_error}")
 
     if tick_age is None:
         warnings.append("Virtual Account ещё не сделал execution tick.")
@@ -93,6 +108,10 @@ def build_realtime_status() -> dict[str, Any]:
         "uptime_seconds": int(time.time()) - STARTED_AT,
         "constitution": constitution_snapshot(),
         "warnings": warnings,
+        "startup": {
+            "news_agent_network_api_installed": not bool(install_error),
+            "news_agent_network_install_error": install_error,
+        },
         "agents": agents,
         "virtual_account": {
             "autorun": paper_activity_autorun_status(),
@@ -130,7 +149,17 @@ def build_realtime_status() -> dict[str, Any]:
             "virtual_account_only": True,
             "live_orders_allowed": False,
             "known_architecture_debt": ["GET realtime status still performs bounded refresh/catch-up until worker migration"],
-            "real_system_organs": ["News", "Risk", "Portfolio", "Learning", "Evidence", "Audit", "Telegram", "Mini App"],
+            "real_system_organs": [
+                "General Controller",
+                "Market Intelligence",
+                "News Intelligence",
+                "Risk Engine",
+                "Portfolio & Reports",
+                "Virtual Account Execution",
+                "Decision Quality",
+                "Learning Engine",
+                "Security Guard",
+            ],
             "visible_surfaces": ["Mini App", "website", "Telegram"],
         },
     }
