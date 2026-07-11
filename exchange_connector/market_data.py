@@ -6,6 +6,7 @@ MarketDataUnavailable error.
 """
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -45,36 +46,51 @@ class MarketDataService:
         cache_ttl_seconds: float = 2.0,
         client: httpx.Client | None = None,
     ) -> None:
-        self.timeout_seconds = max(float(timeout_seconds), 0.5)
-        self.cache_ttl_seconds = max(float(cache_ttl_seconds), 0.0)
+        self.timeout_seconds = min(max(float(timeout_seconds), 0.5), 15.0)
+        self.cache_ttl_seconds = min(max(float(cache_ttl_seconds), 0.0), 30.0)
         self._client = client
         self._cache: dict[str, tuple[float, MarketQuote]] = {}
 
     def quote(self, symbol: str) -> MarketQuote:
-        clean_symbol = _normalize_symbol(symbol)
+        clean_symbol = normalize_symbol(symbol)
         cached = self._cache.get(clean_symbol)
         now = time.monotonic()
         if cached and now - cached[0] <= self.cache_ttl_seconds:
             return cached[1]
 
         errors: list[str] = []
-        for provider in (self._fetch_bybit, self._fetch_binance):
+        for provider in ("bybit", "binance"):
             try:
-                quote = provider(clean_symbol)
+                quote = self.provider_quote(provider, clean_symbol)
                 self._cache[clean_symbol] = (now, quote)
                 return quote
             except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
-                errors.append(f"{provider.__name__}: {type(exc).__name__}: {exc}")
+                errors.append(f"{provider}: {type(exc).__name__}: {exc}")
 
         raise MarketDataUnavailable(
             f"Live market data unavailable for {clean_symbol}; no synthetic fallback used. "
             + " | ".join(errors)
         )
 
+    def provider_quote(self, provider: str, symbol: str) -> MarketQuote:
+        """Public provider interface used by consensus without private-method coupling."""
+        clean = normalize_symbol(symbol)
+        handlers = {"bybit": self._fetch_bybit, "binance": self._fetch_binance}
+        handler = handlers.get(str(provider).strip().lower())
+        if handler is None:
+            raise ValueError(f"unsupported market provider: {provider}")
+        return handler(clean)
+
+    def get_json(self, url: str, *, params: dict[str, str]) -> dict[str, Any]:
+        """Return a validated JSON object from a fixed public-provider URL."""
+        payload = self._get(url, params=params).json()
+        if not isinstance(payload, dict):
+            raise ValueError("provider response must be a JSON object")
+        return payload
+
     def _fetch_bybit(self, symbol: str) -> MarketQuote:
         url = "https://api.bybit.com/v5/market/tickers"
-        response = self._get(url, params={"category": "spot", "symbol": symbol})
-        payload = response.json()
+        payload = self.get_json(url, params={"category": "spot", "symbol": symbol})
         if payload.get("retCode") != 0:
             raise ValueError(payload.get("retMsg") or "Bybit returned an error")
         rows = payload["result"]["list"]
@@ -92,8 +108,7 @@ class MarketDataService:
 
     def _fetch_binance(self, symbol: str) -> MarketQuote:
         url = "https://api.binance.com/api/v3/ticker/24hr"
-        response = self._get(url, params={"symbol": symbol})
-        row = response.json()
+        row = self.get_json(url, params={"symbol": symbol})
         return _make_quote(
             symbol=symbol,
             price=row.get("lastPrice"),
@@ -112,17 +127,26 @@ class MarketDataService:
         return response
 
 
-def _normalize_symbol(symbol: str) -> str:
+def normalize_symbol(symbol: str) -> str:
     clean = str(symbol).strip().upper().replace("/", "").replace("-", "")
     if not clean or not clean.isalnum() or len(clean) > 30:
         raise ValueError("symbol must be a valid exchange ticker such as BTCUSDT")
     return clean
 
 
-def _positive_float(value: Any, field_name: str) -> float:
+def normalize_usdt_symbol(symbol: str) -> tuple[str, str]:
+    clean = normalize_symbol(symbol)
+    if not clean.endswith("USDT") or len(clean) <= 4:
+        raise ValueError("consensus currently supports USDT spot symbols only")
+    return clean, clean[:-4]
+
+
+def positive_finite_float(value: Any, field_name: str) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f"{field_name} is invalid")
     parsed = float(value)
-    if parsed <= 0:
-        raise ValueError(f"{field_name} must be greater than zero")
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise ValueError(f"{field_name} must be a positive finite number")
     return parsed
 
 
@@ -130,15 +154,18 @@ def _optional_nonnegative_float(value: Any) -> float | None:
     if value in (None, ""):
         return None
     parsed = float(value)
-    if parsed < 0:
-        raise ValueError("value must not be negative")
+    if not math.isfinite(parsed) or parsed < 0:
+        raise ValueError("value must be a non-negative finite number")
     return parsed
 
 
 def _optional_float(value: Any) -> float | None:
     if value in (None, ""):
         return None
-    return float(value)
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ValueError("value must be finite")
+    return parsed
 
 
 def _fraction_to_percent(value: Any) -> float | None:
@@ -157,8 +184,8 @@ def _make_quote(
 ) -> MarketQuote:
     now = datetime.now(UTC)
     return MarketQuote(
-        symbol=symbol,
-        price=_positive_float(price, "price"),
+        symbol=normalize_symbol(symbol),
+        price=positive_finite_float(price, "price"),
         change_24h_percent=_optional_float(change_24h),
         volume_24h=_optional_nonnegative_float(volume_24h),
         source=source,
