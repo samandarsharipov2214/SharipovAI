@@ -8,7 +8,7 @@ Set-StrictMode -Version Latest
 Set-Location $ProjectRoot
 
 function Import-LocalEnv([string]$Path) {
-    if (-not (Test-Path $Path)) { throw "Не найден $Path. Сначала запустите setup_pc.ps1." }
+    if (-not (Test-Path $Path)) { throw "File not found: $Path. Run setup_pc.ps1 first." }
     foreach ($line in Get-Content $Path) {
         $trimmed = $line.Trim()
         if (-not $trimmed -or $trimmed.StartsWith("#")) { continue }
@@ -20,7 +20,7 @@ function Import-LocalEnv([string]$Path) {
 
 Import-LocalEnv (Join-Path $ProjectRoot ".env.local")
 $python = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
-if (-not (Test-Path $python)) { throw "Виртуальное окружение не найдено. Сначала запустите setup_pc.ps1." }
+if (-not (Test-Path $python)) { throw "Python virtual environment was not found. Run setup_pc.ps1 first." }
 
 $dataDir = if ($env:SHARIPOVAI_DATA_DIR) { $env:SHARIPOVAI_DATA_DIR } else { Join-Path $ProjectRoot "data" }
 $backupDir = if ($env:SHARIPOVAI_BACKUP_DIR) { $env:SHARIPOVAI_BACKUP_DIR } else { Join-Path $ProjectRoot "runtime\backups" }
