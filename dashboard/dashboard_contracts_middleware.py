@@ -2,7 +2,8 @@
 
 This middleware resolves legacy route precedence without weakening production
 security. It is active for deterministic health/demo contracts and exposes the
-local access-request workflow only outside production.
+local access-request workflow only outside production or when an explicit
+isolated access-request file is configured for tests/local maintenance.
 """
 from __future__ import annotations
 
@@ -28,7 +29,8 @@ def install_dashboard_contracts_middleware(app: FastAPI) -> None:
         if method == "GET" and path in {"/health", "/api/health"}:
             return JSONResponse({"status": "ok"})
 
-        if not _is_production():
+        local_access_contract = (not _is_production()) or bool(os.getenv("AUTH_ACCESS_REQUESTS_FILE"))
+        if local_access_contract:
             if method == "GET" and path == "/api/security/access-requests":
                 compat = importlib.import_module("dashboard.stabilization_compat")
                 return JSONResponse({"status": "ok", "requests": compat._load_requests()})
