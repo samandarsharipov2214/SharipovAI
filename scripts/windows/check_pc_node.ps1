@@ -1,6 +1,7 @@
 param(
     [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path,
-    [int]$MaximumBackupAgeSeconds = 30
+    [int]$MaximumBackupAgeSeconds = 30,
+    [switch]$RequireManagedProcesses
 )
 
 $ErrorActionPreference = "Stop"
@@ -15,6 +16,20 @@ function Import-LocalEnv([string]$Path) {
         $parts = $trimmed.Split("=", 2)
         if ($parts.Count -ne 2) { continue }
         [Environment]::SetEnvironmentVariable($parts[0].Trim(), $parts[1], "Process")
+    }
+}
+
+function Test-ManagedProcess([string]$PidFile, [string]$Name, [System.Collections.Generic.List[string]]$Problems) {
+    if (-not (Test-Path $PidFile)) {
+        $Problems.Add("Не найден PID-файл процесса $Name: $PidFile")
+        return
+    }
+    try {
+        $pidValue = [int](Get-Content $PidFile -Raw).Trim()
+        $process = Get-Process -Id $pidValue -ErrorAction Stop
+        Write-Host "[OK] $Name запущен, PID=$($process.Id)"
+    } catch {
+        $Problems.Add("Процесс $Name из PID-файла не работает: $($_.Exception.Message)")
     }
 }
 
@@ -55,6 +70,20 @@ try {
     Write-Host "[OK] SharipovAI отвечает: http://$hostAddress`:$port"
 } catch {
     $problems.Add("SharipovAI web node не отвечает: $($_.Exception.Message)")
+}
+
+if ($RequireManagedProcesses) {
+    $pidsDir = Join-Path $ProjectRoot "runtime\pids"
+    Test-ManagedProcess (Join-Path $pidsDir "pc_node.pid") "PC Node" $problems
+    Test-ManagedProcess (Join-Path $pidsDir "backup.pid") "Backup" $problems
+}
+
+$stderrLog = Join-Path $ProjectRoot "runtime\logs\pc_node.stderr.log"
+if (Test-Path $stderrLog) {
+    $errorSize = (Get-Item $stderrLog).Length
+    if ($errorSize -gt 0) {
+        Write-Host "[WARN] В stderr-журнале есть данные: $stderrLog" -ForegroundColor Yellow
+    }
 }
 
 if ($problems.Count -gt 0) {
