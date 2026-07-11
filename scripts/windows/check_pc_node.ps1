@@ -21,7 +21,7 @@ function Import-LocalEnv([string]$Path) {
 
 function Test-ManagedProcess([string]$PidFile, [string]$Name, [System.Collections.Generic.List[string]]$Problems) {
     if (-not (Test-Path $PidFile)) {
-        $Problems.Add("Не найден PID-файл процесса $Name: $PidFile")
+        $Problems.Add("Не найден PID-файл процесса ${Name}: $PidFile")
         return $false
     }
     try {
