@@ -43,3 +43,24 @@ jobs:
         run: npm run build
         env:
           NEXT_PUBLIC_API_BASE_URL: https://sharipovai-bot.onrender.com
+      - name: Runtime smoke test
+        shell: bash
+        env:
+          PORT: "3100"
+          NEXT_PUBLIC_API_BASE_URL: https://sharipovai-bot.onrender.com
+        run: |
+          set -euo pipefail
+          npm run start > /tmp/sharipoai-web2.log 2>&1 &
+          pid=$!
+          trap 'kill $pid 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:3100/ > /tmp/sharipoai-home.html; then
+              break
+            fi
+            sleep 1
+          done
+          grep -q "SharipoAI" /tmp/sharipoai-home.html
+          curl --fail --silent http://127.0.0.1:3100/sharipoai-logo.svg > /tmp/sharipoai-logo.svg
+          grep -q "<svg" /tmp/sharipoai-logo.svg
+          test -s /tmp/sharipoai-home.html
+          echo "SharipoAI Web 2 runtime smoke test passed"
