@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -165,7 +166,11 @@ class AutonomousPaperLoop:
             try:
                 self.tick()
             except Exception as exc:
-                self._event("ERROR", f"{type(exc).__name__}: {exc}")
+                try:
+                    self._event("ERROR", f"{type(exc).__name__}: {exc}")
+                except Exception:
+                    # A transient Windows sharing violation must not terminate the daemon loop.
+                    continue
 
     def _load(self) -> dict[str, Any]:
         if self.state_file.exists():
@@ -192,9 +197,29 @@ class AutonomousPaperLoop:
 
     def _persist(self) -> None:
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
-        temp = self.state_file.with_suffix(self.state_file.suffix + ".tmp")
-        temp.write_text(json.dumps(self._state, ensure_ascii=False, indent=2), encoding="utf-8")
-        temp.replace(self.state_file)
+        payload = json.dumps(self._state, ensure_ascii=False, indent=2)
+        temp = self.state_file.with_name(
+            f".{self.state_file.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+        )
+        try:
+            with temp.open("w", encoding="utf-8", newline="\n") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+
+            for attempt in range(8):
+                try:
+                    os.replace(temp, self.state_file)
+                    return
+                except PermissionError:
+                    if attempt == 7:
+                        raise
+                    time.sleep(min(0.025 * (2**attempt), 0.25))
+        finally:
+            try:
+                temp.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     @staticmethod
     def _now() -> str:
