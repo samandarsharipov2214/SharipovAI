@@ -7,15 +7,18 @@ from typing import Any
 from fastapi import FastAPI
 
 from autonomous_trading import AutonomousPaperLoop, AutonomousTestnetBridge, MarketStream
+from storage import ProjectDatabase
 
 
 def install_autonomous_trading_api(app: FastAPI) -> None:
     if getattr(app.state, "autonomous_trading_api_installed", False):
         return
     app.state.autonomous_trading_api_installed = True
+    database = ProjectDatabase()
+    database.initialize()
     stream = MarketStream()
-    loop = AutonomousPaperLoop(stream)
-    testnet_bridge = AutonomousTestnetBridge()
+    loop = AutonomousPaperLoop(stream, database=database)
+    testnet_bridge = AutonomousTestnetBridge(database=database)
     app.state.market_stream = stream
     app.state.autonomous_paper_loop = loop
     app.state.autonomous_testnet_bridge = testnet_bridge
@@ -26,7 +29,7 @@ def install_autonomous_trading_api(app: FastAPI) -> None:
             stream.start()
         if _truthy("AUTONOMOUS_PAPER_ENABLED", default=True):
             loop.start()
-        if _truthy("AUTONOMOUS_TESTNET_BRIDGE_ENABLED", default=True):
+        if _truthy("AUTONOMOUS_TESTNET_BRIDGE_ENABLED", default=False):
             testnet_bridge.start()
 
     @app.on_event("shutdown")
