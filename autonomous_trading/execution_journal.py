@@ -23,7 +23,9 @@ class ExecutionJournal:
         self.path = Path(path or os.getenv("EXECUTION_JOURNAL_FILE", "data/execution_journal.json"))
         self.database = database or ProjectDatabase()
         self.database.initialize()
-        self.namespace = "execution_journal"
+        self.scope = hashlib.sha256(str(self.path.expanduser().resolve()).encode()).hexdigest()[:20]
+        self.namespace = f"execution_journal:{self.scope}"
+        self.migration_key = f"execution_journal_json_v1:{self.scope}"
         self._lock = threading.RLock()
         self._migrate_legacy_once()
 
@@ -38,14 +40,10 @@ class ExecutionJournal:
             "recorded_at": datetime.fromtimestamp(now_ms / 1000, UTC).isoformat(),
             "recorded_at_ms": now_ms,
         }
-        # ProjectDatabase serializes with allow_nan=False and expected_version=0,
-        # so one immutable event ID can never be silently overwritten.
         self.database.put_json(self.namespace, event_id, item, expected_version=0)
         try:
             self._write_backup()
         except Exception as exc:
-            # DB commit already succeeded. Returning a backup warning prevents a
-            # caller from retrying the same financial event as if it were absent.
             return {**item, "backup_status": "error", "backup_error": f"{type(exc).__name__}: {exc}"}
         return {**item, "backup_status": "ok"}
 
@@ -69,10 +67,11 @@ class ExecutionJournal:
             "last_order": orders[-1] if orders else None,
             "database_backed": True,
             "retention_truncated": False,
+            "scope": self.scope,
         }
 
     def _migrate_legacy_once(self) -> None:
-        if self.database.get_json("migrations", "execution_journal_json_v1") is not None:
+        if self.database.get_json("migrations", self.migration_key) is not None:
             return
         imported = 0
         if self.path.exists():
@@ -101,15 +100,13 @@ class ExecutionJournal:
                         raise
         marker = {"completed": True, "imported": imported, "completed_at_ms": int(time.time() * 1000)}
         try:
-            self.database.put_json("migrations", "execution_journal_json_v1", marker, expected_version=0)
+            self.database.put_json("migrations", self.migration_key, marker, expected_version=0)
         except VersionConflict:
-            if self.database.get_json("migrations", "execution_journal_json_v1") is None:
+            if self.database.get_json("migrations", self.migration_key) is None:
                 raise
         try:
             self._write_backup()
         except Exception:
-            # Migration is complete in the source of truth. A later append or
-            # operator repair will refresh the non-authoritative JSON backup.
             pass
 
     def _write_backup(self) -> None:
