@@ -10,6 +10,14 @@
   <link rel="stylesheet" href="/static/style.css?v=20260709-01">
   <link rel="stylesheet" href="/static/mobile-fix.css?v=20260710-security-01">
   <link rel="stylesheet" href="/static/mini-app-mobile-overrides.css?v=20260710-modal-close-01">
+  <style>
+    .os-main{min-height:100vh}
+    .os-main .mini-app-shell{display:block!important;visibility:visible!important;opacity:1!important;width:100%!important;min-height:640px;position:relative!important;transform:none!important}
+    .os-main .mini-section{display:none!important;visibility:hidden!important;opacity:0!important}
+    .os-main .mini-section.active-panel,.os-main #overview-section.active-panel{display:block!important;visibility:visible!important;opacity:1!important;position:relative!important;transform:none!important}
+    .os-main .mini-top,.os-main .mini-tabs{display:flex!important;visibility:visible!important;opacity:1!important}
+    @media(min-width:981px){.os-main .mini-app-shell{max-width:1320px;margin:0 auto}}
+  </style>
 </head>
 <body>
   <aside class="os-sidebar">
