@@ -1,0 +1,58 @@
+name: Проверка SharipovAI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**/*.py'
+      - 'requirements.txt'
+      - '.github/workflows/ci.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - '**/*.py'
+      - 'requirements.txt'
+      - '.github/workflows/ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sharipovai-check-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    if: >-
+      ${{
+        vars.SHARIPOVAI_SELF_HOSTED_CI == '1' &&
+        (github.event_name != 'pull_request' ||
+         github.event.pull_request.head.repo.full_name == github.repository)
+      }}
+    runs-on: [self-hosted, linux, x64, sharipovai-ci]
+    timeout-minutes: 20
+    steps:
+      - name: Получить код
+        uses: actions/checkout@v4
+
+      - name: Настроить Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Установить зависимости
+        run: |
+          python -m pip install --upgrade pip --quiet
+          python -m pip install -r requirements.txt --quiet
+
+      - name: Проверить синтаксис Python
+        run: python -m compileall -q dashboard exchange_connector config
+
+      - name: Запустить быстрые проверки
+        env:
+          PYTHONPATH: .
+        run: |
+          python -m pytest -q --disable-warnings --maxfail=1 \
+            tests/test_ci_self_hosted_contracts.py
