@@ -2,7 +2,7 @@
 set -euo pipefail
 umask 077
 
-APP_DIR=${APP_DIR:-/opt/sharipovai}
+APP_DIR=${APP_DIR:-/opt/sharipovai-repo}
 COMPOSE_DIR=${COMPOSE_DIR:-$APP_DIR/deploy/vps}
 BACKUP_DIR=${BACKUP_DIR:-$COMPOSE_DIR/backups}
 CONTAINER=${CONTAINER:-sharipovai}
