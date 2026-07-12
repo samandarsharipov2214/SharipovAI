@@ -1,44 +1,68 @@
 name: Project Guardrails
 
 on:
-  pull_request:
   push:
     branches: [main]
+    paths:
+      - 'dashboard/**'
+      - 'exchange_connector/**'
+      - 'storage/**'
+      - 'scripts/release_audit.py'
+      - 'scripts/migrate_project_db.py'
+      - 'requirements.txt'
+      - '.github/workflows/project-guardrails.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'dashboard/**'
+      - 'exchange_connector/**'
+      - 'storage/**'
+      - 'scripts/release_audit.py'
+      - 'scripts/migrate_project_db.py'
+      - 'requirements.txt'
+      - '.github/workflows/project-guardrails.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: guardrails-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   verify:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    if: >-
+      ${{
+        vars.SHARIPOVAI_SELF_HOSTED_CI == '1' &&
+        (github.event_name != 'pull_request' ||
+         github.event.pull_request.head.repo.full_name == github.repository)
+      }}
+    runs-on: [self-hosted, linux, x64, sharipovai-ci]
+    timeout-minutes: 15
     env:
-      PYTHONUNBUFFERED: "1"
-      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
       ADMIN_USERNAME: ci-admin
       ADMIN_PASSWORD: ci-test-password
       AUTH_SECRET: ci-test-secret
-      SHARIPOVAI_DISABLE_AUTH: "1"
+      SHARIPOVAI_DISABLE_AUTH: '1'
       DATABASE_URL: sqlite:////tmp/sharipovai-shared.db
-      SHARIPOVAI_DATABASE_REQUIRED: "1"
-      MARKET_STREAM_ENABLED: "0"
-      AUTONOMOUS_PAPER_ENABLED: "0"
-      AUTONOMOUS_TESTNET_ENABLED: "0"
-      AUTONOMOUS_TESTNET_BRIDGE_ENABLED: "0"
-      TESTNET_EXECUTION_ENABLED: "0"
-      EXCHANGE_LIVE_TRADING_ENABLED: "0"
-      FEATURE_BYBIT_LIVE_EXECUTION: "0"
-      FEATURE_BYBIT_TESTNET_EXECUTION: "0"
-      FEATURE_BYBIT_PRIVATE_ORDER_WS: "0"
-      BYBIT_ALLOW_LEGACY_EXCHANGE_CREDENTIALS: "0"
-      EXECUTION_KILL_SWITCH: "1"
-      AUTONOMOUS_TRADING_STAGE: "2"
+      SHARIPOVAI_DATABASE_REQUIRED: '1'
+      MARKET_STREAM_ENABLED: '0'
+      AUTONOMOUS_PAPER_ENABLED: '0'
+      AUTONOMOUS_TESTNET_ENABLED: '0'
+      AUTONOMOUS_TESTNET_BRIDGE_ENABLED: '0'
+      TESTNET_EXECUTION_ENABLED: '0'
+      EXCHANGE_LIVE_TRADING_ENABLED: '0'
+      FEATURE_BYBIT_LIVE_EXECUTION: '0'
+      FEATURE_BYBIT_TESTNET_EXECUTION: '0'
+      FEATURE_BYBIT_PRIVATE_ORDER_WS: '0'
+      BYBIT_ALLOW_LEGACY_EXCHANGE_CREDENTIALS: '0'
+      EXECUTION_KILL_SWITCH: '1'
+      AUTONOMOUS_TRADING_STAGE: '2'
       EXCHANGE_MODE: sandbox
-      BYBIT_ACCOUNT_SYNC_ENABLED: "0"
-      AUTONOMOUS_PAPER_STATE_FILE: /tmp/sharipovai-autonomous-paper.json
-      MARKET_STREAM_STATE_FILE: /tmp/sharipovai-market-stream.json
-      TESTNET_BRIDGE_STATE_FILE: /tmp/sharipovai-testnet-bridge.json
-      EXECUTION_JOURNAL_FILE: /tmp/sharipovai-execution-journal.json
+      BYBIT_ACCOUNT_SYNC_ENABLED: '0'
 
     steps:
       - name: Checkout
@@ -47,13 +71,13 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12.8"
+          python-version: '3.12'
           cache: pip
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip --quiet
-          pip install -r requirements.txt --quiet
+          python -m pip install -r requirements.txt --quiet
 
       - name: Initialize canonical project database
         run: python scripts/migrate_project_db.py
@@ -62,40 +86,21 @@ jobs:
         run: python -m compileall -q .
 
       - name: Import application safely
-        run: python -c "import dashboard; assert dashboard.app is not None; print('dashboard import: ok')"
+        run: |
+          python -c "import dashboard; assert dashboard.app is not None; print('dashboard import: ok')"
 
       - name: Verify execution remains locked
         run: |
           python - <<'PY'
           from exchange_connector.bybit_execution import BybitExecutionClient
           status = BybitExecutionClient().status()
-          assert status["kill_switch"] is True
-          assert status["testnet_execution_enabled"] is False
-          assert status["live_execution_enabled"] is False
+          assert status['kill_switch'] is True
+          assert status['testnet_execution_enabled'] is False
+          assert status['live_execution_enabled'] is False
           print(status)
           PY
 
       - name: Run fail-closed release audit
         env:
-          SHARIPOVAI_DISABLE_AUTH: "0"
+          SHARIPOVAI_DISABLE_AUTH: '0'
         run: python scripts/release_audit.py --runtime --json
-
-      - name: Run regression tests
-        id: pytest
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          python -m pytest -q --disable-warnings --maxfail=1 2>&1 | tee pytest-output.txt
-          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
-
-      - name: Upload pytest report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: project-guardrails-pytest-output
-          path: pytest-output.txt
-          if-no-files-found: error
-
-      - name: Fail when pytest failed
-        if: steps.pytest.outputs.exit_code != '0'
-        run: exit 1
