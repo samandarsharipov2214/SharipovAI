@@ -6,6 +6,7 @@ idempotent so Codex/tests may also import ``dashboard.app`` directly.
 from __future__ import annotations
 
 from .app import app, create_app
+from .ai_organ_state_api import install_ai_organ_state_api
 from .autonomous_trading_api import install_autonomous_trading_api
 from .bybit_account_api import install_bybit_account_api
 from .control_plane_api import install_control_plane_api
@@ -19,6 +20,7 @@ from .news_agent_network_api import install_news_agent_network_api
 from .private_order_ws_api import install_private_order_ws_api
 from .web2_host import install_web2_host
 
+install_database_api(app)
 install_news_agent_network_api(app)
 install_market_data_api(app)
 install_autonomous_trading_api(app)
@@ -26,16 +28,16 @@ install_execution_stages_api(app)
 install_bybit_account_api(app)
 install_control_plane_api(app)
 install_dashboard2_api(app)
-install_database_api(app)
 install_private_order_ws_api(app)
 install_web2_host(app)
 install_global_auth_guard(app)
+install_ai_organ_state_api(app)
 
 try:
     from .telegram_news_agents import install_telegram_news_agent_commands
 
     app.state.telegram_news_agent_commands = install_telegram_news_agent_commands()
-except Exception as exc:  # adapter failure must not break dashboard startup
+except Exception as exc:
     app.state.telegram_news_agent_commands = {
         "status": "error",
         "error": f"{type(exc).__name__}: {exc}",
