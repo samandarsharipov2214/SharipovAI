@@ -2,66 +2,87 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import shutil
 import tempfile
 from pathlib import Path
 
+from tools.backup_integrity import BackupIntegrityError, verify_snapshot
 
-class RestoreError(RuntimeError):
+
+class RestoreError(BackupIntegrityError):
     pass
 
 
-def sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def restore(snapshot: Path, destination: Path) -> dict[str, object]:
-    snapshot = snapshot.resolve()
-    destination = destination.resolve()
-    manifest_path = snapshot / "manifest.json"
+    raw_destination = Path(destination)
+    if raw_destination.is_symlink():
+        raise RestoreError("restore destination must not be a symlink")
+    try:
+        manifest = verify_snapshot(Path(snapshot))
+    except BackupIntegrityError as exc:
+        raise RestoreError(str(exc)) from exc
+
+    snapshot = Path(snapshot).resolve()
     source = snapshot / "data"
-    if not manifest_path.is_file() or not source.is_dir():
-        raise RestoreError("snapshot must contain manifest.json and data/")
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    entries = manifest.get("files")
-    if not isinstance(entries, list):
-        raise RestoreError("invalid backup manifest")
-    for entry in entries:
-        relative = Path(str(entry["path"]))
-        if relative.is_absolute() or ".." in relative.parts:
-            raise RestoreError(f"unsafe backup path: {relative}")
-        path = source / relative
-        if not path.is_file():
-            raise RestoreError(f"backup file missing: {relative}")
-        if sha256(path) != str(entry["sha256"]).lower():
-            raise RestoreError(f"checksum mismatch: {relative}")
+    destination = raw_destination.resolve()
+    if destination == snapshot or destination.is_relative_to(snapshot):
+        raise RestoreError("restore destination must be outside the snapshot")
+    if snapshot.is_relative_to(destination):
+        raise RestoreError("snapshot must be outside the restore destination")
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix="restore-", dir=destination.parent))
     rollback = destination.with_name(destination.name + ".rollback")
+    moved_existing = False
+    installed_new = False
     try:
-        shutil.copytree(source, staging / "data", dirs_exist_ok=True)
+        shutil.copytree(source, staging / "data", dirs_exist_ok=False)
+        verify_snapshot(_snapshot_wrapper(staging, manifest))
         if rollback.exists():
             shutil.rmtree(rollback)
         if destination.exists():
             os.replace(destination, rollback)
+            moved_existing = True
         os.replace(staging / "data", destination)
-        if rollback.exists():
-            shutil.rmtree(rollback)
+        installed_new = True
     except Exception:
-        if not destination.exists() and rollback.exists():
+        if installed_new and destination.exists():
+            shutil.rmtree(destination, ignore_errors=True)
+        if moved_existing and rollback.exists() and not destination.exists():
             os.replace(rollback, destination)
         raise
     finally:
         shutil.rmtree(staging, ignore_errors=True)
+    if rollback.exists():
+        shutil.rmtree(rollback)
     return manifest
+
+
+def _snapshot_wrapper(staging: Path, manifest: dict[str, object]) -> Path:
+    """Create a temporary snapshot envelope to re-verify the copied bytes."""
+
+    wrapper = staging / "verification"
+    wrapper.mkdir()
+    (wrapper / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, sort_keys=True),
+        encoding="utf-8",
+    )
+    os.replace(staging / "data", wrapper / "data")
+    os.replace(wrapper / "data", staging / "data")
+    return _write_verification_envelope(staging, manifest)
+
+
+def _write_verification_envelope(staging: Path, manifest: dict[str, object]) -> Path:
+    envelope = staging / "snapshot"
+    envelope.mkdir()
+    (envelope / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, sort_keys=True),
+        encoding="utf-8",
+    )
+    os.replace(staging / "data", envelope / "data")
+    return envelope
 
 
 def main() -> int:
@@ -71,7 +92,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         manifest = restore(args.snapshot, args.destination)
-    except (OSError, ValueError, KeyError, json.JSONDecodeError, RestoreError) as exc:
+    except (OSError, ValueError, KeyError, json.JSONDecodeError, BackupIntegrityError) as exc:
         print(f"restore failed: {exc}")
         return 1
     print(json.dumps({"status": "ok", "created_at": manifest.get("created_at"), "file_count": manifest.get("file_count")}))
