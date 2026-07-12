@@ -66,8 +66,16 @@ jobs:
         run: python -m compileall -q .
 
       - name: Import application safely
-        run: |
-          python -c "import dashboard; assert dashboard.app is not None; print('dashboard import: ok')"
+        run: python scripts/ci_import_probe.py
+
+      - name: Upload import diagnostic
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: application-import-diagnostic
+          path: ci-import-diagnostic.txt
+          if-no-files-found: error
+          retention-days: 3
 
       - name: Verify execution safety defaults
         env:
