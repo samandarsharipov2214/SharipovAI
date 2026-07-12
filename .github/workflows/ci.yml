@@ -84,7 +84,9 @@ jobs:
           name: news-intelligence-context-${{ github.run_id }}
           path: |
             news_intelligence
+            news_monitor
             dashboard/news_agent_network_api.py
             tests/test_ai_organ_runtime_state.py
+            tests/*news*.py
           if-no-files-found: error
           retention-days: 1
