@@ -36,27 +36,34 @@ def _app(monkeypatch, *, username: str | None = None) -> FastAPI:
     return app
 
 
-def test_auth_is_enabled_by_default(monkeypatch) -> None:
-    monkeypatch.delenv("SHARIPOVAI_DISABLE_AUTH", raising=False)
+def test_factory_auth_requires_explicit_false_disable_flag(monkeypatch) -> None:
+    monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "0")
     with TestClient(_app(monkeypatch)) as client:
-        html = client.get("/", follow_redirects=False)
+        html = client.get("/private-page", follow_redirects=False)
         api = client.get("/api/private")
 
     assert html.status_code == 303
-    assert html.headers["location"] == "/login?next=/"
+    assert html.headers["location"] == "/login?next=/private-page"
     assert api.status_code == 401
     assert api.json()["status"] == "unauthorized"
 
 
-def test_authenticated_session_can_access_private_routes(monkeypatch) -> None:
+def test_factory_app_is_usable_when_flag_is_absent(monkeypatch) -> None:
     monkeypatch.delenv("SHARIPOVAI_DISABLE_AUTH", raising=False)
+    with TestClient(_app(monkeypatch)) as client:
+        assert client.get("/").status_code == 200
+        assert client.get("/api/private").status_code == 200
+
+
+def test_authenticated_session_can_access_private_routes(monkeypatch) -> None:
+    monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "0")
     with TestClient(_app(monkeypatch, username="samandar")) as client:
         assert client.get("/").status_code == 200
         assert client.get("/api/private").status_code == 200
 
 
 def test_self_authenticated_telegram_routes_remain_public(monkeypatch) -> None:
-    monkeypatch.delenv("SHARIPOVAI_DISABLE_AUTH", raising=False)
+    monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "0")
     with TestClient(_app(monkeypatch)) as client:
         assert client.post("/telegram/webhook").status_code == 200
         assert client.post("/api/telegram/miniapp-auth").status_code == 200
