@@ -25,8 +25,8 @@ class FakeClient:
 
 
 def test_fetch_snapshot_is_read_only_and_normalized(monkeypatch, tmp_path):
-    monkeypatch.setenv("EXCHANGE_API_KEY", "key")
-    monkeypatch.setenv("EXCHANGE_API_SECRET", "secret")
+    monkeypatch.setenv("BYBIT_READONLY_API_KEY", "key")
+    monkeypatch.setenv("BYBIT_READONLY_API_SECRET", "secret")
     monkeypatch.setenv("BYBIT_ACCOUNT_BASE_URL", "https://api.bybit.eu")
     monkeypatch.setenv("BYBIT_ACCOUNT_STATE_FILE", str(tmp_path / "account.json"))
     fake = FakeClient()
@@ -44,6 +44,8 @@ def test_fetch_snapshot_is_read_only_and_normalized(monkeypatch, tmp_path):
 
 
 def test_missing_credentials_are_blocked(monkeypatch):
+    monkeypatch.delenv("BYBIT_READONLY_API_KEY", raising=False)
+    monkeypatch.delenv("BYBIT_READONLY_API_SECRET", raising=False)
     monkeypatch.delenv("EXCHANGE_API_KEY", raising=False)
     monkeypatch.delenv("EXCHANGE_API_SECRET", raising=False)
     client = BybitAccountClient(client=FakeClient())
