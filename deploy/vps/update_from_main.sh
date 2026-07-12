@@ -24,6 +24,13 @@ flock -n 9 || fail 'another SharipovAI update is already running'
 previous_sha="$(git -C "${APP_DIR}" rev-parse HEAD)"
 compose_dir="${APP_DIR}/deploy/vps"
 rollback_started=0
+backup_exporter_tmp=""
+rendered_config=""
+
+cleanup() {
+  rm -f "${backup_exporter_tmp:-}" "${rendered_config:-}"
+}
+trap cleanup EXIT
 
 health_check() {
   local attempt
@@ -70,6 +77,7 @@ PY
 
 rollback() {
   local reason="$1"
+  trap - ERR
   if [[ ${rollback_started} -eq 1 ]]; then
     fail "rollback failed after: ${reason}"
   fi
@@ -88,13 +96,7 @@ rollback() {
   fail "new deployment was rolled back safely: ${reason}"
 }
 
-trap 'rollback "unexpected error at line ${LINENO}"' ERR
-
-log "creating verified backup before code update"
-backup_exporter="${APP_DIR}/deploy/vps/export_backup.sh"
-[[ -f "${backup_exporter}" ]] || fail 'verified backup exporter is missing'
-bash "${backup_exporter}"
-
+# Fetching objects does not mutate the checked-out production tree.
 log "fetching origin/${BRANCH}"
 git -C "${APP_DIR}" fetch --prune origin "${BRANCH}"
 target_sha="$(git -C "${APP_DIR}" rev-parse "origin/${BRANCH}")"
@@ -103,10 +105,21 @@ target_sha="$(git -C "${APP_DIR}" rev-parse "origin/${BRANCH}")"
 if [[ "${target_sha}" == "${previous_sha}" ]]; then
   log "already up to date at ${target_sha}"
   health_check || fail 'current deployment is not healthy'
-  trap - ERR
   exit 0
 fi
 
+log "creating verified backup before code update"
+backup_exporter="${APP_DIR}/deploy/vps/export_backup.sh"
+if [[ ! -f "${backup_exporter}" ]]; then
+  # Old installations may predate the exporter. Read it from the fetched target
+  # commit without resetting the production checkout.
+  backup_exporter_tmp="$(mktemp)"
+  git -C "${APP_DIR}" show "origin/${BRANCH}:deploy/vps/export_backup.sh" >"${backup_exporter_tmp}"
+  backup_exporter="${backup_exporter_tmp}"
+fi
+APP_DIR="${APP_DIR}" COMPOSE_DIR="${compose_dir}" bash "${backup_exporter}"
+
+trap 'rollback "unexpected error at line ${LINENO}"' ERR
 log "updating ${previous_sha} -> ${target_sha}"
 git -C "${APP_DIR}" checkout -q "${BRANCH}"
 git -C "${APP_DIR}" reset --hard "${target_sha}"
@@ -114,7 +127,6 @@ chmod 600 "${compose_dir}/.env.vps"
 
 cd "${compose_dir}"
 rendered_config="$(mktemp)"
-trap 'rm -f "${rendered_config:-}"' EXIT
 docker compose config --format json >"${rendered_config}"
 validate_financial_locks "${rendered_config}"
 
