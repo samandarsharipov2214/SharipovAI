@@ -32,6 +32,7 @@ jobs:
       FEATURE_BYBIT_PRIVATE_ORDER_WS: "0"
       BYBIT_ALLOW_LEGACY_EXCHANGE_CREDENTIALS: "0"
       EXECUTION_KILL_SWITCH: "1"
+      AUTONOMOUS_TRADING_STAGE: "2"
       EXCHANGE_MODE: sandbox
       BYBIT_ACCOUNT_SYNC_ENABLED: "0"
       AUTONOMOUS_PAPER_STATE_FILE: /tmp/sharipovai-autonomous-paper.json
@@ -73,6 +74,11 @@ jobs:
           assert status["live_execution_enabled"] is False
           print(status)
           PY
+
+      - name: Run fail-closed release audit
+        env:
+          SHARIPOVAI_DISABLE_AUTH: "0"
+        run: python scripts/release_audit.py --runtime --json
 
       - name: Run regression tests
         id: pytest

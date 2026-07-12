@@ -67,7 +67,7 @@ services:
       - key: AUTONOMOUS_PAPER_STATE_FILE
         value: /var/data/autonomous_paper.json
       - key: AUTONOMOUS_TESTNET_BRIDGE_ENABLED
-        value: "1"
+        value: "0"
       - key: AUTONOMOUS_TESTNET_ENABLED
         value: "0"
       - key: TESTNET_EXECUTION_ENABLED
