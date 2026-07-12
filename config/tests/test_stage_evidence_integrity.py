@@ -102,3 +102,20 @@ def test_only_verified_trades_count_toward_stage_three(tmp_path, monkeypatch) ->
     assert assessment.metrics["net_profit"] == 30.0
     assert assessment.metrics["evidence_equity"] == 10_030.0
     assert assessment.metrics["reported_equity"] == 999_999.0
+
+
+def test_recovered_deep_drawdown_still_blocks_stage_three(tmp_path, monkeypatch) -> None:
+    trades = [_verified_trade(0, -2_000.0)]
+    trades.extend(_verified_trade(index, 100.0) for index in range(1, 30))
+    state_file = tmp_path / "paper.json"
+    state_file.write_text(json.dumps({"equity": 10_900.0, "trades": trades}), encoding="utf-8")
+    monkeypatch.setenv("AUTONOMOUS_TRADING_STAGE", "2")
+    monkeypatch.setenv("STAGE3_MAX_DRAWDOWN_PERCENT", "10")
+
+    assessment = StageController(str(state_file), journal=_Journal()).assess()
+
+    assert assessment.metrics["net_profit"] == 900.0
+    assert assessment.metrics["evidence_equity"] == 10_900.0
+    assert assessment.metrics["drawdown_percent"] == 20.0
+    assert assessment.eligible_stage == 2
+    assert any("Просадка" in blocker for blocker in assessment.blockers)
