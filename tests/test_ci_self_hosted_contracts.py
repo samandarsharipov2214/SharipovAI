@@ -67,3 +67,17 @@ def test_runner_installers_never_add_runner_user_to_docker_group() -> None:
     assert "docker.sock" not in linux_installer
     assert "SHARIPOVAI_SELF_HOSTED_CI" in linux_installer
     assert "SHARIPOVAI_WINDOWS_SELF_HOSTED_CI" in windows_installer
+
+
+def test_vps_bootstrap_uses_device_login_and_verifies_real_ci() -> None:
+    bootstrap = _read(ROOT / "deploy" / "vps" / "bootstrap_github_actions_runner.sh")
+    assert "gh auth login" in bootstrap
+    assert "--web" in bootstrap
+    assert "--git-protocol https" in bootstrap
+    assert "install_github_actions_runner.sh" in bootstrap
+    assert "systemctl is-active" in bootstrap
+    assert "gh workflow run ci.yml" in bootstrap
+    assert "gh run watch" in bootstrap
+    assert "SHARIPOVAI_SELF_HOSTED_CI" in bootstrap
+    assert "usermod -aG docker" not in bootstrap
+    assert "docker.sock" not in bootstrap
