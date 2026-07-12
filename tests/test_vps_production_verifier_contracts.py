@@ -39,7 +39,7 @@ def test_verifier_is_read_only_and_cannot_change_runtime() -> None:
         "systemctl start",
         "systemctl stop",
         "git reset",
-        "git checkout",
+        'git -C "${APP_DIR}" checkout',
         "git pull",
         "--request POST",
         "--method POST",
@@ -91,12 +91,12 @@ def test_verifier_checks_backup_integrity_age_and_runner_online() -> None:
     assert "latest.tar.gz.sha256" in content
     assert "sha256sum -c" in content
     assert "MAX_BACKUP_AGE_HOURS" in content
-    assert "actions.runner" in content
+    assert "actions\\.runner" in content
     assert "systemctl is-enabled" in content
     assert "systemctl is-active" in content
     assert "SHARIPOVAI_SELF_HOSTED_CI" in content
     assert '"sharipovai-ci" in labels' in content
-    assert "runner.get(\"status\"" in content
+    assert 'runner.get("status"' in content
 
 
 def test_verifier_writes_machine_readable_report_without_secrets() -> None:
@@ -106,6 +106,7 @@ def test_verifier_writes_machine_readable_report_without_secrets() -> None:
     assert '"local_commit"' in content
     assert '"target_commit"' in content
     assert '"checks"' in content
-    assert "VERIFY_SESSION_COOKIE" not in content.split("python3 - \"${records_file}\"")[1]
+    report_section = content.split('python3 - "${records_file}" "${REPORT_JSON}"', 1)[1]
+    assert "VERIFY_SESSION_COOKIE" not in report_section
     assert 'chmod 0644 "${REPORT_JSON}"' in content
     assert "exit 2" in content
