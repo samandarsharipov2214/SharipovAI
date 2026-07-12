@@ -5,12 +5,13 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+Set-Location $ProjectRoot
 $python = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
 $reporter = Join-Path $ProjectRoot "tools\standby_health_report.py"
 if (-not (Test-Path $python)) { throw "Python environment not found: $python" }
 if (-not (Test-Path $reporter)) { throw "Standby health reporter not found: $reporter" }
 
-& $python $reporter --project-root $ProjectRoot --maximum-age-seconds $MaximumBackupAgeSeconds
+& $python -m tools.standby_health_report --project-root $ProjectRoot --maximum-age-seconds $MaximumBackupAgeSeconds
 $exitCode = $LASTEXITCODE
 $reportPath = Join-Path $ProjectRoot "runtime\standby_health.json"
 if (Test-Path $reportPath) {

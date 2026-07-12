@@ -95,5 +95,7 @@ def test_sync_persists_success_and_failure_status() -> None:
 def test_readiness_command_writes_a_visible_report() -> None:
     script = read("scripts/windows/check_standby_readiness.ps1")
     assert "standby_health_report.py" in script
+    assert "-m tools.standby_health_report" in script
+    assert "Set-Location $ProjectRoot" in script
     assert r"runtime\standby_health.json" in script
     assert "SharipovAI standby status" in script

@@ -2,7 +2,8 @@ param(
     [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path,
     [string]$VpsHost = $env:SHARIPOVAI_VPS_HOST,
     [string]$VpsUser = $(if ($env:SHARIPOVAI_VPS_USER) { $env:SHARIPOVAI_VPS_USER } else { "root" }),
-    [string]$VpsAppDir = $(if ($env:SHARIPOVAI_VPS_APP_DIR) { $env:SHARIPOVAI_VPS_APP_DIR } else { "/opt/sharipovai" })
+    [string]$VpsAppDir = $(if ($env:SHARIPOVAI_VPS_APP_DIR) { $env:SHARIPOVAI_VPS_APP_DIR } else { "/opt/sharipovai-repo" }),
+    [string]$IdentityFile = $env:SHARIPOVAI_VPS_IDENTITY_FILE
 )
 
 $ErrorActionPreference = "Stop"
@@ -38,6 +39,13 @@ try {
         throw "VPS app directory is invalid."
     }
 
+    $sshOptions = @()
+    if ($IdentityFile) {
+        if (-not (Test-Path $IdentityFile -PathType Leaf)) { throw "SSH identity file not found: $IdentityFile" }
+        $IdentityFile = (Resolve-Path $IdentityFile).Path
+        $sshOptions = @("-i", $IdentityFile, "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", "-o", "ConnectTimeout=15")
+    }
+
     $python = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
     if (-not (Test-Path $python -PathType Leaf)) { throw "Python environment not found. Run setup_pc.ps1 first." }
     $verifier = Join-Path $ProjectRoot "tools\verify_backup_archive.py"
@@ -66,7 +74,7 @@ try {
 
     $target = "$VpsUser@$VpsHost"
     $remoteCommand = "APP_DIR='$VpsAppDir' bash '$VpsAppDir/deploy/vps/export_backup.sh'"
-    $remoteArchive = (& $ssh.Source $target $remoteCommand | Select-Object -Last 1).Trim()
+    $remoteArchive = (& $ssh.Source @sshOptions $target $remoteCommand | Select-Object -Last 1).Trim()
     if ($LASTEXITCODE -ne 0) { throw "VPS backup export failed." }
     $expectedPrefix = "$VpsAppDir/deploy/vps/backups/sharipovai-"
     if (-not $remoteArchive.StartsWith($expectedPrefix, [System.StringComparison]::Ordinal) -or
@@ -76,9 +84,9 @@ try {
 
     $archiveName = Split-Path $remoteArchive -Leaf
     $localArchive = Join-Path $downloads $archiveName
-    & $scp.Source "$target`:$remoteArchive" $localArchive
+    & $scp.Source @sshOptions "$target`:$remoteArchive" $localArchive
     if ($LASTEXITCODE -ne 0) { throw "Archive download failed." }
-    & $scp.Source "$target`:$remoteArchive.sha256" "$localArchive.sha256"
+    & $scp.Source @sshOptions "$target`:$remoteArchive.sha256" "$localArchive.sha256"
     if ($LASTEXITCODE -ne 0) { throw "Checksum download failed." }
 
     $expected = ((Get-Content "$localArchive.sha256" -Raw).Trim() -split "\s+")[0].ToLowerInvariant()
