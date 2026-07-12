@@ -47,7 +47,16 @@ class DecisionSettlement:
     lessons: tuple[str, ...]
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return {
+            "decision_id": self.decision_id,
+            "selected_action": self.selected_action,
+            "realized_action": self.realized_action,
+            "reputation_recorded": self.reputation_recorded,
+            "winning_agents": list(self.winning_agents),
+            "losing_agents": list(self.losing_agents),
+            "abstaining_agents": list(self.abstaining_agents),
+            "lessons": list(self.lessons),
+        }
 
 
 class DecisionQualityService:
