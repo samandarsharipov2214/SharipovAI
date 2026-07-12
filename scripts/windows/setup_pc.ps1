@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 )
 
@@ -39,28 +39,30 @@ $credentialsFile = Join-Path $runtimeDir "initial_admin_credentials.txt"
 if (-not (Test-Path $envFile)) {
     $authSecret = New-RandomSecret 48
     $adminPassword = New-RandomSecret 24
-    @"
-SHARIPOVAI_ENV=local
-SHARIPOVAI_DATA_DIR=$dataDir
-SHARIPOVAI_BACKUP_DIR=$backupDir
-SHARIPOVAI_HOST=127.0.0.1
-SHARIPOVAI_PORT=8000
-SHARIPOVAI_DISABLE_AUTH=0
-AUTH_SECRET=$authSecret
-ADMIN_USERNAME=admin
-ADMIN_PASSWORD=$adminPassword
-FEATURE_BYBIT_WEBSOCKET=0
-EXCHANGE_LIVE_TRADING_ENABLED=0
-EXECUTION_KILL_SWITCH=1
-"@ | Set-Content -Path $envFile -Encoding UTF8
+    $envLines = @(
+        "SHARIPOVAI_ENV=local",
+        "SHARIPOVAI_DATA_DIR=$dataDir",
+        "SHARIPOVAI_BACKUP_DIR=$backupDir",
+        "SHARIPOVAI_HOST=127.0.0.1",
+        "SHARIPOVAI_PORT=8000",
+        "SHARIPOVAI_DISABLE_AUTH=0",
+        "AUTH_SECRET=$authSecret",
+        "ADMIN_USERNAME=admin",
+        "ADMIN_PASSWORD=$adminPassword",
+        "FEATURE_BYBIT_WEBSOCKET=0",
+        "EXCHANGE_LIVE_TRADING_ENABLED=0",
+        "EXECUTION_KILL_SWITCH=1"
+    )
+    $envLines | Set-Content -Path $envFile -Encoding UTF8
 
-    @"
-SharipovAI local admin
-Username: admin
-Password: $adminPassword
-
-Удалите этот файл после сохранения пароля в безопасном месте.
-"@ | Set-Content -Path $credentialsFile -Encoding UTF8
+    $credentialLines = @(
+        "SharipovAI local admin",
+        "Username: admin",
+        "Password: $adminPassword",
+        "",
+        "Удалите этот файл после сохранения пароля в безопасном месте."
+    )
+    $credentialLines | Set-Content -Path $credentialsFile -Encoding UTF8
 }
 
 & $venvPython (Join-Path $ProjectRoot "tools\pc_node_backup.py") --source $dataDir --backup-root $backupDir --once
