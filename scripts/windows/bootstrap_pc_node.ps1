@@ -1,7 +1,8 @@
 param(
     [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path,
     [switch]$SkipSetup,
-    [switch]$SkipAutostart
+    [switch]$SkipAutostart,
+    [switch]$Activate
 )
 
 $ErrorActionPreference = "Stop"
@@ -25,27 +26,37 @@ try {
     }
 
     if (-not $SkipAutostart) {
-        Invoke-Step "AUTOSTART" (Join-Path $ProjectRoot "scripts\windows\install_autostart.ps1") @("-ProjectRoot", $ProjectRoot)
+        $autostartArgs = @("-ProjectRoot", $ProjectRoot)
+        if ($Activate) { $autostartArgs += "-EnableActiveNode" }
+        Invoke-Step "AUTOSTART" (Join-Path $ProjectRoot "scripts\windows\install_autostart.ps1") $autostartArgs
     }
 
-    Invoke-Step "PC AGENT" (Join-Path $ProjectRoot "scripts\windows\start_pc_agent.ps1") @("-ProjectRoot", $ProjectRoot)
-    Invoke-Step "HEALTH CHECK" (Join-Path $ProjectRoot "scripts\windows\check_pc_node.ps1") @("-ProjectRoot", $ProjectRoot, "-RequireManagedProcesses")
+    if ($Activate) {
+        Invoke-Step "PC AGENT" (Join-Path $ProjectRoot "scripts\windows\start_pc_agent.ps1") @("-ProjectRoot", $ProjectRoot)
+        Invoke-Step "HEALTH CHECK" (Join-Path $ProjectRoot "scripts\windows\check_pc_node.ps1") @("-ProjectRoot", $ProjectRoot, "-RequireManagedProcesses")
+    }
 
     [ordered]@{
         status = "ok"
         project_root = $ProjectRoot
         completed_at = [DateTimeOffset]::UtcNow.ToString("o")
-        autostart_installed = -not $SkipAutostart
+        autostart_installed = (-not $SkipAutostart) -and [bool]$Activate
         setup_executed = -not $SkipSetup
-        supervisor = "PC Agent"
+        mode = $(if ($Activate) { "active" } else { "standby" })
+        supervisor = $(if ($Activate) { "PC Agent" } else { "disabled_until_failover" })
         agent_status = (Join-Path $runtimeDir "pc_agent_status.json")
-        dashboard_url = "http://127.0.0.1:8000/"
-        health_url = "http://127.0.0.1:8000/health"
+        dashboard_url = $(if ($Activate) { "http://127.0.0.1:8000/" } else { $null })
+        health_url = $(if ($Activate) { "http://127.0.0.1:8000/health" } else { $null })
     } | ConvertTo-Json | Set-Content -Path $reportPath -Encoding UTF8
 
-    Write-Host "SharipovAI PC Node установлен и проверен." -ForegroundColor Green
-    Write-Host "Dashboard: http://127.0.0.1:8000/"
-    Write-Host "Отчёт: $reportPath"
+    if ($Activate) {
+        Write-Host "SharipovAI PC Node installed, activated and verified." -ForegroundColor Yellow
+    } else {
+        Write-Host "SharipovAI PC Node prepared as passive standby." -ForegroundColor Green
+        Write-Host "Install verified VPS synchronization with install_vps_backup_sync.ps1."
+        Write-Host "Activate only during an outage with activate_pc_failover.ps1."
+    }
+    Write-Host "Report: $reportPath"
     exit 0
 } catch {
     [ordered]@{
@@ -55,6 +66,6 @@ try {
         error = $_.Exception.Message
     } | ConvertTo-Json | Set-Content -Path $reportPath -Encoding UTF8
     Write-Host "PC Node installation failed: $($_.Exception.Message)" -ForegroundColor Red
-    Write-Host "Отчёт: $reportPath"
+    Write-Host "Report: $reportPath"
     exit 1
 }
