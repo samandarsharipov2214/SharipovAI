@@ -16,6 +16,9 @@ _PUBLIC_EXACT = {
     "/api/health",
     "/startup",
     "/api/security/status",
+    # Telegram must reach this endpoint without a dashboard session.
+    # The webhook handler performs its own secret-token validation.
+    "/telegram/webhook",
 }
 _PUBLIC_PREFIXES = ("/static/", "/docs", "/openapi.json")
 _TRUE_VALUES = {"1", "true", "yes", "on"}
