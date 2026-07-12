@@ -1,7 +1,7 @@
 """Fail-closed private Bybit order state backed by the canonical project database.
 
-The module only validates and stores order events. It never opens a network
-connection and never submits, changes or cancels an order.
+The module validates and stores private order events. It never opens a network
+connection and never submits, changes, or cancels an order.
 """
 from __future__ import annotations
 
@@ -94,7 +94,10 @@ class BybitOrderStateStore:
         topic = str(message.get("topic", "")).strip()
         if topic not in _TOPICS:
             raise ValueError("unsupported private order topic")
-        received = _positive_int(received_at_ms if received_at_ms is not None else int(time.time() * 1000), "received_at_ms")
+        received = _positive_int(
+            received_at_ms if received_at_ms is not None else int(time.time() * 1000),
+            "received_at_ms",
+        )
         creation = _positive_int(message.get("creationTime"), "creationTime")
         if creation > received + self.max_future_skew_ms:
             raise ValueError("message creationTime is in the future")
@@ -175,16 +178,17 @@ class BybitOrderStateStore:
             if not isinstance(raw, Mapping):
                 errors.append(f"journal row {index} is not an object")
                 continue
-            link = str(raw.get("order_link_id") or raw.get("orderLinkId") or "").strip()
-            order_id = str(raw.get("order_id") or raw.get("orderId") or "").strip()
+            normalized_row = dict(raw)
+            link = str(normalized_row.get("order_link_id") or normalized_row.get("orderLinkId") or "").strip()
+            order_id = str(normalized_row.get("order_id") or normalized_row.get("orderId") or "").strip()
             if link:
-                if link in journal_by_link and journal_by_link[link] != dict(raw):
+                if link in journal_by_link and journal_by_link[link] != normalized_row:
                     errors.append(f"duplicate journal orderLinkId {link}")
-                journal_by_link[link] = dict(raw)
+                journal_by_link[link] = normalized_row
             if order_id:
-                if order_id in journal_by_order and journal_by_order[order_id] != dict(raw):
+                if order_id in journal_by_order and journal_by_order[order_id] != normalized_row:
                     errors.append(f"duplicate journal orderId {order_id}")
-                journal_by_order[order_id] = dict(raw)
+                journal_by_order[order_id] = normalized_row
 
         matched: list[str] = []
         for order in managed:
@@ -197,7 +201,7 @@ class BybitOrderStateStore:
             journal_order_id = str(row.get("order_id") or row.get("orderId") or "").strip()
             if order_id and journal_order_id != order_id:
                 errors.append(f"orderId mismatch for {link}")
-            if journal_order_id and journal_by_order.get(journal_order_id) is not row:
+            if journal_order_id and journal_by_order.get(journal_order_id) != row:
                 errors.append(f"journal identifiers resolve inconsistently for {link}")
             expected_environment = _journal_environment(row.get("environment") or row.get("mode"))
             if expected_environment and expected_environment != order["environment"]:
@@ -277,9 +281,12 @@ def _merge(existing: OrderState | None, new: OrderState) -> tuple[str, OrderStat
         raise ValueError("orderLinkId changed")
     if new.updated_time_ms < existing.updated_time_ms:
         raise ValueError("out-of-order updatedTime")
-    if new.cum_exec_qty < existing.cum_exec_qty - _TOLERANCE:
-        raise ValueError("cumExecQty regression")
-    merged = replace(new, order_id=new.order_id or existing.order_id, order_link_id=new.order_link_id or existing.order_link_id)
+
+    merged = replace(
+        new,
+        order_id=new.order_id or existing.order_id,
+        order_link_id=new.order_link_id or existing.order_link_id,
+    )
     same_execution = (
         merged.status == existing.status
         and abs(merged.cum_exec_qty - existing.cum_exec_qty) <= _TOLERANCE
@@ -292,6 +299,8 @@ def _merge(existing: OrderState | None, new: OrderState) -> tuple[str, OrderStat
         if not same_execution:
             raise ValueError("terminal order cannot change")
         return ("accepted", merged) if identity_enriched else ("duplicate", existing)
+    if new.cum_exec_qty < existing.cum_exec_qty - _TOLERANCE:
+        raise ValueError("cumExecQty regression")
     if new.updated_time_ms == existing.updated_time_ms:
         if same_execution and identity_enriched:
             return "accepted", merged
@@ -394,7 +403,13 @@ def _validate_semantics(state: OrderState) -> None:
 
 def _document(value: Any, *, environment: str) -> dict[str, Any]:
     if value is None:
-        return {"environment": environment, "orders": {}, "aliases": {}, "last_message_creation_ms": 0, "updated_at_ms": 0}
+        return {
+            "environment": environment,
+            "orders": {},
+            "aliases": {},
+            "last_message_creation_ms": 0,
+            "updated_at_ms": 0,
+        }
     if not isinstance(value, dict) or value.get("environment") != environment:
         raise RuntimeError("private order state document is invalid")
     if not isinstance(value.get("orders"), dict) or not isinstance(value.get("aliases"), dict):
@@ -460,6 +475,8 @@ def _journal_environment(value: Any) -> str:
 
 
 def _finite(value: Any, name: str, *, positive: bool = False) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be finite" + (" and positive" if positive else ""))
     parsed = float(value)
     if not math.isfinite(parsed) or (positive and parsed <= 0):
         raise ValueError(f"{name} must be finite" + (" and positive" if positive else ""))
@@ -467,6 +484,8 @@ def _finite(value: Any, name: str, *, positive: bool = False) -> float:
 
 
 def _positive_int(value: Any, name: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be positive")
     parsed = int(value)
     if parsed <= 0:
         raise ValueError(f"{name} must be positive")
