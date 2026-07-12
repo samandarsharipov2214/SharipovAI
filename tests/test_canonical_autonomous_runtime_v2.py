@@ -199,7 +199,10 @@ def test_missing_news_confirmation_cannot_be_upgraded_to_entry(tmp_path) -> None
     assert authorization.decision is TradingDecision.WAIT
 
 
-def test_dashboard_installer_uses_one_database_and_canonical_loop(tmp_path) -> None:
+def test_dashboard_installer_uses_one_database_and_canonical_loop(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("AUTONOMOUS_PAPER_STATE_FILE", str(tmp_path / "paper.json"))
+    monkeypatch.setenv("TESTNET_BRIDGE_STATE_FILE", str(tmp_path / "testnet.json"))
+    monkeypatch.setenv("EXECUTION_JOURNAL_FILE", str(tmp_path / "journal.json"))
     database = _database(tmp_path)
     app = FastAPI()
     install_database_api(app, database=database)
