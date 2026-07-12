@@ -1,6 +1,7 @@
 param(
     [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path,
     [string]$VpsHealthUrl = $env:SHARIPOVAI_VPS_HEALTH_URL,
+    [int]$MaximumBackupAgeSeconds = $(if ($env:SHARIPOVAI_STANDBY_MAX_BACKUP_AGE_SECONDS) { [int]$env:SHARIPOVAI_STANDBY_MAX_BACKUP_AGE_SECONDS } else { 7200 }),
     [switch]$Force
 )
 
@@ -23,8 +24,21 @@ $runtime = Join-Path $ProjectRoot "runtime"
 $snapshot = Join-Path $runtime "remote_backups\current"
 $data = Join-Path $ProjectRoot "data"
 $python = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
+$reporter = Join-Path $ProjectRoot "tools\standby_health_report.py"
 if (-not (Test-Path $python)) { throw "Python environment not found. Run setup_pc.ps1 first." }
 if (-not (Test-Path (Join-Path $snapshot "manifest.json"))) { throw "No verified VPS backup found. Run sync_vps_backup.ps1 first." }
+
+# Force may bypass only the live VPS check; it never bypasses stale or invalid backup protection.
+& $python $reporter --project-root $ProjectRoot --maximum-age-seconds $MaximumBackupAgeSeconds
+if ($LASTEXITCODE -ne 0) {
+    $healthPath = Join-Path $runtime "standby_health.json"
+    $reason = "standby health report unavailable"
+    if (Test-Path $healthPath) {
+        $health = Get-Content $healthPath -Raw | ConvertFrom-Json
+        $reason = "$($health.status): $($health.reasons -join '; ')"
+    }
+    throw "PC failover blocked because standby is not READY. $reason"
+}
 
 # Stop only SharipovAI processes whose command line points to this project directory.
 $escapedRoot = [Regex]::Escape($ProjectRoot)
@@ -44,6 +58,7 @@ $marker = [ordered]@{
     activated_at = [DateTimeOffset]::UtcNow.ToString("o")
     source = "verified_vps_backup"
     forced = [bool]$Force
+    maximum_backup_age_seconds = $MaximumBackupAgeSeconds
 } | ConvertTo-Json
 New-Item -ItemType Directory -Force -Path $runtime | Out-Null
 $marker | Set-Content (Join-Path $runtime "active_node.json") -Encoding UTF8
