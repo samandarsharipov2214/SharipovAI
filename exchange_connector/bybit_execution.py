@@ -62,6 +62,17 @@ class BybitExecutionClient:
         }
 
     def place_market_order(self, *, symbol: str, side: str, quantity: float, reference_price: float) -> ExecutionResult:
+        if _truthy("EXECUTION_KILL_SWITCH"):
+            raise RuntimeError("Execution kill switch is active")
+        if self.mode == "sandbox":
+            if not _truthy("TESTNET_EXECUTION_ENABLED"):
+                raise RuntimeError("Testnet execution is locked")
+        elif self.mode == "live":
+            if not self._live_unlocked(bool(self.api_key and self.api_secret)):
+                raise RuntimeError("Live execution is locked by safety gates")
+        else:
+            raise RuntimeError("Exchange mode does not permit execution")
+
         symbol = _symbol(symbol)
         side = side.strip().title()
         if side not in {"Buy", "Sell"}:
@@ -73,18 +84,8 @@ class BybitExecutionClient:
             raise ValueError("order notional must be finite")
         if notional > self.max_notional:
             raise RuntimeError(f"Order notional {notional:.2f} exceeds safety cap {self.max_notional:.2f} USDT")
-        if _truthy("EXECUTION_KILL_SWITCH"):
-            raise RuntimeError("Execution kill switch is active")
         if not self.api_key or not self.api_secret:
             raise RuntimeError(f"{self.credential_profile} credentials are not configured")
-        if self.mode == "sandbox":
-            if not _truthy("TESTNET_EXECUTION_ENABLED"):
-                raise RuntimeError("Testnet execution is locked")
-        elif self.mode == "live":
-            if not self._live_unlocked(True):
-                raise RuntimeError("Live execution is locked by safety gates")
-        else:
-            raise RuntimeError("Exchange mode does not permit execution")
 
         base_url = validate_bybit_base_url(self.base_url, environment=self.mode)
         body = {
