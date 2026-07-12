@@ -12,12 +12,15 @@ from typing import Any
 from tools.backup_integrity import BackupIntegrityError, verify_snapshot
 
 
-def _new_drill_directory(destination_root: Path) -> Path:
+def _new_drill_directory(destination_root: Path, source: Path) -> Path:
     raw_root = Path(destination_root)
     if raw_root.is_symlink():
         raise BackupIntegrityError("restore drill destination root must not be a symlink")
     raw_root.mkdir(parents=True, exist_ok=True)
     root = raw_root.resolve()
+    source_root = source.resolve()
+    if root == source_root or root.is_relative_to(source_root):
+        raise BackupIntegrityError("restore drill destination must be outside the source snapshot")
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     candidate = root / stamp
     suffix = 1
@@ -43,7 +46,7 @@ def _sqlite_integrity(path: Path) -> dict[str, Any]:
 def run_restore_drill(snapshot: Path, destination_root: Path) -> dict[str, Any]:
     source = Path(snapshot)
     manifest = verify_snapshot(source)
-    drill_dir = _new_drill_directory(Path(destination_root))
+    drill_dir = _new_drill_directory(Path(destination_root), source)
     restored_snapshot = drill_dir / "snapshot"
     report_path = drill_dir / "restore_drill_report.json"
 
