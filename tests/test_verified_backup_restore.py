@@ -43,6 +43,11 @@ def _archive(snapshot: Path, path: Path) -> Path:
     return path
 
 
+def _manifest(snapshot: Path) -> tuple[Path, dict]:
+    path = snapshot / "manifest.json"
+    return path, json.loads(path.read_text(encoding="utf-8"))
+
+
 def test_restore_replaces_destination_and_removes_rollback(tmp_path: Path) -> None:
     snapshot = _snapshot(tmp_path)
     destination = tmp_path / "data"
@@ -73,8 +78,7 @@ def test_restore_rejects_tampered_snapshot_without_touching_destination(tmp_path
 
 def test_restore_rejects_path_traversal(tmp_path: Path) -> None:
     snapshot = _snapshot(tmp_path)
-    manifest_path = snapshot / "manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest_path, manifest = _manifest(snapshot)
     manifest["files"][0]["path"] = "../outside"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
@@ -92,8 +96,7 @@ def test_snapshot_rejects_unlisted_extra_file(tmp_path: Path) -> None:
 
 def test_snapshot_rejects_duplicate_manifest_path(tmp_path: Path) -> None:
     snapshot = _snapshot(tmp_path)
-    manifest_path = snapshot / "manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest_path, manifest = _manifest(snapshot)
     manifest["files"].append(dict(manifest["files"][0]))
     manifest["file_count"] = 2
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
@@ -104,12 +107,46 @@ def test_snapshot_rejects_duplicate_manifest_path(tmp_path: Path) -> None:
 
 def test_snapshot_rejects_size_mismatch(tmp_path: Path) -> None:
     snapshot = _snapshot(tmp_path)
-    manifest_path = snapshot / "manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest_path, manifest = _manifest(snapshot)
     manifest["files"][0]["bytes"] += 1
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     with pytest.raises(BackupIntegrityError, match="size mismatch"):
+        verify_snapshot(snapshot)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("schema", True, "schema"),
+        ("schema", "1", "schema"),
+        ("file_count", True, "file_count"),
+        ("file_count", "1", "file_count"),
+    ],
+)
+def test_snapshot_rejects_ambiguous_manifest_integer_types(
+    tmp_path: Path,
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    snapshot = _snapshot(tmp_path)
+    manifest_path, manifest = _manifest(snapshot)
+    manifest[field] = value
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(BackupIntegrityError, match=message):
+        verify_snapshot(snapshot)
+
+
+@pytest.mark.parametrize("unsafe", ["CON", "aux.txt", "folder/name. ", "folder/file:stream"])
+def test_snapshot_rejects_windows_ambiguous_paths(tmp_path: Path, unsafe: str) -> None:
+    snapshot = _snapshot(tmp_path)
+    manifest_path, manifest = _manifest(snapshot)
+    manifest["files"][0]["path"] = unsafe
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(BackupIntegrityError, match="unsafe backup path"):
         verify_snapshot(snapshot)
 
 
