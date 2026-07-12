@@ -3,6 +3,14 @@ name: Windows Agent Package
 on:
   push:
     branches: [main]
+    paths:
+      - 'scripts/windows/**'
+      - 'tools/pc_node_agent.py'
+      - 'tools/pc_node_backup.py'
+      - 'tools/pc_node_update.py'
+      - 'tests/test_pc_node_*.py'
+      - 'requirements.txt'
+      - '.github/workflows/windows-agent-package.yml'
   pull_request:
     branches: [main]
     paths:
@@ -18,10 +26,20 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: windows-agent-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test-and-package:
-    runs-on: windows-latest
-    timeout-minutes: 25
+    if: >-
+      ${{
+        vars.SHARIPOVAI_WINDOWS_SELF_HOSTED_CI == '1' &&
+        (github.event_name != 'pull_request' ||
+         github.event.pull_request.head.repo.full_name == github.repository)
+      }}
+    runs-on: [self-hosted, Windows, X64, sharipovai-windows-ci]
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -39,8 +57,6 @@ jobs:
           python -m pip install -r requirements.txt
 
       - name: Validate PowerShell syntax
-        id: psparse
-        continue-on-error: true
         shell: pwsh
         run: |
           $errors = @()
@@ -53,16 +69,16 @@ jobs:
               [ref]$parseErrors
             )
             if ($parseErrors.Count -gt 0) {
-              $errors += $parseErrors | ForEach-Object { "$($_.Extent.File):$($_.Extent.StartLineNumber):$($_.Extent.StartColumnNumber) $($_.Message)" }
+              $errors += $parseErrors | ForEach-Object {
+                "$($_.Extent.File):$($_.Extent.StartLineNumber):$($_.Extent.StartColumnNumber) $($_.Message)"
+              }
             }
           }
-          if ($errors.Count -eq 0) {
-            'PowerShell syntax OK' | Set-Content powershell-syntax-errors.txt -Encoding UTF8
-            exit 0
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Host $_ }
+            exit 1
           }
-          $errors | Set-Content powershell-syntax-errors.txt -Encoding UTF8
-          $errors | ForEach-Object { Write-Host $_ }
-          exit 1
+          Write-Host 'PowerShell syntax OK'
 
       - name: Run PC node tests
         shell: pwsh
@@ -75,8 +91,7 @@ jobs:
 
       - name: Validate Python syntax
         shell: pwsh
-        run: |
-          python -m compileall -q .
+        run: python -m compileall -q .
 
       - name: Build Windows package
         shell: pwsh
@@ -89,34 +104,20 @@ jobs:
           from pathlib import Path
 
           root = Path.cwd().resolve()
-          output = root / "SharipovAI-Windows-Agent.zip"
+          output = root / 'SharipovAI-Windows-Agent.zip'
           excluded_dirs = {
-              ".git",
-              ".venv",
-              "data",
-              "runtime",
-              "__pycache__",
-              ".pytest_cache",
-              ".ci-data",
-              ".mypy_cache",
-              ".ruff_cache",
+              '.git', '.venv', 'data', 'runtime', '__pycache__',
+              '.pytest_cache', '.ci-data', '.mypy_cache', '.ruff_cache',
           }
-          excluded_suffixes = {".pyc", ".pyo"}
+          excluded_suffixes = {'.pyc', '.pyo'}
           file_count = 0
 
           if output.exists():
               output.unlink()
 
-          with zipfile.ZipFile(
-              output,
-              mode="w",
-              compression=zipfile.ZIP_DEFLATED,
-              allowZip64=True,
-          ) as archive:
+          with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED, allowZip64=True) as archive:
               for current, directories, filenames in os.walk(root):
-                  directories[:] = [
-                      name for name in directories if name not in excluded_dirs
-                  ]
+                  directories[:] = [name for name in directories if name not in excluded_dirs]
                   current_path = Path(current)
                   for filename in filenames:
                       source = current_path / filename
@@ -129,42 +130,21 @@ jobs:
                       file_count += 1
 
           if file_count < 20:
-              raise RuntimeError(f"package contains too few files: {file_count}")
+              raise RuntimeError(f'package contains too few files: {file_count}')
 
-          with zipfile.ZipFile(output, mode="r") as archive:
+          with zipfile.ZipFile(output, 'r') as archive:
               broken = archive.testzip()
               if broken is not None:
-                  raise RuntimeError(f"corrupt ZIP member: {broken}")
+                  raise RuntimeError(f'corrupt ZIP member: {broken}')
 
-          print(
-              f"Windows package ready: {output.name}; "
-              f"files={file_count}; bytes={output.stat().st_size}"
-          )
+          print(f'Windows package ready: {output.name}; files={file_count}; bytes={output.stat().st_size}')
           '@ | python -
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          if (-not (Test-Path 'SharipovAI-Windows-Agent.zip')) {
-            throw 'Windows package was not created.'
-          }
-
-      - name: Upload diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: Windows-Agent-Diagnostics
-          path: powershell-syntax-errors.txt
-          if-no-files-found: error
-          retention-days: 30
 
       - name: Upload verified package
-        if: steps.psparse.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: SharipovAI-Windows-Agent
           path: SharipovAI-Windows-Agent.zip
           if-no-files-found: error
-          retention-days: 30
-
-      - name: Fail when PowerShell syntax failed
-        if: steps.psparse.outcome == 'failure'
-        shell: pwsh
-        run: exit 1
+          retention-days: 14
