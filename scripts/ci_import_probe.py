@@ -1,13 +1,20 @@
 """Import the application and preserve a compact traceback for CI diagnosis."""
 from __future__ import annotations
 
+import os
+import sys
 import traceback
 from pathlib import Path
 
-OUTPUT = Path("ci-import-diagnostic.txt")
+ROOT = Path(__file__).resolve().parents[1]
+OUTPUT = ROOT / "ci-import-diagnostic.txt"
 
 
 def main() -> int:
+    os.chdir(ROOT)
+    root_text = str(ROOT)
+    if root_text not in sys.path:
+        sys.path.insert(0, root_text)
     try:
         import dashboard
 
