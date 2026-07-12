@@ -143,15 +143,29 @@ def _audit_workflows(root: Path, record: Any) -> None:
     guardrails = _read(root / ".github/workflows/project-guardrails.yml")
     full = _read(root / ".github/workflows/full-stabilization.yml")
     windows = _read(root / ".github/workflows/windows-agent-package.yml")
-    record("ci_project_guardrails", all(token in guardrails for token in (
-        "python scripts/migrate_project_db.py",
-        "python -m compileall",
-        "Run regression tests",
-        "Verify execution remains locked",
-        "Run fail-closed release audit",
-    )), "migration, compile, execution lock, release audit and pytest gates")
+    record(
+        "ci_project_guardrails",
+        all(token in guardrails for token in (
+            "python scripts/migrate_project_db.py",
+            "python -m compileall",
+            "Import application safely",
+            "Verify execution remains locked",
+            "Run fail-closed release audit",
+            "runs-on: [self-hosted, linux, x64, sharipovai-ci]",
+            "SHARIPOVAI_SELF_HOSTED_CI",
+        )),
+        "self-hosted migration, compile, import, execution lock and release-audit gates",
+    )
     record("ci_full_suite", "python -m pytest" in full and "Fail when full suite failed" in full, "full pytest gate")
-    record("ci_windows_agent", "runs-on: windows-latest" in windows and "pytest" in windows.lower(), "Windows agent verification gate")
+    record(
+        "ci_windows_agent",
+        all(token in windows for token in (
+            "runs-on: [self-hosted, Windows, X64, sharipovai-windows-ci]",
+            "SHARIPOVAI_WINDOWS_SELF_HOSTED_CI",
+            "pytest",
+        )),
+        "self-hosted Windows agent verification gate",
+    )
 
 
 def _audit_runtime_code(record: Any) -> None:
