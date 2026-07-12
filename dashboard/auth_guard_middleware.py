@@ -92,7 +92,10 @@ class AuthGuardMiddleware:
             return
 
         if path.startswith("/api/"):
-            response = JSONResponse({"error": "authentication_required"}, status_code=401)
+            response = JSONResponse(
+                {"status": "unauthorized", "detail": "authentication required"},
+                status_code=401,
+            )
         else:
             safe_path = path if path.startswith("/") and not path.startswith("//") else "/"
             response = RedirectResponse(
