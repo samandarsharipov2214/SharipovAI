@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -64,14 +65,17 @@ def test_stress_lab_handles_bad_numeric_inputs_safely() -> None:
     app = create_app()
     client = TestClient(app)
     response = client.post(
-        "/api/stress-test",
+        "/api/stress-lab/run",
         json={
             "price_drop_percent": "not-a-number",
-            "portfolio_value": "also-not-a-number",
+            "starting_virtual_capital": "also-not-a-number",
         },
     )
 
-    assert response.status_code in {200, 400, 422}
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["capital_before"] == 10000.0
+    assert payload["loss_percent"] >= 0
 
 
 def test_telegram_command_failure_is_rendered_instead_of_raising(monkeypatch) -> None:
@@ -89,10 +93,16 @@ def test_telegram_command_failure_is_rendered_instead_of_raising(monkeypatch) ->
 
 def test_learning_summary_is_serializable() -> None:
     summary = LearningSummary(
-        total_runs=1,
-        successful_runs=1,
-        blocked_runs=0,
-        average_confidence=80.0,
-        lessons=("keep evidence",),
+        total_trades=1,
+        wins=1,
+        losses=0,
+        win_rate=100.0,
+        average_profit=1.5,
+        average_loss=0.0,
+        best_trade=1.5,
+        worst_trade=1.5,
+        recommendations=["keep evidence"],
     )
-    assert isinstance(summary.total_runs, int)
+    payload = asdict(summary)
+    assert payload["total_trades"] == 1
+    assert payload["recommendations"] == ["keep evidence"]
