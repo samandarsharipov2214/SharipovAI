@@ -17,6 +17,7 @@ from config.feature_flags import is_feature_enabled
 from .bybit_websocket_state import BybitWebSocketState, ReconnectPolicy
 
 DEFAULT_URL = "wss://stream.bybit.com/v5/public/spot"
+DEFAULT_SYMBOLS = "BTCUSDT,ETHUSDT"
 OFFICIAL_PUBLIC_STREAM_HOSTS = frozenset(
     {
         "stream.bybit.com",
@@ -56,7 +57,7 @@ class BybitWebSocketWorker:
     ) -> None:
         self.state = state or BybitWebSocketState()
         self.url = validate_public_ws_url(os.getenv("BYBIT_WS_PUBLIC_URL", DEFAULT_URL))
-        self.symbols = _symbols(os.getenv("BYBIT_WS_SYMBOLS", "BTCUSDT,ETHUSDT"))
+        self.symbols = _symbols(_configured_symbol_source())
         self.receive_timeout = min(
             max(float(os.getenv("BYBIT_WS_RECEIVE_TIMEOUT_SECONDS", "10")), 1.0),
             60.0,
@@ -158,6 +159,15 @@ class BybitWebSocketWorker:
             self.state.ingest_ticker(payload)
 
 
+def _configured_symbol_source() -> str:
+    """Use the canonical setting while preserving the existing deployment contract."""
+
+    explicit = os.getenv("BYBIT_WS_SYMBOLS")
+    if explicit is not None:
+        return explicit
+    return os.getenv("MARKET_STREAM_SYMBOLS", DEFAULT_SYMBOLS)
+
+
 def _decode_message(raw: Any) -> dict[str, Any]:
     if isinstance(raw, bytes):
         raw = raw.decode("utf-8")
@@ -194,7 +204,7 @@ def _symbols(raw: str) -> tuple[str, ...]:
         if symbol and symbol.isalnum() and symbol.endswith("USDT") and symbol not in result:
             result.append(symbol)
     if not result:
-        raise ValueError("BYBIT_WS_SYMBOLS must contain at least one USDT symbol")
+        raise ValueError("Bybit market symbols must contain at least one USDT symbol")
     if len(result) > 10:
         raise ValueError("Bybit Spot allows at most 10 topics in one subscription request")
     return tuple(result)
