@@ -7,6 +7,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+Set-Location $ProjectRoot
 $runtime = Join-Path $ProjectRoot "runtime"
 $statusPath = Join-Path $runtime "vps_backup_sync_status.json"
 New-Item -ItemType Directory -Force -Path $runtime | Out-Null
@@ -85,7 +86,7 @@ try {
     $actual = (Get-FileHash -Algorithm SHA256 $localArchive).Hash.ToLowerInvariant()
     if ($actual -ne $expected) { throw "Downloaded backup checksum mismatch." }
 
-    & $python $verifier --archive $localArchive --destination $snapshotStage
+    & $python -m tools.verify_backup_archive --archive $localArchive --destination $snapshotStage
     if ($LASTEXITCODE -ne 0) { throw "Backup archive integrity verification failed." }
     $manifest = Join-Path $snapshotStage "manifest.json"
     if (-not (Test-Path $manifest -PathType Leaf)) { throw "Verified backup manifest is missing." }
