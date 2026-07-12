@@ -3,7 +3,7 @@ name: Production Smoke
 on:
   workflow_dispatch:
   schedule:
-    - cron: "17,47 * * * *"
+    - cron: '17 * * * *'
 
 permissions:
   contents: read
@@ -14,7 +14,8 @@ concurrency:
 
 jobs:
   smoke:
-    runs-on: ubuntu-latest
+    if: ${{ vars.SHARIPOVAI_SELF_HOSTED_CI == '1' }}
+    runs-on: [self-hosted, linux, x64, sharipovai-ci]
     timeout-minutes: 8
     steps:
       - name: Checkout
@@ -23,7 +24,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12.8"
+          python-version: '3.12'
 
       - name: Check deployed SharipovAI
         run: |
