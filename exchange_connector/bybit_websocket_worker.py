@@ -1,8 +1,9 @@
 """Feature-flagged public Bybit ticker worker for the existing Market AI.
 
-The worker only consumes public spot ticker data. It cannot authenticate, access
+The worker consumes public spot ticker data only. It cannot authenticate, access
 accounts, or submit orders. A stream becomes usable only after an explicit
-successful Bybit subscription acknowledgement.
+successful Bybit subscription acknowledgement. The state owns canonical quote
+persistence, so every ticker has one source of truth.
 """
 from __future__ import annotations
 
@@ -14,6 +15,8 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from config.feature_flags import is_feature_enabled
+from storage import ProjectDatabase
+
 from .bybit_websocket_state import BybitWebSocketState, ReconnectPolicy
 
 DEFAULT_URL = "wss://stream.bybit.com/v5/public/spot"
@@ -53,8 +56,20 @@ class BybitWebSocketWorker:
         state: BybitWebSocketState | None = None,
         connector: Callable[..., Any] | None = None,
         wait: Callable[[float], bool] | None = None,
+        database: ProjectDatabase | None = None,
     ) -> None:
-        self.state = state or BybitWebSocketState()
+        self.database = database
+        if self.database is not None:
+            self.database.initialize()
+        if state is None:
+            self.state = BybitWebSocketState(database=self.database)
+        else:
+            self.state = state
+            state_database = getattr(self.state, "database", None)
+            if self.database is not None and state_database is not None and state_database.dsn != self.database.dsn:
+                raise ValueError("worker and websocket state must use the same database")
+            if self.database is not None and state_database is None:
+                self.state.database = self.database
         self.url = validate_public_ws_url(os.getenv("BYBIT_WS_PUBLIC_URL", DEFAULT_URL))
         self.symbols = _symbols(os.getenv("BYBIT_WS_SYMBOLS", "BTCUSDT,ETHUSDT"))
         self.receive_timeout = min(
@@ -89,12 +104,15 @@ class BybitWebSocketWorker:
         self.state.mark_disconnected("worker stopped")
 
     def status(self) -> dict[str, Any]:
+        state_status = self.state.status()
         return {
+            **state_status,
             "enabled": self.enabled(),
             "worker_running": bool(self._thread and self._thread.is_alive()),
             "url": self.url,
             "symbols": list(self.symbols),
-            **self.state.status(),
+            "database_backed": getattr(self.state, "database", None) is not None,
+            "synthetic_fallback_used": False,
         }
 
     def quote(self, symbol: str) -> dict[str, Any]:

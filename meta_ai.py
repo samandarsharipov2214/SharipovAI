@@ -14,10 +14,30 @@ from typing import Iterable, Mapping, Sequence
 
 VALID_ACTIONS = {"BUY", "SELL", "HOLD", "WAIT", "BLOCK"}
 VALID_REGIMES = {"bull", "bear", "sideways", "high_volatility", "unknown"}
+_VETO_AGENT_IDS = {
+    "risk",
+    "risk_engine",
+    "security",
+    "security_guard",
+    "policy_guard",
+    "security_cyber",
+    "security_cyber_ai",
+}
 
 
 def _clip(value: float, low: float = 0.0, high: float = 1.0) -> float:
     return max(low, min(high, float(value)))
+
+
+def _agent_key(agent_id: str) -> str:
+    return str(agent_id).strip().lower().replace(" ", "_").replace("-", "_")
+
+
+def _has_veto_authority(agent_id: str) -> bool:
+    """Only canonical Risk and Security owners may issue an unconditional block."""
+
+    key = _agent_key(agent_id)
+    return key in _VETO_AGENT_IDS or key.startswith("risk_engine_") or key.startswith("security_guard_")
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,29 +201,72 @@ class MetaAI:
         agent_votes: list[tuple[str, str, float]] = []
         total_weight = 0.0
         hard_blockers: list[str] = []
+        suppressed: list[str] = []
         for opinion in opinions:
+            veto_authority = _has_veto_authority(opinion.agent_id)
+            unsafe_evidence = opinion.evidence_score < min_evidence
+            unsafe_risk = opinion.risk_score > max_risk
+            requested_block = opinion.action == "BLOCK"
+
+            if veto_authority and (requested_block or unsafe_evidence or unsafe_risk):
+                hard_blockers.append(opinion.agent_id)
+                agent_votes.append((opinion.agent_id, "BLOCK", 0.0))
+                continue
+
+            if requested_block or unsafe_evidence or unsafe_risk:
+                suppressed.append(opinion.agent_id)
+                agent_votes.append((opinion.agent_id, "WAIT", 0.0))
+                continue
+
             rep_weight = self.reputation(opinion.agent_id).weight(regime)
             quality = opinion.confidence * opinion.evidence_score * (1.0 - opinion.risk_score * 0.5)
             vote_weight = rep_weight * quality
             scores[opinion.action] += vote_weight
             total_weight += vote_weight
             agent_votes.append((opinion.agent_id, opinion.action, vote_weight))
-            if opinion.action == "BLOCK" or opinion.risk_score > max_risk or opinion.evidence_score < min_evidence:
-                hard_blockers.append(opinion.agent_id)
+
         if hard_blockers:
+            dissent = tuple(sorted(set(hard_blockers + suppressed)))
             return ConsensusResult(
-                "BLOCK", 1.0, 0.0, scores, tuple(sorted(set(hard_blockers))), True,
-                "Risk/evidence gate activated",
+                "BLOCK",
+                1.0,
+                0.0,
+                scores,
+                dissent,
+                True,
+                "Canonical Risk/Security veto activated",
             )
+
+        if total_weight <= 0:
+            return ConsensusResult(
+                "WAIT",
+                0.0,
+                0.0,
+                scores,
+                tuple(sorted(set(suppressed))),
+                True,
+                "No eligible agent opinions after evidence and risk filtering",
+            )
+
         ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
         action, top_score = ranked[0]
         second_score = ranked[1][1]
-        agreement = top_score / total_weight if total_weight else 0.0
+        agreement = top_score / total_weight
         confidence = _clip(0.7 * agreement + 0.3 * (top_score - second_score) / max(total_weight, 1e-9))
-        dissent = tuple(sorted(agent for agent, vote, _ in agent_votes if vote != action))
+        dissent = tuple(
+            sorted(
+                set(
+                    [agent for agent, vote, _ in agent_votes if vote != action]
+                    + suppressed
+                )
+            )
+        )
         if agreement < min_agreement:
             return ConsensusResult("WAIT", confidence, agreement, scores, dissent, True, "Insufficient agreement")
-        return ConsensusResult(action, confidence, agreement, scores, dissent, False, "Regime-aware weighted consensus")
+        reason = "Regime-aware weighted consensus"
+        if suppressed:
+            reason += f"; excluded {len(set(suppressed))} non-authoritative unsafe opinion(s)"
+        return ConsensusResult(action, confidence, agreement, scores, dissent, False, reason)
 
     def audit_decision(
         self,
