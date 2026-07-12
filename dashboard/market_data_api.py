@@ -1,6 +1,7 @@
 """FastAPI endpoints for verified read-only market data and order previews."""
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime
 from typing import Any, Callable
 
@@ -11,22 +12,42 @@ from exchange_connector.bybit_instrument_rules import (
     BybitInstrumentRulesService,
     InstrumentRulesUnavailable,
 )
+from exchange_connector.bybit_websocket_state import BybitWebSocketState
 from exchange_connector.bybit_websocket_worker import BybitWebSocketWorker
 from exchange_connector.market_data import MarketDataService, MarketDataUnavailable, normalize_symbol
 from exchange_connector.multi_exchange_consensus import ConsensusUnavailable, MultiExchangeConsensus
 from exchange_connector.order_preview import OrderPreviewError, build_order_preview
+from storage import ProjectDatabase
 
 _BYBIT_MARKET_URL = "https://api.bybit.com/v5/market"
 _ALLOWED_INTERVALS = {"1", "3", "5", "15", "30", "60", "120", "240", "360", "720", "D", "W", "M"}
 _ALLOWED_CATEGORIES = {"spot", "linear", "inverse"}
+_TRUE = {"1", "true", "yes", "on"}
+
+
+def _configure_public_stream_feature() -> None:
+    """Bridge the existing runtime switch without overriding an explicit safety choice."""
+
+    if "FEATURE_BYBIT_WEBSOCKET" in os.environ:
+        return
+    if os.getenv("MARKET_STREAM_ENABLED", "").strip().lower() in _TRUE:
+        os.environ["FEATURE_BYBIT_WEBSOCKET"] = "1"
 
 
 def install_market_data_api(app: FastAPI) -> None:
     if getattr(app.state, "market_data_api_installed", False):
         return
     app.state.market_data_api_installed = True
+    _configure_public_stream_feature()
+    database = getattr(app.state, "project_database", None)
+    if not isinstance(database, ProjectDatabase):
+        database = ProjectDatabase()
+        database.initialize()
+        app.state.project_database = database
     app.state.market_data_service = MarketDataService()
-    app.state.bybit_websocket_worker = BybitWebSocketWorker()
+    app.state.bybit_websocket_worker = BybitWebSocketWorker(
+        state=BybitWebSocketState(database=database)
+    )
     app.state.multi_exchange_consensus = MultiExchangeConsensus(app.state.market_data_service)
     app.state.bybit_instrument_rules = BybitInstrumentRulesService()
     _register_lifecycle_handler(app, "startup", app.state.bybit_websocket_worker.start)
@@ -183,3 +204,6 @@ def _register_lifecycle_handler(app: FastAPI, event: str, handler: Callable[[], 
         return
     if event == "startup":
         handler()
+
+
+__all__ = ["_configure_public_stream_feature", "install_market_data_api"]
