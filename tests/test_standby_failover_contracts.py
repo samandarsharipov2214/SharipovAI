@@ -77,6 +77,8 @@ def test_failover_requires_ready_standby_even_with_force() -> None:
 def test_sync_uses_canonical_verifier_and_process_lock() -> None:
     script = read("scripts/windows/sync_vps_backup.ps1")
     assert "verify_backup_archive.py" in script
+    assert "-m tools.verify_backup_archive" in script
+    assert "Set-Location $ProjectRoot" in script
     assert "vps_backup_sync.lock" in script
     assert "FileShare]::None" in script
     assert "tar -xzf" not in script
