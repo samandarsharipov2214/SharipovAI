@@ -69,6 +69,15 @@ def test_runner_installers_never_add_runner_user_to_docker_group() -> None:
     assert "SHARIPOVAI_WINDOWS_SELF_HOSTED_CI" in windows_installer
 
 
+def test_linux_runner_service_commands_execute_from_runner_root() -> None:
+    installer = _read(ROOT / "deploy" / "vps" / "install_github_actions_runner.sh")
+    assert 'run_svc() { (cd "${RUNNER_HOME}" && ./svc.sh "$@"); }' in installer
+    assert 'run_svc install "${RUNNER_USER}"' in installer
+    assert "run_svc start" in installer
+    assert '"${RUNNER_HOME}/svc.sh" install' not in installer
+    assert '"${RUNNER_HOME}/svc.sh" start' not in installer
+
+
 def test_vps_bootstrap_uses_device_login_and_verifies_real_ci() -> None:
     bootstrap = _read(ROOT / "deploy" / "vps" / "bootstrap_github_actions_runner.sh")
     assert "gh auth login" in bootstrap
