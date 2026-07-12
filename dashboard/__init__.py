@@ -18,6 +18,7 @@ from .market_data_api import install_market_data_api
 from .news_agent_network_api import install_news_agent_network_api
 from .private_order_ws_api import install_private_order_ws_api
 from .system_health_api import install_system_health_api
+from .system_watchdog import install_system_watchdog
 from .web2_host import install_web2_host
 
 install_news_agent_network_api(app)
@@ -32,6 +33,7 @@ install_private_order_ws_api(app)
 install_web2_host(app)
 install_global_auth_guard(app)
 install_system_health_api(app)
+install_system_watchdog(app)
 
 try:
     from .telegram_news_agents import install_telegram_news_agent_commands
