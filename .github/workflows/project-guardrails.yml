@@ -103,4 +103,15 @@ jobs:
       - name: Run fail-closed release audit
         env:
           SHARIPOVAI_DISABLE_AUTH: '0'
-        run: python scripts/release_audit.py --runtime --json
+        run: |
+          set -o pipefail
+          python scripts/release_audit.py --runtime --json 2>&1 | tee release-audit.json
+
+      - name: Upload release audit diagnostic
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-audit-diagnostic
+          path: release-audit.json
+          if-no-files-found: error
+          retention-days: 3
