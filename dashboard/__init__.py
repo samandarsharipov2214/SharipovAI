@@ -5,6 +5,10 @@ idempotent so Codex/tests may also import ``dashboard.app`` directly.
 """
 from __future__ import annotations
 
+from .fastapi_compat import ensure_fastapi_lifecycle_compatibility
+
+ensure_fastapi_lifecycle_compatibility()
+
 from .app import app, create_app
 from .ai_organ_state_api import install_ai_organ_state_api
 from .autonomous_trading_api import install_autonomous_trading_api
