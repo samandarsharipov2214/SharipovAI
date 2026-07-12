@@ -15,6 +15,25 @@ permissions:
   contents: read
 
 jobs:
+  runner-shell:
+    name: runner-shell
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo RUNNER_OK
+
+  checkout-smoke:
+    name: checkout-smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: test -f requirements.txt
+
+  system-python:
+    name: system-python
+    runs-on: ubuntu-latest
+    steps:
+      - run: python3 --version
+
   syntax:
     name: syntax
     runs-on: ubuntu-latest
