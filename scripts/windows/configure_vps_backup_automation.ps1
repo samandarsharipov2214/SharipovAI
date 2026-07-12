@@ -19,6 +19,7 @@ if ($VpsAppDir -notmatch '^/[A-Za-z0-9._/-]+$' -or $VpsAppDir.Contains('/../') -
 }
 
 $ssh = Get-Command ssh.exe -ErrorAction Stop
+$scp = Get-Command scp.exe -ErrorAction Stop
 $keygen = Get-Command ssh-keygen.exe -ErrorAction Stop
 $sshDir = Join-Path $env:USERPROFILE ".ssh"
 $keyPath = Join-Path $sshDir "sharipovai_backup_ed25519"
@@ -32,24 +33,35 @@ if (-not (Test-Path $keyPath -PathType Leaf)) {
     }
 }
 
-if (-not (Test-Path $publicKeyPath -PathType Leaf)) {
-    & $keygen.Source -y -f $keyPath | Set-Content -Path $publicKeyPath -Encoding Ascii
-    if ($LASTEXITCODE -ne 0) { throw "Failed to derive the SSH public key." }
+$publicKeyOutput = & $keygen.Source -y -f $keyPath
+$keygenExitCode = $LASTEXITCODE
+$publicKeyBase = if ($null -eq $publicKeyOutput) { "" } else { ((@($publicKeyOutput) -join "").Trim()) }
+if ($keygenExitCode -ne 0 -or $publicKeyBase -notmatch '^ssh-ed25519 [A-Za-z0-9+/=]+$') {
+    throw "Failed to derive a valid SSH public key from the private key."
 }
-
-$publicKey = (Get-Content $publicKeyPath -Raw).Trim()
-if ($publicKey -notmatch '^ssh-ed25519 [A-Za-z0-9+/=]+(?: .+)?$') {
-    throw "Generated SSH public key is invalid."
-}
+$publicKey = "$publicKeyBase sharipovai-backup@$env:COMPUTERNAME"
+[IO.File]::WriteAllText($publicKeyPath, $publicKey + "`n", [Text.Encoding]::ASCII)
 
 $target = "$VpsUser@$VpsHost"
-$remoteInstall = 'umask 077; mkdir -p "$HOME/.ssh"; touch "$HOME/.ssh/authorized_keys"; chmod 700 "$HOME/.ssh"; chmod 600 "$HOME/.ssh/authorized_keys"; while IFS= read -r key; do grep -qxF "$key" "$HOME/.ssh/authorized_keys" || printf "%s\n" "$key" >> "$HOME/.ssh/authorized_keys"; done'
-$publicKey | & $ssh.Source $target $remoteInstall
-if ($LASTEXITCODE -ne 0) { throw "Failed to install the backup SSH key on the VPS." }
+$probeOutput = & $ssh.Source -i $keyPath -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=15 $target "printf backup-key-ok" 2>$null
+$probeExitCode = $LASTEXITCODE
+$probe = if ($null -eq $probeOutput) { "" } else { ([string]$probeOutput).Trim() }
 
-$probe = (& $ssh.Source -i $keyPath -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=15 $target "printf backup-key-ok").Trim()
-if ($LASTEXITCODE -ne 0 -or $probe -ne "backup-key-ok") {
-    throw "Passwordless VPS authentication check failed."
+if ($probeExitCode -ne 0 -or $probe -ne "backup-key-ok") {
+    $remoteKeyPath = "/tmp/sharipovai_backup_ed25519.pub"
+    & $scp.Source $publicKeyPath "$target`:$remoteKeyPath"
+    if ($LASTEXITCODE -ne 0) { throw "Failed to upload the backup SSH public key to the VPS." }
+
+    $remoteInstall = "umask 077; mkdir -p /root/.ssh; touch /root/.ssh/authorized_keys; chmod 700 /root/.ssh; chmod 600 /root/.ssh/authorized_keys; grep -Fqx -f $remoteKeyPath /root/.ssh/authorized_keys || cat $remoteKeyPath >> /root/.ssh/authorized_keys; rm -f $remoteKeyPath"
+    & $ssh.Source $target $remoteInstall
+    if ($LASTEXITCODE -ne 0) { throw "Failed to install the backup SSH key on the VPS." }
+
+    $probeOutput = & $ssh.Source -i $keyPath -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=15 $target "printf backup-key-ok"
+    $probeExitCode = $LASTEXITCODE
+    $probe = if ($null -eq $probeOutput) { "" } else { ([string]$probeOutput).Trim() }
+    if ($probeExitCode -ne 0 -or $probe -ne "backup-key-ok") {
+        throw "Passwordless VPS authentication check failed after key installation."
+    }
 }
 
 $installer = Join-Path $ProjectRoot "scripts\windows\install_vps_backup_sync.ps1"

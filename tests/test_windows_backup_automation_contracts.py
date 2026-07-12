@@ -30,7 +30,10 @@ def test_one_command_setup_creates_and_verifies_dedicated_key() -> None:
     script = read("scripts/windows/configure_vps_backup_automation.ps1")
     assert "sharipovai_backup_ed25519" in script
     assert "ssh-keygen.exe" in script
+    assert "scp.exe" in script
     assert "authorized_keys" in script
+    assert "/tmp/sharipovai_backup_ed25519.pub" in script
+    assert "grep -Fqx -f" in script
     assert "BatchMode=yes" in script
     assert "backup-key-ok" in script
     assert "install_vps_backup_sync.ps1" in script
