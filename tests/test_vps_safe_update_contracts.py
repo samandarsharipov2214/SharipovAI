@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -11,6 +15,20 @@ EXPORT = ROOT / "deploy" / "vps" / "export_backup.sh"
 
 def _text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def test_vps_shell_scripts_parse_when_bash_is_available() -> None:
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash is not available on this test worker")
+    for path in (UPDATE, INSTALL, EXPORT):
+        result = subprocess.run(
+            [bash, "-n", str(path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, f"{path}: {result.stderr}"
 
 
 def test_all_vps_scripts_use_the_real_repository_path() -> None:
