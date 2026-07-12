@@ -10,6 +10,9 @@ LINUX_WORKFLOWS = (
     "project-guardrails.yml",
     "full-stabilization.yml",
     "stabilization-dashboard.yml",
+    "production-smoke.yml",
+    "web2.yml",
+    "sync-bybit-skill.yml",
 )
 
 
@@ -44,6 +47,16 @@ def test_full_suite_is_not_launched_for_every_pull_request() -> None:
     assert "push:" not in trigger_section
     assert "workflow_dispatch:" in trigger_section
     assert "schedule:" in trigger_section
+
+
+def test_expensive_or_mutating_workflows_are_rate_limited() -> None:
+    production = _read(WORKFLOWS / "production-smoke.yml")
+    bybit_sync = _read(WORKFLOWS / "sync-bybit-skill.yml")
+    assert "17 * * * *" in production
+    assert "17,47 * * * *" not in production
+    assert "pull_request:" not in bybit_sync.split("permissions:", 1)[0]
+    assert "push:" not in bybit_sync.split("permissions:", 1)[0]
+    assert "workflow_dispatch:" in bybit_sync
 
 
 def test_runner_installers_never_add_runner_user_to_docker_group() -> None:
