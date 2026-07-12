@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from html import escape
 from typing import Any
 
@@ -10,24 +11,57 @@ from fastapi.responses import HTMLResponse
 
 from news_monitor.agent_bridge import bridge_events, bridge_status, start_agent_bridge
 from news_monitor.agent_network import (
+    AGENTS,
     agent_detail,
+    configure_database,
     network_status,
     run_agent,
     run_due_agents,
     start_agent_network,
+    stop_agent_network,
 )
 from news_monitor.news_autorun import refresh_news_if_stale
+from storage import ProjectDatabase
+
+
+@dataclass(frozen=True, slots=True)
+class _HubDatabaseBinding:
+    database: ProjectDatabase
+
+
+@dataclass(frozen=True, slots=True)
+class NewsRuntimeBinding:
+    """Identity binding for the one existing News Intelligence network."""
+
+    database: ProjectDatabase
+    hub: _HubDatabaseBinding
+    agents: tuple[Any, ...]
 
 
 def install_news_agent_network_api(app: FastAPI) -> None:
     if getattr(app.state, "news_agent_network_api_installed", False):
         return
     app.state.news_agent_network_api_installed = True
+    database = getattr(app.state, "project_database", None)
+    if not isinstance(database, ProjectDatabase):
+        database = ProjectDatabase()
+        database.initialize()
+        app.state.project_database = database
+    configure_database(database)
+    app.state.news_agent_network = NewsRuntimeBinding(
+        database=database,
+        hub=_HubDatabaseBinding(database),
+        agents=AGENTS,
+    )
 
     @app.on_event("startup")
     def news_agent_network_startup() -> None:
-        app.state.news_agent_network = start_agent_network()
+        app.state.news_agent_runtime = start_agent_network()
         app.state.news_agent_bridge = start_agent_bridge()
+
+    @app.on_event("shutdown")
+    def news_agent_network_shutdown() -> None:
+        app.state.news_agent_runtime = stop_agent_network()
 
     @app.get("/api/news-agents/status")
     def news_agents_status() -> dict[str, Any]:
@@ -86,3 +120,6 @@ def _agent_card(agent: dict[str, Any]) -> str:
 
 def _css() -> str:
     return "body{margin:0;background:#07111f;color:#eef4ff;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}main{max-width:1280px;margin:auto;padding:18px}.hero,.panel,.card{background:#111827;border:1px solid #263245;border-radius:20px;padding:18px;margin:12px 0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}.row{display:flex;justify-content:space-between;gap:12px;align-items:center}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.stats div{background:#0b1220;border-radius:12px;padding:10px}.stats small{display:block;color:#9db0cc}.stats b{font-size:18px}.pill,.ok,.warn,.bad{border-radius:999px;padding:5px 9px;font-weight:800}.pill,.ok{background:#10b981;color:#03130d}.warn{background:#f59e0b;color:#120a02}.bad{background:#ef4444;color:white}a{color:#60a5fa;font-weight:800}pre{white-space:pre-wrap}"
+
+
+__all__ = ["NewsRuntimeBinding", "install_news_agent_network_api"]
