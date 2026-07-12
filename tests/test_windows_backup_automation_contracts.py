@@ -31,8 +31,10 @@ def test_one_command_setup_creates_and_verifies_dedicated_key() -> None:
     assert "sharipovai_backup_ed25519" in script
     assert "ssh-keygen.exe" in script
     assert "authorized_keys" in script
-    assert "ToBase64String" in script
-    assert "base64 -d" in script
+    assert "remoteScriptTemplate" in script
+    assert "remoteScriptPayload" in script
+    assert "base64 -d | sh" in script
+    assert "awk -v full=" in script
     assert "ssh-keygen.Source -y" in script
     assert "$null -eq $probeOutput" in script
     assert "BatchMode=yes" in script
