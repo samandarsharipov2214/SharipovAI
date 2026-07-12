@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from meta_ai import AgentOpinion, PredictionOutcome
+from meta_ai_adapter import record_realized_result
 from meta_ai_persistence import MetaAIPersistenceError, PersistentMetaAI
 from storage import ProjectDatabase, VersionConflict
 
@@ -47,6 +48,56 @@ def test_duplicate_decision_id_does_not_double_count(tmp_path) -> None:
     snapshot = restarted.reputations_snapshot("bull")
     assert snapshot["Market AI"]["total_predictions"] == 1
     assert snapshot["Market AI"]["pnl_contribution"] == 2.5
+
+
+def test_existing_agent_payloads_are_persisted_through_adapter(tmp_path) -> None:
+    database = _database(tmp_path)
+    meta = PersistentMetaAI(database)
+    payloads = [
+        {
+            "name": "Market AI",
+            "decision": "BUY",
+            "confidence": 82,
+            "data_quality": 91,
+            "risk": 24,
+            "evidence_class": "verified_market",
+        },
+        {
+            "name": "News AI",
+            "decision": "BUY",
+            "confidence": 74,
+            "data_quality": 85,
+            "risk": 30,
+            "evidence_class": "verified_market",
+        },
+    ]
+
+    recorded = record_realized_result(
+        meta,
+        payloads,
+        realized_action="BUY",
+        pnl_by_agent={"Market AI": 1.2, "News AI": 0.8},
+        regime="bull",
+        decision_id="adapter-decision-1",
+        evidence_class="verified_market",
+        verified_market_data=True,
+    )
+
+    assert recorded is True
+    snapshot = PersistentMetaAI(database).reputations_snapshot("bull")
+    assert snapshot["Market AI"]["total_predictions"] == 1
+    assert snapshot["News AI"]["total_predictions"] == 1
+
+
+def test_persistent_adapter_requires_decision_id(tmp_path) -> None:
+    meta = PersistentMetaAI(_database(tmp_path))
+    with pytest.raises(MetaAIPersistenceError, match="decision_id"):
+        record_realized_result(
+            meta,
+            [{"name": "Market AI", "decision": "BUY", "confidence": 80}],
+            realized_action="BUY",
+            regime="bull",
+        )
 
 
 def test_synthetic_outcome_is_rejected(tmp_path) -> None:
