@@ -43,12 +43,14 @@ if ($publicKey -notmatch '^ssh-ed25519 [A-Za-z0-9+/=]+(?: .+)?$') {
 }
 
 $target = "$VpsUser@$VpsHost"
-$remoteInstall = 'umask 077; mkdir -p "$HOME/.ssh"; touch "$HOME/.ssh/authorized_keys"; chmod 700 "$HOME/.ssh"; chmod 600 "$HOME/.ssh/authorized_keys"; while IFS= read -r key; do grep -qxF "$key" "$HOME/.ssh/authorized_keys" || printf "%s\n" "$key" >> "$HOME/.ssh/authorized_keys"; done'
-$publicKey | & $ssh.Source $target $remoteInstall
+$remoteInstall = 'umask 077; mkdir -p ~/.ssh; touch ~/.ssh/authorized_keys; chmod 700 ~/.ssh; chmod 600 ~/.ssh/authorized_keys; tmp=/tmp/sharipovai_backup_key_$$; cat > $tmp; grep -qxFf $tmp ~/.ssh/authorized_keys || cat $tmp >> ~/.ssh/authorized_keys; rm -f $tmp'
+($publicKey + "`n") | & $ssh.Source $target $remoteInstall
 if ($LASTEXITCODE -ne 0) { throw "Failed to install the backup SSH key on the VPS." }
 
-$probe = (& $ssh.Source -i $keyPath -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=15 $target "printf backup-key-ok").Trim()
-if ($LASTEXITCODE -ne 0 -or $probe -ne "backup-key-ok") {
+$probeOutput = & $ssh.Source -i $keyPath -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=15 $target "printf backup-key-ok"
+$probeExitCode = $LASTEXITCODE
+$probe = if ($null -eq $probeOutput) { "" } else { ([string]$probeOutput).Trim() }
+if ($probeExitCode -ne 0 -or $probe -ne "backup-key-ok") {
     throw "Passwordless VPS authentication check failed."
 }
 
