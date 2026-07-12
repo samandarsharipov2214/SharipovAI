@@ -25,8 +25,11 @@ class FakeClient:
 
 
 def test_fetch_snapshot_is_read_only_and_normalized(monkeypatch, tmp_path):
-    monkeypatch.setenv("EXCHANGE_API_KEY", "key")
-    monkeypatch.setenv("EXCHANGE_API_SECRET", "secret")
+    monkeypatch.setenv("BYBIT_READONLY_API_KEY", "key")
+    monkeypatch.setenv("BYBIT_READONLY_API_SECRET", "secret")
+    monkeypatch.delenv("EXCHANGE_API_KEY", raising=False)
+    monkeypatch.delenv("EXCHANGE_API_SECRET", raising=False)
+    monkeypatch.setenv("BYBIT_ALLOW_LEGACY_EXCHANGE_CREDENTIALS", "0")
     monkeypatch.setenv("BYBIT_ACCOUNT_BASE_URL", "https://api.bybit.eu")
     monkeypatch.setenv("BYBIT_ACCOUNT_STATE_FILE", str(tmp_path / "account.json"))
     fake = FakeClient()
@@ -35,6 +38,7 @@ def test_fetch_snapshot_is_read_only_and_normalized(monkeypatch, tmp_path):
     snapshot = client.fetch_snapshot()
     path = client.save_snapshot(snapshot)
 
+    assert client.credential_profile == "live_read_only"
     assert snapshot.status == "connected"
     assert snapshot.total_equity == 100
     assert snapshot.coins[0]["coin"] == "USDT"
@@ -44,8 +48,14 @@ def test_fetch_snapshot_is_read_only_and_normalized(monkeypatch, tmp_path):
 
 
 def test_missing_credentials_are_blocked(monkeypatch):
-    monkeypatch.delenv("EXCHANGE_API_KEY", raising=False)
-    monkeypatch.delenv("EXCHANGE_API_SECRET", raising=False)
+    for name in (
+        "BYBIT_READONLY_API_KEY",
+        "BYBIT_READONLY_API_SECRET",
+        "EXCHANGE_API_KEY",
+        "EXCHANGE_API_SECRET",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("BYBIT_ALLOW_LEGACY_EXCHANGE_CREDENTIALS", "0")
     client = BybitAccountClient(client=FakeClient())
     try:
         client.fetch_snapshot()
