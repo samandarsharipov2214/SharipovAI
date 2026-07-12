@@ -148,9 +148,10 @@ def _auto_configure_webhook() -> dict[str, Any]:
 def _set_webhook() -> dict[str, Any]:
     webhook_url = f"{_webapp_url()}/telegram/webhook"
     commands = _safe_setup_commands()
+    menu_button = _restore_commands_menu()
     payload = {"url": webhook_url, "secret_token": _webhook_secret(), "drop_pending_updates": False, "allowed_updates": ["message", "callback_query"], "max_connections": 20}
     result = _telegram("setWebhook", payload)
-    return {"status": "ok" if result.get("ok") else "error", "webhook_url": webhook_url, "secret_token_configured": True, "set_webhook": result, "commands": commands, "adapter": "shared_website_system"}
+    return {"status": "ok" if result.get("ok") else "error", "webhook_url": webhook_url, "secret_token_configured": True, "set_webhook": result, "commands": commands, "menu_button": menu_button, "adapter": "shared_website_system"}
 
 
 def _delete_webhook() -> dict[str, Any]:
@@ -164,7 +165,13 @@ def _telegram_status() -> dict[str, Any]:
     if token:
         result["telegram_get_me"] = _telegram("getMe")
         result["webhook_info"] = _telegram("getWebhookInfo")
+        result["menu_button"] = _telegram("getChatMenuButton")
     return result
+
+
+def _restore_commands_menu() -> dict[str, Any]:
+    """Restore Telegram's native slash-command menu instead of a Web App button."""
+    return _telegram("setChatMenuButton", {"menu_button": {"type": "commands"}})
 
 
 def _safe_setup_commands() -> dict[str, Any]:
