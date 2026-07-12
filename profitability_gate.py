@@ -4,6 +4,10 @@ The virtual account must not create trades just because a timer tick happened.
 Before every virtual entry, this gate checks whether the expected edge is large
 enough to pay fees and risk. If not, the tick becomes WAIT and no new position
 is opened.
+
+Important: the current edge model is a deterministic simulator filter, not a live
+market prediction. Its output is never eligible for stage promotion, MetaAI
+reputation, strategy performance evidence, or capital-allocation decisions.
 """
 
 from __future__ import annotations
@@ -44,7 +48,7 @@ def evaluate_profitability_candidate(
     state: dict[str, Any],
     gate: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Return ALLOW or WAIT for a virtual trade candidate."""
+    """Return ALLOW or WAIT for simulator activity without creating real evidence."""
 
     gate = gate or {}
     confidence = int(gate.get("confidence", gate.get("ai_consensus_score", 75)) or 75)
@@ -81,16 +85,17 @@ def evaluate_profitability_candidate(
         "blockers": blockers,
         "warnings": warnings,
         "reason_ru": _reason_ru(decision, blockers, expected_net, edge_to_fee),
+        "evidence_class": "synthetic_simulation",
+        "model_type": "deterministic_fee_churn_filter",
+        "uses_live_market_prediction": False,
+        "promotion_eligible": False,
+        "learning_eligible": False,
+        "reputation_eligible": False,
     }
 
 
 def _expected_gross_edge(*, symbol: str, side: str, tick_count: int, confidence: int) -> float:
-    """Deterministic virtual edge model.
-
-    This is not market prediction. It gives the simulator a stricter entry
-    filter so it can avoid obvious fee-only churn until real signal models are
-    wired in.
-    """
+    """Return a deterministic simulator value, never a market forecast."""
 
     symbol_score = ((sum(ord(ch) for ch in symbol) + tick_count * 17) % 11) - 3
     side_boost = 1.0 if side.upper() == "BUY" else 0.35
@@ -116,5 +121,5 @@ def _open_count(state: dict[str, Any]) -> int:
 
 def _reason_ru(decision: str, blockers: list[str], expected_net: float, edge_to_fee: float) -> str:
     if decision == "ALLOW":
-        return f"вход разрешён: ожидаемый чистый результат {expected_net:.2f} USDT, преимущество к комиссии {edge_to_fee:.2f}x"
-    return "вход пропущен: " + "; ".join(blockers[:3])
+        return f"симулятор разрешил виртуальную активность: расчётный результат {expected_net:.2f} USDT, отношение к комиссии {edge_to_fee:.2f}x; это не торговый прогноз и не Evidence"
+    return "виртуальная активность пропущена: " + "; ".join(blockers[:3])
