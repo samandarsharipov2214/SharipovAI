@@ -40,7 +40,7 @@ else
   log 'GitHub device authorization is required once; approve the code shown below'
   gh auth login \
     --hostname github.com \
-    --git-protocol ssh \
+    --git-protocol https \
     --web \
     --scopes repo,workflow
   AUTH_CREATED=1
