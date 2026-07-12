@@ -11,6 +11,9 @@ from tools.backup_integrity import BackupIntegrityError, sha256, verify_snapshot
 from tools.isolated_restore_drill import run_restore_drill
 
 
+ROOT = Path(__file__).resolve().parents[1]
+
+
 def make_snapshot(root: Path) -> Path:
     snapshot = root / "snapshot"
     data = snapshot / "data"
@@ -79,13 +82,33 @@ def test_restore_drill_rejects_destination_inside_source(tmp_path: Path) -> None
         run_restore_drill(source, source / "restore-drills")
 
 
-def test_windows_restore_wrapper_stays_passive() -> None:
-    script = (Path(__file__).resolve().parents[1] / "scripts/windows/test_isolated_restore.ps1").read_text(
-        encoding="utf-8-sig"
-    )
+def test_windows_restore_wrapper_stays_passive_and_retains_reports() -> None:
+    script = (ROOT / "scripts/windows/test_isolated_restore.ps1").read_text(encoding="utf-8-sig")
     assert "-m tools.isolated_restore_drill" in script
-    assert "runtime\\remote_backups\\current" in script
-    assert "runtime\\restore_drills" in script
+    assert "runtime\remote_backups\current" in script
+    assert "runtime\restore_drills" in script
+    assert "runtime\restore_drill_status.json" in script
+    assert "RetainRuns = 12" in script
+    assert "Select-Object -Skip $RetainRuns" in script
+    assert "activation_performed" in script
+    assert "network_services_started" in script
     assert "bootstrap_pc_node" not in script
     assert "docker" not in script.lower()
     assert "Start-Process" not in script
+
+
+def test_weekly_restore_installer_is_passive_and_start_when_available() -> None:
+    script = (ROOT / "scripts/windows/install_weekly_restore_drill.ps1").read_text(encoding="utf-8-sig")
+    assert '"SharipovAI Weekly Restore Drill"' in script
+    assert "New-ScheduledTaskTrigger -Weekly" in script
+    assert "-DaysOfWeek $scheduledDay" in script
+    assert "-StartWhenAvailable" in script
+    assert "-MultipleInstances IgnoreNew" in script
+    assert "-RetainRuns $RetainRuns" in script
+    assert 'DayOfWeek = "Sunday"' in script
+    assert 'Time = "04:00"' in script
+    assert "runtime\restore_drill_status.json" in script
+    assert "activation_performed" in script
+    assert "network_services_started" in script
+    assert "bootstrap_pc_node" not in script
+    assert "docker" not in script.lower()
