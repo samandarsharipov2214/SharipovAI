@@ -2,8 +2,8 @@
 
 The worker consumes public spot ticker data only. It cannot authenticate, access
 accounts, or submit orders. A stream becomes usable only after an explicit
-successful Bybit subscription acknowledgement. Latest verified quotes are stored
-in the canonical ProjectDatabase when one is supplied.
+successful Bybit subscription acknowledgement. The state owns canonical quote
+persistence, so every ticker has one source of truth.
 """
 from __future__ import annotations
 
@@ -58,16 +58,24 @@ class BybitWebSocketWorker:
         wait: Callable[[float], bool] | None = None,
         database: ProjectDatabase | None = None,
     ) -> None:
-        self.state = state or BybitWebSocketState()
+        self.database = database
+        if self.database is not None:
+            self.database.initialize()
+        if state is None:
+            self.state = BybitWebSocketState(database=self.database)
+        else:
+            self.state = state
+            state_database = getattr(self.state, "database", None)
+            if self.database is not None and state_database is not None and state_database.dsn != self.database.dsn:
+                raise ValueError("worker and websocket state must use the same database")
+            if self.database is not None and state_database is None:
+                self.state.database = self.database
         self.url = validate_public_ws_url(os.getenv("BYBIT_WS_PUBLIC_URL", DEFAULT_URL))
         self.symbols = _symbols(os.getenv("BYBIT_WS_SYMBOLS", "BTCUSDT,ETHUSDT"))
         self.receive_timeout = min(
             max(float(os.getenv("BYBIT_WS_RECEIVE_TIMEOUT_SECONDS", "10")), 1.0),
             60.0,
         )
-        self.database = database
-        if self.database is not None:
-            self.database.initialize()
         self._connector = connector
         self._stop = threading.Event()
         self._wait = wait or self._stop.wait
@@ -96,14 +104,15 @@ class BybitWebSocketWorker:
         self.state.mark_disconnected("worker stopped")
 
     def status(self) -> dict[str, Any]:
+        state_status = self.state.status()
         return {
+            **state_status,
             "enabled": self.enabled(),
             "worker_running": bool(self._thread and self._thread.is_alive()),
             "url": self.url,
             "symbols": list(self.symbols),
-            "database_backed": self.database is not None,
+            "database_backed": getattr(self.state, "database", None) is not None,
             "synthetic_fallback_used": False,
-            **self.state.status(),
         }
 
     def quote(self, symbol: str) -> dict[str, Any]:
@@ -164,26 +173,7 @@ class BybitWebSocketWorker:
                 continue
             if op == "subscribe":
                 raise RuntimeError("unexpected duplicate subscription response")
-            quote = self.state.ingest_ticker(payload)
-            self._persist_quote(quote.to_dict())
-
-    def _persist_quote(self, quote: dict[str, Any]) -> None:
-        if self.database is None:
-            return
-        symbol = str(quote.get("symbol") or "").strip().upper()
-        if not symbol:
-            raise RuntimeError("verified websocket quote has no symbol")
-        self.database.put_json(
-            "market_quotes",
-            f"bybit_websocket_v5:spot:{symbol}",
-            {
-                **quote,
-                "provider": "bybit_websocket_v5",
-                "category": "spot",
-                "verified": True,
-                "synthetic_fallback_used": False,
-            },
-        )
+            self.state.ingest_ticker(payload)
 
 
 def _decode_message(raw: Any) -> dict[str, Any]:
