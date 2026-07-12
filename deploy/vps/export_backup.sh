@@ -19,7 +19,7 @@ cd "$COMPOSE_DIR"
 docker compose ps --status running "$CONTAINER" | grep -q "$CONTAINER"
 
 # Create a transactionally consistent SQLite copy inside the running container.
-docker exec "$CONTAINER" python - <<'PY'
+docker exec -i "$CONTAINER" python - <<'PY'
 import os
 import shutil
 import sqlite3
