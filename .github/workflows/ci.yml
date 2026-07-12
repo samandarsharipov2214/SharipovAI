@@ -65,7 +65,7 @@ jobs:
           EXCHANGE_LIVE_TRADING_ENABLED: '0'
         run: |
           set -o pipefail
-          python -m pytest -q --disable-warnings --maxfail=1 2>&1 | tee pytest-ci.log
+          python -m pytest -q --disable-warnings 2>&1 | tee pytest-ci.log
 
       - name: Сохранить полный pytest log
         if: failure()
