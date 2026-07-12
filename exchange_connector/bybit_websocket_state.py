@@ -1,7 +1,8 @@
 """Fail-closed state and reconnect policy for Bybit public ticker streams.
 
-This module does not open sockets or execute trades. It validates ticker events,
-tracks connection/freshness evidence, and calculates bounded reconnect delays.
+The state validates ticker events, tracks connection/freshness evidence and
+stores the latest verified quote in the canonical ProjectDatabase when supplied.
+It never opens sockets and never executes trades.
 """
 from __future__ import annotations
 
@@ -13,6 +14,8 @@ import time
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from storage import ProjectDatabase
+
 
 @dataclass(frozen=True, slots=True)
 class StreamQuote:
@@ -21,20 +24,33 @@ class StreamQuote:
     exchange_timestamp_ms: int
     received_at_ms: int
     sequence: int | None
+    change_24h_percent: float | None = None
     source: str = "bybit_websocket_v5"
+    verified: bool = True
+    database_backed: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    def __getitem__(self, key: str) -> Any:
+        return self.to_dict()[key]
 
 
 class BybitWebSocketState:
     """Thread-safe ticker state that fails closed when evidence is stale."""
 
-    def __init__(self) -> None:
-        self.max_age_seconds = min(
-            max(float(os.getenv("BYBIT_WS_MAX_QUOTE_AGE_SECONDS", "1.0")), 0.1),
-            30.0,
+    def __init__(
+        self,
+        *,
+        database: ProjectDatabase | None = None,
+        max_age_seconds: float | None = None,
+    ) -> None:
+        configured_age = (
+            float(max_age_seconds)
+            if max_age_seconds is not None
+            else float(os.getenv("BYBIT_WS_MAX_QUOTE_AGE_SECONDS", "1.0"))
         )
+        self.max_age_seconds = min(max(configured_age, 0.1), 30.0)
         self.max_future_skew_ms = min(
             max(int(os.getenv("BYBIT_WS_MAX_FUTURE_SKEW_MS", "1000")), 0),
             10_000,
@@ -43,21 +59,39 @@ class BybitWebSocketState:
             max(int(os.getenv("BYBIT_WS_MAX_EXCHANGE_LAG_MS", "3000")), 100),
             60_000,
         )
+        self.database = database
+        if self.database is not None:
+            self.database.initialize()
         self._quotes: dict[str, StreamQuote] = {}
         self._connected = False
         self._last_error: str | None = None
         self._disconnects = 0
+        self._connected_at_ms = 0
+        self._disconnected_at_ms = 0
         self._lock = threading.RLock()
 
-    def mark_connected(self) -> None:
+    def mark_connected(self, *, connected_at_ms: int | None = None) -> None:
         """Mark usable only after a successful Bybit subscription acknowledgement."""
+        timestamp = int(time.time() * 1000) if connected_at_ms is None else _positive_int(
+            connected_at_ms, "connected_at_ms"
+        )
         with self._lock:
             self._connected = True
+            self._connected_at_ms = timestamp
             self._last_error = None
 
-    def mark_disconnected(self, error: Exception | str | None = None) -> None:
+    def mark_disconnected(
+        self,
+        error: Exception | str | None = None,
+        *,
+        disconnected_at_ms: int | None = None,
+    ) -> None:
+        timestamp = int(time.time() * 1000) if disconnected_at_ms is None else _positive_int(
+            disconnected_at_ms, "disconnected_at_ms"
+        )
         with self._lock:
             self._connected = False
+            self._disconnected_at_ms = timestamp
             self._disconnects += 1
             self._last_error = None if error is None else str(error)
 
@@ -93,12 +127,15 @@ class BybitWebSocketState:
 
         sequence_raw = payload.get("cs")
         sequence = None if sequence_raw is None else _positive_int(sequence_raw, "cs")
+        change = _fraction_to_percent(data.get("price24hPcnt"))
         quote = StreamQuote(
             symbol=symbol,
             price=price,
             exchange_timestamp_ms=exchange_ms,
             received_at_ms=now_ms,
             sequence=sequence,
+            change_24h_percent=change,
+            database_backed=self.database is not None,
         )
         with self._lock:
             previous = self._quotes.get(symbol)
@@ -110,6 +147,7 @@ class BybitWebSocketState:
             ):
                 raise ValueError("ticker sequence did not advance")
             self._quotes[symbol] = quote
+        self._persist(quote)
         return quote
 
     def current_quote(self, symbol: str, *, now_ms: int | None = None) -> StreamQuote:
@@ -137,6 +175,8 @@ class BybitWebSocketState:
             connected = self._connected
             error = self._last_error
             disconnects = self._disconnects
+            connected_at_ms = self._connected_at_ms
+            disconnected_at_ms = self._disconnected_at_ms
         ages = {
             symbol: round((current_ms - quote.received_at_ms) / 1000, 6)
             for symbol, quote in quotes.items()
@@ -150,8 +190,26 @@ class BybitWebSocketState:
             "quote_count": len(quotes),
             "quote_ages_seconds": ages,
             "disconnect_count": disconnects,
+            "connected_at_ms": connected_at_ms,
+            "disconnected_at_ms": disconnected_at_ms,
             "last_error": error,
+            "database_backed": self.database is not None,
+            "synthetic_fallback_used": False,
         }
+
+    def _persist(self, quote: StreamQuote) -> None:
+        if self.database is None:
+            return
+        self.database.put_json(
+            "market_quotes",
+            quote.symbol,
+            {
+                **quote.to_dict(),
+                "provider": quote.source,
+                "category": "spot",
+                "synthetic_fallback_used": False,
+            },
+        )
 
 
 class ReconnectPolicy:
@@ -176,6 +234,17 @@ class ReconnectPolicy:
 
     def reset(self) -> None:
         self._attempt = 0
+
+
+def _fraction_to_percent(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, bool):
+        raise ValueError("price24hPcnt must be finite")
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ValueError("price24hPcnt must be finite")
+    return parsed * 100.0
 
 
 def _positive_float(value: Any, field: str) -> float:
