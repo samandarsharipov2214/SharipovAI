@@ -19,6 +19,7 @@ if ($VpsAppDir -notmatch '^/[A-Za-z0-9._/-]+$' -or $VpsAppDir.Contains('/../') -
 }
 
 $ssh = Get-Command ssh.exe -ErrorAction Stop
+$scp = Get-Command scp.exe -ErrorAction Stop
 $keygen = Get-Command ssh-keygen.exe -ErrorAction Stop
 $sshDir = Join-Path $env:USERPROFILE ".ssh"
 $keyPath = Join-Path $sshDir "sharipovai_backup_ed25519"
@@ -34,48 +35,33 @@ if (-not (Test-Path $keyPath -PathType Leaf)) {
 
 $publicKeyOutput = & $keygen.Source -y -f $keyPath
 $keygenExitCode = $LASTEXITCODE
-$publicKey = if ($null -eq $publicKeyOutput) { "" } else { ((@($publicKeyOutput) -join "").Trim()) }
-if ($keygenExitCode -ne 0 -or $publicKey -notmatch '^ssh-ed25519 [A-Za-z0-9+/=]+(?: .+)?$') {
+$publicKeyBase = if ($null -eq $publicKeyOutput) { "" } else { ((@($publicKeyOutput) -join "").Trim()) }
+if ($keygenExitCode -ne 0 -or $publicKeyBase -notmatch '^ssh-ed25519 [A-Za-z0-9+/=]+$') {
     throw "Failed to derive a valid SSH public key from the private key."
 }
-$publicKey | Set-Content -Path $publicKeyPath -Encoding Ascii
+$publicKey = "$publicKeyBase sharipovai-backup@$env:COMPUTERNAME"
+[IO.File]::WriteAllText($publicKeyPath, $publicKey + "`n", [Text.Encoding]::ASCII)
 
 $target = "$VpsUser@$VpsHost"
-$keyPayload = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($publicKey))
-$remoteScriptTemplate = @'
-set -eu
-umask 077
-mkdir -p ~/.ssh
-touch ~/.ssh/authorized_keys
-chmod 700 ~/.ssh
-chmod 600 ~/.ssh/authorized_keys
-key_payload='__KEY_PAYLOAD__'
-key="$(printf '%s' "$key_payload" | base64 -d)"
-key_type="$(printf '%s\n' "$key" | awk '{print $1}')"
-key_blob="$(printf '%s\n' "$key" | awk '{print $2}')"
-key_comment="$(printf '%s\n' "$key" | cut -d' ' -f3-)"
-tmp="$(mktemp)"
-awk -v full="$key" -v type="$key_type" -v blob="$key_blob" -v comment="$key_comment" '
-    $0 == type || $0 == blob || (comment != "" && $0 == comment) { next }
-    $0 == full { if (seen++) next }
-    { print }
-    END { print full }
-' ~/.ssh/authorized_keys > "$tmp"
-cat "$tmp" > ~/.ssh/authorized_keys
-rm -f "$tmp"
-chmod 600 ~/.ssh/authorized_keys
-'@
-$remoteScript = $remoteScriptTemplate.Replace("__KEY_PAYLOAD__", $keyPayload)
-$remoteScriptPayload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($remoteScript))
-$remoteInstall = "printf %s $remoteScriptPayload | base64 -d | sh"
-& $ssh.Source $target $remoteInstall
-if ($LASTEXITCODE -ne 0) { throw "Failed to install the backup SSH key on the VPS." }
-
-$probeOutput = & $ssh.Source -i $keyPath -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=15 $target "printf backup-key-ok"
+$probeOutput = & $ssh.Source -i $keyPath -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=15 $target "printf backup-key-ok" 2>$null
 $probeExitCode = $LASTEXITCODE
 $probe = if ($null -eq $probeOutput) { "" } else { ([string]$probeOutput).Trim() }
+
 if ($probeExitCode -ne 0 -or $probe -ne "backup-key-ok") {
-    throw "Passwordless VPS authentication check failed."
+    $remoteKeyPath = "/tmp/sharipovai_backup_ed25519.pub"
+    & $scp.Source $publicKeyPath "$target`:$remoteKeyPath"
+    if ($LASTEXITCODE -ne 0) { throw "Failed to upload the backup SSH public key to the VPS." }
+
+    $remoteInstall = "umask 077; mkdir -p /root/.ssh; touch /root/.ssh/authorized_keys; chmod 700 /root/.ssh; chmod 600 /root/.ssh/authorized_keys; grep -Fqx -f $remoteKeyPath /root/.ssh/authorized_keys || cat $remoteKeyPath >> /root/.ssh/authorized_keys; rm -f $remoteKeyPath"
+    & $ssh.Source $target $remoteInstall
+    if ($LASTEXITCODE -ne 0) { throw "Failed to install the backup SSH key on the VPS." }
+
+    $probeOutput = & $ssh.Source -i $keyPath -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=15 $target "printf backup-key-ok"
+    $probeExitCode = $LASTEXITCODE
+    $probe = if ($null -eq $probeOutput) { "" } else { ([string]$probeOutput).Trim() }
+    if ($probeExitCode -ne 0 -or $probe -ne "backup-key-ok") {
+        throw "Passwordless VPS authentication check failed after key installation."
+    }
 }
 
 $installer = Join-Path $ProjectRoot "scripts\windows\install_vps_backup_sync.ps1"
