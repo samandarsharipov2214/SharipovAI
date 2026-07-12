@@ -152,6 +152,7 @@ def _auto_configure_webhook() -> dict[str, Any]:
 def _set_webhook() -> dict[str, Any]:
     webhook_url = f"{_webapp_url()}/telegram/webhook"
     commands = _safe_setup_commands()
+    menu_button = _safe_set_menu_button()
     payload = {
         "url": webhook_url,
         "secret_token": _webhook_secret(),
@@ -160,7 +161,14 @@ def _set_webhook() -> dict[str, Any]:
         "max_connections": 20,
     }
     result = _telegram("setWebhook", payload)
-    return {"status": "ok" if result.get("ok") else "error", "webhook_url": webhook_url, "secret_token_configured": True, "set_webhook": result, "commands": commands}
+    return {
+        "status": "ok" if result.get("ok") else "error",
+        "webhook_url": webhook_url,
+        "secret_token_configured": True,
+        "set_webhook": result,
+        "commands": commands,
+        "menu_button": menu_button,
+    }
 
 
 def _delete_webhook() -> dict[str, Any]:
@@ -182,7 +190,24 @@ def _telegram_status() -> dict[str, Any]:
     if token:
         result["telegram_get_me"] = _telegram("getMe")
         result["webhook_info"] = _telegram("getWebhookInfo")
+        result["menu_button"] = _telegram("getChatMenuButton")
     return result
+
+
+def _safe_set_menu_button() -> dict[str, Any]:
+    url = _webapp_url()
+    if not url:
+        return {"ok": False, "error": "WEBAPP_URL_missing"}
+    return _telegram(
+        "setChatMenuButton",
+        {
+            "menu_button": {
+                "type": "web_app",
+                "text": "Открыть SharipovAI",
+                "web_app": {"url": url},
+            }
+        },
+    )
 
 
 def _safe_setup_commands() -> dict[str, Any]:
