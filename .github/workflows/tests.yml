@@ -7,29 +7,18 @@ on:
       - '**/*.py'
       - 'requirements.txt'
       - '.github/workflows/tests.yml'
-  pull_request:
-    branches: [main]
-    paths:
-      - '**/*.py'
-      - 'requirements.txt'
-      - '.github/workflows/tests.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: tests-${{ github.event.pull_request.number || github.ref }}
+  group: tests-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   pytest:
-    if: >-
-      ${{
-        vars.SHARIPOVAI_SELF_HOSTED_CI == '1' &&
-        (github.event_name != 'pull_request' ||
-         github.event.pull_request.head.repo.full_name == github.repository)
-      }}
+    if: ${{ vars.SHARIPOVAI_SELF_HOSTED_CI == '1' }}
     runs-on: [self-hosted, linux, x64, sharipovai-ci]
     timeout-minutes: 20
     env:
