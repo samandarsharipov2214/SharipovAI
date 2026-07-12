@@ -28,7 +28,7 @@ def test_windows_sync_is_scheduled_without_parallel_runs() -> None:
     assert '"SharipovAI VPS Backup Sync"' in script
     assert "-MultipleInstances IgnoreNew" in script
     assert "Initial VPS backup synchronization failed" in script
-    assert "remote_backups\current\manifest.json" in script
+    assert r"remote_backups\current\manifest.json" in script
 
 
 def test_vps_backup_timer_is_persistent_and_hourly() -> None:
@@ -53,6 +53,15 @@ def test_failover_requires_https_health_endpoint_and_blocks_any_vps_response() -
     assert '$healthUri.AbsolutePath -ne "/health"' in script
     assert "VPS responded with HTTP" in script
     assert "VPS is reachable and returned an HTTP response" in script
+
+
+def test_failover_fences_reachable_https_port_and_concurrent_activation() -> None:
+    script = read("scripts/windows/activate_pc_failover.ps1")
+    assert "Test-TcpReachable" in script
+    assert "VPS HTTPS port is reachable" in script
+    assert "pc_failover.lock" in script
+    assert "FileShare]::None" in script
+    assert "Another PC failover operation is already running" in script
 
 
 def test_failover_requires_ready_standby_even_with_force() -> None:
@@ -84,5 +93,5 @@ def test_sync_persists_success_and_failure_status() -> None:
 def test_readiness_command_writes_a_visible_report() -> None:
     script = read("scripts/windows/check_standby_readiness.ps1")
     assert "standby_health_report.py" in script
-    assert "runtime\standby_health.json" in script
+    assert r"runtime\standby_health.json" in script
     assert "SharipovAI standby status" in script
