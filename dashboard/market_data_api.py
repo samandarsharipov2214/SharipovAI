@@ -1,6 +1,7 @@
 """FastAPI endpoints for verified read-only market data and order previews."""
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime
 from typing import Any, Callable
 
@@ -19,11 +20,21 @@ from exchange_connector.order_preview import OrderPreviewError, build_order_prev
 _BYBIT_MARKET_URL = "https://api.bybit.com/v5/market"
 _ALLOWED_INTERVALS = {"1", "3", "5", "15", "30", "60", "120", "240", "360", "720", "D", "W", "M"}
 _ALLOWED_CATEGORIES = {"spot", "linear", "inverse"}
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def _configure_public_stream_feature() -> None:
+    """Map the public market switch once without overriding an explicit feature value."""
+    if "FEATURE_BYBIT_WEBSOCKET" in os.environ:
+        return
+    if os.getenv("MARKET_STREAM_ENABLED", "").strip().lower() in _TRUTHY:
+        os.environ["FEATURE_BYBIT_WEBSOCKET"] = "1"
 
 
 def install_market_data_api(app: FastAPI) -> None:
     if getattr(app.state, "market_data_api_installed", False):
         return
+    _configure_public_stream_feature()
     app.state.market_data_api_installed = True
     app.state.market_data_service = MarketDataService()
     app.state.bybit_websocket_worker = BybitWebSocketWorker()
