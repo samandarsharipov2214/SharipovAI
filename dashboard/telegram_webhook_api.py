@@ -10,10 +10,10 @@ from typing import Any
 from urllib.parse import parse_qsl
 
 import httpx
-from fastapi import BackgroundTasks, Body, FastAPI, Header, HTTPException, Request
+from fastapi import BackgroundTasks, Body, FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
 
-from telegram_bot import handle_callback, handle_message, main_keyboard, send_message, setup_bot_commands
+from telegram_system_adapter import handle_callback, handle_message, main_keyboard, send_message, setup_bot_commands
 from telegram_health import telegram_health
 
 TELEGRAM_API_TIMEOUT = 20.0
@@ -33,25 +33,24 @@ def install_telegram_webhook_api(app: FastAPI) -> None:
     def telegram_status() -> dict[str, Any]:
         result = _telegram_status()
         result["auto_configure"] = getattr(app.state, "telegram_webhook_autoconfigure", None)
+        result["integration"] = {"website_core": True, "shared_demo_state": True, "shared_ai_chat_orchestrator": True, "shared_bot_network": True, "adapter": "telegram_system_adapter"}
         return result
 
     @app.get("/api/telegram/self-test")
     def telegram_self_test() -> dict[str, Any]:
-        return telegram_health()
+        result = telegram_health()
+        result["system_adapter"] = "telegram_system_adapter"
+        return result
 
     @app.post("/telegram/webhook")
-    async def telegram_webhook(
-        background_tasks: BackgroundTasks,
-        update: dict[str, Any] = Body(default_factory=dict),
-        x_telegram_bot_api_secret_token: str | None = Header(default=None),
-    ) -> dict[str, Any]:
+    async def telegram_webhook(background_tasks: BackgroundTasks, update: dict[str, Any] = Body(default_factory=dict), x_telegram_bot_api_secret_token: str | None = Header(default=None)) -> dict[str, Any]:
         expected = _webhook_secret()
         if not expected or not hmac.compare_digest(x_telegram_bot_api_secret_token or "", expected):
             raise HTTPException(status_code=403, detail="invalid_webhook_secret")
         if not isinstance(update, dict) or "update_id" not in update:
             raise HTTPException(status_code=400, detail="invalid_telegram_update")
         background_tasks.add_task(_process_update_safely, update)
-        return {"ok": True, "queued": True}
+        return {"ok": True, "queued": True, "adapter": "shared_website_system"}
 
     @app.get("/api/telegram/set-webhook")
     def set_webhook_get() -> JSONResponse:
@@ -74,16 +73,13 @@ def install_telegram_webhook_api(app: FastAPI) -> None:
         return _delete_webhook()
 
     @app.post("/api/telegram/test-message")
-    def telegram_test_message(
-        payload: dict[str, Any] | None = Body(default=None),
-        x_sharipovai_admin: str | None = Header(default=None),
-    ) -> dict[str, Any]:
+    def telegram_test_message(payload: dict[str, Any] | None = Body(default=None), x_sharipovai_admin: str | None = Header(default=None)) -> dict[str, Any]:
         _require_admin_token(x_sharipovai_admin)
         chat_id = (payload or {}).get("chat_id")
         if not chat_id:
             raise HTTPException(status_code=400, detail="chat_id_required")
-        send_message(int(chat_id), "✅ Telegram webhook работает. Mini App авторизация включена.", main_keyboard())
-        return {"status": "ok", "sent": True}
+        send_message(int(chat_id), "✅ Telegram подключён к ядру сайта SharipovAI.", main_keyboard())
+        return {"status": "ok", "sent": True, "adapter": "shared_website_system"}
 
     @app.post("/api/telegram/miniapp-auth")
     def miniapp_auth(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
@@ -152,23 +148,9 @@ def _auto_configure_webhook() -> dict[str, Any]:
 def _set_webhook() -> dict[str, Any]:
     webhook_url = f"{_webapp_url()}/telegram/webhook"
     commands = _safe_setup_commands()
-    menu_button = _safe_set_menu_button()
-    payload = {
-        "url": webhook_url,
-        "secret_token": _webhook_secret(),
-        "drop_pending_updates": False,
-        "allowed_updates": ["message", "callback_query"],
-        "max_connections": 20,
-    }
+    payload = {"url": webhook_url, "secret_token": _webhook_secret(), "drop_pending_updates": False, "allowed_updates": ["message", "callback_query"], "max_connections": 20}
     result = _telegram("setWebhook", payload)
-    return {
-        "status": "ok" if result.get("ok") else "error",
-        "webhook_url": webhook_url,
-        "secret_token_configured": True,
-        "set_webhook": result,
-        "commands": commands,
-        "menu_button": menu_button,
-    }
+    return {"status": "ok" if result.get("ok") else "error", "webhook_url": webhook_url, "secret_token_configured": True, "set_webhook": result, "commands": commands, "adapter": "shared_website_system"}
 
 
 def _delete_webhook() -> dict[str, Any]:
@@ -178,36 +160,11 @@ def _delete_webhook() -> dict[str, Any]:
 
 def _telegram_status() -> dict[str, Any]:
     token = _bot_token()
-    result: dict[str, Any] = {
-        "status": "ok" if token else "missing_token",
-        "bot_token_configured": bool(token),
-        "webapp_url": _webapp_url(),
-        "webhook_endpoint": "/telegram/webhook",
-        "webhook_secret_configured": bool(_webhook_secret()),
-        "mode": "webhook",
-        "miniapp_auth": "/api/telegram/miniapp-auth",
-    }
+    result: dict[str, Any] = {"status": "ok" if token else "missing_token", "bot_token_configured": bool(token), "webapp_url": _webapp_url(), "webhook_endpoint": "/telegram/webhook", "webhook_secret_configured": bool(_webhook_secret()), "mode": "webhook", "miniapp_auth": "/api/telegram/miniapp-auth"}
     if token:
         result["telegram_get_me"] = _telegram("getMe")
         result["webhook_info"] = _telegram("getWebhookInfo")
-        result["menu_button"] = _telegram("getChatMenuButton")
     return result
-
-
-def _safe_set_menu_button() -> dict[str, Any]:
-    url = _webapp_url()
-    if not url:
-        return {"ok": False, "error": "WEBAPP_URL_missing"}
-    return _telegram(
-        "setChatMenuButton",
-        {
-            "menu_button": {
-                "type": "web_app",
-                "text": "Открыть SharipovAI",
-                "web_app": {"url": url},
-            }
-        },
-    )
 
 
 def _safe_setup_commands() -> dict[str, Any]:
