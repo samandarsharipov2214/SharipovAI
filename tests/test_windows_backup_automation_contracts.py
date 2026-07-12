@@ -34,6 +34,9 @@ def test_one_command_setup_creates_and_verifies_dedicated_key() -> None:
     assert "authorized_keys" in script
     assert "/tmp/sharipovai_backup_ed25519.pub" in script
     assert "grep -Fqx -f" in script
+    assert "publicKeyRaw" in script
+    assert "(?:\\s+.*)?$" in script
+    assert '$publicKeyBase = "$($Matches[1]) $($Matches[2])"' in script
     assert "BatchMode=yes" in script
     assert "backup-key-ok" in script
     assert "install_vps_backup_sync.ps1" in script
