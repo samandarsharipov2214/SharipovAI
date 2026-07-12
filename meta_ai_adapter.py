@@ -55,7 +55,17 @@ def record_realized_result(
     pnl_by_agent: Mapping[str, float] | None = None,
     drawdown_by_agent: Mapping[str, float] | None = None,
     regime: str = "unknown",
-) -> None:
+    decision_id: str | None = None,
+    evidence_class: str = "verified_market",
+    verified_market_data: bool = True,
+) -> bool:
+    """Record one realized result in memory or canonical persistent MetaAI.
+
+    Persistent MetaAI instances require ``decision_id`` and verified evidence.
+    Plain MetaAI remains backward compatible and records the same outcomes in
+    process memory.
+    """
+
     pnl = pnl_by_agent or {}
     drawdown = drawdown_by_agent or {}
     eligible_payloads = [payload for payload in payloads if _learning_eligible(payload)]
@@ -71,7 +81,21 @@ def record_realized_result(
         )
         for opinion in opinions_from_payloads(eligible_payloads, regime=regime)
     ]
+    if not outcomes:
+        return False
+
+    if hasattr(meta, "persistence_status"):
+        return bool(
+            meta.record_outcomes(
+                outcomes,
+                decision_id=decision_id,
+                evidence_class=evidence_class,
+                verified_market_data=verified_market_data,
+            )
+        )
+
     meta.record_outcomes(outcomes)
+    return True
 
 
 def _learning_eligible(payload: Mapping[str, Any]) -> bool:
