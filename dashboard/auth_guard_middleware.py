@@ -1,9 +1,8 @@
-"""Compatibility authentication middleware used by ``create_app`` instances.
+"""Fail-closed authentication middleware used by ``create_app`` instances.
 
-The production entrypoint installs ``global_auth_guard`` separately and remains
-fail-closed. This middleware preserves the historical app-factory contract:
-authentication is enforced when ``SHARIPOVAI_DISABLE_AUTH`` is explicitly false,
-while isolated local/test app instances remain usable when the variable is absent.
+Authentication is enabled by default. Only an explicit truthy
+``SHARIPOVAI_DISABLE_AUTH`` value bypasses the guard for isolated CI/local
+workflows. Production and unknown values remain protected.
 """
 from __future__ import annotations
 
@@ -16,9 +15,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.requests import Request
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
-_FALSE_VALUES = {"0", "false", "no", "off"}
 _PUBLIC_EXACT = {
-    "/",
     "/login",
     "/register",
     "/logout",
@@ -51,15 +48,10 @@ _PUBLIC_PREFIXES = (
 
 
 def factory_auth_enabled() -> bool:
-    """Return True only when factory-level auth is explicitly requested."""
+    """Keep authentication enabled unless bypass is explicitly requested."""
 
-    raw = os.getenv("SHARIPOVAI_DISABLE_AUTH")
-    if raw is None:
-        return False
-    normalized = raw.strip().lower()
-    if normalized in _TRUE_VALUES:
-        return False
-    return normalized in _FALSE_VALUES
+    raw = os.getenv("SHARIPOVAI_DISABLE_AUTH", "")
+    return raw.strip().lower() not in _TRUE_VALUES
 
 
 def session_username(request: Request) -> str | None:
@@ -75,7 +67,7 @@ def is_public_path(path: str) -> bool:
 
 
 class AuthGuardMiddleware:
-    """Protect private app-factory routes when auth is explicitly enabled."""
+    """Protect private app-factory routes with an explicit CI-only bypass."""
 
     def __init__(self, app: Callable[[Any, Any, Any], Awaitable[None]]) -> None:
         self.app = app
@@ -92,7 +84,10 @@ class AuthGuardMiddleware:
             return
 
         if path.startswith("/api/"):
-            response = JSONResponse({"error": "authentication_required"}, status_code=401)
+            response = JSONResponse(
+                {"status": "unauthorized", "error": "authentication_required"},
+                status_code=401,
+            )
         else:
             safe_path = path if path.startswith("/") and not path.startswith("//") else "/"
             response = RedirectResponse(
