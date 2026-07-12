@@ -3,6 +3,7 @@
 Each agent has an independent schedule, source ownership, memory, health,
 freshness and event output. Only real saved RSS/API items are consumed.
 One failed agent is isolated and cannot stop the rest of the network.
+The canonical ProjectDatabase is the source of truth; JSON is a backup only.
 """
 
 from __future__ import annotations
@@ -16,11 +17,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from storage import ProjectDatabase, VersionConflict
+
 from .storage import load_news_state
 
 STATE_PATH = Path(os.getenv("NEWS_AGENT_NETWORK_STATE_FILE", "data/news_agent_network.json"))
 MEMORY_LIMIT = max(50, int(os.getenv("NEWS_AGENT_MEMORY_LIMIT", "500") or 500))
 EVENT_LIMIT = max(100, int(os.getenv("NEWS_AGENT_EVENT_LIMIT", "1000") or 1000))
+_DB_NAMESPACE = "news_agent_network"
+_DB_KEY = "canonical_state"
 
 
 @dataclass(frozen=True)
@@ -53,6 +58,25 @@ AGENTS: tuple[AgentSpec, ...] = (
 _LOCK = threading.RLock()
 _THREAD: threading.Thread | None = None
 _STOP = threading.Event()
+_DATABASE: ProjectDatabase | None = None
+_LAST_BACKUP_ERROR = ""
+
+
+def configure_database(database: ProjectDatabase) -> None:
+    """Bind the active network to the exact canonical application database."""
+
+    if not isinstance(database, ProjectDatabase):
+        raise TypeError("database must be ProjectDatabase")
+    database.initialize()
+    global _DATABASE
+    with _LOCK:
+        _DATABASE = database
+        if database.get_json(_DB_NAMESPACE, _DB_KEY) is None:
+            legacy = _load_json_backup()
+            try:
+                database.put_json(_DB_NAMESPACE, _DB_KEY, legacy, expected_version=0)
+            except VersionConflict:
+                pass
 
 
 def network_enabled() -> bool:
@@ -106,6 +130,9 @@ def network_status(*, run_due: bool = False) -> dict[str, Any]:
         "coordinator": _coordinator_summary(state),
         "network_error": state.get("network_error"),
         "network_error_at": state.get("network_error_at"),
+        "database_backed": _DATABASE is not None,
+        "backup_status": "error" if _LAST_BACKUP_ERROR else "ok",
+        "backup_error": _LAST_BACKUP_ERROR,
     }
 
 
@@ -123,7 +150,7 @@ def run_due_agents(*, force: bool = False) -> dict[str, Any]:
                 continue
             try:
                 result = _run_agent(spec, state, now)
-            except Exception as exc:  # isolate one broken agent
+            except Exception as exc:
                 result = _agent_error(spec, previous, now, exc)
             state.setdefault("agents", {})[spec.id] = result
             results.append(result)
@@ -149,7 +176,7 @@ def agent_detail(agent_id: str, *, run_now: bool = False) -> dict[str, Any]:
         agent = state.get("agents", {}).get(agent_id, {})
     memory = [item for item in state.get("memory", []) if item.get("agent_id") == agent_id][-MEMORY_LIMIT:]
     events = [item for item in state.get("events", []) if item.get("agent_id") == agent_id][-100:]
-    return {"status": "ok", "agent": agent, "memory": memory, "events": events}
+    return {"status": "ok", "agent": agent, "memory": memory, "events": events, "database_backed": _DATABASE is not None}
 
 
 def run_agent(agent_id: str) -> dict[str, Any]:
@@ -379,31 +406,78 @@ def _default_state() -> dict[str, Any]:
     return {"status": "ok", "agents": {}, "memory": [], "events": [], "last_network_cycle_at": 0}
 
 
-def _load_state() -> dict[str, Any]:
+def _load_json_backup() -> dict[str, Any]:
     if not STATE_PATH.exists():
         return _default_state()
     try:
         data = json.loads(STATE_PATH.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else _default_state()
     except Exception:
         return _default_state()
+    return data if isinstance(data, dict) else _default_state()
+
+
+def _load_state() -> dict[str, Any]:
+    if _DATABASE is None:
+        return _load_json_backup()
+    stored = _DATABASE.get_json(_DB_NAMESPACE, _DB_KEY)
+    if stored is None:
+        state = _load_json_backup()
+        try:
+            _DATABASE.put_json(_DB_NAMESPACE, _DB_KEY, state, expected_version=0)
+        except VersionConflict:
+            stored = _DATABASE.get_json(_DB_NAMESPACE, _DB_KEY)
+            value = stored.get("value") if stored else None
+            if not isinstance(value, dict):
+                raise RuntimeError("persisted news agent network state is invalid")
+            return dict(value)
+        return state
+    value = stored.get("value")
+    if not isinstance(value, dict):
+        raise RuntimeError("persisted news agent network state must be an object")
+    return dict(value)
 
 
 def _save_state(state: dict[str, Any]) -> None:
-    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    temporary = STATE_PATH.with_suffix(STATE_PATH.suffix + ".tmp")
-    temporary.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
-    temporary.replace(STATE_PATH)
+    if not isinstance(state, dict):
+        raise RuntimeError("news agent network state must be an object")
+    serialized = json.dumps(state, ensure_ascii=False, indent=2, allow_nan=False)
+    if _DATABASE is not None:
+        _DATABASE.put_json(_DB_NAMESPACE, _DB_KEY, state)
+    global _LAST_BACKUP_ERROR
+    try:
+        STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        temporary = STATE_PATH.with_suffix(STATE_PATH.suffix + ".tmp")
+        temporary.write_text(serialized, encoding="utf-8")
+        temporary.replace(STATE_PATH)
+        _LAST_BACKUP_ERROR = ""
+    except Exception as exc:
+        _LAST_BACKUP_ERROR = f"{type(exc).__name__}: {exc}"
+        if _DATABASE is None:
+            raise
 
 
 def _loop() -> None:
     while not _STOP.is_set():
         try:
             run_due_agents()
-        except Exception as exc:  # only network-level failures reach here
+        except Exception as exc:
             with _LOCK:
                 state = _load_state()
                 state["network_error"] = f"{type(exc).__name__}: {exc}"
                 state["network_error_at"] = int(time.time())
                 _save_state(state)
         _STOP.wait(5)
+
+
+__all__ = [
+    "AGENTS",
+    "AgentSpec",
+    "agent_detail",
+    "configure_database",
+    "network_enabled",
+    "network_status",
+    "run_agent",
+    "run_due_agents",
+    "start_agent_network",
+    "stop_agent_network",
+]
