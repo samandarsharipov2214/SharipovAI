@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 
 LINUX_WORKFLOWS = (
+    "ci.yml",
     "tests.yml",
     "project-guardrails.yml",
     "full-stabilization.yml",
