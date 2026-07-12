@@ -23,15 +23,28 @@ venv/
 **/.env.*
 !**/.env.example
 !**/*.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
 
 # Local runtime data, logs, backups and databases
 *.log
 logs/
+runtime/
 data/
 backups/
 *.sqlite
 *.sqlite3
 *.db
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
 
 # OS and editor noise
 .DS_Store
