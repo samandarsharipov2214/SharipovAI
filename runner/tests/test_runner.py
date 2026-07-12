@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 import config.settings as config_settings
 from bybit import TickerInfo
 from config.models import AppConfig, MarketConfig, NewsConfig, PaperConfig, RiskConfig
@@ -102,7 +104,7 @@ def test_invalid_mode_raises_runner_error(tmp_path: Path) -> None:
     config_settings.settings = _settings("invalid")
     try:
         runner = _runner(tmp_path)
-        with __import__("pytest").raises(RunnerError):
+        with pytest.raises(RunnerError):
             runner.run()
     finally:
         config_settings.settings = original_settings
