@@ -1,16 +1,17 @@
-"""Continuous verified Bybit spot market stream."""
+"""Compatibility market stream backed by a Bybit public WebSocket worker.
+
+Production uses :class:`SharedVerifiedMarketStream`, which also requires REST and
+multi-exchange evidence. This class remains for diagnostics and compatibility but
+no longer opens an independent socket implementation.
+"""
 from __future__ import annotations
 
-import json
-import os
-import threading
-import time
+import math
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
-from websockets.sync.client import connect
+from exchange_connector.bybit_websocket_worker import BybitWebSocketWorker
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,93 +30,130 @@ class StreamQuote:
 
 
 class MarketStream:
-    def __init__(self, symbols: list[str] | None = None) -> None:
-        configured = os.getenv("MARKET_STREAM_SYMBOLS", "BTCUSDT,ETHUSDT,SOLUSDT")
-        self.symbols = symbols or [x.strip().upper() for x in configured.split(",") if x.strip()]
-        self.state_file = Path(os.getenv("MARKET_STREAM_STATE_FILE", "data/market_stream.json"))
-        self.stale_after = max(float(os.getenv("MARKET_STREAM_STALE_SECONDS", "15")), 3.0)
-        self._quotes: dict[str, StreamQuote] = {}
-        self._lock = threading.RLock()
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
-        self._connected = False
-        self._last_error = ""
+    """Backward-compatible adapter that reuses one worker instance."""
+
+    def __init__(
+        self,
+        symbols: list[str] | tuple[str, ...] | None = None,
+        *,
+        worker: Any | None = None,
+    ) -> None:
+        self.worker = worker or BybitWebSocketWorker()
+        configured = tuple(symbols or getattr(self.worker, "symbols", ()))
+        self.symbols = tuple(_symbol(item) for item in configured)
+        if not self.symbols:
+            raise ValueError("market stream requires at least one configured symbol")
+        self.shared_worker = worker is not None
 
     def start(self) -> None:
-        if self._thread and self._thread.is_alive():
-            return
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._run, name="market-stream", daemon=True)
-        self._thread.start()
+        self.worker.start()
 
     def stop(self) -> None:
-        self._stop.set()
+        self.worker.stop()
 
     def quote(self, symbol: str) -> StreamQuote:
-        clean = symbol.strip().upper().replace("/", "").replace("-", "")
-        with self._lock:
-            quote = self._quotes.get(clean)
-        if quote is None:
-            raise RuntimeError(f"No streamed quote for {clean}")
-        age = time.time() - quote.received_at_unix_ms / 1000
-        if age > self.stale_after:
-            raise RuntimeError(f"Streamed quote for {clean} is stale ({age:.1f}s)")
-        return quote
+        clean = _symbol(symbol)
+        raw = self.worker.quote(clean)
+        if not isinstance(raw, dict):
+            to_dict = getattr(raw, "to_dict", None)
+            if not callable(to_dict):
+                raise RuntimeError("worker quote has an invalid structure")
+            raw = to_dict()
+        if raw.get("verified") is False:
+            raise RuntimeError(f"worker quote is not verified for {clean}")
+        received_at_ms = _positive_int(raw.get("received_at_ms"), "received_at_ms")
+        return StreamQuote(
+            symbol=clean,
+            price=_positive_float(raw.get("price"), "price"),
+            change_24h_percent=_optional_float(raw.get("change_24h_percent")),
+            volume_24h=_optional_nonnegative(raw.get("volume_24h")),
+            source=str(raw.get("source") or "bybit_websocket_v5"),
+            received_at=datetime.fromtimestamp(received_at_ms / 1000, UTC).isoformat(),
+            received_at_unix_ms=received_at_ms,
+            verified=True,
+        )
 
     def snapshot(self) -> dict[str, Any]:
-        with self._lock:
-            quotes = {k: v.to_dict() for k, v in self._quotes.items()}
-            newest = max((v.received_at_unix_ms for v in self._quotes.values()), default=0)
-        age = None if not newest else max(0.0, time.time() - newest / 1000)
-        verified = bool(quotes) and age is not None and age <= self.stale_after
-        return {"status": "live" if self._connected and verified else "stale", "connected": self._connected,
-                "verified": verified, "source": "bybit_websocket", "age_seconds": age,
-                "symbols": self.symbols, "quotes": quotes, "last_error": self._last_error,
-                "synthetic_fallback_used": False}
-
-    def _run(self) -> None:
-        delay = 1.0
-        while not self._stop.is_set():
+        status = self.worker.status()
+        quotes: dict[str, dict[str, Any]] = {}
+        errors: dict[str, str] = {}
+        raw_ages: list[float] = []
+        for symbol in self.symbols:
             try:
-                self._consume()
-                delay = 1.0
+                raw = self.worker.quote(symbol)
+                if not isinstance(raw, dict):
+                    raw = raw.to_dict()
+                quote = self.quote(symbol)
+                quotes[symbol] = quote.to_dict()
+                age = raw.get("age_seconds")
+                if age is not None and math.isfinite(float(age)):
+                    raw_ages.append(max(float(age), 0.0))
             except Exception as exc:
-                self._connected = False
-                self._last_error = f"{type(exc).__name__}: {exc}"
-                self._persist()
-                self._stop.wait(delay)
-                delay = min(delay * 2, 30.0)
-
-    def _consume(self) -> None:
-        topics = [f"tickers.{symbol}" for symbol in self.symbols]
-        with connect("wss://stream.bybit.com/v5/public/spot", open_timeout=10, close_timeout=5,
-                     ping_interval=20, ping_timeout=10) as websocket:
-            websocket.send(json.dumps({"op": "subscribe", "args": topics}))
-            self._connected = True
-            self._last_error = ""
-            for raw in websocket:
-                if self._stop.is_set():
-                    return
-                payload = json.loads(raw)
-                data = payload.get("data")
-                if not isinstance(data, dict):
+                errors[symbol] = f"{type(exc).__name__}: {exc}"
+        status_ages = status.get("quote_ages_seconds") if isinstance(status, dict) else None
+        if isinstance(status_ages, dict):
+            for value in status_ages.values():
+                try:
+                    parsed = float(value)
+                except (TypeError, ValueError):
                     continue
-                symbol = str(data.get("symbol", "")).upper()
-                price = float(data.get("lastPrice", 0) or 0)
-                if symbol not in self.symbols or price <= 0:
-                    continue
-                now = datetime.now(UTC)
-                change, turnover = data.get("price24hPcnt"), data.get("turnover24h")
-                quote = StreamQuote(symbol, price,
-                    None if change in (None, "") else float(change) * 100,
-                    None if turnover in (None, "") else max(float(turnover), 0.0),
-                    "bybit_websocket", now.isoformat(), int(now.timestamp() * 1000))
-                with self._lock:
-                    self._quotes[symbol] = quote
-                self._persist()
+                if math.isfinite(parsed):
+                    raw_ages.append(max(parsed, 0.0))
+        verified = bool(status.get("verified")) and len(quotes) == len(self.symbols) and not errors
+        return {
+            "status": "live" if verified else "stale",
+            "connected": bool(status.get("connected")),
+            "verified": verified,
+            "source": "shared_bybit_websocket",
+            "age_seconds": max(raw_ages) if raw_ages else None,
+            "symbols": list(self.symbols),
+            "quotes": quotes,
+            "quote_errors": errors,
+            "last_error": str(status.get("last_error") or ""),
+            "synthetic_fallback_used": False,
+            "shared_worker": True,
+        }
 
-    def _persist(self) -> None:
-        self.state_file.parent.mkdir(parents=True, exist_ok=True)
-        temp = self.state_file.with_suffix(self.state_file.suffix + ".tmp")
-        temp.write_text(json.dumps(self.snapshot(), ensure_ascii=False, indent=2), encoding="utf-8")
-        temp.replace(self.state_file)
+
+def _symbol(value: Any) -> str:
+    clean = str(value or "").strip().upper().replace("/", "").replace("-", "")
+    if not clean or not clean.isalnum() or len(clean) > 30:
+        raise ValueError("invalid market symbol")
+    return clean
+
+
+def _positive_float(value: Any, field: str) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f"{field} must be positive")
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise ValueError(f"{field} must be positive and finite")
+    return parsed
+
+
+def _positive_int(value: Any, field: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{field} must be positive")
+    parsed = int(value)
+    if parsed <= 0:
+        raise ValueError(f"{field} must be positive")
+    return parsed
+
+
+def _optional_float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ValueError("optional value must be finite")
+    return parsed
+
+
+def _optional_nonnegative(value: Any) -> float | None:
+    parsed = _optional_float(value)
+    if parsed is not None and parsed < 0:
+        raise ValueError("optional value must be non-negative")
+    return parsed
+
+
+__all__ = ["MarketStream", "StreamQuote"]
