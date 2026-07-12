@@ -81,6 +81,7 @@ class SourceAgent:
             reasons.append(f"source_error={fetched.error}")
         if urgency != "normal":
             reasons.append(f"urgency={urgency}")
+        detected_at = datetime.fromtimestamp(fetched.received_at_ms / 1000, UTC).isoformat()
         return NewsEnvelope(
             agent_id=self.definition.source_id,
             agent_name=self.definition.name,
@@ -94,7 +95,7 @@ class SourceAgent:
             impact=impact,
             score=score,
             reasons=tuple(reasons),
-            detected_at=datetime.now(UTC).isoformat(),
+            detected_at=detected_at,
         )
 
 
