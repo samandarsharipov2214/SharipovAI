@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import importlib
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -7,8 +9,7 @@ from dashboard.global_auth_guard import auth_disabled, install_global_auth_guard
 
 
 def _app(monkeypatch, *, username: str | None = None) -> FastAPI:
-    import dashboard.app as dashboard_app
-
+    dashboard_app = importlib.import_module("dashboard.app")
     monkeypatch.setattr(dashboard_app, "_session_username", lambda request: username)
     app = FastAPI()
 
