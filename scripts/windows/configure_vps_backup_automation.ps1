@@ -35,10 +35,11 @@ if (-not (Test-Path $keyPath -PathType Leaf)) {
 
 $publicKeyOutput = & $keygen.Source -y -f $keyPath
 $keygenExitCode = $LASTEXITCODE
-$publicKeyBase = if ($null -eq $publicKeyOutput) { "" } else { ((@($publicKeyOutput) -join "").Trim()) }
-if ($keygenExitCode -ne 0 -or $publicKeyBase -notmatch '^ssh-ed25519 [A-Za-z0-9+/=]+$') {
+$publicKeyRaw = if ($null -eq $publicKeyOutput) { "" } else { ((@($publicKeyOutput) -join " ").Trim()) }
+if ($keygenExitCode -ne 0 -or $publicKeyRaw -notmatch '^(ssh-ed25519)\s+([A-Za-z0-9+/=]+)(?:\s+.*)?$') {
     throw "Failed to derive a valid SSH public key from the private key."
 }
+$publicKeyBase = "$($Matches[1]) $($Matches[2])"
 $publicKey = "$publicKeyBase sharipovai-backup@$env:COMPUTERNAME"
 [IO.File]::WriteAllText($publicKeyPath, $publicKey + "`n", [Text.Encoding]::ASCII)
 
