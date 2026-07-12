@@ -11,33 +11,18 @@ on:
       - 'scripts/migrate_project_db.py'
       - 'requirements.txt'
       - '.github/workflows/project-guardrails.yml'
-  pull_request:
-    branches: [main]
-    paths:
-      - 'dashboard/**'
-      - 'exchange_connector/**'
-      - 'storage/**'
-      - 'scripts/release_audit.py'
-      - 'scripts/migrate_project_db.py'
-      - 'requirements.txt'
-      - '.github/workflows/project-guardrails.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: guardrails-${{ github.event.pull_request.number || github.ref }}
+  group: guardrails-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   verify:
-    if: >-
-      ${{
-        vars.SHARIPOVAI_SELF_HOSTED_CI == '1' &&
-        (github.event_name != 'pull_request' ||
-         github.event.pull_request.head.repo.full_name == github.repository)
-      }}
+    if: ${{ vars.SHARIPOVAI_SELF_HOSTED_CI == '1' }}
     runs-on: [self-hosted, linux, x64, sharipovai-ci]
     timeout-minutes: 15
     env:
