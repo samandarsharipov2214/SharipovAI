@@ -1,8 +1,9 @@
 """Feature-flagged public Bybit ticker worker for the existing Market AI.
 
-The worker only consumes public spot ticker data. It cannot authenticate, access
+The worker consumes public spot ticker data only. It cannot authenticate, access
 accounts, or submit orders. A stream becomes usable only after an explicit
-successful Bybit subscription acknowledgement.
+successful Bybit subscription acknowledgement. Latest verified quotes are stored
+in the canonical ProjectDatabase when one is supplied.
 """
 from __future__ import annotations
 
@@ -14,6 +15,8 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from config.feature_flags import is_feature_enabled
+from storage import ProjectDatabase
+
 from .bybit_websocket_state import BybitWebSocketState, ReconnectPolicy
 
 DEFAULT_URL = "wss://stream.bybit.com/v5/public/spot"
@@ -53,6 +56,7 @@ class BybitWebSocketWorker:
         state: BybitWebSocketState | None = None,
         connector: Callable[..., Any] | None = None,
         wait: Callable[[float], bool] | None = None,
+        database: ProjectDatabase | None = None,
     ) -> None:
         self.state = state or BybitWebSocketState()
         self.url = validate_public_ws_url(os.getenv("BYBIT_WS_PUBLIC_URL", DEFAULT_URL))
@@ -61,6 +65,9 @@ class BybitWebSocketWorker:
             max(float(os.getenv("BYBIT_WS_RECEIVE_TIMEOUT_SECONDS", "10")), 1.0),
             60.0,
         )
+        self.database = database
+        if self.database is not None:
+            self.database.initialize()
         self._connector = connector
         self._stop = threading.Event()
         self._wait = wait or self._stop.wait
@@ -94,6 +101,8 @@ class BybitWebSocketWorker:
             "worker_running": bool(self._thread and self._thread.is_alive()),
             "url": self.url,
             "symbols": list(self.symbols),
+            "database_backed": self.database is not None,
+            "synthetic_fallback_used": False,
             **self.state.status(),
         }
 
@@ -155,7 +164,26 @@ class BybitWebSocketWorker:
                 continue
             if op == "subscribe":
                 raise RuntimeError("unexpected duplicate subscription response")
-            self.state.ingest_ticker(payload)
+            quote = self.state.ingest_ticker(payload)
+            self._persist_quote(quote.to_dict())
+
+    def _persist_quote(self, quote: dict[str, Any]) -> None:
+        if self.database is None:
+            return
+        symbol = str(quote.get("symbol") or "").strip().upper()
+        if not symbol:
+            raise RuntimeError("verified websocket quote has no symbol")
+        self.database.put_json(
+            "market_quotes",
+            f"bybit_websocket_v5:spot:{symbol}",
+            {
+                **quote,
+                "provider": "bybit_websocket_v5",
+                "category": "spot",
+                "verified": True,
+                "synthetic_fallback_used": False,
+            },
+        )
 
 
 def _decode_message(raw: Any) -> dict[str, Any]:
