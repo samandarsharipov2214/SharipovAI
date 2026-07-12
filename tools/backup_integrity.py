@@ -12,9 +12,16 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 MAX_BACKUP_FILES = 20_000
+MAX_ARCHIVE_MEMBERS = MAX_BACKUP_FILES * 2 + 10
 MAX_FILE_BYTES = 5 * 1024 * 1024 * 1024
 MAX_TOTAL_BYTES = 20 * 1024 * 1024 * 1024
+MAX_RELATIVE_PATH_LENGTH = 512
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_WINDOWS_RESERVED = {
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{index}" for index in range(1, 10)),
+    *(f"LPT{index}" for index in range(1, 10)),
+}
 
 
 class BackupIntegrityError(RuntimeError):
@@ -47,14 +54,18 @@ def verify_snapshot(snapshot: Path) -> dict[str, Any]:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise BackupIntegrityError(f"invalid backup manifest: {exc}") from exc
-    if not isinstance(manifest, dict) or manifest.get("schema") != 1:
+    if not isinstance(manifest, dict):
+        raise BackupIntegrityError("invalid backup manifest")
+    schema = manifest.get("schema")
+    if isinstance(schema, bool) or not isinstance(schema, int) or schema != 1:
         raise BackupIntegrityError("unsupported backup manifest schema")
     entries = manifest.get("files")
     if not isinstance(entries, list):
         raise BackupIntegrityError("invalid backup manifest files")
     if len(entries) > MAX_BACKUP_FILES:
         raise BackupIntegrityError("backup contains too many files")
-    if manifest.get("file_count") != len(entries):
+    file_count = manifest.get("file_count")
+    if isinstance(file_count, bool) or not isinstance(file_count, int) or file_count != len(entries):
         raise BackupIntegrityError("backup manifest file_count mismatch")
     _validate_created_at(manifest.get("created_at"))
 
@@ -121,8 +132,11 @@ def extract_verified_archive(archive: Path, destination: Path) -> dict[str, Any]
     if destination.is_symlink():
         raise BackupIntegrityError("backup destination must not be a symlink")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    if destination.exists() and any(destination.iterdir()):
-        raise BackupIntegrityError("backup destination must be empty")
+    if destination.exists():
+        if not destination.is_dir():
+            raise BackupIntegrityError("backup destination must be a directory")
+        if any(destination.iterdir()):
+            raise BackupIntegrityError("backup destination must be empty")
 
     staging = Path(tempfile.mkdtemp(prefix="backup-extract-", dir=destination.parent))
     try:
@@ -140,6 +154,7 @@ def extract_verified_archive(archive: Path, destination: Path) -> dict[str, Any]
 def _extract_archive_members(archive: Path, destination: Path) -> None:
     names: set[str] = set()
     file_count = 0
+    member_count = 0
     total_bytes = 0
     try:
         opened = tarfile.open(archive, mode="r:gz")
@@ -147,6 +162,9 @@ def _extract_archive_members(archive: Path, destination: Path) -> None:
         raise BackupIntegrityError(f"invalid backup archive: {exc}") from exc
     with opened:
         for member in opened:
+            member_count += 1
+            if member_count > MAX_ARCHIVE_MEMBERS:
+                raise BackupIntegrityError("backup archive contains too many members")
             relative = _safe_archive_member(member.name)
             key = relative.as_posix()
             if key in names:
@@ -188,14 +206,17 @@ def _extract_archive_members(archive: Path, destination: Path) -> None:
 
 def _safe_relative_path(value: Any) -> PurePosixPath:
     text = str(value or "").strip()
-    if not text or "\\" in text or "\x00" in text:
+    if not text or len(text) > MAX_RELATIVE_PATH_LENGTH or "\\" in text or "\x00" in text:
         raise BackupIntegrityError(f"unsafe backup path: {text!r}")
     relative = PurePosixPath(text)
     if relative.is_absolute() or relative == PurePosixPath(".") or any(part in {"", ".", ".."} for part in relative.parts):
         raise BackupIntegrityError(f"unsafe backup path: {text}")
-    first = relative.parts[0]
-    if ":" in first:
-        raise BackupIntegrityError(f"unsafe backup path: {text}")
+    for part in relative.parts:
+        if len(part) > 128 or ":" in part or part.endswith((" ", ".")):
+            raise BackupIntegrityError(f"unsafe backup path: {text}")
+        stem = part.split(".", 1)[0].upper()
+        if stem in _WINDOWS_RESERVED:
+            raise BackupIntegrityError(f"unsafe backup path: {text}")
     return relative
 
 
