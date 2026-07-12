@@ -76,8 +76,12 @@ def test_vps_bootstrap_uses_device_login_and_verifies_real_ci() -> None:
     assert "--git-protocol https" in bootstrap
     assert "install_github_actions_runner.sh" in bootstrap
     assert "systemctl is-active" in bootstrap
-    assert "gh workflow run ci.yml" in bootstrap
-    assert "gh run watch" in bootstrap
-    assert "SHARIPOVAI_SELF_HOSTED_CI" in bootstrap
+    assert "actions/variables/SHARIPOVAI_SELF_HOSTED_CI" in bootstrap
+    assert "actions/workflows/ci.yml/dispatches" in bootstrap
+    assert "actions/runs/${run_id}" in bootstrap
+    assert "BOOTSTRAP_SUCCEEDED" in bootstrap
+    assert "gh variable get" not in bootstrap
+    assert "gh workflow run" not in bootstrap
+    assert "gh run watch" not in bootstrap
     assert "usermod -aG docker" not in bootstrap
     assert "docker.sock" not in bootstrap
