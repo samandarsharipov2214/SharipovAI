@@ -19,6 +19,8 @@ def restore(snapshot: Path, destination: Path) -> dict[str, object]:
     raw_destination = Path(destination)
     if raw_destination.is_symlink():
         raise RestoreError("restore destination must not be a symlink")
+    if raw_destination.exists() and not raw_destination.is_dir():
+        raise RestoreError("restore destination must be a directory")
     try:
         manifest = verify_snapshot(Path(snapshot))
     except BackupIntegrityError as exc:
@@ -46,24 +48,36 @@ def restore(snapshot: Path, destination: Path) -> dict[str, object]:
             encoding="utf-8",
         )
         verify_snapshot(envelope)
-        if rollback.exists():
-            shutil.rmtree(rollback)
+        _remove_path(rollback)
         if destination.exists():
             os.replace(destination, rollback)
             moved_existing = True
         os.replace(envelope / "data", destination)
         installed_new = True
     except Exception:
-        if installed_new and destination.exists():
-            shutil.rmtree(destination, ignore_errors=True)
+        if installed_new:
+            _remove_path(destination)
         if moved_existing and rollback.exists() and not destination.exists():
             os.replace(rollback, destination)
         raise
     finally:
         shutil.rmtree(staging_root, ignore_errors=True)
-    if rollback.exists():
-        shutil.rmtree(rollback)
+
+    # The atomic restore is already committed. Cleanup failure must not invite a
+    # second restore attempt against successfully installed data.
+    _remove_path(rollback, ignore_errors=True)
     return manifest
+
+
+def _remove_path(path: Path, *, ignore_errors: bool = False) -> None:
+    try:
+        if path.is_symlink() or path.is_file():
+            path.unlink(missing_ok=True)
+        elif path.exists():
+            shutil.rmtree(path)
+    except OSError:
+        if not ignore_errors:
+            raise
 
 
 def main() -> int:
