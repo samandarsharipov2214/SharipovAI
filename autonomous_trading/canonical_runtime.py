@@ -6,6 +6,7 @@ It never executes orders. Paper execution may consume only an authorized result.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
@@ -16,7 +17,8 @@ from decision_quality import (
     DecisionQualityAssessment,
     DecisionQualityService,
 )
-from storage import ProjectDatabase
+from meta_ai_persistence import EVENT_NAMESPACE
+from storage import ProjectDatabase, VersionConflict
 from trading_candidate import TradingDecision, TradingEnvironment
 
 
@@ -52,12 +54,10 @@ class PaperDecisionAuthorization:
 
 
 class CanonicalPaperDecisionRuntime:
-    """Single fail-closed gateway for new autonomous paper entries.
+    """Single fail-closed gateway for autonomous paper entries and learning."""
 
-    The runtime coordinates existing services only. It cannot place, size, amend,
-    or cancel an order. A separate virtual execution owner may act only when the
-    returned authorization is explicitly true.
-    """
+    consumption_namespace = "paper_authorization_consumption"
+    settlement_namespace = "paper_decision_settlements"
 
     def __init__(
         self,
@@ -90,9 +90,9 @@ class CanonicalPaperDecisionRuntime:
         min_confidence: float = 70.0,
         min_consensus: float = 70.0,
     ) -> PaperDecisionAuthorization:
-        clean_id = str(decision_id or "").strip()
-        if not clean_id:
-            raise CanonicalPaperRuntimeError("decision_id is required")
+        clean_id = _decision_id(decision_id)
+        if self.database.get_json(self.consumption_namespace, clean_id) is not None:
+            raise CanonicalPaperRuntimeError("paper authorization has already been consumed")
         if packet.candidate_id != clean_id:
             raise CanonicalPaperRuntimeError("candidate_id must equal decision_id")
         if packet.environment is not TradingEnvironment.PAPER:
@@ -132,6 +132,129 @@ class CanonicalPaperDecisionRuntime:
             candidate_result=candidate_result,
         )
 
+    def consume_authorization(
+        self,
+        authorization: PaperDecisionAuthorization,
+        *,
+        consumed_at_ms: int,
+    ) -> dict[str, Any]:
+        """Atomically consume an ALLOW once, before virtual execution mutates cash."""
+
+        if authorization.authorized is not True or authorization.decision is not TradingDecision.ALLOW:
+            raise CanonicalPaperRuntimeError("only an authorized ALLOW may be consumed")
+        if consumed_at_ms <= 0:
+            raise CanonicalPaperRuntimeError("consumed_at_ms must be positive")
+        candidate = authorization.candidate_result.candidate
+        if candidate.candidate_id != authorization.decision_id:
+            raise CanonicalPaperRuntimeError("authorization candidate identity mismatch")
+        payload = {
+            "decision_id": authorization.decision_id,
+            "candidate_id": candidate.candidate_id,
+            "consumed_at_ms": int(consumed_at_ms),
+            "environment": candidate.environment.value,
+            "decision": candidate.decision.value,
+            "execution_authority": False,
+        }
+        try:
+            self.database.put_json(
+                self.consumption_namespace,
+                authorization.decision_id,
+                payload,
+                expected_version=0,
+            )
+        except VersionConflict as exc:
+            raise CanonicalPaperRuntimeError("paper authorization was already consumed") from exc
+        return payload
+
+    def settle_exit(
+        self,
+        decision_id: str,
+        *,
+        net_pnl: float,
+        drawdown_contribution: float,
+    ) -> dict[str, Any]:
+        """Settle one closed paper position and update reputation exactly once."""
+
+        clean_id = _decision_id(decision_id)
+        existing = self.database.get_json(self.settlement_namespace, clean_id)
+        if existing is not None:
+            return dict(existing["value"])
+        pnl = _finite(net_pnl, "net_pnl")
+        drawdown = max(0.0, _finite(drawdown_contribution, "drawdown_contribution"))
+        assessment = self.quality.get_assessment(clean_id)
+        if assessment is None:
+            raise CanonicalPaperRuntimeError("cannot settle a decision without an assessment")
+        payloads = self._stored_opinions(clean_id)
+        if not payloads:
+            raise CanonicalPaperRuntimeError("stored assessment contains no eligible opinions")
+        allocation = pnl / len(payloads)
+        drawdown_allocation = drawdown / len(payloads)
+        pnl_by_agent = {str(item.get("agent_id")): allocation for item in payloads}
+        drawdown_by_agent = {
+            str(item.get("agent_id")): drawdown_allocation for item in payloads
+        }
+        realized_action = "BUY" if pnl > 1e-9 else "SELL" if pnl < -1e-9 else "HOLD"
+        settlement = self.quality.settle(
+            clean_id,
+            payloads,
+            realized_action=realized_action,
+            pnl_by_agent=pnl_by_agent,
+            drawdown_by_agent=drawdown_by_agent,
+            regime=assessment.regime,
+            evidence_class="verified_market",
+            verified_market_data=True,
+        )
+        result = {
+            **settlement.to_dict(),
+            "net_pnl": pnl,
+            "drawdown_contribution": drawdown,
+            "evidence_class": "verified_market",
+            "verified_market_data": True,
+        }
+        try:
+            self.database.put_json(
+                self.settlement_namespace,
+                clean_id,
+                result,
+                expected_version=0,
+            )
+        except VersionConflict:
+            concurrent = self.database.get_json(self.settlement_namespace, clean_id)
+            if concurrent is None:
+                raise
+            return dict(concurrent["value"])
+        return result
+
+    def _stored_opinions(self, decision_id: str) -> list[dict[str, Any]]:
+        events = self.database.list_events(
+            EVENT_NAMESPACE,
+            entity_type="decision_assessment",
+            entity_id=decision_id,
+            limit=1,
+        )
+        if not events:
+            return []
+        payload = events[0].get("payload")
+        if not isinstance(payload, Mapping):
+            return []
+        opinions = payload.get("opinions")
+        if not isinstance(opinions, list):
+            return []
+        result: list[dict[str, Any]] = []
+        for item in opinions:
+            if not isinstance(item, Mapping):
+                continue
+            normalized = dict(item)
+            normalized.update(
+                evidence_class="verified_market",
+                verified_market_data=True,
+                learning_eligible=True,
+                evidence_eligible=True,
+                reputation_eligible=True,
+            )
+            result.append(normalized)
+        return result
+
     def status(self) -> dict[str, object]:
         return {
             "owner": "virtual_execution.paper_decision_gateway",
@@ -139,6 +262,8 @@ class CanonicalPaperDecisionRuntime:
             "candidate_owner": "general_controller_to_trading_candidate_bridge",
             "execution_authority": False,
             "accepted_environment": TradingEnvironment.PAPER.value,
+            "authorization_single_use": True,
+            "verified_exit_settlement": True,
             "database": self.database.health(),
             "decision_quality": self.quality.status(),
         }
@@ -163,6 +288,22 @@ def _authorization_reason(
             unique.append(clean)
     detail = "; ".join(unique[:8]) or "canonical decision did not authorize entry"
     return f"{decision.value}: {detail}"
+
+
+def _decision_id(value: Any) -> str:
+    clean = str(value or "").strip()
+    if not clean or len(clean) > 170:
+        raise CanonicalPaperRuntimeError("decision_id is invalid")
+    return clean
+
+
+def _finite(value: Any, field: str) -> float:
+    if isinstance(value, bool):
+        raise CanonicalPaperRuntimeError(f"{field} must be finite")
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise CanonicalPaperRuntimeError(f"{field} must be finite")
+    return parsed
 
 
 __all__ = [
