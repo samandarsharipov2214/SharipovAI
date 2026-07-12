@@ -1,16 +1,6 @@
 name: Sync official Bybit trading skill
 
 on:
-  push:
-    branches:
-      - feat/bybit-trading-skill
-    paths:
-      - .github/workflows/sync-bybit-skill.yml
-  pull_request:
-    branches:
-      - main
-    paths:
-      - .github/workflows/sync-bybit-skill.yml
   workflow_dispatch:
 
 permissions:
@@ -18,7 +8,9 @@ permissions:
 
 jobs:
   sync-skill:
-    runs-on: ubuntu-latest
+    if: ${{ vars.SHARIPOVAI_SELF_HOSTED_CI == '1' }}
+    runs-on: [self-hosted, linux, x64, sharipovai-ci]
+    timeout-minutes: 10
     steps:
       - name: Check out branch
         uses: actions/checkout@v4
@@ -36,19 +28,19 @@ jobs:
           import pathlib
           import urllib.request
 
-          version = "1.5.3"
-          upstream_commit = "0a0c9a7af9cbaeb0d29f3f90498043ff4b7b5179"
-          expected_sha256 = "ec311a0b4f21910af4068ac17084618b5f64a8233b8331a8b570ceae3add6fd1"
+          version = '1.5.3'
+          upstream_commit = '0a0c9a7af9cbaeb0d29f3f90498043ff4b7b5179'
+          expected_sha256 = 'ec311a0b4f21910af4068ac17084618b5f64a8233b8331a8b570ceae3add6fd1'
           source_url = (
-              "https://raw.githubusercontent.com/bybit-exchange/skills/"
-              f"{upstream_commit}/SKILL.md"
+              'https://raw.githubusercontent.com/bybit-exchange/skills/'
+              f'{upstream_commit}/SKILL.md'
           )
-          target = pathlib.Path("skills/bybit-trading/SKILL.md")
-          metadata_target = pathlib.Path("skills/bybit-trading/SOURCE.json")
+          target = pathlib.Path('skills/bybit-trading/SKILL.md')
+          metadata_target = pathlib.Path('skills/bybit-trading/SOURCE.json')
 
           request = urllib.request.Request(
               source_url,
-              headers={"User-Agent": "SharipovAI/bybit-skill-vendor"},
+              headers={'User-Agent': 'SharipovAI/bybit-skill-vendor'},
           )
           with urllib.request.urlopen(request, timeout=30) as response:
               content = response.read()
@@ -56,59 +48,59 @@ jobs:
           actual_sha256 = hashlib.sha256(content).hexdigest()
           if actual_sha256 != expected_sha256:
               raise SystemExit(
-                  "Checksum mismatch for official Bybit SKILL.md: "
-                  f"expected {expected_sha256}, got {actual_sha256}"
+                  'Checksum mismatch for official Bybit SKILL.md: '
+                  f'expected {expected_sha256}, got {actual_sha256}'
               )
 
-          decoded = content.decode("utf-8")
+          decoded = content.decode('utf-8')
           required_markers = (
-              "name: bybit-trading",
-              "version: 1.5.3",
-              "## Security Rules",
-              "Structured Operation Confirmation",
+              'name: bybit-trading',
+              'version: 1.5.3',
+              '## Security Rules',
+              'Structured Operation Confirmation',
           )
           missing = [marker for marker in required_markers if marker not in decoded]
           if missing:
-              raise SystemExit(f"Required safety markers missing: {missing}")
+              raise SystemExit(f'Required safety markers missing: {missing}')
 
           target.parent.mkdir(parents=True, exist_ok=True)
           target.write_bytes(content)
           metadata_target.write_text(
               json.dumps(
                   {
-                      "name": "bybit-trading",
-                      "version": version,
-                      "vendor": "Bybit",
-                      "upstream_repository": "bybit-exchange/skills",
-                      "upstream_commit": upstream_commit,
-                      "source": source_url,
-                      "sha256": actual_sha256,
-                      "usage_policy": {
-                          "default_environment": "testnet",
-                          "mainnet_write_requires_human_confirm": True,
-                          "withdraw_permission_forbidden": True,
-                          "secrets_must_not_be_committed": True,
+                      'name': 'bybit-trading',
+                      'version': version,
+                      'vendor': 'Bybit',
+                      'upstream_repository': 'bybit-exchange/skills',
+                      'upstream_commit': upstream_commit,
+                      'source': source_url,
+                      'sha256': actual_sha256,
+                      'usage_policy': {
+                          'default_environment': 'testnet',
+                          'mainnet_write_requires_human_confirm': True,
+                          'withdraw_permission_forbidden': True,
+                          'secrets_must_not_be_committed': True,
                       },
                   },
                   ensure_ascii=False,
                   indent=2,
               )
-              + "\n",
-              encoding="utf-8",
+              + '\n',
+              encoding='utf-8',
           )
-          print(f"Verified official Bybit skill v{version}: sha256:{actual_sha256}")
+          print(f'Verified official Bybit skill v{version}: sha256:{actual_sha256}')
           PY
 
       - name: Commit synchronized skill
         shell: bash
         run: |
           set -euo pipefail
-          git config user.name "SharipovAI Bot"
-          git config user.email "actions@users.noreply.github.com"
+          git config user.name 'SharipovAI Bot'
+          git config user.email 'actions@users.noreply.github.com'
           git add skills/bybit-trading/SKILL.md skills/bybit-trading/SOURCE.json
           if git diff --cached --quiet; then
-            echo "Bybit skill is already current."
+            echo 'Bybit skill is already current.'
             exit 0
           fi
-          git commit -m "feat: vendor verified Bybit trading skill"
+          git commit -m 'feat: vendor verified Bybit trading skill'
           git push origin HEAD:feat/bybit-trading-skill
