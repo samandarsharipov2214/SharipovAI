@@ -63,4 +63,16 @@ jobs:
           EXECUTION_KILL_SWITCH: '1'
           TESTNET_EXECUTION_ENABLED: '0'
           EXCHANGE_LIVE_TRADING_ENABLED: '0'
-        run: python -m pytest -q --disable-warnings --maxfail=1
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q --disable-warnings --maxfail=1 2>&1 | tee pytest-ci.log
+
+      - name: Сохранить диагностический лог pytest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-ci-${{ github.run_id }}
+          path: pytest-ci.log
+          if-no-files-found: error
+          retention-days: 7
