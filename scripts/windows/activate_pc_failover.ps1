@@ -8,6 +8,33 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 Set-Location $ProjectRoot
+$runtime = Join-Path $ProjectRoot "runtime"
+New-Item -ItemType Directory -Force -Path $runtime | Out-Null
+$lockPath = Join-Path $runtime "pc_failover.lock"
+try {
+    $failoverLock = [System.IO.File]::Open(
+        $lockPath,
+        [System.IO.FileMode]::OpenOrCreate,
+        [System.IO.FileAccess]::ReadWrite,
+        [System.IO.FileShare]::None
+    )
+} catch {
+    throw "Another PC failover operation is already running."
+}
+
+function Test-TcpReachable([string]$HostName, [int]$Port, [int]$TimeoutMilliseconds = 3000) {
+    $client = New-Object System.Net.Sockets.TcpClient
+    try {
+        $pending = $client.BeginConnect($HostName, $Port, $null, $null)
+        if (-not $pending.AsyncWaitHandle.WaitOne($TimeoutMilliseconds, $false)) { return $false }
+        $client.EndConnect($pending)
+        return $client.Connected
+    } catch {
+        return $false
+    } finally {
+        $client.Close()
+    }
+}
 
 if (-not $Force) {
     throw "PC failover requires explicit -Force confirmation after the operator has disabled VPS services."
@@ -15,7 +42,7 @@ if (-not $Force) {
 if (-not $VpsHealthUrl) {
     throw "VPS health URL is required; refusing failover without a split-brain check."
 }
-$healthUri = $null
+[Uri]$healthUri = $null
 if (-not [Uri]::TryCreate($VpsHealthUrl, [UriKind]::Absolute, [ref]$healthUri) -or
     $healthUri.Scheme -ne "https" -or
     $healthUri.UserInfo -or
@@ -31,10 +58,12 @@ try {
     if ($_.Exception.Response) {
         throw "VPS is reachable and returned an HTTP response. Refusing PC failover to prevent two active nodes."
     }
-    Write-Host "[WARN] VPS health endpoint is unreachable. Explicit failover confirmation accepted." -ForegroundColor Yellow
+    if (Test-TcpReachable $healthUri.DnsSafeHost $healthUri.Port) {
+        throw "VPS HTTPS port is reachable. Refusing PC failover even though the health request failed."
+    }
+    Write-Host "[WARN] VPS health endpoint and HTTPS port are unreachable. Explicit failover confirmation accepted." -ForegroundColor Yellow
 }
 
-$runtime = Join-Path $ProjectRoot "runtime"
 $snapshot = Join-Path $runtime "remote_backups\current"
 $data = Join-Path $ProjectRoot "data"
 $python = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
@@ -76,7 +105,6 @@ $marker = [ordered]@{
     vps_health_url = $healthUri.AbsoluteUri
     maximum_backup_age_seconds = $MaximumBackupAgeSeconds
 } | ConvertTo-Json
-New-Item -ItemType Directory -Force -Path $runtime | Out-Null
 $marker | Set-Content (Join-Path $runtime "active_node.json") -Encoding UTF8
 
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $ProjectRoot "scripts\windows\start_pc_agent.ps1") -ProjectRoot $ProjectRoot
@@ -84,4 +112,5 @@ if ($LASTEXITCODE -ne 0) { throw "PC Agent failed to start after restore." }
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $ProjectRoot "scripts\windows\check_pc_node.ps1") -ProjectRoot $ProjectRoot -RequireManagedProcesses
 if ($LASTEXITCODE -ne 0) { throw "PC failover health check failed." }
 
+$failoverLock.Dispose()
 Write-Host "SharipovAI PC failover is active and verified." -ForegroundColor Green
