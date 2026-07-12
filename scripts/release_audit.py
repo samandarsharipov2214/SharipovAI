@@ -9,9 +9,14 @@ import argparse
 import json
 import os
 import re
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 EXPECTED_ORGANS = (
     "general_controller",
@@ -156,7 +161,15 @@ def _audit_workflows(root: Path, record: Any) -> None:
         )),
         "self-hosted migration, compile, import, execution lock and release-audit gates",
     )
-    record("ci_full_suite", "python -m pytest" in full and "Fail when full suite failed" in full, "full pytest gate")
+    record(
+        "ci_full_suite",
+        all(token in full for token in (
+            "python -m pytest",
+            "runs-on: [self-hosted, linux, x64, sharipovai-ci]",
+            "SHARIPOVAI_SELF_HOSTED_CI",
+        )),
+        "self-hosted scheduled full pytest gate",
+    )
     record(
         "ci_windows_agent",
         all(token in windows for token in (
