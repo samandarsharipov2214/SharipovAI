@@ -72,6 +72,13 @@ def test_restore_drill_rejects_tampered_source(tmp_path: Path) -> None:
         run_restore_drill(source, tmp_path / "drills")
 
 
+def test_restore_drill_rejects_destination_inside_source(tmp_path: Path) -> None:
+    source = make_snapshot(tmp_path / "source")
+
+    with pytest.raises(BackupIntegrityError, match="outside the source snapshot"):
+        run_restore_drill(source, source / "restore-drills")
+
+
 def test_windows_restore_wrapper_stays_passive() -> None:
     script = (Path(__file__).resolve().parents[1] / "scripts/windows/test_isolated_restore.ps1").read_text(
         encoding="utf-8-sig"
