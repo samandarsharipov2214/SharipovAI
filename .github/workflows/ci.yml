@@ -63,4 +63,15 @@ jobs:
           EXECUTION_KILL_SWITCH: '1'
           TESTNET_EXECUTION_ENABLED: '0'
           EXCHANGE_LIVE_TRADING_ENABLED: '0'
-        run: python -m pytest -q --disable-warnings --maxfail=1
+        run: |
+          set -o pipefail
+          python -m pytest -q --disable-warnings --maxfail=1 2>&1 | tee pytest-ci.log
+
+      - name: Сохранить полный pytest log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-pytest-failure-log
+          path: pytest-ci.log
+          if-no-files-found: error
+          retention-days: 3
