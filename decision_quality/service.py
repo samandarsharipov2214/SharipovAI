@@ -3,17 +3,28 @@
 This service coordinates agent consensus, reputation, immutable assessment
 records, and post-decision learning. It never executes orders.
 """
-
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any, Mapping, Sequence
 
-from meta_ai import AgentOpinion
+from meta_ai import AgentOpinion, VALID_ACTIONS, VALID_REGIMES
 from meta_ai_adapter import evaluate_agent_payloads, opinions_from_payloads, record_realized_result
 from meta_ai_persistence import EVENT_NAMESPACE, MetaAIPersistenceError, PersistentMetaAI
 from storage import ProjectDatabase
+
+_ASSESSMENT_EVIDENCE_CLASSES = {
+    "verified_market",
+    "verified_exchange",
+    "verified_bybit",
+    "verified_market_and_news",
+    "verified_news",
+    "verified_portfolio",
+    "verified_risk",
+    "verified_security",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +42,48 @@ class DecisionQualityAssessment:
     regime: str
     created_at: str
 
+    def __post_init__(self) -> None:
+        clean_id = _decision_id(self.decision_id)
+        action = str(self.action).upper().strip()
+        regime = str(self.regime).strip()
+        if action not in VALID_ACTIONS:
+            raise MetaAIPersistenceError(f"stored assessment action is invalid: {action}")
+        if regime not in VALID_REGIMES:
+            raise MetaAIPersistenceError(f"stored assessment regime is invalid: {regime}")
+        confidence = _ratio(self.confidence, "confidence")
+        agreement = _ratio(self.agreement, "agreement")
+        quality_score = _ratio(self.quality_score, "quality_score")
+        if not isinstance(self.blocked, bool):
+            raise MetaAIPersistenceError("stored assessment blocked must be boolean")
+        if not isinstance(self.weighted_scores, dict):
+            raise MetaAIPersistenceError("stored weighted_scores must be a dictionary")
+        weighted: dict[str, float] = {}
+        for key, value in self.weighted_scores.items():
+            clean_key = str(key).upper().strip()
+            if clean_key not in VALID_ACTIONS:
+                raise MetaAIPersistenceError(f"stored weighted score action is invalid: {clean_key}")
+            parsed = _finite(value, f"weighted_scores.{clean_key}")
+            if parsed < 0:
+                raise MetaAIPersistenceError("stored weighted scores must be non-negative")
+            weighted[clean_key] = parsed
+        try:
+            created = datetime.fromisoformat(str(self.created_at))
+        except (TypeError, ValueError) as exc:
+            raise MetaAIPersistenceError("stored assessment created_at is invalid") from exc
+        if created.tzinfo is None:
+            raise MetaAIPersistenceError("stored assessment created_at must be timezone-aware")
+        object.__setattr__(self, "decision_id", clean_id)
+        object.__setattr__(self, "action", action)
+        object.__setattr__(self, "confidence", confidence)
+        object.__setattr__(self, "agreement", agreement)
+        object.__setattr__(self, "quality_score", quality_score)
+        object.__setattr__(self, "reason", str(self.reason))
+        object.__setattr__(self, "weighted_scores", weighted)
+        object.__setattr__(self, "dissenting_agents", _clean_ids(self.dissenting_agents))
+        object.__setattr__(self, "rejected_agents", _clean_ids(self.rejected_agents))
+        object.__setattr__(self, "regime", regime)
+        object.__setattr__(self, "created_at", created.astimezone(UTC).isoformat())
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
@@ -45,6 +98,21 @@ class DecisionSettlement:
     losing_agents: tuple[str, ...]
     abstaining_agents: tuple[str, ...]
     lessons: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "decision_id", _decision_id(self.decision_id))
+        selected = str(self.selected_action).upper().strip()
+        realized = str(self.realized_action).upper().strip()
+        if selected not in VALID_ACTIONS or realized not in VALID_ACTIONS:
+            raise MetaAIPersistenceError("settlement actions must be canonical")
+        if not isinstance(self.reputation_recorded, bool):
+            raise MetaAIPersistenceError("reputation_recorded must be boolean")
+        object.__setattr__(self, "selected_action", selected)
+        object.__setattr__(self, "realized_action", realized)
+        object.__setattr__(self, "winning_agents", _clean_ids(self.winning_agents))
+        object.__setattr__(self, "losing_agents", _clean_ids(self.losing_agents))
+        object.__setattr__(self, "abstaining_agents", _clean_ids(self.abstaining_agents))
+        object.__setattr__(self, "lessons", tuple(str(item).strip() for item in self.lessons if str(item).strip()))
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -134,14 +202,21 @@ class DecisionQualityService:
             EVENT_NAMESPACE,
             entity_type="decision_assessment",
             entity_id=clean_id,
-            limit=1,
+            limit=2,
         )
         if not events:
             return None
+        if len(events) != 1:
+            raise MetaAIPersistenceError("decision assessment history is not immutable")
         payload = events[0].get("payload", {})
         if not isinstance(payload, Mapping):
             raise MetaAIPersistenceError("stored decision assessment payload is invalid")
-        return _assessment_from_payload(payload.get("assessment"))
+        if payload.get("execution_authority") is not False or payload.get("owner") != "decision_quality":
+            raise MetaAIPersistenceError("stored decision assessment ownership is invalid")
+        assessment = _assessment_from_payload(payload.get("assessment"))
+        if assessment.decision_id != clean_id:
+            raise MetaAIPersistenceError("stored decision assessment id mismatch")
+        return assessment
 
     def settle(
         self,
@@ -162,7 +237,7 @@ class DecisionQualityService:
         if assessment is None:
             raise MetaAIPersistenceError("decision must be assessed before it can be settled")
 
-        eligible, _ = _split_payloads(payloads)
+        eligible, _ = _split_payloads(payloads, learning=True)
         if not eligible:
             raise MetaAIPersistenceError("no evidence-eligible agent payloads are available for settlement")
 
@@ -198,40 +273,44 @@ class DecisionQualityService:
         return {
             "owner": "decision_quality",
             "execution_authority": False,
+            "accepted_evidence_classes": sorted(_ASSESSMENT_EVIDENCE_CLASSES),
             "persistence": self.meta.persistence_status(),
         }
 
 
 def _split_payloads(
     payloads: Sequence[Mapping[str, Any]],
+    *,
+    learning: bool = False,
 ) -> tuple[list[Mapping[str, Any]], list[str]]:
     eligible: list[Mapping[str, Any]] = []
     rejected: list[str] = []
+    learning_classes = {
+        "verified_market",
+        "verified_exchange",
+        "verified_bybit",
+        "verified_market_and_news",
+    }
+    allowed = learning_classes if learning else _ASSESSMENT_EVIDENCE_CLASSES
     for index, payload in enumerate(payloads):
-        agent_id = str(payload.get("agent_id") or payload.get("name") or f"agent-{index}")
+        if not isinstance(payload, Mapping):
+            rejected.append(f"agent-{index}")
+            continue
+        agent_id = str(payload.get("agent_id") or payload.get("name") or f"agent-{index}").strip()
         evidence_class = str(payload.get("evidence_class") or "").strip().lower()
-        explicit_false = any(
-            payload.get(field) is False
-            for field in (
-                "learning_eligible",
-                "evidence_eligible",
-                "reputation_eligible",
-                "verified_market_data",
-                "data_verified",
-            )
+        explicitly_verified = any(
+            payload.get(field) is True
+            for field in ("verified_market_data", "data_verified", "evidence_verified")
         )
-        synthetic = evidence_class in {
-            "synthetic",
-            "synthetic_simulation",
-            "demo",
-            "fixture",
-            "mock",
-        }
-        if explicit_false or synthetic:
-            rejected.append(agent_id)
-        else:
-            eligible.append(payload)
-    return eligible, sorted(set(rejected))
+        explicitly_ineligible = any(
+            payload.get(field) is False
+            for field in ("learning_eligible", "evidence_eligible", "reputation_eligible")
+        )
+        if not agent_id or evidence_class not in allowed or not explicitly_verified or explicitly_ineligible:
+            rejected.append(agent_id or f"agent-{index}")
+            continue
+        eligible.append(payload)
+    return eligible, tuple(sorted(set(rejected)))  # type: ignore[return-value]
 
 
 def _opinion_payload(opinion: AgentOpinion) -> dict[str, object]:
@@ -255,12 +334,12 @@ def _assessment_from_payload(raw: object) -> DecisionQualityAssessment:
     return DecisionQualityAssessment(
         decision_id=str(raw.get("decision_id", "")),
         action=str(raw.get("action", "WAIT")),
-        confidence=float(raw.get("confidence", 0.0)),
-        agreement=float(raw.get("agreement", 0.0)),
-        quality_score=float(raw.get("quality_score", 0.0)),
-        blocked=bool(raw.get("blocked", True)),
+        confidence=_finite(raw.get("confidence", 0.0), "confidence"),
+        agreement=_finite(raw.get("agreement", 0.0), "agreement"),
+        quality_score=_finite(raw.get("quality_score", 0.0), "quality_score"),
+        blocked=raw.get("blocked", True),
         reason=str(raw.get("reason", "")),
-        weighted_scores={str(key): float(value) for key, value in weighted.items()},
+        weighted_scores={str(key): _finite(value, f"weighted_scores.{key}") for key, value in weighted.items()},
         dissenting_agents=tuple(str(item) for item in raw.get("dissenting_agents", [])),
         rejected_agents=tuple(str(item) for item in raw.get("rejected_agents", [])),
         regime=str(raw.get("regime", "unknown")),
@@ -274,7 +353,37 @@ def _decision_id(value: object) -> str:
         raise ValueError("decision_id must not be empty")
     if len(clean) > 170:
         raise ValueError("decision_id must contain at most 170 characters")
+    if not all(char.isalnum() or char in "._:-" for char in clean):
+        raise ValueError("decision_id contains unsupported characters")
     return clean
+
+
+def _finite(value: object, name: str) -> float:
+    if isinstance(value, bool):
+        raise MetaAIPersistenceError(f"{name} must be finite")
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise MetaAIPersistenceError(f"{name} must be finite") from exc
+    if not math.isfinite(parsed):
+        raise MetaAIPersistenceError(f"{name} must be finite")
+    return parsed
+
+
+def _ratio(value: object, name: str) -> float:
+    parsed = _finite(value, name)
+    if not 0.0 <= parsed <= 1.0:
+        raise MetaAIPersistenceError(f"{name} must be within 0..1")
+    return parsed
+
+
+def _clean_ids(values: Sequence[object]) -> tuple[str, ...]:
+    result: list[str] = []
+    for value in values:
+        clean = str(value).strip()
+        if clean and clean not in result:
+            result.append(clean)
+    return tuple(result)
 
 
 __all__ = [
