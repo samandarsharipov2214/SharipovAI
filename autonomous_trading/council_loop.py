@@ -45,6 +45,10 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         self.decision_runtime = decision_runtime
         self.proposal_provider = proposal_provider
         self._pending_authorization: PaperDecisionAuthorization | None = None
+        self._state["peak_equity"] = max(
+            float(self._state.get("peak_equity", 0.0) or 0.0),
+            float(self._state.get("equity", 0.0) or 0.0),
+        )
 
     def tick(self) -> None:
         market = self.stream.snapshot()
@@ -56,8 +60,8 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
             for symbol in self.stream.symbols:
                 try:
                     quote = self.stream.quote(symbol)
-                except RuntimeError as exc:
-                    self._event("BLOCK", str(exc), symbol)
+                except Exception as exc:
+                    self._event("BLOCK", f"verified_quote_error:{type(exc).__name__}: {exc}", symbol)
                     continue
 
                 position = self._state["positions"].get(symbol)
@@ -76,7 +80,7 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                     continue
 
                 if proposal is None:
-                    self._event("WAIT", "no canonical council proposal", symbol)
+                    self._event("WAIT", "no fresh canonical council proposal", symbol)
                     continue
 
                 try:
@@ -101,8 +105,17 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                     self._event("BLOCK", "authorized candidate symbol does not match loop symbol", symbol)
                     continue
 
-                if authorization.candidate_result.candidate.side.value != "BUY":
+                if authorization.candidate_result.candidate.side.value != "Buy":
                     self._event("WAIT", "spot paper loop does not open a short position", symbol)
+                    continue
+
+                try:
+                    self.decision_runtime.consume_authorization(
+                        authorization,
+                        consumed_at_ms=self._now_ms(),
+                    )
+                except Exception as exc:
+                    self._event("BLOCK", f"authorization_consumption_error:{type(exc).__name__}: {exc}", symbol)
                     continue
 
                 self._pending_authorization = authorization
@@ -113,15 +126,22 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                         f"canonical_council_allow:{authorization.decision_id}",
                     )
                     position = self._state["positions"].get(symbol)
-                    if position is not None:
-                        position["decision_id"] = authorization.decision_id
-                        position["candidate_id"] = authorization.candidate_result.candidate.candidate_id
-                        position["evidence_class"] = "verified_market"
-                        position["verified_market_data"] = True
+                    if position is None:
+                        self._event("BLOCK", "authorized entry could not allocate a safe paper budget", symbol)
+                        continue
+                    position["decision_id"] = authorization.decision_id
+                    position["candidate_id"] = authorization.candidate_result.candidate.candidate_id
+                    position["evidence_class"] = "verified_market"
+                    position["verified_market_data"] = True
+                    position["regime"] = authorization.assessment.regime
                 finally:
                     self._pending_authorization = None
 
             self._mark_to_market(market)
+            self._state["peak_equity"] = max(
+                float(self._state.get("peak_equity", 0.0) or 0.0),
+                float(self._state.get("equity", 0.0) or 0.0),
+            )
             self._persist()
 
     def _manage_protective_exit(self, symbol: str, quote: Any) -> None:
@@ -137,6 +157,37 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
             self._close(symbol, quote.price, "protective_take_profit")
         elif change is not None and change <= self.exit_change_percent:
             self._close(symbol, quote.price, "protective_momentum_exit")
+
+    def _close(self, symbol: str, price: float, reason: str) -> None:
+        position = dict(self._state["positions"].get(symbol) or {})
+        decision_id = str(position.get("decision_id") or "").strip()
+        candidate_id = str(position.get("candidate_id") or "").strip()
+        super()._close(symbol, price, reason)
+        if not self._state["trades"]:
+            return
+        trade = self._state["trades"][-1]
+        if decision_id:
+            trade["decision_id"] = decision_id
+            trade["candidate_id"] = candidate_id or decision_id
+            trade["evidence_class"] = "verified_market"
+            trade["verified_market_data"] = True
+            trade["canonical_exit_protective"] = True
+            net = float(trade.get("net_pnl") or 0.0)
+            try:
+                settlement = self.decision_runtime.settle_exit(
+                    decision_id,
+                    net_pnl=net,
+                    drawdown_contribution=max(0.0, -net),
+                )
+                trade["decision_settlement"] = settlement
+                trade["reputation_recorded"] = bool(settlement.get("reputation_recorded"))
+            except Exception as exc:
+                trade["decision_settlement_error"] = f"{type(exc).__name__}: {exc}"
+                self._event(
+                    "ERROR",
+                    f"verified_settlement_error:{type(exc).__name__}: {exc}",
+                    symbol,
+                )
 
     def _trade(
         self,
@@ -164,6 +215,7 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                 "decision_quality_agreement": authorization.assessment.agreement,
                 "general_controller_decision": authorization.candidate_result.general_controller_decision.value,
                 "canonical_entry_authorized": True,
+                "authorization_single_use": True,
             }
         )
 
@@ -171,6 +223,8 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         return {
             "cash": float(self._state.get("cash", 0.0)),
             "equity": float(self._state.get("equity", 0.0)),
+            "peak_equity": float(self._state.get("peak_equity", self._state.get("equity", 0.0))),
+            "initial_cash": float(self.initial_cash),
             "realized_pnl": float(self._state.get("realized_pnl", 0.0)),
             "unrealized_pnl": float(self._state.get("unrealized_pnl", 0.0)),
             "total_fees": float(self._state.get("total_fees", 0.0)),
@@ -183,6 +237,8 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         state["decision_mode"] = "CANONICAL_COUNCIL_REQUIRED"
         state["entry_without_authorization_allowed"] = False
         state["protective_exit_without_new_council_allowed"] = True
+        state["authorization_single_use"] = True
+        state["verified_exit_learning"] = True
         state["decision_runtime"] = self.decision_runtime.status()
         return state
 
