@@ -22,7 +22,7 @@ git pull --ff-only origin main
 bash deploy/vps/bootstrap_github_actions_runner.sh
 ```
 
-During the first run GitHub CLI prints a one-time device code. Approve that code in the browser. The temporary CLI authorization is removed automatically after installation when the server did not already have a GitHub CLI session.
+During the first run GitHub CLI prints a one-time device code. Approve that code in the browser. When the server did not already have a GitHub CLI session, the bootstrap removes the local CLI credential from the VPS after installation. GitHub CLI OAuth access remains authorized in the GitHub account until it is revoked from account application settings.
 
 ## Non-interactive VPS installer
 
