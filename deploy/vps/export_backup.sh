@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 APP_DIR=${APP_DIR:-/opt/sharipovai}
 COMPOSE_DIR=${COMPOSE_DIR:-$APP_DIR/deploy/vps}
@@ -9,9 +10,19 @@ KEEP=${KEEP:-7}
 
 mkdir -p "$BACKUP_DIR"
 chmod 700 "$BACKUP_DIR"
+exec 9>"$BACKUP_DIR/.export.lock"
+if ! flock -n 9; then
+  echo "backup export is already running" >&2
+  exit 1
+fi
+
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
-work="$BACKUP_DIR/.staging-$stamp"
+work=$(mktemp -d "$BACKUP_DIR/.staging-$stamp-XXXXXX")
 archive="$BACKUP_DIR/sharipovai-$stamp.tar.gz"
+if [[ -e "$archive" || -e "$archive.sha256" ]]; then
+  echo "backup archive already exists for timestamp $stamp" >&2
+  exit 1
+fi
 mkdir -p "$work/data"
 trap 'rm -rf "$work"' EXIT
 
@@ -29,6 +40,13 @@ source = Path(os.getenv("SHARIPOVAI_DATA_DIR", "/var/lib/sharipovai"))
 staging = source / ".backup-export"
 if staging.exists():
     shutil.rmtree(staging)
+if source.is_symlink() or not source.is_dir():
+    raise RuntimeError("data directory must be a real directory")
+for path in source.rglob("*"):
+    if path == staging or staging in path.parents:
+        continue
+    if path.is_symlink():
+        raise RuntimeError(f"data symlink is forbidden in backup: {path.relative_to(source)}")
 staging.mkdir(parents=True)
 for item in source.iterdir():
     if item.name == staging.name:
@@ -53,13 +71,24 @@ import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
 root = Path(sys.argv[1])
 files = []
 for path in sorted((root / "data").rglob("*")):
+    if path.is_symlink():
+        raise RuntimeError(f"backup symlink is forbidden: {path}")
     if path.is_file():
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
         files.append({"path": path.relative_to(root / "data").as_posix(), "bytes": path.stat().st_size, "sha256": digest})
-manifest = {"schema": 1, "created_at": datetime.now(timezone.utc).isoformat(), "files": files, "file_count": len(files), "source": "vps"}
+if not files:
+    raise RuntimeError("backup contains no files")
+manifest = {
+    "schema": 1,
+    "created_at": datetime.now(timezone.utc).isoformat(),
+    "files": files,
+    "file_count": len(files),
+    "source": "vps",
+}
 (root / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 PY
 
