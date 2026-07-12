@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -46,6 +47,7 @@ class StageController:
             if isinstance(item, dict) and item.get("side") == "SELL" and item.get("net_pnl") is not None
         ]
         trades, rejected = eligible_closed_trades(raw_closed)
+        trades = sorted(trades, key=lambda item: int(item["created_at_ms"]))
         pnls = [float(item["net_pnl"]) for item in trades]
         wins = sum(1 for value in pnls if value > 0)
         total = len(pnls)
@@ -54,10 +56,9 @@ class StageController:
         gross_loss = abs(sum(value for value in pnls if value < 0))
         gross_profit = sum(value for value in pnls if value > 0)
         profit_factor = gross_profit / gross_loss if gross_loss > 0 else (10.0 if gross_profit > 0 else 0.0)
-        initial = float(os.getenv("AUTONOMOUS_PAPER_INITIAL_CASH", "10000"))
-        reported_equity = float(state.get("equity", initial))
-        evidence_equity = initial + net_profit
-        drawdown = max(0.0, (initial - evidence_equity) / initial * 100)
+        initial = _positive_env("AUTONOMOUS_PAPER_INITIAL_CASH", 10_000.0)
+        reported_equity = _finite_or_default(state.get("equity"), initial)
+        evidence_equity, drawdown = _evidence_equity_and_max_drawdown(initial, pnls)
         execution = self.journal.summary()
         testnet_orders = int(execution["verified_testnet_orders"])
         live_orders = int(execution["verified_live_orders"])
@@ -105,7 +106,7 @@ class StageController:
             else:
                 eligible = 5
 
-        current = int(os.getenv("AUTONOMOUS_TRADING_STAGE", "2"))
+        current = _stage_env("AUTONOMOUS_TRADING_STAGE", 2)
         cap = self._recommended_cap(eligible, profit_factor, drawdown)
         decision = "HOLD" if eligible <= current else "ELIGIBLE_FOR_REVIEW"
         return StageAssessment(current, eligible, decision, tuple(blockers), metrics, cap)
@@ -133,3 +134,39 @@ class StageController:
             return data if isinstance(data, dict) else {}
         except Exception:
             return {}
+
+
+def _evidence_equity_and_max_drawdown(initial: float, pnls: list[float]) -> tuple[float, float]:
+    equity = initial
+    peak = initial
+    maximum_drawdown = 0.0
+    for pnl in pnls:
+        equity += pnl
+        peak = max(peak, equity)
+        if peak > 0:
+            maximum_drawdown = max(maximum_drawdown, (peak - equity) / peak * 100)
+    return equity, maximum_drawdown
+
+
+def _positive_env(name: str, default: float) -> float:
+    try:
+        value = float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    return value if math.isfinite(value) and value > 0 else default
+
+
+def _finite_or_default(value: Any, default: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if math.isfinite(parsed) else default
+
+
+def _stage_env(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    return value if 0 <= value <= 5 else default
