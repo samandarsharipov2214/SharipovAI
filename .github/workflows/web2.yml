@@ -2,51 +2,56 @@ name: SharipoAI Web 2
 
 on:
   pull_request:
+    branches: [main]
     paths:
       - 'web2/**'
       - '.github/workflows/web2.yml'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
-  group: web2-${{ github.ref }}
+  group: web2-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    if: >-
+      ${{
+        vars.SHARIPOVAI_SELF_HOSTED_CI == '1' &&
+        (github.event_name != 'pull_request' ||
+         github.event.pull_request.head.repo.full_name == github.repository)
+      }}
+    runs-on: [self-hosted, linux, x64, sharipovai-ci]
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: web2
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: npm
+          cache-dependency-path: web2/package-lock.json
+
       - name: Install dependencies
-        run: npm install --silent --no-audit --no-fund
+        run: npm ci --silent --no-audit --no-fund
+
       - name: Lint
-        id: lint
-        shell: bash
-        run: |
-          set +e
-          npx eslint . --format json > lint-report.json
-          code=$?
-          node -e "const fs=require('fs');const r=JSON.parse(fs.readFileSync('lint-report.json','utf8'));const out=[];for(const f of r){for(const m of f.messages){out.push(`${f.filePath}:${m.line}:${m.column} ${m.severity===2?'error':'warning'} ${m.ruleId||''} ${m.message}`)}}console.log(out.slice(0,80).join('\n')||'No lint issues');"
-          exit $code
-      - name: Upload lint report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: web2-lint-report
-          path: web2/lint-report.json
+        run: npx eslint .
+
       - name: Production build
         run: npm run build
         env:
           NEXT_PUBLIC_API_BASE_URL: https://sharipovai-bot.onrender.com
+
       - name: Runtime smoke test
         shell: bash
         env:
-          PORT: "3100"
+          PORT: '3100'
           NEXT_PUBLIC_API_BASE_URL: https://sharipovai-bot.onrender.com
         run: |
           set -euo pipefail
@@ -59,8 +64,8 @@ jobs:
             fi
             sleep 1
           done
-          grep -q "SharipoAI" /tmp/sharipoai-home.html
+          grep -q 'SharipoAI' /tmp/sharipoai-home.html
           curl --fail --silent http://127.0.0.1:3100/sharipoai-logo.svg > /tmp/sharipoai-logo.svg
-          grep -q "<svg" /tmp/sharipoai-logo.svg
+          grep -q '<svg' /tmp/sharipoai-logo.svg
           test -s /tmp/sharipoai-home.html
-          echo "SharipoAI Web 2 runtime smoke test passed"
+          echo 'SharipoAI Web 2 runtime smoke test passed'
