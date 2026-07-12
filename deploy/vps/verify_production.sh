@@ -62,11 +62,13 @@ PY
 
 http_code() {
   local url="$1"
+  local code
   local -a args=(--silent --show-error --max-time 10 --output "${http_body}" --write-out '%{http_code}')
   if [[ -n "${VERIFY_SESSION_COOKIE}" ]]; then
     args+=(--header "Cookie: ${VERIFY_SESSION_COOKIE}")
   fi
-  curl "${args[@]}" "${url}" 2>/dev/null || printf '000'
+  code="$(curl "${args[@]}" "${url}" 2>/dev/null || true)"
+  printf '%s' "${code:-000}"
 }
 
 check_endpoint() {
@@ -151,7 +153,9 @@ else
   record FAIL env_file "missing ${ENV_FILE}"
 fi
 
-if [[ -f "${COMPOSE_DIR}/docker-compose.yml" && -f "${ENV_FILE}" ]]; then
+if [[ ! -f "${COMPOSE_DIR}/docker-compose.yml" ]]; then
+  record FAIL compose_file "missing ${COMPOSE_DIR}/docker-compose.yml"
+elif [[ -f "${ENV_FILE}" ]]; then
   if (cd "${COMPOSE_DIR}" && docker compose config --format json >"${compose_json}"); then
     if python3 - "${compose_json}" <<'PY'
 import json
@@ -205,7 +209,8 @@ else
   record FAIL caddy_container "sharipovai-caddy state is ${caddy_state:-missing}"
 fi
 
-health_status="$(curl --silent --show-error --max-time 10 --output "${http_body}" --write-out '%{http_code}' "${LOCAL_BASE_URL}/health" 2>/dev/null || printf '000')"
+health_status="$(curl --silent --show-error --max-time 10 --output "${http_body}" --write-out '%{http_code}' "${LOCAL_BASE_URL}/health" 2>/dev/null || true)"
+health_status="${health_status:-000}"
 if [[ "${health_status}" == '200' ]]; then
   record PASS backend_health 'local /health returned HTTP 200'
 else
@@ -230,7 +235,8 @@ PY
 )"
 fi
 if [[ -n "${public_domain}" && "${public_domain}" != 'sharipovai.example.com' ]]; then
-  public_status="$(curl --silent --show-error --max-time 15 --output /dev/null --write-out '%{http_code}' "https://${public_domain}/health" 2>/dev/null || printf '000')"
+  public_status="$(curl --silent --show-error --max-time 15 --output /dev/null --write-out '%{http_code}' "https://${public_domain}/health" 2>/dev/null || true)"
+  public_status="${public_status:-000}"
   if [[ "${public_status}" == '200' ]]; then
     record PASS public_https "https://${public_domain}/health returned HTTP 200"
   else
