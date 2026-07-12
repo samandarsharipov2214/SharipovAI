@@ -11,6 +11,7 @@ CI_VARIABLE="SHARIPOVAI_SELF_HOSTED_CI"
 
 log() { printf '[sharipovai-ci] %s\n' "$*"; }
 fail() { printf '[sharipovai-ci] ERROR: %s\n' "$*" >&2; exit 1; }
+run_svc() { (cd "${RUNNER_HOME}" && ./svc.sh "$@"); }
 
 [[ ${EUID} -eq 0 ]] || fail 'run as root'
 [[ "${REPOSITORY}" == */* ]] || fail 'GITHUB_REPOSITORY must be owner/repo'
@@ -47,7 +48,13 @@ if [[ ! -x "${RUNNER_HOME}/config.sh" ]]; then
 fi
 
 if [[ -x "${RUNNER_HOME}/bin/installdependencies.sh" ]]; then
-  "${RUNNER_HOME}/bin/installdependencies.sh" >/dev/null
+  dependency_log="$(mktemp)"
+  if ! "${RUNNER_HOME}/bin/installdependencies.sh" >"${dependency_log}" 2>&1; then
+    cat "${dependency_log}" >&2
+    rm -f "${dependency_log}"
+    fail 'GitHub Actions runner dependency installation failed'
+  fi
+  rm -f "${dependency_log}"
 fi
 
 registration_token="${GITHUB_RUNNER_TOKEN:-}"
@@ -63,8 +70,8 @@ fi
 if [[ -f "${RUNNER_HOME}/.runner" ]]; then
   log 'runner is already configured; replacing registration safely'
   if [[ -x "${RUNNER_HOME}/svc.sh" ]]; then
-    "${RUNNER_HOME}/svc.sh" stop >/dev/null 2>&1 || true
-    "${RUNNER_HOME}/svc.sh" uninstall >/dev/null 2>&1 || true
+    run_svc stop >/dev/null 2>&1 || true
+    run_svc uninstall >/dev/null 2>&1 || true
   fi
   remove_token="${GITHUB_RUNNER_REMOVE_TOKEN:-}"
   if [[ -z "${remove_token}" && -n "${GH_TOKEN:-}" ]]; then
@@ -89,8 +96,8 @@ runuser -u "${RUNNER_USER}" -- bash -lc \
     --work '${RUNNER_WORK}' \
     --unattended --replace"
 
-"${RUNNER_HOME}/svc.sh" install "${RUNNER_USER}" >/dev/null
-"${RUNNER_HOME}/svc.sh" start >/dev/null
+run_svc install "${RUNNER_USER}" >/dev/null
+run_svc start >/dev/null
 
 if [[ -n "${GH_TOKEN:-}" ]]; then
   variable_payload="$(jq -nc --arg name "${CI_VARIABLE}" --arg value '1' '{name:$name,value:$value}')"
