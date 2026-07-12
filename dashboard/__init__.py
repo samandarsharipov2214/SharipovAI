@@ -18,6 +18,7 @@ from .global_auth_guard import install_global_auth_guard
 from .market_data_api import install_market_data_api
 from .news_agent_network_api import install_news_agent_network_api
 from .private_order_ws_api import install_private_order_ws_api
+from .system_health_api import install_system_health_api
 from .web2_host import install_web2_host
 
 # The canonical database must exist before any organ creates runtime state.
@@ -32,8 +33,9 @@ install_dashboard2_api(app)
 install_private_order_ws_api(app)
 install_web2_host(app)
 install_global_auth_guard(app)
-# Health monitoring is installed last so it sees the complete runtime graph.
+# Monitoring is installed after the complete runtime graph and remains read-only.
 install_ai_organ_state_api(app)
+install_system_health_api(app)
 
 try:
     from .telegram_news_agents import install_telegram_news_agent_commands
