@@ -6,6 +6,7 @@ It never executes orders. Paper execution may consume only an authorized result.
 """
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
@@ -204,13 +205,15 @@ class CanonicalPaperDecisionRuntime:
             evidence_class="verified_market",
             verified_market_data=True,
         )
-        result = {
-            **settlement.to_dict(),
-            "net_pnl": pnl,
-            "drawdown_contribution": drawdown,
-            "evidence_class": "verified_market",
-            "verified_market_data": True,
-        }
+        result = _json_object(
+            {
+                **settlement.to_dict(),
+                "net_pnl": pnl,
+                "drawdown_contribution": drawdown,
+                "evidence_class": "verified_market",
+                "verified_market_data": True,
+            }
+        )
         try:
             self.database.put_json(
                 self.settlement_namespace,
@@ -304,6 +307,20 @@ def _finite(value: Any, field: str) -> float:
     if not math.isfinite(parsed):
         raise CanonicalPaperRuntimeError(f"{field} must be finite")
     return parsed
+
+
+def _json_object(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the exact JSON shape that ProjectDatabase will persist.
+
+    This keeps first-time and idempotent replay responses identical (notably
+    converting tuple fields from immutable domain objects into JSON lists).
+    """
+
+    encoded = json.dumps(dict(value), ensure_ascii=False, allow_nan=False)
+    decoded = json.loads(encoded)
+    if not isinstance(decoded, dict):
+        raise CanonicalPaperRuntimeError("settlement payload must be a JSON object")
+    return decoded
 
 
 __all__ = [
