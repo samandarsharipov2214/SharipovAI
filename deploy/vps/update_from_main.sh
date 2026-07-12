@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+APP_DIR="${APP_DIR:-/opt/sharipovai-repo}"
+BRANCH="${BRANCH:-main}"
+LOCK_FILE="${LOCK_FILE:-/run/lock/sharipovai-deploy.lock}"
+HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:8000/health}"
+HEALTH_ATTEMPTS="${HEALTH_ATTEMPTS:-30}"
+HEALTH_DELAY_SECONDS="${HEALTH_DELAY_SECONDS:-2}"
+
+log() { printf '[sharipovai-update] %s\n' "$*"; }
+fail() { printf '[sharipovai-update] ERROR: %s\n' "$*" >&2; exit 1; }
+
+[[ ${EUID} -eq 0 ]] || fail 'run as root'
+[[ "${APP_DIR}" == /* ]] || fail 'APP_DIR must be an absolute path'
+[[ "${BRANCH}" =~ ^[A-Za-z0-9._/-]+$ ]] || fail 'BRANCH contains unsafe characters'
+[[ -d "${APP_DIR}/.git" ]] || fail "git repository not found at ${APP_DIR}"
+[[ -f "${APP_DIR}/deploy/vps/.env.vps" ]] || fail 'deploy/vps/.env.vps is missing'
+
+install -d -m 0755 "$(dirname "${LOCK_FILE}")"
+exec 9>"${LOCK_FILE}"
+flock -n 9 || fail 'another SharipovAI update is already running'
+
+previous_sha="$(git -C "${APP_DIR}" rev-parse HEAD)"
+compose_dir="${APP_DIR}/deploy/vps"
+rollback_started=0
+
+health_check() {
+  local attempt
+  for ((attempt = 1; attempt <= HEALTH_ATTEMPTS; attempt++)); do
+    if curl --fail --silent --show-error --max-time 5 "${HEALTH_URL}" >/dev/null; then
+      return 0
+    fi
+    sleep "${HEALTH_DELAY_SECONDS}"
+  done
+  return 1
+}
+
+validate_financial_locks() {
+  local rendered="$1"
+  python3 - "${rendered}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+service = payload.get("services", {}).get("sharipovai", {})
+environment = service.get("environment", {})
+if isinstance(environment, list):
+    environment = dict(item.split("=", 1) for item in environment if "=" in item)
+required = {
+    "EXCHANGE_LIVE_TRADING_ENABLED": "0",
+    "EXECUTION_KILL_SWITCH": "1",
+}
+for key, expected in required.items():
+    actual = str(environment.get(key, ""))
+    if actual != expected:
+        raise SystemExit(f"unsafe compose environment: {key}={actual!r}, expected {expected!r}")
+for key in (
+    "AUTONOMOUS_TESTNET_BRIDGE_ENABLED",
+    "TESTNET_EXECUTION_ENABLED",
+    "FEATURE_BYBIT_TESTNET",
+    "FEATURE_BYBIT_LIVE_EXECUTION",
+):
+    actual = str(environment.get(key, "0")).strip().lower()
+    if actual in {"1", "true", "yes", "on"}:
+        raise SystemExit(f"unsafe compose environment: {key} is enabled")
+PY
+}
+
+rollback() {
+  local reason="$1"
+  if [[ ${rollback_started} -eq 1 ]]; then
+    fail "rollback failed after: ${reason}"
+  fi
+  rollback_started=1
+  log "deployment failed: ${reason}; rolling back to ${previous_sha}"
+  git -C "${APP_DIR}" reset --hard "${previous_sha}"
+  cd "${compose_dir}"
+  local rollback_config
+  rollback_config="$(mktemp)"
+  trap 'rm -f "${rollback_config:-}"' RETURN
+  docker compose config --format json >"${rollback_config}"
+  validate_financial_locks "${rollback_config}"
+  docker compose build
+  docker compose up -d --remove-orphans
+  health_check || fail 'rollback container did not become healthy'
+  fail "new deployment was rolled back safely: ${reason}"
+}
+
+trap 'rollback "unexpected error at line ${LINENO}"' ERR
+
+log "creating verified backup before code update"
+if [[ -x "${APP_DIR}/deploy/vps/export_backup.sh" ]]; then
+  "${APP_DIR}/deploy/vps/export_backup.sh"
+else
+  fail 'verified backup exporter is missing or not executable'
+fi
+
+log "fetching origin/${BRANCH}"
+git -C "${APP_DIR}" fetch --prune origin "${BRANCH}"
+target_sha="$(git -C "${APP_DIR}" rev-parse "origin/${BRANCH}")"
+[[ -n "${target_sha}" ]] || fail 'target commit could not be resolved'
+
+if [[ "${target_sha}" == "${previous_sha}" ]]; then
+  log "already up to date at ${target_sha}"
+  health_check || fail 'current deployment is not healthy'
+  trap - ERR
+  exit 0
+fi
+
+log "updating ${previous_sha} -> ${target_sha}"
+git -C "${APP_DIR}" checkout -q "${BRANCH}"
+git -C "${APP_DIR}" reset --hard "${target_sha}"
+chmod 600 "${compose_dir}/.env.vps"
+
+cd "${compose_dir}"
+rendered_config="$(mktemp)"
+trap 'rm -f "${rendered_config:-}"' EXIT
+docker compose config --format json >"${rendered_config}"
+validate_financial_locks "${rendered_config}"
+
+log 'building the new image'
+docker compose build --pull
+log 'starting the updated services'
+docker compose up -d --remove-orphans
+
+health_check || rollback 'health endpoint did not recover in time'
+container_state="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' sharipovai 2>/dev/null || true)"
+[[ "${container_state}" == "healthy" || "${container_state}" == "running" ]] || rollback "container state is ${container_state:-missing}"
+
+trap - ERR
+log "deployment completed successfully at ${target_sha}"
+docker compose ps
