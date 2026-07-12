@@ -43,6 +43,10 @@ def install_autonomous_trading_api(app: FastAPI) -> None:
         raise RuntimeError("MarketDataService must be installed before autonomous trading")
     if not isinstance(consensus, MultiExchangeConsensus):
         raise RuntimeError("MultiExchangeConsensus must be installed before autonomous trading")
+    existing_worker_database = getattr(worker, "database", None)
+    if existing_worker_database is not None and existing_worker_database.dsn != database.dsn:
+        raise RuntimeError("market worker and autonomous runtime must use the same database")
+    worker.database = database
 
     app.state.autonomous_trading_api_installed = True
     stream = SharedVerifiedMarketStream(worker, market_data, consensus, database=database)
