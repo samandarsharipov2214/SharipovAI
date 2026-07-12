@@ -204,9 +204,9 @@ class AIOrganRuntimeMonitor:
 
     def _risk_engine(self) -> tuple[list[str], list[str]]:
         evidence, blockers = [], []
-        if importlib.util.find_spec("trading_intelligence.trade_gate") is not None:
+        if _module_available("trading_intelligence"):
             evidence.append("trade_gate_module")
-        elif importlib.util.find_spec("trading_candidate") is not None:
+        elif _module_available("trading_candidate"):
             evidence.append("canonical_trading_candidate_validator")
         else:
             blockers.append("critical: no canonical trade validation module found")
@@ -247,7 +247,7 @@ class AIOrganRuntimeMonitor:
     def _decision_quality(self) -> tuple[list[str], list[str]]:
         evidence, blockers = [], []
         for module_name in ("trading_candidate", "exchange_connector.preview_candidate_bridge"):
-            if importlib.util.find_spec(module_name) is not None:
+            if _module_available(module_name):
                 evidence.append(module_name)
             else:
                 blockers.append(f"critical: decision evidence module missing: {module_name}")
@@ -256,7 +256,7 @@ class AIOrganRuntimeMonitor:
     def _learning_engine(self) -> tuple[list[str], list[str]]:
         evidence, blockers = [], []
         candidates = ("learning_engine", "decision_quality", "trading_intelligence")
-        available = [name for name in candidates if importlib.util.find_spec(name) is not None]
+        available = [name for name in candidates if _module_available(name)]
         if available:
             evidence.extend(f"module={name}" for name in available)
         else:
@@ -315,6 +315,13 @@ def _register_lifecycle(app: FastAPI, event: str, handler: Callable[[], None]) -
         handlers.append(handler)
         return
     raise RuntimeError(f"FastAPI lifecycle registration unavailable for {event}")
+
+
+def _module_available(name: str) -> bool:
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (AttributeError, ImportError, ModuleNotFoundError, ValueError):
+        return False
 
 
 def _summary(states: list[OrganRuntimeState], *, now_ms: int) -> dict[str, Any]:
