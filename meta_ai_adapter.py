@@ -7,13 +7,24 @@ from typing import Any
 
 from meta_ai import AgentOpinion, ConsensusResult, MetaAI, PredictionOutcome
 
+_VERIFIED_LEARNING_EVIDENCE = {
+    "verified_market",
+    "verified_exchange",
+    "verified_bybit",
+    "verified_market_and_news",
+}
+
 
 def opinions_from_payloads(payloads: Sequence[Mapping[str, Any]], *, regime: str = "unknown") -> list[AgentOpinion]:
-    """Convert legacy payloads while normalizing 0..1 and 0..100 score scales."""
+    """Convert existing payloads while normalizing 0..1 and 0..100 score scales."""
 
     opinions: list[AgentOpinion] = []
     for index, payload in enumerate(payloads):
-        agent_id = str(payload.get("agent_id") or payload.get("name") or f"agent-{index}")
+        if not isinstance(payload, Mapping):
+            raise TypeError("agent payload must be a mapping")
+        agent_id = str(payload.get("agent_id") or payload.get("name") or f"agent-{index}").strip()
+        if not agent_id:
+            raise ValueError("agent_id must not be empty")
         action = str(payload.get("action") or payload.get("decision") or "WAIT").upper()
         confidence = _ratio(payload.get("confidence", 0.0), "confidence")
         evidence_score = _ratio(
@@ -59,12 +70,7 @@ def record_realized_result(
     evidence_class: str = "verified_market",
     verified_market_data: bool = True,
 ) -> bool:
-    """Record one realized result in memory or canonical persistent MetaAI.
-
-    Persistent MetaAI instances require ``decision_id`` and verified evidence.
-    Plain MetaAI remains backward compatible and records the same outcomes in
-    process memory.
-    """
+    """Record one realized result only from explicitly verified evidence."""
 
     pnl = pnl_by_agent or {}
     drawdown = drawdown_by_agent or {}
@@ -84,13 +90,17 @@ def record_realized_result(
     if not outcomes:
         return False
 
+    normalized_class = str(evidence_class or "").strip().lower()
+    if verified_market_data is not True or normalized_class not in _VERIFIED_LEARNING_EVIDENCE:
+        raise ValueError("AI reputation requires explicit verified market evidence")
+
     if hasattr(meta, "persistence_status"):
         return bool(
             meta.record_outcomes(
                 outcomes,
                 decision_id=decision_id,
-                evidence_class=evidence_class,
-                verified_market_data=verified_market_data,
+                evidence_class=normalized_class,
+                verified_market_data=True,
             )
         )
 
@@ -99,16 +109,20 @@ def record_realized_result(
 
 
 def _learning_eligible(payload: Mapping[str, Any]) -> bool:
+    if not isinstance(payload, Mapping):
+        return False
+    evidence_class = str(payload.get("evidence_class") or "").strip().lower()
+    if evidence_class not in _VERIFIED_LEARNING_EVIDENCE:
+        return False
+    if not any(
+        payload.get(field) is True
+        for field in ("verified_market_data", "data_verified", "evidence_verified")
+    ):
+        return False
     for field in ("learning_eligible", "evidence_eligible", "reputation_eligible"):
         if payload.get(field) is False:
             return False
-    return str(payload.get("evidence_class") or "").strip().lower() not in {
-        "synthetic",
-        "synthetic_simulation",
-        "demo",
-        "fixture",
-        "mock",
-    }
+    return True
 
 
 def _ratio(value: Any, name: str) -> float:
