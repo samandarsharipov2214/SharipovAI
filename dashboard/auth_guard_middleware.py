@@ -1,9 +1,8 @@
-"""Compatibility authentication middleware used by ``create_app`` instances.
+"""Fail-closed authentication middleware used by ``create_app`` instances.
 
-The production entrypoint installs ``global_auth_guard`` separately and remains
-fail-closed. This middleware preserves the historical app-factory contract:
-authentication is enforced when ``SHARIPOVAI_DISABLE_AUTH`` is explicitly false,
-while isolated local/test app instances remain usable when the variable is absent.
+The production entrypoint installs ``global_auth_guard`` separately. Factory
+applications follow the same safe default: authentication stays enabled unless
+``SHARIPOVAI_DISABLE_AUTH`` is explicitly set to a supported truthy value.
 """
 from __future__ import annotations
 
@@ -18,7 +17,6 @@ from starlette.requests import Request
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _FALSE_VALUES = {"0", "false", "no", "off"}
 _PUBLIC_EXACT = {
-    "/",
     "/login",
     "/register",
     "/logout",
@@ -51,15 +49,22 @@ _PUBLIC_PREFIXES = (
 
 
 def factory_auth_enabled() -> bool:
-    """Return True only when factory-level auth is explicitly requested."""
+    """Return False only for an explicit, supported auth-bypass value.
+
+    Missing, false-like, empty, or malformed values all keep authentication
+    enabled. This prevents an omitted or mistyped production setting from
+    silently exposing private routes.
+    """
 
     raw = os.getenv("SHARIPOVAI_DISABLE_AUTH")
     if raw is None:
-        return False
+        return True
     normalized = raw.strip().lower()
     if normalized in _TRUE_VALUES:
         return False
-    return normalized in _FALSE_VALUES
+    if normalized in _FALSE_VALUES:
+        return True
+    return True
 
 
 def session_username(request: Request) -> str | None:
@@ -75,7 +80,7 @@ def is_public_path(path: str) -> bool:
 
 
 class AuthGuardMiddleware:
-    """Protect private app-factory routes when auth is explicitly enabled."""
+    """Protect private app-factory routes unless auth bypass is explicit."""
 
     def __init__(self, app: Callable[[Any, Any, Any], Awaitable[None]]) -> None:
         self.app = app
