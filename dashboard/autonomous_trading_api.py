@@ -47,6 +47,12 @@ def install_autonomous_trading_api(app: FastAPI) -> None:
     if existing_worker_database is not None and existing_worker_database.dsn != database.dsn:
         raise RuntimeError("market worker and autonomous runtime must use the same database")
     worker.database = database
+    worker_state = getattr(worker, "state", None)
+    if worker_state is not None:
+        state_database = getattr(worker_state, "database", None)
+        if state_database is not None and state_database.dsn != database.dsn:
+            raise RuntimeError("market worker state and autonomous runtime must use the same database")
+        worker_state.database = database
 
     app.state.autonomous_trading_api_installed = True
     stream = SharedVerifiedMarketStream(worker, market_data, consensus, database=database)
@@ -150,7 +156,7 @@ def _database_news_reader(database: ProjectDatabase) -> Callable[..., dict[str, 
                     "key": str(row.get("key") or ""),
                     "created_at": int(row.get("updated_at_ms") or 0) // 1000,
                     "impact": str(value.get("impact") or "neutral"),
-                    "impact_score": _finite(value.get("score"), 0.0),
+                    "impact_score": _score(value.get("score")),
                     "credibility_percent": reliability,
                     "urgency": str(value.get("urgency") or "low"),
                     "needs_confirmation": fetched.get("verified") is not True or reliability < 60.0,
@@ -174,6 +180,13 @@ def _percentage(value: Any) -> float:
     if 0.0 <= parsed <= 1.0:
         parsed *= 100.0
     return min(max(parsed, 0.0), 100.0)
+
+
+def _score(value: Any) -> float:
+    parsed = _finite(value, 0.0)
+    if 0.0 < abs(parsed) <= 1.0:
+        parsed *= 100.0
+    return min(max(parsed, -100.0), 100.0)
 
 
 def _finite(value: Any, default: float) -> float:
