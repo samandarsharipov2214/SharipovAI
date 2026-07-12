@@ -32,19 +32,18 @@ if (-not (Test-Path $keyPath -PathType Leaf)) {
     }
 }
 
-if (-not (Test-Path $publicKeyPath -PathType Leaf)) {
-    & $keygen.Source -y -f $keyPath | Set-Content -Path $publicKeyPath -Encoding Ascii
-    if ($LASTEXITCODE -ne 0) { throw "Failed to derive the SSH public key." }
+$publicKeyOutput = & $keygen.Source -y -f $keyPath
+$keygenExitCode = $LASTEXITCODE
+$publicKey = if ($null -eq $publicKeyOutput) { "" } else { ((@($publicKeyOutput) -join "").Trim()) }
+if ($keygenExitCode -ne 0 -or $publicKey -notmatch '^ssh-ed25519 [A-Za-z0-9+/=]+(?: .+)?$') {
+    throw "Failed to derive a valid SSH public key from the private key."
 }
-
-$publicKey = (Get-Content $publicKeyPath -Raw).Trim()
-if ($publicKey -notmatch '^ssh-ed25519 [A-Za-z0-9+/=]+(?: .+)?$') {
-    throw "Generated SSH public key is invalid."
-}
+$publicKey | Set-Content -Path $publicKeyPath -Encoding Ascii
 
 $target = "$VpsUser@$VpsHost"
-$remoteInstall = 'umask 077; mkdir -p ~/.ssh; touch ~/.ssh/authorized_keys; chmod 700 ~/.ssh; chmod 600 ~/.ssh/authorized_keys; tmp=/tmp/sharipovai_backup_key_$$; cat > $tmp; grep -qxFf $tmp ~/.ssh/authorized_keys || cat $tmp >> ~/.ssh/authorized_keys; rm -f $tmp'
-($publicKey + "`n") | & $ssh.Source $target $remoteInstall
+$keyPayload = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($publicKey))
+$remoteInstall = "set -eu; umask 077; mkdir -p ~/.ssh; touch ~/.ssh/authorized_keys; chmod 700 ~/.ssh; chmod 600 ~/.ssh/authorized_keys; key=`$(printf '%s' '$keyPayload' | base64 -d); grep -qxF `"`$key`" ~/.ssh/authorized_keys || printf '%s\n' `"`$key`" >> ~/.ssh/authorized_keys"
+& $ssh.Source $target $remoteInstall
 if ($LASTEXITCODE -ne 0) { throw "Failed to install the backup SSH key on the VPS." }
 
 $probeOutput = & $ssh.Source -i $keyPath -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=15 $target "printf backup-key-ok"
