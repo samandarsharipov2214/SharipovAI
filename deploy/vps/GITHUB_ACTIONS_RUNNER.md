@@ -10,18 +10,29 @@ GitHub-hosted Actions are not used by project workflows. Linux checks run on the
 - Trading flags, exchange credentials and production `.env.vps` are not passed to CI jobs.
 - Workflows remain skipped until the corresponding repository variable is set to `1`.
 
-## VPS runner
+## One-command VPS bootstrap
 
-Use a short-lived runner registration token in `GITHUB_RUNNER_TOKEN`, or an administrator token in `GH_TOKEN`. When `GH_TOKEN` is used, the installer also sets `SHARIPOVAI_SELF_HOSTED_CI=1` automatically.
+The bootstrap finds `/opt/sharipovai-repo` or `/opt/SharipovAI`, updates `main`, performs GitHub device authorization once, installs the runner service, enables `SHARIPOVAI_SELF_HOSTED_CI=1`, starts a real workflow and waits for a passing result.
 
 ```bash
 cd /opt/sharipovai-repo
-git fetch origin
+git fetch origin main
 git checkout main
 git pull --ff-only origin main
+bash deploy/vps/bootstrap_github_actions_runner.sh
+```
+
+During the first run GitHub CLI prints a one-time device code. Approve that code in the browser. When the server did not already have a GitHub CLI session, the bootstrap removes the local CLI credential from the VPS after installation. GitHub CLI OAuth access remains authorized in the GitHub account until it is revoked from account application settings.
+
+## Non-interactive VPS installer
+
+For automation, use a short-lived runner registration token in `GITHUB_RUNNER_TOKEN`, or an administrator token in `GH_TOKEN`. When `GH_TOKEN` is used, the installer also sets `SHARIPOVAI_SELF_HOSTED_CI=1` automatically.
+
+```bash
+cd /opt/sharipovai-repo
 read -rsp 'GitHub token: ' GH_TOKEN && echo
 export GH_TOKEN
-sudo -E bash deploy/vps/install_github_actions_runner.sh
+bash deploy/vps/install_github_actions_runner.sh
 unset GH_TOKEN
 ```
 
@@ -31,7 +42,7 @@ Remove safely:
 cd /opt/sharipovai-repo
 read -rsp 'GitHub token: ' GH_TOKEN && echo
 export GH_TOKEN
-sudo -E bash deploy/vps/uninstall_github_actions_runner.sh
+bash deploy/vps/uninstall_github_actions_runner.sh
 unset GH_TOKEN
 ```
 
@@ -50,7 +61,7 @@ The installer registers the service and sets `SHARIPOVAI_WINDOWS_SELF_HOSTED_CI=
 
 ## Workflow allocation
 
-- `Проверка SharipovAI`: fast CI contract check on VPS.
+- `Проверка SharipovAI`: full Python verification on VPS.
 - `Tests`: Python regression tests on VPS.
 - `Project Guardrails`: database migration, fail-closed audit and execution safety on VPS.
 - `Dashboard Stabilization`: targeted dashboard tests on VPS.
