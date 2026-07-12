@@ -4,6 +4,7 @@ import json
 
 from autonomous_trading.evidence_integrity import assess_trade_evidence
 from autonomous_trading.stage_controller import StageController
+from profitability_gate import evaluate_profitability_candidate
 
 
 class _Journal:
@@ -47,6 +48,27 @@ def test_verified_market_trade_is_eligible() -> None:
     result = assess_trade_evidence(_verified_trade(1))
     assert result.eligible is True
     assert result.reasons == ()
+
+
+def test_deterministic_profitability_is_explicitly_non_evidence(monkeypatch) -> None:
+    monkeypatch.setenv("VIRTUAL_MIN_EXPECTED_NET_USDT", "0")
+    monkeypatch.setenv("VIRTUAL_MIN_EDGE_TO_FEE_RATIO", "0")
+    monkeypatch.setenv("VIRTUAL_MIN_CONFIDENCE", "0")
+    result = evaluate_profitability_candidate(
+        symbol="BTC/USDT",
+        side="BUY",
+        tick_count=1,
+        notional=100.0,
+        estimated_fee=0.1,
+        state={"trades": []},
+        gate={"ai_consensus_score": 75},
+    )
+
+    assert result["evidence_class"] == "synthetic_simulation"
+    assert result["uses_live_market_prediction"] is False
+    assert result["promotion_eligible"] is False
+    assert result["learning_eligible"] is False
+    assert result["reputation_eligible"] is False
 
 
 def test_synthetic_profit_cannot_unlock_testnet(tmp_path, monkeypatch) -> None:
