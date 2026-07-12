@@ -76,7 +76,6 @@ class AIOrganRuntimeMonitor:
                 try:
                     setter(state.organ_id, payload)
                 except TypeError:
-                    # Older ProjectDatabase signatures may accept status and payload separately.
                     try:
                         setter(state.organ_id, state.status, payload)
                     except TypeError:
@@ -112,7 +111,9 @@ class AIOrganRuntimeMonitor:
                     self._last_error = f"{type(exc).__name__}: {exc}"
                 try:
                     self.database.append_event(
-                        "ai_organ_monitor_error",
+                        "ai_organ_monitor",
+                        "error",
+                        "runtime",
                         {"error": self._last_error, "checked_at_ms": self.clock_ms()},
                     )
                 except Exception:
@@ -292,8 +293,8 @@ def install_ai_organ_state_api(app: FastAPI) -> None:
         raise RuntimeError("ProjectDatabase must be installed before AI organ monitor")
     monitor = AIOrganRuntimeMonitor(app, database)
     app.state.ai_organ_runtime_monitor = monitor
-    app.add_event_handler("startup", monitor.start)
-    app.add_event_handler("shutdown", monitor.stop)
+    _register_lifecycle(app, "startup", monitor.start)
+    _register_lifecycle(app, "shutdown", monitor.stop)
 
     @app.get("/api/system/ai-organs")
     def ai_organs_status() -> dict[str, Any]:
@@ -302,6 +303,18 @@ def install_ai_organ_state_api(app: FastAPI) -> None:
     @app.post("/api/system/ai-organs/refresh")
     def refresh_ai_organs() -> dict[str, Any]:
         return monitor.refresh()
+
+
+def _register_lifecycle(app: FastAPI, event: str, handler: Callable[[], None]) -> None:
+    add_event_handler = getattr(app, "add_event_handler", None)
+    if callable(add_event_handler):
+        add_event_handler(event, handler)
+        return
+    handlers = getattr(getattr(app, "router", None), f"on_{event}", None)
+    if isinstance(handlers, list):
+        handlers.append(handler)
+        return
+    raise RuntimeError(f"FastAPI lifecycle registration unavailable for {event}")
 
 
 def _summary(states: list[OrganRuntimeState], *, now_ms: int) -> dict[str, Any]:
