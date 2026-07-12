@@ -25,8 +25,10 @@ class FakeClient:
 
 
 def test_fetch_snapshot_is_read_only_and_normalized(monkeypatch, tmp_path):
-    monkeypatch.setenv("EXCHANGE_API_KEY", "key")
-    monkeypatch.setenv("EXCHANGE_API_SECRET", "secret")
+    monkeypatch.setenv("BYBIT_READONLY_API_KEY", "key")
+    monkeypatch.setenv("BYBIT_READONLY_API_SECRET", "secret")
+    monkeypatch.delenv("EXCHANGE_API_KEY", raising=False)
+    monkeypatch.delenv("EXCHANGE_API_SECRET", raising=False)
     monkeypatch.setenv("BYBIT_ACCOUNT_BASE_URL", "https://api.bybit.eu")
     monkeypatch.setenv("BYBIT_ACCOUNT_STATE_FILE", str(tmp_path / "account.json"))
     fake = FakeClient()
@@ -40,10 +42,12 @@ def test_fetch_snapshot_is_read_only_and_normalized(monkeypatch, tmp_path):
     assert snapshot.coins[0]["coin"] == "USDT"
     assert snapshot.positions[0]["symbol"] == "BTCUSDT"
     assert all("/v5/order/create" not in call for call in fake.calls)
-    assert json.loads(path.read_text())["source"] == "bybit_private_api_v5"
+    assert json.loads(path.read_text())['source'] == "bybit_private_api_v5"
 
 
 def test_missing_credentials_are_blocked(monkeypatch):
+    monkeypatch.delenv("BYBIT_READONLY_API_KEY", raising=False)
+    monkeypatch.delenv("BYBIT_READONLY_API_SECRET", raising=False)
     monkeypatch.delenv("EXCHANGE_API_KEY", raising=False)
     monkeypatch.delenv("EXCHANGE_API_SECRET", raising=False)
     client = BybitAccountClient(client=FakeClient())
