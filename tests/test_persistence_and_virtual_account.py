@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import paper_activity_engine as engine_module
 from paper_activity_engine import PaperActivityEngine
 from persistence_paths import durable_data_path
 
@@ -12,6 +13,21 @@ def test_durable_data_path_uses_render_disk(monkeypatch, tmp_path):
 
 def test_virtual_account_equity_uses_expected_open_edge_not_fee_only_loss(tmp_path, monkeypatch):
     monkeypatch.setenv("VIRTUAL_ACCOUNT_MAX_OPEN", "10")
+    monkeypatch.setenv("VIRTUAL_MIN_EXPECTED_NET_USDT", "0")
+    monkeypatch.setenv("VIRTUAL_MIN_EDGE_TO_FEE_RATIO", "0")
+    monkeypatch.setenv("VIRTUAL_MIN_CONFIDENCE", "0")
+    monkeypatch.setattr(
+        engine_module,
+        "trade_gate",
+        lambda payload: {
+            "can_trade_demo": True,
+            "can_trade_virtual": True,
+            "ai_consensus_score": 100,
+            "decision": "VIRTUAL_ALLOWED",
+            "blockers": [],
+            "warnings": [],
+        },
+    )
     engine = PaperActivityEngine(tmp_path / "state.json")
     opened = []
     now = 1_700_000_000
