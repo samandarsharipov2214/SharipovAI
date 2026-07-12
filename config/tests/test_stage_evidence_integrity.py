@@ -1,0 +1,82 @@
+from __future__ import annotations
+
+import json
+
+from autonomous_trading.evidence_integrity import assess_trade_evidence
+from autonomous_trading.stage_controller import StageController
+
+
+class _Journal:
+    def summary(self) -> dict[str, int]:
+        return {"verified_testnet_orders": 0, "verified_live_orders": 0}
+
+
+def _verified_trade(index: int, pnl: float = 1.0) -> dict[str, object]:
+    return {
+        "trade_id": f"trade-{index}",
+        "created_at_ms": 1_700_000_000_000 + index,
+        "side": "SELL",
+        "quantity": 0.01,
+        "price": 50_000.0,
+        "net_pnl": pnl,
+        "source": "bybit_websocket",
+        "verified_market_data": True,
+    }
+
+
+def _synthetic_trade(index: int, pnl: float = 100.0) -> dict[str, object]:
+    return {
+        "id": f"VA-{index}",
+        "created_at_ms": 1_700_000_100_000 + index,
+        "side": "SELL",
+        "quantity": 1.0,
+        "price": 1.0,
+        "net_pnl": pnl,
+        "source": "virtual_account_execution_engine",
+        "verified_market_data": False,
+    }
+
+
+def test_synthetic_trade_is_not_promotion_evidence() -> None:
+    result = assess_trade_evidence(_synthetic_trade(1))
+    assert result.eligible is False
+    assert any("synthetic source" in reason for reason in result.reasons)
+
+
+def test_verified_market_trade_is_eligible() -> None:
+    result = assess_trade_evidence(_verified_trade(1))
+    assert result.eligible is True
+    assert result.reasons == ()
+
+
+def test_synthetic_profit_cannot_unlock_testnet(tmp_path, monkeypatch) -> None:
+    state_file = tmp_path / "paper.json"
+    state_file.write_text(
+        json.dumps({"equity": 1_000_000.0, "trades": [_synthetic_trade(index) for index in range(100)]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AUTONOMOUS_TRADING_STAGE", "2")
+    assessment = StageController(str(state_file), journal=_Journal()).assess()
+
+    assert assessment.eligible_stage == 2
+    assert assessment.metrics["closed_trades"] == 0.0
+    assert assessment.metrics["rejected_evidence_trades"] == 100.0
+    assert assessment.metrics["net_profit"] == 0.0
+    assert assessment.recommended_max_notional_usdt == 0.0
+
+
+def test_only_verified_trades_count_toward_stage_three(tmp_path, monkeypatch) -> None:
+    trades = [_verified_trade(index) for index in range(30)]
+    trades.extend(_synthetic_trade(index) for index in range(20))
+    state_file = tmp_path / "paper.json"
+    state_file.write_text(json.dumps({"equity": 999_999.0, "trades": trades}), encoding="utf-8")
+    monkeypatch.setenv("AUTONOMOUS_TRADING_STAGE", "2")
+
+    assessment = StageController(str(state_file), journal=_Journal()).assess()
+
+    assert assessment.eligible_stage == 3
+    assert assessment.metrics["closed_trades"] == 30.0
+    assert assessment.metrics["rejected_evidence_trades"] == 20.0
+    assert assessment.metrics["net_profit"] == 30.0
+    assert assessment.metrics["evidence_equity"] == 10_030.0
+    assert assessment.metrics["reported_equity"] == 999_999.0
