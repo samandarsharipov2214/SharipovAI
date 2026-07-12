@@ -76,3 +76,15 @@ jobs:
           path: pytest-ci.log
           if-no-files-found: error
           retention-days: 7
+
+      - name: Сохранить контекст News Intelligence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: news-intelligence-context-${{ github.run_id }}
+          path: |
+            news_intelligence
+            dashboard/news_agent_network_api.py
+            tests/test_ai_organ_runtime_state.py
+          if-no-files-found: error
+          retention-days: 1
