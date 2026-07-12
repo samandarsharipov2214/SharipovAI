@@ -8,6 +8,10 @@ BACKUP_DIR=${BACKUP_DIR:-$COMPOSE_DIR/backups}
 CONTAINER=${CONTAINER:-sharipovai}
 KEEP=${KEEP:-7}
 
+if ! [[ "$KEEP" =~ ^[0-9]+$ ]] || (( KEEP < 1 || KEEP > 100 )); then
+  echo "KEEP must be an integer between 1 and 100" >&2
+  exit 1
+fi
 mkdir -p "$BACKUP_DIR"
 chmod 700 "$BACKUP_DIR"
 exec 9>"$BACKUP_DIR/.export.lock"
@@ -18,13 +22,13 @@ fi
 
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
 work=$(mktemp -d "$BACKUP_DIR/.staging-$stamp-XXXXXX")
+trap 'rm -rf "$work"' EXIT
 archive="$BACKUP_DIR/sharipovai-$stamp.tar.gz"
 if [[ -e "$archive" || -e "$archive.sha256" ]]; then
   echo "backup archive already exists for timestamp $stamp" >&2
   exit 1
 fi
 mkdir -p "$work/data"
-trap 'rm -rf "$work"' EXIT
 
 cd "$COMPOSE_DIR"
 docker compose ps --status running "$CONTAINER" | grep -q "$CONTAINER"
@@ -62,8 +66,13 @@ if db.exists():
 PY
 
 container_id=$(docker compose ps -q "$CONTAINER")
-docker cp "$container_id:/var/lib/sharipovai/.backup-export/." "$work/data/"
-docker exec "$CONTAINER" rm -rf /var/lib/sharipovai/.backup-export
+container_data_dir=$(docker exec "$CONTAINER" sh -c 'printf "%s" "${SHARIPOVAI_DATA_DIR:-/var/lib/sharipovai}"')
+if [[ "$container_data_dir" != /* || "$container_data_dir" == *$'\n'* || "$container_data_dir" == *'/../'* ]]; then
+  echo "container data directory is unsafe" >&2
+  exit 1
+fi
+docker cp "$container_id:$container_data_dir/.backup-export/." "$work/data/"
+docker exec "$CONTAINER" rm -rf "$container_data_dir/.backup-export"
 
 python3 - "$work" <<'PY'
 import hashlib
