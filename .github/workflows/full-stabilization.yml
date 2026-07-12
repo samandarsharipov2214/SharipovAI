@@ -36,4 +36,21 @@ jobs:
         run: python -m compileall -q .
 
       - name: Run full pytest suite
-        run: python -m pytest -q --tb=short
+        id: full_pytest
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          python -m pytest -q --tb=short 2>&1 | tee full-pytest.log
+
+      - name: Upload full pytest diagnostic
+        if: steps.full_pytest.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-stabilization-pytest-log
+          path: full-pytest.log
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Fail when full suite failed
+        if: steps.full_pytest.outcome == 'failure'
+        run: exit 1
