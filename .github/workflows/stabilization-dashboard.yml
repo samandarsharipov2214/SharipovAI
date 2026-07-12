@@ -10,32 +10,18 @@ on:
       - 'runner/**'
       - 'telegram_bot.py'
       - '.github/workflows/stabilization-dashboard.yml'
-  pull_request:
-    branches: [main]
-    paths:
-      - 'dashboard/**'
-      - 'agent_health.py'
-      - 'learning_engine/**'
-      - 'runner/**'
-      - 'telegram_bot.py'
-      - '.github/workflows/stabilization-dashboard.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: dashboard-${{ github.event.pull_request.number || github.ref }}
+  group: dashboard-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   targeted-dashboard-tests:
-    if: >-
-      ${{
-        vars.SHARIPOVAI_SELF_HOSTED_CI == '1' &&
-        (github.event_name != 'pull_request' ||
-         github.event.pull_request.head.repo.full_name == github.repository)
-      }}
+    if: ${{ vars.SHARIPOVAI_SELF_HOSTED_CI == '1' }}
     runs-on: [self-hosted, linux, x64, sharipovai-ci]
     timeout-minutes: 20
     steps:
