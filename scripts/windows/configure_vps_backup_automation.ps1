@@ -42,7 +42,32 @@ $publicKey | Set-Content -Path $publicKeyPath -Encoding Ascii
 
 $target = "$VpsUser@$VpsHost"
 $keyPayload = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($publicKey))
-$remoteInstall = "set -eu; umask 077; mkdir -p ~/.ssh; touch ~/.ssh/authorized_keys; chmod 700 ~/.ssh; chmod 600 ~/.ssh/authorized_keys; key=`$(printf '%s' '$keyPayload' | base64 -d); grep -qxF `"`$key`" ~/.ssh/authorized_keys || printf '%s\n' `"`$key`" >> ~/.ssh/authorized_keys"
+$remoteScriptTemplate = @'
+set -eu
+umask 077
+mkdir -p ~/.ssh
+touch ~/.ssh/authorized_keys
+chmod 700 ~/.ssh
+chmod 600 ~/.ssh/authorized_keys
+key_payload='__KEY_PAYLOAD__'
+key="$(printf '%s' "$key_payload" | base64 -d)"
+key_type="$(printf '%s\n' "$key" | awk '{print $1}')"
+key_blob="$(printf '%s\n' "$key" | awk '{print $2}')"
+key_comment="$(printf '%s\n' "$key" | cut -d' ' -f3-)"
+tmp="$(mktemp)"
+awk -v full="$key" -v type="$key_type" -v blob="$key_blob" -v comment="$key_comment" '
+    $0 == type || $0 == blob || (comment != "" && $0 == comment) { next }
+    $0 == full { if (seen++) next }
+    { print }
+    END { print full }
+' ~/.ssh/authorized_keys > "$tmp"
+cat "$tmp" > ~/.ssh/authorized_keys
+rm -f "$tmp"
+chmod 600 ~/.ssh/authorized_keys
+'@
+$remoteScript = $remoteScriptTemplate.Replace("__KEY_PAYLOAD__", $keyPayload)
+$remoteScriptPayload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($remoteScript))
+$remoteInstall = "printf %s $remoteScriptPayload | base64 -d | sh"
 & $ssh.Source $target $remoteInstall
 if ($LASTEXITCODE -ne 0) { throw "Failed to install the backup SSH key on the VPS." }
 
