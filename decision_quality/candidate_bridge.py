@@ -138,10 +138,11 @@ class DecisionCandidateBridge:
             trusted_security_approvals=trusted_security_approvals,
         )
         if not validation.valid:
+            original_errors = validation.errors
             blocked = replace(
                 candidate,
                 decision=TradingDecision.BLOCK,
-                risk_blocks=_unique(candidate.risk_blocks + validation.errors),
+                risk_blocks=_unique(candidate.risk_blocks + original_errors),
             )
             blocked_validation = validate_trading_candidate(
                 blocked,
@@ -167,7 +168,7 @@ class DecisionCandidateBridge:
                 )
             candidate = blocked
             validation = blocked_validation
-            reasons.extend(item for item in validation.errors if item not in reasons)
+            reasons.extend(item for item in original_errors if item not in reasons)
 
         stored = self.store.save_trading_candidate(candidate)
         return CandidateBuildResult(
