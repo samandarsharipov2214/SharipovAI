@@ -32,7 +32,7 @@ def main_keyboard() -> dict[str, Any]:
     rows.extend(
         [
             [
-                {"text": "📊 Обзор", "callback_data": "overview"},
+                {"text": "🟢 Текущее решение", "callback_data": "now"},
                 {"text": "💼 Портфель", "callback_data": "portfolio"},
             ],
             [
