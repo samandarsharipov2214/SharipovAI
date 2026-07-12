@@ -79,9 +79,9 @@ rollback() {
   cd "${compose_dir}"
   local rollback_config
   rollback_config="$(mktemp)"
-  trap 'rm -f "${rollback_config:-}"' RETURN
   docker compose config --format json >"${rollback_config}"
   validate_financial_locks "${rollback_config}"
+  rm -f "${rollback_config}"
   docker compose build
   docker compose up -d --remove-orphans
   health_check || fail 'rollback container did not become healthy'
@@ -91,11 +91,9 @@ rollback() {
 trap 'rollback "unexpected error at line ${LINENO}"' ERR
 
 log "creating verified backup before code update"
-if [[ -x "${APP_DIR}/deploy/vps/export_backup.sh" ]]; then
-  "${APP_DIR}/deploy/vps/export_backup.sh"
-else
-  fail 'verified backup exporter is missing or not executable'
-fi
+backup_exporter="${APP_DIR}/deploy/vps/export_backup.sh"
+[[ -f "${backup_exporter}" ]] || fail 'verified backup exporter is missing'
+bash "${backup_exporter}"
 
 log "fetching origin/${BRANCH}"
 git -C "${APP_DIR}" fetch --prune origin "${BRANCH}"
