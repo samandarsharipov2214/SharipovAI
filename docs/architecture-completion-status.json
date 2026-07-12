@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "branch": "architecture/completion-v1",
+  "status": "integrating",
+  "financial_execution_enabled": false,
+  "kill_switch_required": true,
+  "completed_layers": []
+}
