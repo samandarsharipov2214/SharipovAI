@@ -1,6 +1,6 @@
 """Dashboard package entrypoint for SharipovAI OS.
 
-Render starts ``uvicorn dashboard:app``. Feature installers placed here must be
+VPS starts ``uvicorn dashboard:app``. Feature installers placed here must be
 idempotent so Codex/tests may also import ``dashboard.app`` directly.
 """
 from __future__ import annotations
@@ -14,6 +14,7 @@ from .dashboard2_api import install_dashboard2_api
 from .database_api import install_database_api
 from .exceptions import DashboardError
 from .execution_stages_api import install_execution_stages_api
+from .full_system_audit_api import install_full_system_audit_api
 from .global_auth_guard import install_global_auth_guard
 from .market_data_api import install_market_data_api
 from .news_agent_network_api import install_news_agent_network_api
@@ -38,6 +39,7 @@ install_global_auth_guard(app)
 install_ai_organ_state_api(app)
 install_system_health_api(app)
 install_system_watchdog(app)
+install_full_system_audit_api(app)
 
 try:
     from .telegram_news_agents import install_telegram_news_agent_commands
