@@ -33,19 +33,25 @@ def restore(snapshot: Path, destination: Path) -> dict[str, object]:
         raise RestoreError("snapshot must be outside the restore destination")
 
     destination.parent.mkdir(parents=True, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(prefix="restore-", dir=destination.parent))
+    staging_root = Path(tempfile.mkdtemp(prefix="restore-", dir=destination.parent))
+    envelope = staging_root / "snapshot"
+    envelope.mkdir()
     rollback = destination.with_name(destination.name + ".rollback")
     moved_existing = False
     installed_new = False
     try:
-        shutil.copytree(source, staging / "data", dirs_exist_ok=False)
-        verify_snapshot(_snapshot_wrapper(staging, manifest))
+        shutil.copytree(source, envelope / "data", dirs_exist_ok=False)
+        (envelope / "manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, sort_keys=True),
+            encoding="utf-8",
+        )
+        verify_snapshot(envelope)
         if rollback.exists():
             shutil.rmtree(rollback)
         if destination.exists():
             os.replace(destination, rollback)
             moved_existing = True
-        os.replace(staging / "data", destination)
+        os.replace(envelope / "data", destination)
         installed_new = True
     except Exception:
         if installed_new and destination.exists():
@@ -54,35 +60,10 @@ def restore(snapshot: Path, destination: Path) -> dict[str, object]:
             os.replace(rollback, destination)
         raise
     finally:
-        shutil.rmtree(staging, ignore_errors=True)
+        shutil.rmtree(staging_root, ignore_errors=True)
     if rollback.exists():
         shutil.rmtree(rollback)
     return manifest
-
-
-def _snapshot_wrapper(staging: Path, manifest: dict[str, object]) -> Path:
-    """Create a temporary snapshot envelope to re-verify the copied bytes."""
-
-    wrapper = staging / "verification"
-    wrapper.mkdir()
-    (wrapper / "manifest.json").write_text(
-        json.dumps(manifest, ensure_ascii=False, sort_keys=True),
-        encoding="utf-8",
-    )
-    os.replace(staging / "data", wrapper / "data")
-    os.replace(wrapper / "data", staging / "data")
-    return _write_verification_envelope(staging, manifest)
-
-
-def _write_verification_envelope(staging: Path, manifest: dict[str, object]) -> Path:
-    envelope = staging / "snapshot"
-    envelope.mkdir()
-    (envelope / "manifest.json").write_text(
-        json.dumps(manifest, ensure_ascii=False, sort_keys=True),
-        encoding="utf-8",
-    )
-    os.replace(staging / "data", envelope / "data")
-    return envelope
 
 
 def main() -> int:
