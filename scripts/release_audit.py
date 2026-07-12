@@ -6,6 +6,7 @@ actual environment. It never enables trading and never prints secret values.
 from __future__ import annotations
 
 import argparse
+import importlib
 import inspect
 import json
 import os
@@ -236,8 +237,7 @@ def _audit_runtime_code(record: Any) -> None:
         record("single_public_market_worker", False, f"dashboard import failed: {type(exc).__name__}: {exc}")
 
     try:
-        import autonomous_trading.market_stream as market_stream_module
-
+        market_stream_module = importlib.import_module("autonomous_trading.market_stream")
         source = inspect.getsource(market_stream_module)
         no_second_socket = "websockets" not in source and "wss://" not in source
         record("market_adapter_no_second_socket", no_second_socket, "MarketStream contains no network client or WebSocket URL")
@@ -245,8 +245,7 @@ def _audit_runtime_code(record: Any) -> None:
         record("market_adapter_no_second_socket", False, f"{type(exc).__name__}: {exc}")
 
     try:
-        import dashboard.app as dashboard_app_module
-
+        dashboard_app_module = importlib.import_module("dashboard.app")
         source = inspect.getsource(dashboard_app_module)
         record(
             "production_secure_session_cookie",
