@@ -118,6 +118,48 @@ def install_market_data_api(app: FastAPI) -> None:
             "received_at": datetime.now(UTC).isoformat(), "bids": result.get("b", []), "asks": result.get("a", []),
         }
 
+    @app.get("/api/market/trades/{symbol}")
+    def market_recent_trades(
+        symbol: str,
+        limit: int = Query(default=50, ge=1, le=1000),
+        category: str = Query(default="spot"),
+    ) -> dict[str, Any]:
+        clean_symbol = normalize_symbol(symbol)
+        clean_category = str(category).lower()
+        if clean_category not in _ALLOWED_CATEGORIES:
+            raise HTTPException(status_code=400, detail="Неподдерживаемый тип рынка")
+        try:
+            payload = app.state.market_data_service.get_json(
+                f"{_BYBIT_MARKET_URL}/recent-trade",
+                params={"category": clean_category, "symbol": clean_symbol, "limit": str(limit)},
+            )
+            if payload.get("retCode") != 0:
+                raise ValueError(payload.get("retMsg") or "Bybit вернул ошибку")
+            rows = payload.get("result", {}).get("list", [])
+            trades = [
+                {
+                    "time": int(row.get("time", 0)),
+                    "price": float(row["price"]),
+                    "size": float(row["size"]),
+                    "side": str(row.get("side", "")),
+                    "is_block_trade": bool(row.get("isBlockTrade", False)),
+                }
+                for row in rows
+                if isinstance(row, dict) and row.get("price") not in (None, "") and row.get("size") not in (None, "")
+            ]
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail={"status": "unavailable", "verified": False, "synthetic_fallback_used": False, "message": str(exc)}) from exc
+        return {
+            "status": "ok",
+            "verified": True,
+            "synthetic_fallback_used": False,
+            "source": "Bybit",
+            "symbol": clean_symbol,
+            "category": clean_category,
+            "received_at": datetime.now(UTC).isoformat(),
+            "trades": trades,
+        }
+
     @app.get("/api/market/bybit-websocket/status")
     def bybit_websocket_status() -> dict[str, Any]:
         return app.state.bybit_websocket_worker.status()
