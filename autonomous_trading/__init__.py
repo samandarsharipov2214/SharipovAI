@@ -5,13 +5,16 @@ from .canonical_runtime import (
     PaperDecisionAuthorization,
 )
 from .council_loop import CouncilAuthorizedPaperLoop, CouncilEntryProposal, ProposalProvider
+from .council_provider import AutonomousCouncilProposalProvider
 from .execution_journal import ExecutionJournal
 from .loop import AutonomousPaperLoop
 from .market_stream import MarketStream, StreamQuote
+from .shared_market_stream import SharedVerifiedMarketStream
 from .stage_controller import StageAssessment, StageController
 from .testnet_bridge import AutonomousTestnetBridge
 
 __all__ = (
+    "AutonomousCouncilProposalProvider",
     "AutonomousPaperLoop",
     "AutonomousTestnetBridge",
     "CanonicalPaperDecisionRuntime",
@@ -22,6 +25,7 @@ __all__ = (
     "MarketStream",
     "PaperDecisionAuthorization",
     "ProposalProvider",
+    "SharedVerifiedMarketStream",
     "StreamQuote",
     "StageAssessment",
     "StageController",
