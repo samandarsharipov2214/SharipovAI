@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from scripts.release_audit import _audit_blueprint, _audit_runtime_environment, audit_repository
+from scripts.release_audit import (
+    _audit_blueprint,
+    _audit_runtime_environment,
+    _audit_test_collection,
+    _audit_vps_boundary,
+    audit_repository,
+)
 
 
 def configure_safe_runtime(monkeypatch, tmp_path: Path) -> None:
@@ -38,8 +44,18 @@ def test_current_repository_release_audit_passes(monkeypatch, tmp_path: Path) ->
     configure_safe_runtime(monkeypatch, tmp_path)
     report = audit_repository(Path("."), runtime=True)
     assert report.status == "ok", report.errors
-    assert any(item.name == "canonical_ai_organs" and item.status == "pass" for item in report.checks)
-    assert any(item.name == "execution_journal_database" and item.status == "pass" for item in report.checks)
+    required_passes = {
+        "canonical_ai_organs",
+        "execution_journal_database",
+        "pytest_all_regressions_covered",
+        "single_public_market_worker",
+        "market_adapter_no_second_socket",
+        "vps_https_boundary",
+        "vps_secure_cookie_preserved",
+        "production_secure_session_cookie",
+    }
+    passed = {item.name for item in report.checks if item.status == "pass"}
+    assert required_passes <= passed
 
 
 def test_unsafe_render_testnet_value_is_detected(tmp_path: Path) -> None:
@@ -111,3 +127,55 @@ def test_partial_credentials_and_mainnet_credentials_are_blocked(monkeypatch) ->
     _audit_runtime_environment(record)
     assert seen["runtime_bybit_testnet_pair"] is False
     assert seen["runtime_mainnet_credentials_absent"] is False
+
+
+def test_uncovered_regression_directory_is_blocked(tmp_path: Path) -> None:
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests/test_visible.py").write_text("def test_visible(): pass\n", encoding="utf-8")
+    hidden = tmp_path / "hidden/tests"
+    hidden.mkdir(parents=True)
+    (hidden / "test_hidden.py").write_text("def test_hidden(): pass\n", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.pytest.ini_options]\ntestpaths = ["tests"]\n',
+        encoding="utf-8",
+    )
+    seen = {}
+
+    def record(name, passed, detail, **kwargs):
+        seen[name] = (passed, detail)
+
+    _audit_test_collection(tmp_path, record)
+    assert seen["pytest_root_regressions"][0] is True
+    assert seen["pytest_all_regressions_covered"][0] is False
+    assert "hidden/tests/test_hidden.py" in seen["pytest_all_regressions_covered"][1]
+
+
+def test_vps_proxy_cannot_strip_secure_cookie(tmp_path: Path) -> None:
+    deploy = tmp_path / "deploy/vps"
+    deploy.mkdir(parents=True)
+    (deploy / "docker-compose.yml").write_text(
+        'ports:\n  - "127.0.0.1:8000:8000"\n  - "80:80"\n  - "443:443"\n',
+        encoding="utf-8",
+    )
+    (deploy / "Caddyfile").write_text(
+        '{$DOMAIN} {\n'
+        '  header { Strict-Transport-Security "max-age=31536000; includeSubDomains" }\n'
+        '  reverse_proxy sharipovai:8000 {\n'
+        '    header_down Set-Cookie "{http.reverse_proxy.header.Set-Cookie}; nosecure"\n'
+        '  }\n'
+        '}\n',
+        encoding="utf-8",
+    )
+    (deploy / ".env.vps.example").write_text(
+        "DOMAIN=example.com\nTELEGRAM_WEBAPP_URL=https://example.com\n",
+        encoding="utf-8",
+    )
+    seen = {}
+
+    def record(name, passed, detail, **kwargs):
+        seen[name] = passed
+
+    _audit_vps_boundary(tmp_path, record)
+    assert seen["vps_backend_private"] is True
+    assert seen["vps_https_boundary"] is True
+    assert seen["vps_secure_cookie_preserved"] is False
