@@ -1,0 +1,25 @@
+{$DOMAIN} {
+    encode zstd gzip
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "SAMEORIGIN"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        -Server
+    }
+
+    reverse_proxy sharipovai:8000 {
+        health_uri /health
+        health_interval 30s
+        transport http {
+            dial_timeout 5s
+            response_header_timeout 30s
+        }
+    }
+
+    log {
+        output stdout
+        format console
+    }
+}
