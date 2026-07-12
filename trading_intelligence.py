@@ -68,7 +68,8 @@ def market_regime(payload: dict[str, Any] | None = None) -> dict[str, Any]:
     volatility = float(payload.get("volatility_percent", 0.0) or 0)
     trend_score = float(payload.get("trend_score", 0.0) or 0)
     spread = float(payload.get("spread_percent", 0.05) or 0)
-    news_shock = float(payload.get("news_shock_score", _news_shock_score()) or 0)
+    raw_news_shock = payload.get("news_shock_score")
+    news_shock = float(_news_shock_score() if raw_news_shock is None else raw_news_shock or 0)
     liquidity = float(payload.get("liquidity_score", 75) or 0)
 
     if news_shock >= 70:
@@ -104,11 +105,17 @@ def market_regime(payload: dict[str, Any] | None = None) -> dict[str, Any]:
 def trade_gate(payload: dict[str, Any] | None = None) -> dict[str, Any]:
     """Strict gate for virtual execution; real execution always remains locked."""
     resolved, market_error = _resolved_payload(payload)
+
+    if "news_shock_score" not in resolved or "news_credibility_percent" not in resolved:
+        default_shock, default_credibility = _news_metrics()
+        resolved.setdefault("news_shock_score", default_shock)
+        resolved.setdefault("news_credibility_percent", default_credibility)
+
     regime = market_regime(resolved)
     live_requested = bool(resolved.get("live_requested", False))
     ai_score = float(resolved.get("ai_consensus_score", 62) or 0)
     risk_per_trade = float(resolved.get("risk_per_trade_percent", 1.0) or 0)
-    news_credibility = float(resolved.get("news_credibility_percent", _news_credibility()) or 0)
+    news_credibility = float(resolved.get("news_credibility_percent", 60) or 0)
     exchange_ok = bool(resolved.get("exchange_ok", False))
     market_verified = bool(resolved.get("market_data_verified", False))
     has_strategy_approval = bool(resolved.get("strategy_approved", False))
@@ -158,26 +165,32 @@ def trade_gate(payload: dict[str, Any] | None = None) -> dict[str, Any]:
     }
 
 
-def _news_shock_score() -> float:
+def _news_metrics() -> tuple[float, float]:
+    """Read news once and derive all gate metrics from the same snapshot."""
     if not analyzed_news_payload:
-        return 35
+        return 35.0, 60.0
     try:
         news = analyzed_news_payload()
         summary = news.get("summary", {}) if isinstance(news, dict) else {}
-        return min(100, int(summary.get("urgent_count", 0) or 0) * 25 + int(summary.get("needs_confirmation", 0) or 0) * 10)
+        shock = min(
+            100,
+            int(summary.get("urgent_count", 0) or 0) * 25
+            + int(summary.get("needs_confirmation", 0) or 0) * 10,
+        )
+        credibility = float(summary.get("average_credibility_percent", 60) or 60)
+        return float(shock), credibility
     except Exception:
-        return 35
+        return 35.0, 60.0
+
+
+def _news_shock_score() -> float:
+    shock, _ = _news_metrics()
+    return shock
 
 
 def _news_credibility() -> float:
-    if not analyzed_news_payload:
-        return 60
-    try:
-        news = analyzed_news_payload()
-        summary = news.get("summary", {}) if isinstance(news, dict) else {}
-        return float(summary.get("average_credibility_percent", 60) or 60)
-    except Exception:
-        return 60
+    _, credibility = _news_metrics()
+    return credibility
 
 
 def _regime_explanation(regime: str) -> str:

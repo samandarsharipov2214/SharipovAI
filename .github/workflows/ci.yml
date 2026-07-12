@@ -1,0 +1,36 @@
+name: Проверка SharipovAI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Получить код
+        uses: actions/checkout@v4
+
+      - name: Настроить Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Установить зависимости
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Проверить синтаксис Python
+        run: python -m compileall -q dashboard exchange_connector config
+
+      - name: Запустить тесты
+        env:
+          PYTHONPATH: .
+        run: pytest -q
