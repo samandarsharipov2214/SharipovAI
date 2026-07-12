@@ -31,6 +31,7 @@ from paper_trading import PaperEngine
 from portfolio_engine import PortfolioInput, Position
 from risk_engine import RiskInput
 
+from .diagnostic_memory import DiagnosticMemorySink
 from .exceptions import RunnerError
 from .models import RunnerOutput
 
@@ -88,7 +89,7 @@ class SharipovAIRunner:
 
         ai_core = AICore(
             orchestrator=orchestrator,
-            memory_engine=self._memory_engine,
+            memory_engine=DiagnosticMemorySink(),
         )
         ai_output = ai_core.run(
             AICoreInput(
@@ -107,7 +108,8 @@ class SharipovAIRunner:
         )
 
         # The legacy runner must never turn its static/pre-canonical analysis into
-        # a trade or learning record. The account exists only for UI compatibility.
+        # a trade, memory record, or learning record. The account exists only for
+        # UI compatibility.
         self._paper_engine.create_account(10000.0)
         paper_account = self._paper_engine.account()
         learning_summary = self._learning_engine.summary()
