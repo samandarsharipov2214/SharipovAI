@@ -23,12 +23,15 @@ def test_bridge_does_nothing_when_autonomous_testnet_disabled(tmp_path, monkeypa
     monkeypatch.setenv("AUTONOMOUS_PAPER_STATE_FILE", str(paper))
     monkeypatch.setenv("TESTNET_BRIDGE_STATE_FILE", str(tmp_path / "bridge.json"))
     monkeypatch.setenv("EXECUTION_JOURNAL_FILE", str(tmp_path / "journal.json"))
+    monkeypatch.setenv("AUTONOMOUS_TESTNET_BRIDGE_ENABLED", "1")
     monkeypatch.setenv("AUTONOMOUS_TESTNET_ENABLED", "0")
     bridge = AutonomousTestnetBridge()
     bridge.tick()
     snapshot = bridge.snapshot()
     assert snapshot["last_status"] == "disabled"
-    assert snapshot["processed_trade_count"] == 0
+    assert snapshot["enabled"] is False
+    # Historical trades are baseline-recorded so a later unlock cannot replay them.
+    assert snapshot["processed_trade_count"] == 1
     assert snapshot["journal"]["accepted_orders"] == 0
 
 
