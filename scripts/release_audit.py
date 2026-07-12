@@ -6,9 +6,11 @@ actual environment. It never enables trading and never prints secret values.
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import os
 import re
+import tomllib
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -32,6 +34,7 @@ REQUIRED_ROUTES = {
     "/api/exchange/private-order-ws/snapshot",
     "/api/exchange/private-order-ws/reconcile",
 }
+_IGNORED_TEST_PARTS = {".git", ".venv", "venv", "node_modules", "build", "dist"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,7 +74,9 @@ def audit_repository(root: Path, *, runtime: bool = False) -> AuditReport:
 
     _audit_architecture(record)
     _audit_blueprint(root, record)
+    _audit_vps_boundary(root, record)
     _audit_workflows(root, record)
+    _audit_test_collection(root, record)
     _audit_runtime_code(record)
     _audit_database_and_journal(record)
     if runtime:
@@ -139,6 +144,34 @@ def _audit_blueprint(root: Path, record: Any) -> None:
         record(name, passed, "contract satisfied" if passed else "required Render contract is missing or unsafe")
 
 
+def _audit_vps_boundary(root: Path, record: Any) -> None:
+    compose = _read(root / "deploy/vps/docker-compose.yml")
+    caddy = _read(root / "deploy/vps/Caddyfile")
+    example = _read(root / "deploy/vps/.env.vps.example")
+    record(
+        "vps_backend_private",
+        '"127.0.0.1:8000:8000"' in compose and '"8000:8000"' not in compose.replace('"127.0.0.1:8000:8000"', ""),
+        "backend is bound only to loopback",
+    )
+    record(
+        "vps_https_boundary",
+        all(token in caddy for token in ("{$DOMAIN}", 'Strict-Transport-Security "max-age=31536000; includeSubDomains"', "reverse_proxy sharipovai:8000"))
+        and all(token in compose for token in ('"80:80"', '"443:443"')),
+        "Caddy terminates TLS and publishes only HTTP/HTTPS boundary ports",
+    )
+    lowered = caddy.lower()
+    record(
+        "vps_secure_cookie_preserved",
+        "nosecure" not in lowered and "set-cookie" not in lowered,
+        "reverse proxy must not remove or rewrite Secure session-cookie attributes",
+    )
+    record(
+        "vps_domain_required",
+        "DOMAIN=" in example and "TELEGRAM_WEBAPP_URL=https://" in example,
+        "production VPS example requires a hostname and HTTPS WebApp URL",
+    )
+
+
 def _audit_workflows(root: Path, record: Any) -> None:
     guardrails = _read(root / ".github/workflows/project-guardrails.yml")
     full = _read(root / ".github/workflows/full-stabilization.yml")
@@ -154,6 +187,38 @@ def _audit_workflows(root: Path, record: Any) -> None:
     record("ci_windows_agent", "runs-on: windows-latest" in windows and "pytest" in windows.lower(), "Windows agent verification gate")
 
 
+def _audit_test_collection(root: Path, record: Any) -> None:
+    path = root / "pyproject.toml"
+    if not path.exists():
+        record("pytest_configuration", False, "pyproject.toml is missing")
+        return
+    try:
+        config = tomllib.loads(path.read_text(encoding="utf-8"))
+        configured = tuple(str(item).strip() for item in config.get("tool", {}).get("pytest", {}).get("ini_options", {}).get("testpaths", ()) if str(item).strip())
+    except Exception as exc:
+        record("pytest_configuration", False, f"{type(exc).__name__}: {exc}")
+        return
+    record("pytest_root_regressions", "tests" in configured, f"testpaths={configured}")
+
+    test_files: list[Path] = []
+    for item in root.rglob("test_*.py"):
+        relative = item.relative_to(root)
+        if any(part in _IGNORED_TEST_PARTS for part in relative.parts):
+            continue
+        test_files.append(relative)
+    configured_paths = tuple(Path(item) for item in configured)
+    uncovered = sorted(
+        str(item)
+        for item in test_files
+        if not any(item.is_relative_to(base) for base in configured_paths)
+    )
+    record(
+        "pytest_all_regressions_covered",
+        not uncovered,
+        f"test_files={len(test_files)}, uncovered={uncovered[:20]}",
+    )
+
+
 def _audit_runtime_code(record: Any) -> None:
     try:
         import dashboard
@@ -161,8 +226,35 @@ def _audit_runtime_code(record: Any) -> None:
         routes = {getattr(route, "path", "") for route in dashboard.app.routes}
         missing = sorted(REQUIRED_ROUTES - routes)
         record("dashboard_required_routes", not missing, f"missing={missing}" if missing else "all required routes registered")
+
+        worker = getattr(dashboard.app.state, "bybit_websocket_worker", None)
+        stream = getattr(dashboard.app.state, "market_stream", None)
+        same_worker = worker is not None and stream is not None and getattr(stream, "worker", None) is worker
+        record("single_public_market_worker", same_worker, "Dashboard and paper runtime share the exact worker object")
     except Exception as exc:
         record("dashboard_required_routes", False, f"dashboard import failed: {type(exc).__name__}: {exc}")
+        record("single_public_market_worker", False, f"dashboard import failed: {type(exc).__name__}: {exc}")
+
+    try:
+        import autonomous_trading.market_stream as market_stream_module
+
+        source = inspect.getsource(market_stream_module)
+        no_second_socket = "websockets" not in source and "wss://" not in source
+        record("market_adapter_no_second_socket", no_second_socket, "MarketStream contains no network client or WebSocket URL")
+    except Exception as exc:
+        record("market_adapter_no_second_socket", False, f"{type(exc).__name__}: {exc}")
+
+    try:
+        import dashboard.app as dashboard_app_module
+
+        source = inspect.getsource(dashboard_app_module)
+        record(
+            "production_secure_session_cookie",
+            "secure=_is_production()" in source,
+            "production session cookie is Secure and local development remains supported",
+        )
+    except Exception as exc:
+        record("production_secure_session_cookie", False, f"{type(exc).__name__}: {exc}")
 
     try:
         from exchange_connector.bybit_private_order_ws import BybitPrivateOrderWebSocket
