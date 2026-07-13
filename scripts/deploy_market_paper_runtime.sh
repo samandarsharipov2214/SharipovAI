@@ -5,6 +5,7 @@ ROOT="/opt/sharipovai-repo"
 DEPLOY="$ROOT/deploy/vps"
 SERVICE="sharipovai"
 ROLLBACK_TAG="sharipovai-market-paper-rollback:latest"
+production_replaced=0
 
 cd "$DEPLOY"
 old_image_id="$(docker inspect -f '{{.Image}}' "$SERVICE" 2>/dev/null || true)"
@@ -14,6 +15,10 @@ if [[ -n "$old_image_id" ]]; then
 fi
 
 rollback() {
+  if [[ "$production_replaced" != "1" ]]; then
+    echo "Candidate verification failed before production replacement; running service was not touched."
+    return 0
+  fi
   if [[ -n "$old_image_ref" ]] && docker image inspect "$ROLLBACK_TAG" >/dev/null 2>&1; then
     echo "New runtime verification failed; restoring previous SharipovAI image."
     docker tag "$ROLLBACK_TAG" "$old_image_ref"
@@ -43,11 +48,13 @@ python -m pytest \
   tests/test_news_intelligence_runtime.py \
   tests/test_lifecycle_compat.py \
   tests/test_ai_organ_safe_runtime.py \
-  tests/test_verify_market_paper_runtime_script.py -q
+  tests/test_verify_market_paper_runtime_script.py \
+  tests/test_config_loader_cwd.py -q
 python -m py_compile \
   /app/market_paper_engine.py \
   /app/paper_activity_autorun.py \
   /app/scripts/verify_market_paper_runtime.py \
+  /app/config/loader.py \
   /app/dashboard/lifecycle_compat.py \
   /app/dashboard/ai_organ_state_safe_api.py \
   /app/dashboard/paper_activity_api.py \
@@ -60,6 +67,13 @@ python -m py_compile \
 cd /tmp
 SHARIPOVAI_VERIFY_IMPORT_ONLY=1 python /app/scripts/verify_market_paper_runtime.py
 python - <<"PY"
+from config.loader import DEFAULT_CONFIG_PATH
+from config.settings import settings
+assert DEFAULT_CONFIG_PATH.is_absolute(), "default config path must be absolute"
+assert DEFAULT_CONFIG_PATH.exists(), "default config file missing"
+assert settings.market.exchange == "bybit", "default config did not load"
+print("CONFIG_CWD_INDEPENDENT_OK")
+
 from dashboard.app import app
 paths = {getattr(route, "path", "") for route in app.routes}
 assert "/health" in paths, "health route missing"
@@ -106,6 +120,7 @@ exit 1
 '
 
 echo "[4/5] Replacing production SharipovAI only after candidate verification..."
+production_replaced=1
 docker compose up -d --no-deps --force-recreate "$SERVICE"
 
 health="starting"
