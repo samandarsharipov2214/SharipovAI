@@ -7,18 +7,26 @@ on:
     paths-ignore:
       - '**/*.md'
       - '.ci-results/**'
+  pull_request:
+    branches:
+      - verify/base-noop-v1
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: isolated-full-pytest-${{ github.ref }}
+  group: isolated-full-pytest-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   full-pytest:
-    if: ${{ vars.SHARIPOVAI_SELF_HOSTED_CI == '1' }}
+    if: >-
+      ${{
+        vars.SHARIPOVAI_SELF_HOSTED_CI == '1' &&
+        (github.event_name != 'pull_request' ||
+         github.event.pull_request.head.repo.full_name == github.repository)
+      }}
     runs-on: [self-hosted, linux, x64, sharipovai-ci]
     timeout-minutes: 45
     env:
@@ -81,8 +89,8 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - name: Publish machine-readable result
-        if: always()
+      - name: Publish machine-readable push result
+        if: always() && github.event_name == 'push'
         env:
           PYTEST_EXIT_CODE: ${{ steps.pytest.outputs.exit_code || '99' }}
         shell: bash
