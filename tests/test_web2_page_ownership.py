@@ -7,6 +7,8 @@ COORDINATOR = WEB2 / "navigation_coordinator_v23.js"
 RENDER_GUARD = WEB2 / "runtime_render_guard_v24.js"
 CORE = WEB2 / "web2.js"
 OVERVIEW = WEB2 / "overview_runtime_v25.js"
+MARKET = WEB2 / "tradingview_market_v32.js"
+MARKET_CSS = WEB2 / "tradingview_market_v32.css"
 DECISION = WEB2 / "decision_runtime_v25.js"
 LEARNING = WEB2 / "learning_runtime_v25.js"
 EXECUTION_UI = WEB2 / "exchange_execution_settings_v18.js"
@@ -17,33 +19,39 @@ WEB2_HOST = ROOT / "dashboard" / "web2_host.py"
 
 def test_page_runtime_script_order_and_cache_version():
     html = INDEX.read_text(encoding="utf-8")
-    coordinator = html.index("navigation_coordinator_v23.js?v=31")
+    coordinator = html.index("navigation_coordinator_v23.js?v=32")
     core = html.index("web2.js?v=29")
     overview = html.index("overview_runtime_v25.js?v=31")
     decision = html.index("decision_runtime_v25.js?v=25")
+    market = html.index("tradingview_market_v32.js?v=32")
     learning = html.index("learning_runtime_v25.js?v=25")
     exchange = html.index("exchange_execution_settings_v18.js?v=30")
-    assert coordinator < core < overview < decision < learning < exchange
+    assert coordinator < core < overview < decision < market < learning < exchange
     assert "runtime_render_guard_v24.js?v=31" in html
     assert "system_status_v11.js?v=29" in html
     assert "interface_v30.css?v=30" in html
+    assert "tradingview_market_v32.css?v=32" in html
 
 
-def test_obsolete_sections_renderer_is_not_loaded():
+def test_obsolete_renderers_are_not_loaded():
     html = INDEX.read_text(encoding="utf-8")
     assert "sections_v10.js" not in html
+    assert "market_terminal_v13.js" not in html
+    assert "market_terminal_v13.css" not in html
     assert "Фактическая сводка SharipovAI по всем рабочим контурам" not in html
 
 
 def test_one_explicit_owner_for_affected_pages():
     source = COORDINATOR.read_text(encoding="utf-8")
     assert "['overview', 'overview_runtime_v25.js']" in source
+    assert "['market', 'tradingview_market_v32.js']" in source
     assert "['decision', 'decision_runtime_v25.js']" in source
     assert "['portfolio', 'portfolio_risk_v16.js']" in source
     assert "['trades', 'exchange_execution_settings_v18.js']" in source
     assert "['learning', 'learning_runtime_v25.js']" in source
-    assert "const VERSION = 31" in source
+    assert "const VERSION = 32" in source
     assert "value.includes('sections_v10.js')" in source
+    assert "value.includes('market_terminal_v13.js')" in source
 
 
 def test_render_guard_blocks_every_known_legacy_overview_signature():
@@ -69,6 +77,65 @@ def test_legacy_core_does_not_render_owned_pages_or_poll_market():
     assert "restartMarketTimer" not in source
     assert "loadMarket(" not in source
     assert "setInterval(() => { loadHeaderStatus()" in source
+
+
+def test_tradingview_market_embeds_supported_official_widgets():
+    source = MARKET.read_text(encoding="utf-8")
+    expected_scripts = (
+        "embed-widget-advanced-chart.js",
+        "embed-widget-technical-analysis.js",
+        "embed-widget-screener.js",
+        "embed-widget-crypto-coins-heatmap.js",
+        "embed-widget-market-overview.js",
+        "embed-widget-events.js",
+        "embed-widget-timeline.js",
+    )
+    for script in expected_scripts:
+        assert f"https://s3.tradingview.com/external-embedding/{script}" in source
+    for label in (
+        "График",
+        "Теханализ",
+        "Скринер",
+        "Тепловая карта",
+        "Обзор рынков",
+        "Календарь",
+        "Новости TradingView",
+    ):
+        assert label in source
+    assert "allow_symbol_change: true" in source
+    assert "studies: ['STD;RSI', 'STD;MACD']" in source
+    assert "Все рынки на TradingView" in source
+
+
+def test_tradingview_is_visual_only_and_native_market_truth_remains_separate():
+    source = MARKET.read_text(encoding="utf-8")
+    for endpoint in (
+        "/api/market/bybit-websocket/quote/",
+        "/api/market/quote/",
+        "/api/market/orderbook/",
+        "/api/market/trades/",
+        "/api/virtual-account/state",
+    ):
+        assert endpoint in source
+    assert "TradingView встроен как аналитический интерфейс" in source
+    assert "Он не передаёт ордера" in source
+    assert "Реальная торговля остаётся заблокированной" in source
+    assert "Реальные ордера" in source
+    assert "ЗАБЛОКИРОВАНЫ" in source
+
+
+def test_tradingview_market_has_all_supported_crypto_pairs_and_responsive_layout():
+    source = MARKET.read_text(encoding="utf-8")
+    css = MARKET_CSS.read_text(encoding="utf-8")
+    for symbol in ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT"):
+        assert symbol in source
+    assert "setInterval(loadQuote, 2000)" in source
+    assert "setInterval(loadBookAndTrades, 5000)" in source
+    assert "setInterval(loadContext, 15000)" in source
+    assert ".tv32-widget-host" in css
+    assert ".tv32-native-grid" in css
+    assert "@media(max-width:760px)" in css
+    assert "@media(max-width:480px)" in css
 
 
 def test_header_and_system_status_count_the_same_market_source():
