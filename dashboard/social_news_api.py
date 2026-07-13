@@ -1,5 +1,4 @@
 """Dashboard API endpoints for Social News Monitor."""
-
 from __future__ import annotations
 
 from typing import Any
@@ -16,17 +15,19 @@ from news_monitor.telegram_client import read_latest_messages, telegram_client_s
 
 
 def install_social_news_api(app: FastAPI) -> None:
-    """Install Social News Monitor and specialized News AI APIs."""
-
+    """Install Social News Monitor and the DB-backed News Intelligence network."""
     if getattr(app.state, "social_news_api_installed", False):
         return
-    app.state.social_news_api_installed = True
 
-    # Keep the specialized network attached to the already-installed Social News
-    # feature so older app factories cannot silently omit the new API.
+    # App factories historically installed Social News before the package-level
+    # database installer. Make this feature self-sufficient and keep one shared
+    # ProjectDatabase rather than silently replacing the routes with a warning.
+    from dashboard.database_api import install_database_api
     from dashboard.news_agent_network_api import install_news_agent_network_api
 
+    install_database_api(app)
     install_news_agent_network_api(app)
+    app.state.social_news_api_installed = True
 
     @app.on_event("startup")
     def social_news_startup() -> None:
