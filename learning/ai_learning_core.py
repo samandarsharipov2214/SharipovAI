@@ -6,6 +6,7 @@ but canonical ownership is defined by ai_architecture_registry.py.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from ai_architecture_registry import canonical_id
@@ -78,14 +79,37 @@ def evaluate_exam(bot_name: str, answers: dict[str, str]) -> dict[str, Any]:
     details: list[dict[str, Any]] = []
     for question in questions:
         question_id = question["id"]
-        answer = answers.get(question_id, "").lower()
-        expected_keywords = [keyword.lower() for keyword in question["expected_keywords"]]
-        ok = all(keyword in answer for keyword in expected_keywords)
+        answer = str(answers.get(question_id, ""))
+        expected_keywords = [str(keyword).lower() for keyword in question["expected_keywords"]]
+        ok = _matches_expected(answer, expected_keywords)
         if ok:
             passed += 1
         details.append({"id": question_id, "passed": ok, "expected_keywords": expected_keywords})
     score = round((passed / total) * 100, 2) if total else 0.0
     return {"status": "ok", "bot": _clean_bot_name(bot_name), "canonical_owner": pack["canonical_owner"], "score": score, "passed": passed, "total": total, "details": details}
+
+
+def _matches_expected(answer: str, expected_keywords: list[str]) -> bool:
+    """Match required concepts without depending on Russian word order.
+
+    Exams validate understanding, not memorisation of an exact sentence. Tokens
+    remain strict, except that the required negation concept accepts common safe
+    forms such as ``не``, ``нельзя`` and ``запрещено``.
+    """
+
+    tokens = set(re.findall(r"[a-zа-яё0-9]+", answer.casefold()))
+    if not tokens:
+        return False
+    negations = {"не", "нельзя", "запрещено", "запрещается"}
+    for phrase in expected_keywords:
+        required = re.findall(r"[a-zа-яё0-9]+", phrase.casefold())
+        for token in required:
+            if token == "не":
+                if not tokens.intersection(negations):
+                    return False
+            elif token not in tokens:
+                return False
+    return True
 
 
 def _bot_goal(bot: str) -> str:
