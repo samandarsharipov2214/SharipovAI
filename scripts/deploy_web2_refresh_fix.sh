@@ -44,7 +44,7 @@ grep -F "/api/market/bybit-websocket/quote/" /app/dashboard/static/web2/tradingv
 grep -F "/api/market/orderbook/" /app/dashboard/static/web2/tradingview_market_v32.js >/dev/null
 grep -F "/api/market/trades/" /app/dashboard/static/web2/tradingview_market_v32.js >/dev/null
 grep -F "/api/virtual-account/state" /app/dashboard/static/web2/tradingview_market_v32.js >/dev/null
-grep -F "--tv32-widget-height" /app/dashboard/static/web2/tradingview_widget_height_fix_v34.css >/dev/null
+grep -F -- "--tv32-widget-height" /app/dashboard/static/web2/tradingview_widget_height_fix_v34.css >/dev/null
 grep -F "tradingview-widget-container__widget>iframe" /app/dashboard/static/web2/tradingview_widget_height_fix_v34.css >/dev/null
 grep -F "frame.style.height = frameHeight" /app/dashboard/static/web2/tradingview_widget_height_fix_v34.js >/dev/null
 grep -F "frame.setAttribute('"'"'height'"'"', String(widgetHeight))" /app/dashboard/static/web2/tradingview_widget_height_fix_v34.js >/dev/null
