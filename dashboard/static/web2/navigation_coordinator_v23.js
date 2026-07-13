@@ -52,41 +52,13 @@
     return document.querySelector('#nav button.active[data-page]')?.dataset.page || 'overview';
   }
 
-  function scriptFromStack(stack) {
-    const value = String(stack || '');
-    for (const filename of new Set(PAGE_OWNERS.values())) {
-      if (value.includes(filename)) return filename;
-    }
-    return '';
+  function ownerFor(page) {
+    return PAGE_OWNERS.get(String(page || '')) || '';
   }
 
-  function writeAllowed(stack) {
-    const activeOwner = PAGE_OWNERS.get(activePage());
-    const callerOwner = scriptFromStack(stack);
-    if (activeOwner) {
-      return callerOwner === activeOwner || String(stack || '').includes('navigation_coordinator_v23.js');
-    }
-    if (callerOwner) return false;
-    return true;
-  }
-
-  function installContentOwnership() {
-    const content = document.getElementById('content');
-    if (!content || content.dataset.navigationOwnership === 'v23') return;
-    const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML');
-    if (!descriptor?.get || !descriptor?.set) return;
-
-    Object.defineProperty(content, 'innerHTML', {
-      configurable: true,
-      enumerable: descriptor.enumerable,
-      get() {
-        return descriptor.get.call(this);
-      },
-      set(value) {
-        if (writeAllowed(new Error().stack || '')) descriptor.set.call(this, value);
-      },
-    });
-    content.dataset.navigationOwnership = 'v23';
+  function canRender(owner, page = activePage()) {
+    const expected = ownerFor(page);
+    return !expected || expected === String(owner || '');
   }
 
   function currentLanguage() {
@@ -141,15 +113,15 @@
   }
 
   function install() {
-    installContentOwnership();
     installLabelGuard();
     installHashNavigation();
   }
 
   window.SharipovAIPageCoordinator = Object.freeze({
     activePage,
-    ownerFor: (page) => PAGE_OWNERS.get(page) || '',
-    writeAllowed,
+    ownerFor,
+    canRender,
+    restoreLabels: restoreLabelsAndAria,
     version: 23,
   });
 
