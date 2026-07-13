@@ -16,6 +16,7 @@ from ai_chat_orchestrator import answer_chat
 from dashboard.demo_api import _load as load_shared_state
 from telegram_deploy_control import (
     cancel_confirmation,
+    claim_owner,
     confirm_deployment,
     deployment_keyboard,
     identity_message,
@@ -159,6 +160,7 @@ def setup_bot_commands() -> None:
         {"command": "deploy", "description": "Обновить SharipovAI"},
         {"command": "deploy_status", "description": "Статус обновления"},
         {"command": "whoami", "description": "Показать Telegram ID"},
+        {"command": "claim_owner", "description": "Активировать телефон владельца"},
     ]
     _telegram("setMyCommands", {"commands": commands})
 
@@ -237,6 +239,9 @@ def handle_message(message: dict[str, Any]) -> None:
         answer = _status()
     elif command == "/whoami":
         answer = identity_message(actor_id, chat_id)
+    elif command == "/claim_owner":
+        code = text.replace("/claim_owner", "", 1).strip()
+        answer, keyboard = claim_owner(int(actor_id or 0), int(chat_id), code)
     elif command == "/deploy":
         answer, keyboard = prepare_confirmation(int(actor_id or 0), int(chat_id))
     elif command == "/deploy_status":
