@@ -72,19 +72,31 @@ def _canonical_state() -> dict[str, Any]:
     }
 
 
+def load_shared_state() -> dict[str, Any]:
+    """Public read-only state accessor shared by Website, Telegram and Mini App."""
+
+    return _canonical_state()
+
+
+def _load() -> dict[str, Any]:
+    """Backward-compatible alias; returns canonical state only."""
+
+    return load_shared_state()
+
+
 def _state_response() -> dict[str, Any]:
     return {
         "status": "ok",
         "deprecated": True,
         "use": _CANONICAL_STATE_ROUTE,
-        "state": _canonical_state(),
+        "state": load_shared_state(),
     }
 
 
 def run_ai_command(message: str) -> dict[str, Any]:
     """Run informational chat against the read-only canonical state."""
 
-    return answer_chat(message, _canonical_state())
+    return answer_chat(message, load_shared_state())
 
 
 def _is_execution_request(message: str) -> bool:
@@ -94,7 +106,7 @@ def _is_execution_request(message: str) -> bool:
 
 
 def _chat(message: str) -> dict[str, Any]:
-    state = _canonical_state()
+    state = load_shared_state()
     if _is_execution_request(message):
         return {
             "status": "blocked",
@@ -192,4 +204,4 @@ def install_demo_api(app: FastAPI) -> None:
         return _blocked_write("reset")
 
 
-__all__ = ["install_demo_api", "run_ai_command"]
+__all__ = ["install_demo_api", "load_shared_state", "run_ai_command"]
