@@ -1,6 +1,8 @@
 name: Audit v2
 
 on:
+  push:
+    branches: [fix/audit-v2]
   pull_request:
     branches: [main]
   workflow_dispatch:
