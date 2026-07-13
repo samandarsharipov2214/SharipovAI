@@ -3,7 +3,6 @@
 This service coordinates agent consensus, reputation, immutable assessment
 records, and post-decision learning. It never executes orders.
 """
-
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
@@ -47,18 +46,27 @@ class DecisionSettlement:
     lessons: tuple[str, ...]
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        """Return a stable JSON-compatible representation.
+
+        Persisted settlements are decoded with lists, so the first and every
+        idempotent replay must expose the same value types.
+        """
+        return {
+            "decision_id": self.decision_id,
+            "selected_action": self.selected_action,
+            "realized_action": self.realized_action,
+            "reputation_recorded": self.reputation_recorded,
+            "winning_agents": list(self.winning_agents),
+            "losing_agents": list(self.losing_agents),
+            "abstaining_agents": list(self.abstaining_agents),
+            "lessons": list(self.lessons),
+        }
 
 
 class DecisionQualityService:
     """Single canonical owner of decision-quality assessment and learning."""
 
-    def __init__(
-        self,
-        database: ProjectDatabase | None = None,
-        *,
-        meta: PersistentMetaAI | None = None,
-    ) -> None:
+    def __init__(self, database: ProjectDatabase | None = None, *, meta: PersistentMetaAI | None = None) -> None:
         self.database = database or ProjectDatabase()
         self.database.initialize()
         self.meta = meta or PersistentMetaAI(self.database)
@@ -76,7 +84,6 @@ class DecisionQualityService:
         min_agreement: float = 0.55,
     ) -> DecisionQualityAssessment:
         """Evaluate and persist one immutable, idempotent council assessment."""
-
         clean_id = _decision_id(decision_id)
         existing = self.get_assessment(clean_id)
         if existing is not None:
@@ -156,7 +163,6 @@ class DecisionQualityService:
         verified_market_data: bool = True,
     ) -> DecisionSettlement:
         """Persist verified realized outcomes and immutable post-decision audit."""
-
         clean_id = _decision_id(decision_id)
         assessment = self.get_assessment(clean_id)
         if assessment is None:
@@ -202,9 +208,7 @@ class DecisionQualityService:
         }
 
 
-def _split_payloads(
-    payloads: Sequence[Mapping[str, Any]],
-) -> tuple[list[Mapping[str, Any]], list[str]]:
+def _split_payloads(payloads: Sequence[Mapping[str, Any]]) -> tuple[list[Mapping[str, Any]], list[str]]:
     eligible: list[Mapping[str, Any]] = []
     rejected: list[str] = []
     for index, payload in enumerate(payloads):
@@ -221,11 +225,7 @@ def _split_payloads(
             )
         )
         synthetic = evidence_class in {
-            "synthetic",
-            "synthetic_simulation",
-            "demo",
-            "fixture",
-            "mock",
+            "synthetic", "synthetic_simulation", "demo", "fixture", "mock",
         }
         if explicit_false or synthetic:
             rejected.append(agent_id)
