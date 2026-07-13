@@ -2,16 +2,18 @@ name: Tests
 
 on:
   push:
-    branches: [main]
+    branches: [main, agent/maximum-velocity-phase1]
     paths:
       - '**/*.py'
       - 'requirements.txt'
+      - 'pyproject.toml'
       - '.github/workflows/tests.yml'
   pull_request:
     branches: [main]
     paths:
       - '**/*.py'
       - 'requirements.txt'
+      - 'pyproject.toml'
       - '.github/workflows/tests.yml'
   workflow_dispatch:
 
@@ -23,7 +25,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  pytest:
+  test:
     if: >-
       ${{
         vars.SHARIPOVAI_SELF_HOSTED_CI == '1' &&
@@ -31,7 +33,7 @@ jobs:
          github.event.pull_request.head.repo.full_name == github.repository)
       }}
     runs-on: [self-hosted, linux, x64, sharipovai-ci]
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       PYTHONUNBUFFERED: '1'
       PYTHONDONTWRITEBYTECODE: '1'
@@ -42,7 +44,14 @@ jobs:
       MARKET_STREAM_ENABLED: '0'
       AUTONOMOUS_PAPER_ENABLED: '0'
       AUTONOMOUS_TESTNET_BRIDGE_ENABLED: '0'
+      TESTNET_EXECUTION_ENABLED: '0'
+      EXCHANGE_LIVE_TRADING_ENABLED: '0'
+      LIVE_EXECUTION_MANUAL_UNLOCK: '0'
+      LIVE_EXECUTION_CONFIRMATION: ''
+      EXECUTION_KILL_SWITCH: '1'
+      EXCHANGE_MODE: sandbox
       AUTONOMOUS_PAPER_STATE_FILE: /tmp/sharipovai-autonomous-paper.json
+      VIRTUAL_ACCOUNT_STATE_FILE: /tmp/sharipovai-virtual-account.json
       MARKET_STREAM_STATE_FILE: /tmp/sharipovai-market-stream.json
       TESTNET_BRIDGE_STATE_FILE: /tmp/sharipovai-testnet-bridge.json
       EXECUTION_JOURNAL_FILE: /tmp/sharipovai-execution-journal.json
@@ -50,6 +59,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -62,29 +73,48 @@ jobs:
           python -m pip install --upgrade pip --quiet
           python -m pip install -r requirements.txt --quiet
 
-      - name: Compile Python sources
+      - name: Compile all Python sources
         run: python -m compileall -q .
 
       - name: Import application safely
-        run: |
-          python -c "import dashboard; assert dashboard.app is not None; print('dashboard import: ok')"
+        run: python -c "import dashboard; assert dashboard.app is not None; print('dashboard import: ok')"
 
-      - name: Verify execution safety defaults
-        env:
-          AUTONOMOUS_TESTNET_ENABLED: '0'
-          TESTNET_EXECUTION_ENABLED: '0'
-          EXCHANGE_LIVE_TRADING_ENABLED: '0'
-          EXECUTION_KILL_SWITCH: '1'
-          EXCHANGE_MODE: sandbox
+      - name: Verify hard execution locks
         run: |
           python - <<'PY'
+          import os
           from exchange_connector.bybit_execution import BybitExecutionClient
+          from exchange_connector.execution_contract import MAINNET_EXECUTION_COMPILED
+
+          assert MAINNET_EXECUTION_COMPILED is False
           status = BybitExecutionClient().status()
           assert status['live_execution_enabled'] is False
+          assert status['mainnet_execution_compiled'] is False
+          assert status['mainnet_hard_blocked'] is True
           assert status['testnet_execution_enabled'] is False
           assert status['kill_switch'] is True
-          print('execution safety gates: ok')
+
+          os.environ['EXCHANGE_MODE'] = 'live'
+          os.environ['EXCHANGE_LIVE_TRADING_ENABLED'] = '1'
+          os.environ['LIVE_EXECUTION_MANUAL_UNLOCK'] = '1'
+          os.environ['LIVE_EXECUTION_CONFIRMATION'] = 'I_ACCEPT_REAL_FINANCIAL_RISK'
+          os.environ['EXECUTION_KILL_SWITCH'] = '0'
+          live_status = BybitExecutionClient().status()
+          assert live_status['live_execution_enabled'] is False
+          assert live_status['mainnet_hard_blocked'] is True
+          print('execution safety gates: hard-locked')
           PY
 
-      - name: Run test suite
-        run: python -m pytest -q --disable-warnings --maxfail=1
+      - name: Run safety regression tests
+        run: |
+          python -m pytest \
+            tests/test_execution_contract.py \
+            tests/test_capital_allocation.py \
+            tests/test_market_paper_engine.py \
+            tests/test_project_change_ledger.py \
+            -q --tb=short
+
+      - name: Run full test suite
+        run: |
+          mkdir -p artifacts
+          python -m pytest -q --tb=short --junitxml=artifacts/pytest.xml
