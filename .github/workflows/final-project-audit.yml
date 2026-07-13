@@ -33,7 +33,7 @@ concurrency:
 jobs:
   static-audit:
     name: Five-phase static audit
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, sharipovai-ci]
     timeout-minutes: 45
     env:
       PYTHONUNBUFFERED: '1'
