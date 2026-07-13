@@ -24,9 +24,41 @@ def install_learning_os_api(app: FastAPI) -> None:
     def memory() -> LearningMemory:
         return LearningMemory(Path(os.getenv("LEARNING_MEMORY_DB", "data/learning_memory.sqlite3")))
 
+    def snapshot() -> dict[str, Any]:
+        return learning_os_snapshot(memory())
+
     @app.get("/api/learning-os/snapshot")
     def learning_os_snapshot_api() -> dict[str, Any]:
-        return learning_os_snapshot(memory())
+        return snapshot()
+
+    @app.get("/api/learning-os/status")
+    def learning_os_status_api() -> dict[str, Any]:
+        """Return the compact, UI-stable Learning OS contract.
+
+        This is an alias over the canonical snapshot, not a synthetic fallback.
+        The normalized ``items`` collection lets every dashboard version consume
+        the same persistent learning memory without guessing nested keys.
+        """
+
+        snap = snapshot()
+        memory_snapshot = snap.get("memory", {}) if isinstance(snap.get("memory"), dict) else {}
+        lessons = memory_snapshot.get("recent_lessons", [])
+        if not isinstance(lessons, list):
+            lessons = []
+        summary = snap.get("summary", {}) if isinstance(snap.get("summary"), dict) else {}
+        return {
+            "status": "ok",
+            "system": snap.get("system", "SharipovAI Learning OS"),
+            "mode": snap.get("mode", "controlled_self_learning"),
+            "source": "learning_memory",
+            "summary": summary,
+            "count": len(lessons),
+            "items": lessons,
+            "lessons": lessons,
+            "bots": snap.get("bots", []),
+            "memory": memory_snapshot,
+            "snapshot": snap,
+        }
 
     @app.post("/api/learning-os/close-gap")
     def close_gap_api() -> dict[str, Any]:
@@ -49,8 +81,7 @@ def install_learning_os_api(app: FastAPI) -> None:
 
     @app.get("/learning-os", response_class=HTMLResponse)
     def learning_os_page() -> HTMLResponse:
-        snap = learning_os_snapshot(memory())
-        return HTMLResponse(_render_learning_os(snap))
+        return HTMLResponse(_render_learning_os(snapshot()))
 
 
 def _render_learning_os(snap: dict[str, Any]) -> str:
