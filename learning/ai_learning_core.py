@@ -6,6 +6,7 @@ but canonical ownership is defined by ai_architecture_registry.py.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from ai_architecture_registry import canonical_id
@@ -78,14 +79,34 @@ def evaluate_exam(bot_name: str, answers: dict[str, str]) -> dict[str, Any]:
     details: list[dict[str, Any]] = []
     for question in questions:
         question_id = question["id"]
-        answer = answers.get(question_id, "").lower()
-        expected_keywords = [keyword.lower() for keyword in question["expected_keywords"]]
-        ok = all(keyword in answer for keyword in expected_keywords)
+        answer = _normalized_text(answers.get(question_id, ""))
+        expected_keywords = [_normalized_text(keyword) for keyword in question["expected_keywords"]]
+        ok = all(_keyword_satisfied(keyword, answer) for keyword in expected_keywords)
         if ok:
             passed += 1
         details.append({"id": question_id, "passed": ok, "expected_keywords": expected_keywords})
     score = round((passed / total) * 100, 2) if total else 0.0
     return {"status": "ok", "bot": _clean_bot_name(bot_name), "canonical_owner": pack["canonical_owner"], "score": score, "passed": passed, "total": total, "details": details}
+
+
+def _normalized_text(value: object) -> str:
+    return " ".join(re.findall(r"[a-zа-яё0-9]+", str(value or "").casefold()))
+
+
+def _keyword_satisfied(keyword: str, answer: str) -> bool:
+    if not keyword:
+        return True
+    if keyword in answer:
+        return True
+    keyword_tokens = keyword.split()
+    answer_tokens = set(answer.split())
+    if keyword_tokens and all(token in answer_tokens for token in keyword_tokens):
+        return True
+    if keyword_tokens and keyword_tokens[0] == "не":
+        concept_tokens = keyword_tokens[1:]
+        negation = bool({"не", "нельзя", "запрещено", "запрещён", "запрещена"} & answer_tokens)
+        return negation and all(token in answer_tokens for token in concept_tokens)
+    return False
 
 
 def _bot_goal(bot: str) -> str:
