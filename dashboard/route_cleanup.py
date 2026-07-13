@@ -10,9 +10,16 @@ def remove_legacy_routes(
     app: FastAPI,
     specifications: Iterable[tuple[str, str]],
     *,
-    owner_module: str = "dashboard.routes",
+    owner_module: str | None = None,
 ) -> int:
-    """Remove exact method/path routes owned by an explicitly legacy module."""
+    """Remove exact method/path routes before a canonical owner is registered.
+
+    Installers call this helper immediately before adding their canonical route,
+    so every exact match present at this point is necessarily an older owner.
+    Matching by method and path is more reliable than ``endpoint.__module__``:
+    FastAPI wrappers and compatibility adapters may preserve a different module
+    name even though they still shadow the canonical endpoint.
+    """
 
     targets = {(method.upper(), path) for method, path in specifications}
     kept = []
@@ -23,7 +30,8 @@ def remove_legacy_routes(
         endpoint = getattr(route, "endpoint", None)
         module_name = str(getattr(endpoint, "__module__", ""))
         matches = any(target_path == path and target_method in methods for target_method, target_path in targets)
-        if matches and module_name == owner_module:
+        owner_matches = owner_module is None or module_name == owner_module or module_name.startswith(f"{owner_module}.")
+        if matches and owner_matches:
             removed += 1
             continue
         kept.append(route)
