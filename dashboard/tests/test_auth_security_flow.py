@@ -42,6 +42,9 @@ def test_login_page_points_to_access_request() -> None:
 def test_register_creates_security_access_request(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AUTH_ACCESS_REQUESTS_FILE", str(tmp_path / "access_requests.json"))
     monkeypatch.setenv("AUTH_SECURITY_EVENTS_FILE", str(tmp_path / "security_events.json"))
+    monkeypatch.setenv("ADMIN_USERNAME", "ci-admin")
+    monkeypatch.setenv("ADMIN_PASSWORD", "ci-admin-password")
+    monkeypatch.setenv("AUTH_SECRET", "ci-auth-secret")
     app = create_app(runner_factory=FakeRunner)
     client = TestClient(app)
 
@@ -56,6 +59,13 @@ def test_register_creates_security_access_request(tmp_path: Path, monkeypatch) -
 
     assert response.status_code == 202
     assert "Запрос доступа отправлен" in response.text
+
+    login = client.post(
+        "/login",
+        data={"username": "ci-admin", "password": "ci-admin-password", "next": "/"},
+        follow_redirects=False,
+    )
+    assert login.status_code == 303
 
     api_response = client.get("/api/security/access-requests")
     assert api_response.status_code == 200
