@@ -1,85 +1,173 @@
 (() => {
   'use strict';
-  const $ = id => document.getElementById(id);
-  const nav = $('nav'), content = $('content'), notice = $('notice'), refresh = $('refresh');
-  const state = { health:null, run:null, account:null, bots:null, news:null, learning:null, evidence:null, virtual:null, report:null };
-  const market = { symbol:'BTCUSDT', interval:'15', candles:[], quote:null, orderbook:null, timer:null };
-  const defaults = { lang:'ru', refreshSeconds:5, compact:false, animations:true, verifiedOnly:false, defaultSymbol:'BTCUSDT', defaultInterval:'15', sound:false, desktopNotifications:false };
-  let settings = {...defaults, ...JSON.parse(localStorage.getItem('sharipovai-settings') || '{}')};
-  let lang = settings.lang;
-  let page = 'overview';
-  if (!nav || !content) return;
 
-  const L = {
-    ru:{nav:['Обзор','Рынок','Решение ИИ','Портфель','Сделки','ИИ-модули','ИИ-чат','Новости','Центр рисков','Bybit','Центр обучения','Главное управление','Хранилище доказательств','Виртуальный счёт','Отчёты','Настройки'],hello:'Привет, Самандар 👋',sub:'SharipovAI — единый центр анализа, управления и контроля',refresh:'Обновить',safe:'Безопасное исполнение',active:'Режим ИИ активен'},
-    en:{nav:['Overview','Market','AI decision','Portfolio','Trades','AI modules','AI chat','News','Risk center','Bybit','Learning center','Main control','Evidence vault','Virtual account','Reports','Settings'],hello:'Hello, Samandar 👋',sub:'SharipovAI — unified analysis, control and monitoring center',refresh:'Refresh',safe:'Safe execution',active:'AI mode active'},
-    uz:{nav:['Umumiy ko‘rinish','Bozor','AI qarori','Portfel','Bitimlar','AI modullari','AI chat','Yangiliklar','Xavf markazi','Bybit','O‘qitish markazi','Bosh boshqaruv','Dalillar ombori','Virtual hisob','Hisobotlar','Sozlamalar'],hello:'Salom, Samandar 👋',sub:'SharipovAI — tahlil, boshqaruv va nazorat markazi',refresh:'Yangilash',safe:'Xavfsiz ijro',active:'AI rejimi faol'}
+  const $ = (id) => document.getElementById(id);
+  const nav = $('nav');
+  const content = $('content');
+  const notice = $('notice');
+  const refresh = $('refresh');
+  if (!nav || !content || !refresh) return;
+
+  const defaults = {
+    lang: 'ru', refreshSeconds: 5, compact: false, animations: true,
+    verifiedOnly: false, defaultSymbol: 'BTCUSDT', defaultInterval: '15',
+    sound: false, desktopNotifications: false,
   };
-  const pages = ['overview','market','decision','portfolio','trades','bots','chat','news','risk','bybit','learning','control','evidence','virtual','reports','settings'];
-  const esc = v => String(v ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const num = v => Number(v||0).toLocaleString(lang==='en'?'en-US':'ru-RU',{maximumFractionDigits:8});
-  const tr = (ru,en,uz) => lang==='en'?en:lang==='uz'?uz:ru;
-  const title = (h,p) => `<div class="title"><h1>${esc(h)}</h1><p>${esc(p)}</p></div>`;
-  const card = (l,v,n,c='') => `<article class="card"><span>${esc(l)}</span><strong class="${c}">${esc(v)}</strong><small>${esc(n)}</small></article>`;
-  const panel = (h,b,c='') => `<article class="panel ${c}"><small>SHARIPOVAI</small><h2>${esc(h)}</h2>${b}</article>`;
-  const empty = t => `<div class="empty">${esc(t)}</div>`;
-  const status = (l,v,ok=true) => `<div><span>${esc(l)}</span><b class="${ok?'positive':'negative'}">${esc(v)}</b></div>`;
-  const saveSettings = () => { localStorage.setItem('sharipovai-settings', JSON.stringify(settings)); };
+  let settings = defaults;
+  try {
+    settings = { ...defaults, ...JSON.parse(localStorage.getItem('sharipovai-settings') || '{}') };
+  } catch {
+    settings = { ...defaults };
+  }
+  let lang = ['ru', 'en', 'uz'].includes(settings.lang) ? settings.lang : 'ru';
+  let page = document.querySelector('#nav button.active[data-page]')?.dataset.page || 'overview';
 
-  function applyLanguage(){
-    const d=L[lang]; document.documentElement.lang=lang;
-    [...nav.querySelectorAll('button[data-page]')].forEach((b,i)=>b.textContent=d.nav[i]);
-    $('helloLabel').textContent=d.hello; $('subtitleLabel').textContent=d.sub; refresh.textContent=d.refresh;
-    $('aiModeLabel').textContent=d.active; if(!$('modeText').dataset.dynamic)$('modeText').textContent=d.safe;
-    document.querySelectorAll('[data-lang]').forEach(b=>b.classList.toggle('active',b.dataset.lang===lang));
-    document.body.classList.toggle('compact', settings.compact);
+  const labels = {
+    ru: {
+      overview: 'Обзор', market: 'Рынок', decision: 'Решение ИИ', portfolio: 'Портфель',
+      trades: 'Сделки', bots: 'Центр ИИ', chat: 'ИИ-чат', news: 'Новости', risk: 'Центр рисков',
+      bybit: 'Bybit', learning: 'Центр обучения', control: 'Главное управление',
+      evidence: 'Хранилище доказательств', virtual: 'Виртуальный счёт', reports: 'Отчёты',
+      settings: 'Настройки', 'system-status': 'Состояние системы', operations: 'Эксплуатация',
+      incidents: 'Центр ошибок',
+    },
+    en: {
+      overview: 'Overview', market: 'Market', decision: 'AI decision', portfolio: 'Portfolio',
+      trades: 'Trades', bots: 'AI center', chat: 'AI chat', news: 'News', risk: 'Risk center',
+      bybit: 'Bybit', learning: 'Learning center', control: 'Main control', evidence: 'Evidence vault',
+      virtual: 'Virtual account', reports: 'Reports', settings: 'Settings',
+      'system-status': 'System status', operations: 'Operations', incidents: 'Incident center',
+    },
+    uz: {
+      overview: 'Umumiy ko‘rinish', market: 'Bozor', decision: 'AI qarori', portfolio: 'Portfel',
+      trades: 'Bitimlar', bots: 'AI markazi', chat: 'AI chat', news: 'Yangiliklar', risk: 'Xavf markazi',
+      bybit: 'Bybit', learning: 'O‘qitish markazi', control: 'Bosh boshqaruv',
+      evidence: 'Dalillar ombori', virtual: 'Virtual hisob', reports: 'Hisobotlar', settings: 'Sozlamalar',
+      'system-status': 'Tizim holati', operations: 'Ekspluatatsiya', incidents: 'Xatolar markazi',
+    },
+  };
+  const text = {
+    ru: { hello: 'Привет, Самандар 👋', sub: 'SharipovAI — единый центр анализа, управления и контроля', refresh: 'Обновить', active: 'Режим ИИ активен', safe: 'Безопасное исполнение' },
+    en: { hello: 'Hello, Samandar 👋', sub: 'SharipovAI — unified analysis, control and monitoring center', refresh: 'Refresh', active: 'AI mode active', safe: 'Safe execution' },
+    uz: { hello: 'Salom, Samandar 👋', sub: 'SharipovAI — tahlil, boshqaruv va nazorat markazi', refresh: 'Yangilash', active: 'AI rejimi faol', safe: 'Xavfsiz ijro' },
+  };
+
+  const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[char]));
+  const tr = (ru, en, uz) => lang === 'en' ? en : lang === 'uz' ? uz : ru;
+
+  function saveSettings() {
+    settings.lang = lang;
+    localStorage.setItem('sharipovai-settings', JSON.stringify(settings));
+  }
+
+  function applyLanguage() {
+    const dictionary = labels[lang];
+    document.documentElement.lang = lang;
+    nav.querySelectorAll('button[data-page]').forEach((button) => {
+      const label = dictionary[button.dataset.page];
+      if (label) button.textContent = label;
+    });
+    const copy = text[lang];
+    if ($('helloLabel')) $('helloLabel').textContent = copy.hello;
+    if ($('subtitleLabel')) $('subtitleLabel').textContent = copy.sub;
+    refresh.textContent = copy.refresh;
+    if ($('aiModeLabel')) $('aiModeLabel').textContent = copy.active;
+    if ($('modeText') && !$('modeText').dataset.dynamic) $('modeText').textContent = copy.safe;
+    document.querySelectorAll('[data-lang]').forEach((button) => button.classList.toggle('active', button.dataset.lang === lang));
+    document.body.classList.toggle('compact', Boolean(settings.compact));
     document.body.classList.toggle('no-animations', !settings.animations);
-    render();
+    if (page === 'chat') renderChat();
   }
 
-  function account(){ const x=state.account?.snapshot||state.account?.account||state.account?.result||state.account||{}; return {equity:x.total_equity??x.totalEquity??x.equity,available:x.total_available_balance??x.totalAvailableBalance??x.available_balance,positions:Array.isArray(x.positions)?x.positions:[],connected:Boolean(state.account&&!state.account.error)}; }
-  function verifiedBots(){ const all=state.bots?.bots||[]; return settings.verifiedOnly ? all.filter(b=>isVerifiedBot(b)) : all; }
-  function isVerifiedBot(b){ return b && b.heartbeat_age_seconds!=null && b.heartbeat_age_seconds<60; }
-  function botState(b){ if(!b)return {label:tr('Нет данных','No data','Ma’lumot yo‘q'),ok:false}; if(isVerifiedBot(b))return {label:tr('Работает','Running','Ishlamoqda'),ok:true}; if(b.status==='error'||b.error)return {label:tr('Ошибка','Error','Xato'),ok:false}; return {label:tr('Не подтверждён','Unverified','Tasdiqlanmagan'),ok:false}; }
-
-  function overview(){ const a=account(); const r=state.run||{}; const bots=state.bots?.bots||[]; const verified=bots.filter(isVerifiedBot).length; return title(tr('Центр управления','Control center','Boshqaruv markazi'),tr('Фактическое состояние системы без выдуманных показателей','Verified system state without invented figures','To‘qima raqamlarsiz tizim holati'))+`<section class="metrics">${card(tr('Общий баланс','Total balance','Umumiy balans'),a.equity!=null?`${num(a.equity)} USDT`:'—',a.connected?'Bybit':'')}${card(tr('Доступно','Available','Mavjud'),a.available!=null?`${num(a.available)} USDT`:'—','')}${card(tr('Открытые позиции','Open positions','Ochiq pozitsiyalar'),a.positions.length,'')}${card(tr('ИИ-модули','AI modules','AI modullari'),`${verified}/${bots.length}`,tr('Подтверждены за последнюю минуту','Verified in the last minute','Oxirgi daqiqada tasdiqlangan'))}${card(tr('Риск','Risk','Xavf'),r.risk_level||'—','')}</section>${panel(tr('Рынок','Market','Bozor'),market.quote?`${card(market.symbol,`${num(market.quote.price)} USDT`,`${market.quote.source} · ${new Date(market.quote.received_at).toLocaleTimeString()}`)}`:empty(tr('Котировка загружается','Quote is loading','Kotirovka yuklanmoqda')),'wide')}`; }
-
-  function marketPage(){ const q=market.quote||{}; const c=market.candles||[]; const latest=c[c.length-1]||{}; return title(tr('Рынок','Market','Bozor'),tr('Реальные свечи и котировки с Bybit','Real candles and quotes from Bybit','Bybit dan haqiqiy shamlar va kotirovkalar'))+`<div class="market-toolbar"><select id="symbolSelect">${['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT'].map(s=>`<option ${s===market.symbol?'selected':''}>${s}</option>`).join('')}</select><div class="intervals">${['1','5','15','60','240','D'].map(i=>`<button data-interval="${i}" class="${i===market.interval?'active':''}">${i==='D'?'1Д':i+'м'}</button>`).join('')}</div><span class="source-badge">Bybit · ${q.received_at?new Date(q.received_at).toLocaleTimeString():'—'}</span></div><section class="metrics">${card(tr('Последняя цена','Last price','Oxirgi narx'),q.price!=null?`${num(q.price)} USDT`:'—',tr('Проверенная котировка','Verified quote','Tasdiqlangan kotirovka'))}${card(tr('Изменение за 24 часа','24h change','24 soatlik o‘zgarish'),q.change_24h_percent!=null?`${num(q.change_24h_percent)}%`:'—','',Number(q.change_24h_percent)>=0?'positive':'negative')}${card(tr('Объём за 24 часа','24h volume','24 soatlik hajm'),q.volume_24h!=null?num(q.volume_24h):'—','USDT')}${card(tr('Последняя свеча','Latest candle','Oxirgi sham'),latest.close!=null?num(latest.close):'—',market.interval)}</section>${panel(tr('Свечной график','Candlestick chart','Shamlar grafigi'),`<div class="chart-wrap"><canvas id="candleChart" height="420"></canvas></div>`,'wide')}<section class="grid">${panel(tr('Объём','Volume','Hajm'),`<canvas id="volumeChart" height="170"></canvas>`,'wide')}${panel(tr('Книга заявок','Order book','Buyurtmalar kitobi'),orderBookHtml())}</section>`; }
-  function orderBookHtml(){ const o=market.orderbook; if(!o)return empty(tr('Загрузка книги заявок','Loading order book','Buyurtmalar kitobi yuklanmoqda')); const rows=[]; (o.asks||[]).slice(0,8).reverse().forEach(x=>rows.push(`<div class="book-row ask"><span>${num(x[0])}</span><span>${num(x[1])}</span></div>`)); (o.bids||[]).slice(0,8).forEach(x=>rows.push(`<div class="book-row bid"><span>${num(x[0])}</span><span>${num(x[1])}</span></div>`)); return `<div class="book-head"><span>${tr('Цена','Price','Narx')}</span><span>${tr('Количество','Amount','Miqdor')}</span></div>${rows.join('')}`; }
-
-  function botsPage(){
-    const all=state.bots?.bots||[], bots=verifiedBots(), verified=all.filter(isVerifiedBot).length, errors=all.filter(b=>b.status==='error'||b.error).length;
-    const activity=all.filter(b=>b.evidence_id&&b.last_action).sort((a,b)=>String(b.last_seen||'').localeCompare(String(a.last_seen||''))).slice(0,20);
-    const cards=bots.length?bots.map((b,i)=>{ const s=botState(b); const heartbeat=b.heartbeat_age_seconds!=null?`${b.heartbeat_age_seconds} сек.`:tr('Нет','None','Yo‘q'); return `<article class="agent-card" data-agent-index="${i}"><div class="agent-head"><div><small>${esc(b.kind||tr('ИИ-модуль','AI module','AI moduli'))}</small><h3>${esc(b.name||tr('ИИ-модуль','AI module','AI moduli'))}</h3></div><span class="agent-state ${s.ok?'ok':'bad'}">${esc(s.label)}</span></div><div class="agent-metrics"><div><span>${tr('Сигнал','Heartbeat','Signal')}</span><b>${esc(heartbeat)}</b></div><div><span>${tr('Качество','Quality','Sifat')}</span><b>${b.metrics_verified&&b.quality_score!=null?esc(b.quality_score)+'%':'—'}</b></div><div><span>${tr('Ошибки','Errors','Xatolar')}</span><b>${b.error_rate!=null?esc(b.error_rate)+'%':'—'}</b></div></div><div class="agent-work"><span>${tr('Последняя подтверждённая работа','Last verified work','Oxirgi tasdiqlangan ish')}</span><p>${b.evidence_id&&b.last_action?esc(b.last_action):tr('Подтверждённой записи нет','No verified record','Tasdiqlangan yozuv yo‘q')}</p></div><details><summary>${tr('Подробнее','Details','Batafsil')}</summary><div class="detail-grid">${status(tr('Отчитывается','Reports to','Hisobot beradi'),b.reports_to||'—',true)}${status(tr('Зона ответственности','Responsibility','Mas’uliyat'),b.responsibility||b.kind||'—',true)}${status(tr('Последний сигнал','Last seen','Oxirgi signal'),b.last_seen||'—',isVerifiedBot(b))}${status(tr('Доказательство','Evidence','Dalil'),b.evidence_id||'—',Boolean(b.evidence_id))}</div></details></article>`; }).join(''):empty(tr('Список модулей не получен','Module list was not received','Modullar ro‘yxati olinmadi'));
-    const feed=activity.length?activity.map(x=>`<div class="activity-item"><span class="activity-dot"></span><div><b>${esc(x.name||'ИИ')}</b><p>${esc(x.last_action)}</p><small>${esc(x.last_seen||'')} · ${esc(x.evidence_id)}</small></div></div>`).join(''):empty(tr('Подтверждённых действий пока нет','No verified actions yet','Tasdiqlangan amallar hali yo‘q'));
-    return title(tr('ИИ-модули и их работа','AI modules and their work','AI modullari va ularning ishi'),tr('Показываются только измеримые статусы, сигналы и доказательства','Only measurable states, heartbeats and evidence are shown','Faqat o‘lchanadigan holatlar, signallar va dalillar ko‘rsatiladi'))+`<section class="metrics">${card(tr('Всего модулей','Total modules','Jami modullar'),all.length,'')}${card(tr('Подтверждены','Verified','Tasdiqlangan'),verified,tr('Сигнал младше 60 секунд','Heartbeat under 60 seconds','Signal 60 soniyadan yangi'),'positive')}${card(tr('Без подтверждения','Unverified','Tasdiqlanmagan'),Math.max(0,all.length-verified-errors),'')}${card(tr('С ошибкой','Errors','Xatolar'),errors,'',errors?'negative':'positive')}</section><div class="agents-toolbar"><label><input id="verifiedOnly" type="checkbox" ${settings.verifiedOnly?'checked':''}> ${tr('Только подтверждённые','Verified only','Faqat tasdiqlangan')}</label><button id="refreshAgents" class="action">${tr('Обновить работу ИИ','Refresh AI work','AI ishini yangilash')}</button></div><section class="agents-layout"><div class="agent-grid">${cards}</div><aside class="activity-feed"><h2>${tr('Журнал работы','Work journal','Ish jurnali')}</h2>${feed}</aside></section>`;
+  function renderChat() {
+    if (page !== 'chat') return;
+    content.innerHTML = `<div class="title"><h1>${esc(tr('ИИ-чат', 'AI chat', 'AI chat'))}</h1><p>${esc(tr('Диалог с SharipovAI', 'Conversation with SharipovAI', 'SharipovAI bilan suhbat'))}</p></div><article class="panel wide"><small>SHARIPOVAI</small><h2>${esc(tr('Ассистент', 'Assistant', 'Yordamchi'))}</h2><div class="chat"><div id="messages" class="messages"><div class="bubble">${esc(tr('Я онлайн. Спроси о рынке, виртуальном счёте или состоянии системы.', 'I am online. Ask about the market, virtual account, or system status.', 'Men onlaynman. Bozor, virtual hisob yoki tizim holati haqida so‘rang.'))}</div></div><form id="chatForm"><input id="msg" autocomplete="off"><button class="action">${esc(tr('Отправить', 'Send', 'Yuborish'))}</button></form></div></article>`;
+    bindChat();
   }
 
-  function settingsPage(){
-    return title(tr('Настройки','Settings','Sozlamalar'),tr('Интерфейс, рынок, обновления и безопасность','Interface, market, refresh and safety','Interfeys, bozor, yangilash va xavfsizlik'))+`<section class="settings-grid">${panel(tr('Язык','Language','Til'),`<div class="segmented"><button data-setting-lang="ru" class="${lang==='ru'?'active':''}">Русский</button><button data-setting-lang="en" class="${lang==='en'?'active':''}">English</button><button data-setting-lang="uz" class="${lang==='uz'?'active':''}">O‘zbek</button></div>`)}${panel(tr('Обновление данных','Data refresh','Ma’lumotni yangilash'),`<label class="setting-row"><span>${tr('Интервал','Interval','Oraliq')}</span><select id="refreshSeconds">${[3,5,10,30,60].map(v=>`<option value="${v}" ${settings.refreshSeconds===v?'selected':''}>${v} ${tr('сек.','sec.','son.')}</option>`).join('')}</select></label><p class="setting-help">${tr('Рынок обновляется автоматически. Слишком частое обновление увеличивает нагрузку.','Market refreshes automatically. Very frequent refresh increases load.','Bozor avtomatik yangilanadi. Juda tez yangilash yuklamani oshiradi.')}</p>`)}${panel(tr('Внешний вид','Appearance','Ko‘rinish'),`<label class="setting-row"><span>${tr('Компактный режим','Compact mode','Ixcham rejim')}</span><input id="compactMode" type="checkbox" ${settings.compact?'checked':''}></label><label class="setting-row"><span>${tr('Анимации','Animations','Animatsiyalar')}</span><input id="animations" type="checkbox" ${settings.animations?'checked':''}></label>`)}${panel(tr('Рынок по умолчанию','Default market','Standart bozor'),`<label class="setting-row"><span>${tr('Пара','Pair','Juftlik')}</span><select id="defaultSymbol">${['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT'].map(v=>`<option ${settings.defaultSymbol===v?'selected':''}>${v}</option>`).join('')}</select></label><label class="setting-row"><span>${tr('Интервал свечей','Candle interval','Sham oralig‘i')}</span><select id="defaultInterval">${['1','5','15','60','240','D'].map(v=>`<option value="${v}" ${settings.defaultInterval===v?'selected':''}>${v==='D'?'1 день':v+' мин.'}</option>`).join('')}</select></label>`)}${panel(tr('ИИ-модули','AI modules','AI modullari'),`<label class="setting-row"><span>${tr('Показывать только подтверждённые','Show verified only','Faqat tasdiqlanganlarni ko‘rsatish')}</span><input id="verifiedOnlySetting" type="checkbox" ${settings.verifiedOnly?'checked':''}></label><p class="setting-help">${tr('Подтверждённым считается модуль, чей последний сигнал получен менее минуты назад.','A module is verified when its heartbeat is less than one minute old.','Modulning so‘nggi signali bir daqiqadan yangi bo‘lsa tasdiqlangan hisoblanadi.')}</p>`)}${panel(tr('Безопасность','Safety','Xavfsizlik'),`<div class="status-list">${status(tr('Вывод средств','Withdrawals','Pul yechish'),tr('Запрещён','Blocked','Taqiqlangan'),true)}${status(tr('Реальные сделки','Live trading','Haqiqiy savdo'),tr('Требуют отдельного разрешения','Require separate permission','Alohida ruxsat talab qiladi'),true)}${status(tr('Секреты API','API secrets','API sirlari'),tr('Скрыты','Hidden','Yashirilgan'),true)}</div>`,'wide')}<article class="panel wide settings-actions"><button id="saveSettings" class="action primary">${tr('Сохранить настройки','Save settings','Sozlamalarni saqlash')}</button><button id="resetSettings" class="action">${tr('Сбросить','Reset','Tiklash')}</button><span id="settingsSaved"></span></article></section>`;
+  function bindChat() {
+    const form = $('chatForm');
+    if (!form) return;
+    form.onsubmit = async (event) => {
+      event.preventDefault();
+      const input = $('msg');
+      const messages = $('messages');
+      const message = String(input?.value || '').trim();
+      if (!message || !messages) return;
+      messages.insertAdjacentHTML('beforeend', `<div class="bubble user">${esc(message)}</div>`);
+      input.value = '';
+      try {
+        const response = await fetch('/api/chat/message', {
+          method: 'POST', credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message }),
+        });
+        if (!response.ok) throw new Error(String(response.status));
+        const payload = await response.json();
+        messages.insertAdjacentHTML('beforeend', `<div class="bubble">${esc(payload.reply || '—')}</div>`);
+      } catch {
+        messages.insertAdjacentHTML('beforeend', `<div class="bubble">${esc(tr('ИИ временно недоступен', 'AI is temporarily unavailable', 'AI vaqtincha mavjud emas'))}</div>`);
+      }
+    };
   }
 
-  function simplePage(key){ const a=account(), r=state.run||{}; if(key==='decision')return title(tr('Решение ИИ','AI decision','AI qarori'),'')+panel(tr('Текущее решение','Current decision','Joriy qaror'),`<div class="status-list">${status(tr('Решение','Decision','Qaror'),r.decision||'—',true)}${status(tr('Уверенность','Confidence','Ishonch'),r.confidence!=null?r.confidence+'%':'—',true)}${status(tr('Риск','Risk','Xavf'),r.risk_level||'—',true)}</div><p>${esc(r.reason||tr('Объяснение пока не получено','No explanation yet','Izoh hali olinmadi'))}</p>`,'wide'); if(key==='portfolio')return title(tr('Портфель','Portfolio','Portfel'),'')+`<section class="metrics">${card(tr('Капитал','Equity','Kapital'),a.equity!=null?num(a.equity)+' USDT':'—','')}${card(tr('Доступно','Available','Mavjud'),a.available!=null?num(a.available)+' USDT':'—','')}${card(tr('Позиции','Positions','Pozitsiyalar'),a.positions.length,'')}</section>`; if(key==='bots')return botsPage(); if(key==='settings')return settingsPage(); if(key==='risk')return title(tr('Центр рисков','Risk center','Xavf markazi'),'')+panel(tr('Проверки','Checks','Tekshiruvlar'),`<div class="status-list">${status(tr('Вывод средств','Withdrawals','Pul yechish'),tr('Запрещён','Blocked','Taqiqlangan'),true)}${status(tr('Лимиты позиции','Position limits','Pozitsiya limitlari'),tr('Активны','Active','Faol'),true)}</div>`,'wide'); if(key==='bybit')return title('Bybit','')+`<section class="metrics">${card(tr('Подключение','Connection','Ulanish'),a.connected?tr('Подключён','Connected','Ulangan'):tr('Не подключён','Not connected','Ulanmagan'),'',a.connected?'positive':'negative')}${card(tr('Капитал','Equity','Kapital'),a.equity!=null?num(a.equity)+' USDT':'—','')}</section>`; if(key==='chat')return title(tr('ИИ-чат','AI chat','AI chat'),'')+panel('SharipovAI',`<div class="chat"><div id="messages" class="messages"><div class="bubble">${tr('Я онлайн. Спроси о рынке или портфеле.','I am online. Ask about the market or portfolio.','Men onlaynman. Bozor yoki portfel haqida so‘rang.')}</div></div><form id="chatForm"><input id="msg"><button class="action">${tr('Отправить','Send','Yuborish')}</button></form></div>`,'wide'); const names={trades:tr('Сделки','Trades','Bitimlar'),news:tr('Новости','News','Yangiliklar'),learning:tr('Центр обучения','Learning center','O‘qitish markazi'),control:tr('Главное управление','Main control','Bosh boshqaruv'),evidence:tr('Хранилище доказательств','Evidence vault','Dalillar ombori'),virtual:tr('Виртуальный счёт','Virtual account','Virtual hisob'),reports:tr('Отчёты','Reports','Hisobotlar')}; return title(names[key]||'',tr('Раздел использует только подтверждённые данные','This section uses verified data only','Bu bo‘lim faqat tasdiqlangan ma’lumotlardan foydalanadi'))+panel(names[key]||'',empty(tr('Данные пока не получены','No data received yet','Ma’lumot hali olinmadi')),'wide'); }
+  async function get(url) {
+    const response = await fetch(url, { credentials: 'same-origin', cache: 'no-store' });
+    if (!response.ok) throw new Error(`${url}: ${response.status}`);
+    return response.json();
+  }
 
-  function render(){ content.innerHTML=page==='market'?marketPage():page==='overview'?overview():simplePage(page); if(page==='market'){bindMarketControls();requestAnimationFrame(drawCharts);} if(page==='chat')bindChat(); if(page==='bots')bindBots(); if(page==='settings')bindSettings(); }
-  function bindBots(){ const v=$('verifiedOnly'); if(v)v.onchange=()=>{settings.verifiedOnly=v.checked;saveSettings();render();}; const r=$('refreshAgents'); if(r)r.onclick=()=>loadBase(); }
-  function bindSettings(){ document.querySelectorAll('[data-setting-lang]').forEach(b=>b.onclick=()=>{lang=b.dataset.settingLang;settings.lang=lang;saveSettings();applyLanguage();}); const save=$('saveSettings'); if(save)save.onclick=()=>{settings.refreshSeconds=Number($('refreshSeconds').value);settings.compact=$('compactMode').checked;settings.animations=$('animations').checked;settings.defaultSymbol=$('defaultSymbol').value;settings.defaultInterval=$('defaultInterval').value;settings.verifiedOnly=$('verifiedOnlySetting').checked;market.symbol=settings.defaultSymbol;market.interval=settings.defaultInterval;saveSettings();restartMarketTimer();applyLanguage();const m=$('settingsSaved');if(m)m.textContent=tr('Сохранено','Saved','Saqlandi');}; const reset=$('resetSettings'); if(reset)reset.onclick=()=>{settings={...defaults};lang=settings.lang;market.symbol=settings.defaultSymbol;market.interval=settings.defaultInterval;saveSettings();restartMarketTimer();applyLanguage();}; }
-  function bindMarketControls(){ const s=$('symbolSelect'); if(s)s.onchange=()=>{market.symbol=s.value;loadMarket(true)}; document.querySelectorAll('[data-interval]').forEach(b=>b.onclick=()=>{market.interval=b.dataset.interval;loadMarket(true)}); }
-  function bindChat(){ const f=$('chatForm'); if(!f)return; f.onsubmit=async e=>{e.preventDefault();const i=$('msg'),m=$('messages'),t=i.value.trim();if(!t)return;m.insertAdjacentHTML('beforeend',`<div class="bubble user">${esc(t)}</div>`);i.value='';try{const r=await fetch('/api/chat/message',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:t})});const j=await r.json();m.insertAdjacentHTML('beforeend',`<div class="bubble">${esc(j.reply||'—')}</div>`)}catch{m.insertAdjacentHTML('beforeend',`<div class="bubble">${tr('ИИ временно недоступен','AI is temporarily unavailable','AI vaqtincha mavjud emas')}</div>`)}}; }
+  async function loadHeaderStatus() {
+    const endpoints = [
+      '/api/health', '/api/run', '/api/exchange/account/snapshot', '/api/ai-bots',
+      '/api/social-news', '/api/learning-os/status', '/api/evidence-vault/recent',
+      '/api/virtual-account/state', '/api/ai-control-center/daily-report',
+    ];
+    const results = await Promise.allSettled(endpoints.map(get));
+    const ok = results.filter((result) => result.status === 'fulfilled').length;
+    if ($('systemLabel')) {
+      $('systemLabel').textContent = ok
+        ? tr(`Система работает · ${ok}/${endpoints.length} API`, `System online · ${ok}/${endpoints.length} APIs`, `Tizim ishlamoqda · ${ok}/${endpoints.length} API`)
+        : tr('API недоступен', 'API unavailable', 'API mavjud emas');
+    }
+    if (notice) {
+      if (ok < endpoints.length) {
+        notice.textContent = tr(`Часть источников недоступна (${ok}/${endpoints.length}).`, `Some sources are unavailable (${ok}/${endpoints.length}).`, `Ayrim manbalar mavjud emas (${ok}/${endpoints.length}).`);
+        notice.classList.remove('hidden');
+      } else {
+        notice.classList.add('hidden');
+      }
+    }
+  }
 
-  function drawCharts(){ drawCandleCanvas($('candleChart'),market.candles); drawVolumeCanvas($('volumeChart'),market.candles); }
-  function prepCanvas(canvas){ if(!canvas)return null; const dpr=window.devicePixelRatio||1,w=canvas.clientWidth||900,h=Number(canvas.getAttribute('height'))||400; canvas.width=w*dpr;canvas.height=h*dpr;const ctx=canvas.getContext('2d');ctx.scale(dpr,dpr);return {ctx,w,h}; }
-  function drawCandleCanvas(canvas,data){ const p=prepCanvas(canvas); if(!p)return; const {ctx,w,h}=p;ctx.clearRect(0,0,w,h);if(!data.length){ctx.fillStyle='#7f93a8';ctx.fillText(tr('Нет свечей','No candles','Shamlar yo‘q'),20,30);return;} const pad={l:16,r:72,t:20,b:28},plotW=w-pad.l-pad.r,plotH=h-pad.t-pad.b,lo=Math.min(...data.map(x=>x.low)),hi=Math.max(...data.map(x=>x.high)),range=hi-lo||1,y=v=>pad.t+(hi-v)/range*plotH;ctx.strokeStyle='#173957';for(let i=0;i<5;i++){const yy=pad.t+i*plotH/4;ctx.beginPath();ctx.moveTo(pad.l,yy);ctx.lineTo(w-pad.r,yy);ctx.stroke();ctx.fillStyle='#7f93a8';ctx.font='11px sans-serif';ctx.fillText(num(hi-i*range/4),w-pad.r+6,yy+4);} const step=plotW/data.length,body=Math.max(2,step*.62);data.forEach((c,i)=>{const x=pad.l+i*step+step/2,color=c.close>=c.open?'#3be08f':'#ff6f7d';ctx.strokeStyle=color;ctx.fillStyle=color;ctx.beginPath();ctx.moveTo(x,y(c.high));ctx.lineTo(x,y(c.low));ctx.stroke();const top=Math.min(y(c.open),y(c.close)),bh=Math.max(1,Math.abs(y(c.open)-y(c.close)));ctx.fillRect(x-body/2,top,body,bh);}); }
-  function drawVolumeCanvas(canvas,data){ const p=prepCanvas(canvas); if(!p)return;const {ctx,w,h}=p;ctx.clearRect(0,0,w,h);if(!data.length)return;const max=Math.max(...data.map(x=>x.volume))||1,step=w/data.length,bw=Math.max(2,step*.65);data.forEach((c,i)=>{ctx.fillStyle=c.close>=c.open?'#3be08f88':'#ff6f7d88';const bh=(c.volume/max)*(h-20);ctx.fillRect(i*step+(step-bw)/2,h-bh,bw,bh);}); }
-  async function get(url){ const r=await fetch(url,{credentials:'same-origin',cache:'no-store'});if(!r.ok)throw new Error(`${url}: ${r.status}`);return r.json(); }
-  async function loadMarket(force=false){ if(force){market.candles=[];render();} const [q,c,o]=await Promise.allSettled([get(`/api/market/quote/${market.symbol}`),get(`/api/market/candles/${market.symbol}?interval=${market.interval}&limit=180&category=spot`),get(`/api/market/orderbook/${market.symbol}?limit=25&category=spot`)]);if(q.status==='fulfilled')market.quote=q.value;if(c.status==='fulfilled')market.candles=c.value.candles||[];if(o.status==='fulfilled')market.orderbook=o.value;if(page==='market'||page==='overview')render(); }
-  async function loadBase(){ if(notice)notice.classList.add('hidden'); const endpoints={health:'/api/health',run:'/api/run',account:'/api/exchange/account/snapshot',bots:'/api/ai-bots',news:'/api/social-news',learning:'/api/learning-os/status',evidence:'/api/evidence-vault/recent',virtual:'/api/virtual-account/state',report:'/api/ai-control-center/daily-report'};const entries=Object.entries(endpoints),rs=await Promise.allSettled(entries.map(([,u])=>get(u)));rs.forEach((r,i)=>{if(r.status==='fulfilled')state[entries[i][0]]=r.value});const ok=rs.filter(x=>x.status==='fulfilled').length;$('systemLabel').textContent=ok?tr(`Система работает · ${ok}/${entries.length} API`,`System online · ${ok}/${entries.length} APIs`,`Tizim ishlamoqda · ${ok}/${entries.length} API`):tr('API недоступен','API unavailable','API mavjud emas');if(ok<entries.length&&notice){notice.textContent=tr(`Часть источников недоступна (${ok}/${entries.length}).`,`Some sources are unavailable (${ok}/${entries.length}).`,`Ayrim manbalar mavjud emas (${ok}/${entries.length}).`);notice.classList.remove('hidden');}render(); }
-  function restartMarketTimer(){ clearInterval(market.timer);market.timer=setInterval(()=>loadMarket(false),Math.max(3,settings.refreshSeconds)*1000); }
+  nav.addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-page]');
+    if (!button) return;
+    nav.querySelectorAll('button[data-page]').forEach((item) => item.classList.remove('active'));
+    button.classList.add('active');
+    page = button.dataset.page;
+    if (page === 'chat') renderChat();
+  });
 
-  nav.querySelectorAll('button[data-page]').forEach((b,i)=>{b.dataset.page=pages[i];b.onclick=()=>{nav.querySelectorAll('button').forEach(x=>x.classList.remove('active'));b.classList.add('active');page=b.dataset.page;render();};});
-  document.querySelectorAll('[data-lang]').forEach(b=>b.onclick=()=>{lang=b.dataset.lang;settings.lang=lang;saveSettings();applyLanguage();});
-  refresh.onclick=()=>{loadBase();loadMarket(true)};
-  window.addEventListener('resize',()=>{if(page==='market')drawCharts()});
-  market.symbol=settings.defaultSymbol;market.interval=settings.defaultInterval;
-  applyLanguage();loadBase();loadMarket();restartMarketTimer();
+  document.querySelectorAll('[data-lang]').forEach((button) => {
+    button.addEventListener('click', () => {
+      lang = ['ru', 'en', 'uz'].includes(button.dataset.lang) ? button.dataset.lang : 'ru';
+      saveSettings();
+      applyLanguage();
+    });
+  });
+
+  refresh.addEventListener('click', () => { loadHeaderStatus().catch(() => {}); });
+  window.addEventListener('storage', (event) => {
+    if (event.key !== 'sharipovai-settings') return;
+    try { settings = { ...defaults, ...JSON.parse(event.newValue || '{}') }; } catch { settings = { ...defaults }; }
+    lang = ['ru', 'en', 'uz'].includes(settings.lang) ? settings.lang : 'ru';
+    applyLanguage();
+  });
+
+  applyLanguage();
+  loadHeaderStatus().catch(() => {});
+  setInterval(() => { loadHeaderStatus().catch(() => {}); }, 30000);
 })();
