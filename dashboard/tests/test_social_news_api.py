@@ -101,12 +101,12 @@ def test_social_news_rss_refresh_api(monkeypatch, tmp_path: Path) -> None:
         return SimpleNamespace(
             bozo=False,
             entries=[
-                SimpleNamespace(
-                    title="BTC ETF inflow update",
-                    summary="Bitcoin market inflow summary",
-                    link="https://example.com/btc",
-                    published_parsed=(2026, 1, 2, 3, 4, 5, 0, 0, 0),
-                )
+                {
+                    "title": "BTC ETF inflow update",
+                    "summary": "Bitcoin market inflow summary",
+                    "link": "https://example.com/btc",
+                    "published_parsed": (2026, 1, 2, 3, 4, 5, 0, 0, 0),
+                }
             ],
         )
 
@@ -128,9 +128,12 @@ def test_social_news_telegram_status_when_not_configured(monkeypatch, tmp_path: 
         monkeypatch.delenv(name, raising=False)
     payload = TestClient(create_app()).get("/api/social-news/telegram/status").json()
     assert payload["status"] == "ok"
-    assert payload["telegram_client"]["configured"] is False
-    assert "TELEGRAM_SESSION_STRING" in payload["telegram_client"]["missing"]
-    assert "api_hash" not in str(payload).lower()
+    telegram = payload["telegram_client"]
+    assert telegram["configured"] is False
+    missing = set(telegram["missing"])
+    assert {"TELEGRAM_API_HASH", "TELEGRAM_SESSION_STRING"} <= missing
+    assert "api_hash" not in telegram
+    assert "session_string" not in telegram
 
 
 def test_social_news_telegram_refresh_disabled_when_not_configured(monkeypatch, tmp_path: Path) -> None:
