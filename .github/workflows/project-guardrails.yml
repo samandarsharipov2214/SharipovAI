@@ -86,8 +86,7 @@ jobs:
         run: python -m compileall -q .
 
       - name: Import application safely
-        run: |
-          python -c "import dashboard; assert dashboard.app is not None; print('dashboard import: ok')"
+        run: python -c "import dashboard; assert dashboard.app is not None; print('dashboard import: ok')"
 
       - name: Verify execution remains locked
         run: |
@@ -103,4 +102,16 @@ jobs:
       - name: Run fail-closed release audit
         env:
           SHARIPOVAI_DISABLE_AUTH: '0'
-        run: python scripts/release_audit.py --runtime --json
+        shell: bash
+        run: |
+          set -o pipefail
+          python scripts/release_audit.py --runtime --json 2>&1 | tee release-audit.json
+
+      - name: Upload release audit evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-audit-evidence
+          path: release-audit.json
+          if-no-files-found: error
+          retention-days: 30
