@@ -5,42 +5,62 @@ ROOT="/opt/sharipovai-repo"
 DEPLOY="$ROOT/deploy/vps"
 SERVICE="sharipovai"
 ACTIVE_IMAGE_REF="vps-sharipovai:latest"
-ROLLBACK_TAG="sharipovai-market-paper-rollback:latest"
+PUBLIC_HEALTH="http://127.0.0.1:8000/health"
+
 production_replaced=0
-rollback_ready=0
-running_service_present=0
+backup_container=""
+old_network=""
+data_volume=""
+runtime_override=""
+runtime_project="sharipovai-runtime-$(date +%s)-$$"
 
 cd "$DEPLOY"
 
 if docker container inspect "$SERVICE" >/dev/null 2>&1; then
-  running_service_present=1
-  old_image_id="$(docker inspect -f '{{.Image}}' "$SERVICE" 2>/dev/null || true)"
-  if [[ -n "$old_image_id" ]] && docker image inspect "$old_image_id" >/dev/null 2>&1; then
-    docker tag "$old_image_id" "$ROLLBACK_TAG"
-  else
-    echo "Running image metadata is missing; creating a rollback snapshot from the live SharipovAI container."
-    docker commit --pause=false "$SERVICE" "$ROLLBACK_TAG" >/dev/null
-  fi
-  if docker image inspect "$ROLLBACK_TAG" >/dev/null 2>&1; then
-    rollback_ready=1
-  else
-    echo "Unable to create a rollback image; production was not touched." >&2
-    exit 1
-  fi
+  old_network="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "$SERVICE" | head -n 1 | tr -d '[:space:]')"
+  data_volume="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/var/lib/sharipovai"}}{{.Name}}{{end}}{{end}}' "$SERVICE" | tr -d '[:space:]')"
 fi
+old_network="${old_network:-vps_default}"
+data_volume="${data_volume:-vps_sharipovai_data}"
+
+cleanup() {
+  if [[ -n "$runtime_override" ]]; then
+    rm -f "$runtime_override"
+  fi
+}
+trap cleanup EXIT
 
 rollback() {
   if [[ "$production_replaced" != "1" ]]; then
     echo "Candidate verification failed before production replacement; running service was not touched."
     return 0
   fi
-  if [[ "$rollback_ready" == "1" ]] && docker image inspect "$ROLLBACK_TAG" >/dev/null 2>&1; then
-    echo "New runtime verification failed; restoring previous SharipovAI image."
-    docker tag "$ROLLBACK_TAG" "$ACTIVE_IMAGE_REF"
-    docker compose up -d --no-deps --force-recreate "$SERVICE"
-  else
-    echo "Rollback image is unavailable; current container state was left unchanged for inspection." >&2
+
+  echo "New runtime verification failed; restoring the previous SharipovAI container."
+  if docker container inspect "$SERVICE" >/dev/null 2>&1; then
+    docker rm -f "$SERVICE" >/dev/null 2>&1 || true
   fi
+
+  if [[ -n "$backup_container" ]] && docker container inspect "$backup_container" >/dev/null 2>&1; then
+    docker rename "$backup_container" "$SERVICE"
+    if ! docker inspect -f '{{json .NetworkSettings.Networks}}' "$SERVICE" | grep -Fq "\"$old_network\""; then
+      docker network connect --alias "$SERVICE" "$old_network" "$SERVICE"
+    fi
+    docker start "$SERVICE" >/dev/null
+    for _ in $(seq 1 45); do
+      if curl --fail --silent "$PUBLIC_HEALTH" >/dev/null 2>&1; then
+        echo "Previous SharipovAI container restored and healthy."
+        return 0
+      fi
+      sleep 2
+    done
+    echo "Previous container was restored but did not pass /health within 90 seconds." >&2
+    docker logs --tail 160 "$SERVICE" 2>/dev/null || true
+    return 1
+  fi
+
+  echo "No previous container snapshot is available for rollback." >&2
+  return 1
 }
 
 on_error() {
@@ -52,6 +72,7 @@ trap on_error ERR
 
 echo "[1/5] Building candidate image..."
 docker compose build "$SERVICE"
+docker image inspect "$ACTIVE_IMAGE_REF" >/dev/null
 
 echo "[2/5] Running focused tests and importing the complete FastAPI graph..."
 docker compose run --rm --no-deps \
@@ -112,12 +133,12 @@ cd /app
 log=/tmp/sharipovai-candidate.log
 uvicorn dashboard.app:app --host 127.0.0.1 --port 8000 >"$log" 2>&1 &
 pid=$!
-cleanup() {
+cleanup_candidate() {
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
 }
-trap cleanup EXIT
-for i in $(seq 1 60); do
+trap cleanup_candidate EXIT
+for _ in $(seq 1 60); do
   if curl --fail --silent --show-error http://127.0.0.1:8000/health >/tmp/health.json 2>/tmp/curl.err; then
     echo "CANDIDATE_HEALTH_OK"
     cat /tmp/health.json
@@ -137,24 +158,56 @@ cat "$log"
 exit 1
 '
 
-echo "[4/5] Replacing production SharipovAI only after candidate verification..."
+runtime_override="$(mktemp /tmp/sharipovai-runtime-XXXXXX.yml)"
+cat >"$runtime_override" <<YAML
+services:
+  sharipovai:
+    image: ${ACTIVE_IMAGE_REF}
+volumes:
+  sharipovai_data:
+    external: true
+    name: ${data_volume}
+networks:
+  default:
+    external: true
+    name: ${old_network}
+YAML
+
+docker compose -p "$runtime_project" \
+  -f "$DEPLOY/docker-compose.yml" \
+  -f "$runtime_override" \
+  config --quiet
+
+echo "[4/5] Replacing production while retaining the previous container for rollback..."
+if docker container inspect "$SERVICE" >/dev/null 2>&1; then
+  backup_container="${SERVICE}-rollback-$(date +%s)-$$"
+  docker stop "$SERVICE" >/dev/null
+  docker rename "$SERVICE" "$backup_container"
+  docker network disconnect "$old_network" "$backup_container" >/dev/null 2>&1 || true
+fi
 production_replaced=1
-docker compose up -d --no-deps --force-recreate "$SERVICE"
+
+docker compose -p "$runtime_project" \
+  -f "$DEPLOY/docker-compose.yml" \
+  -f "$runtime_override" \
+  up -d --no-deps --no-build "$SERVICE"
 
 health="starting"
 for _ in $(seq 1 90); do
-  health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$SERVICE" 2>/dev/null || true)"
-  if [[ "$health" == "healthy" ]]; then
+  container_state="$(docker inspect -f '{{.State.Status}}' "$SERVICE" 2>/dev/null || true)"
+  if [[ "$container_state" == "running" ]] && curl --fail --silent "$PUBLIC_HEALTH" >/tmp/production-health.json 2>/dev/null; then
+    health="healthy"
     break
   fi
-  if [[ "$health" == "unhealthy" || "$health" == "exited" || "$health" == "dead" ]]; then
+  if [[ "$container_state" == "exited" || "$container_state" == "dead" ]]; then
+    health="$container_state"
     break
   fi
   sleep 2
 done
 
 if [[ "$health" != "healthy" ]]; then
-  echo "SharipovAI health check failed after 180s: $health" >&2
+  echo "SharipovAI production health check failed after 180s: $health" >&2
   docker inspect "$SERVICE" --format '{{json .State}}' 2>/dev/null || true
   docker logs --tail 160 "$SERVICE" 2>/dev/null || true
   rollback || true
@@ -165,6 +218,11 @@ fi
 echo "[5/5] Verifying the running market-backed virtual account..."
 docker exec -e PYTHONPATH=/app "$SERVICE" python /app/scripts/verify_market_paper_runtime.py
 
+if [[ -n "$backup_container" ]] && docker container inspect "$backup_container" >/dev/null 2>&1; then
+  docker rm "$backup_container" >/dev/null
+fi
+
+production_replaced=0
 trap - ERR
 echo "Market-backed virtual account deployed and verified."
 echo "Real exchange orders remain blocked."
