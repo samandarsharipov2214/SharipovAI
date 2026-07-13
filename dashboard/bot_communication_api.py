@@ -93,16 +93,42 @@ def install_bot_communication_api(app: FastAPI) -> None:
         if not text:
             return {"status": "empty_message", "reply": "Напиши вопрос AI-боту."}
 
+        bus = network()
+        question_sender = "security_guard" if requested_bot == "general_controller" else "general_controller"
+        message = bus.send_message(
+            sender=question_sender,
+            recipient=requested_bot,
+            message_type="question",
+            topic="unified_chat",
+            payload={"question": text, "channel": "dashboard"},
+            priority="normal",
+        )
+        if message.get("status") != "ok":
+            return {"status": "error", "bot": requested_bot, "message": message, "reply": "Вопрос не сохранён."}
+
         # Prefixing guarantees the same agent routing in web, Mini App and Telegram.
         routed_text = f"{requested_bot}: {text}"
-        answer = answer_chat(routed_text, state)
+        result = answer_chat(routed_text, state)
+        answer = bus.reply(
+            original_message_id=str(message["message_id"]),
+            sender=requested_bot,
+            message_type="answer",
+            payload={
+                "reply": str(result.get("reply", "Ответ не сформирован.")),
+                "source_ai": str(result.get("source_ai", requested_bot)),
+                "intent": str(result.get("intent", "agent_chat")),
+                "data": result.get("data", {}) if isinstance(result.get("data", {}), dict) else {},
+            },
+        )
         return {
-            "status": answer.get("status", "ok"),
+            "status": "ok" if answer.get("status") == "ok" else "error",
             "bot": requested_bot,
-            "reply": answer.get("reply", "Ответ не сформирован."),
-            "source_ai": answer.get("source_ai", requested_bot),
-            "intent": answer.get("intent", "agent_chat"),
-            "data": answer.get("data", {}),
+            "reply": result.get("reply", "Ответ не сформирован."),
+            "source_ai": result.get("source_ai", requested_bot),
+            "intent": result.get("intent", "agent_chat"),
+            "data": result.get("data", {}),
+            "message": message,
+            "answer": answer,
         }
 
     @app.get("/api/bot-network/inbox/{bot_name}")
@@ -122,8 +148,8 @@ def install_bot_communication_api(app: FastAPI) -> None:
     @app.get("/api/bot-network/agent/{bot_name}/timeline")
     def timeline_api(bot_name: str) -> dict[str, Any]:
         bot = _chat_bot(bot_name)
-        answer = answer_chat(f"{bot} покажи журнал действий", {})
-        return {"status": answer.get("status", "ok"), "bot": bot, "reply": answer.get("reply", ""), "messages": answer.get("data", {}).get("messages", [])}
+        result = answer_chat(f"{bot} покажи журнал действий", {})
+        return {"status": result.get("status", "ok"), "bot": bot, "reply": result.get("reply", ""), "messages": result.get("data", {}).get("messages", [])}
 
     @app.post("/api/bot-network/agent/{bot_name}/self-check")
     def self_check_api(bot_name: str) -> dict[str, Any]:
@@ -155,7 +181,7 @@ def _chat_bot(value: str) -> str:
 
 def _render_bot_network(health: dict[str, Any]) -> str:
     rows = "".join(_bot_row(bot, responsibility) for bot, responsibility in health.get("responsibilities", {}).items())
-    return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SharipovAI · Agent Control</title><style>{_css()}</style></head><body><main><section class="card"><span class="ok">AGENT CONTROL</span><h1>Связь и контроль AI-ботов</h1><p>Одинаковая логика чата для сайта, Mini App и Telegram: отдельные диалоги, журнал, self-check, pause и Learning.</p><p><a href="/">Главная</a> · <a href="/api/bot-network/health">JSON health</a> · <a href="/api/bot-network/matrix">JSON matrix</a></p></section><section class="card"><div class="grid"><div class="stat"><small>Ботов</small><b>{health.get('bot_count', 0)}</b></div><div class="stat"><small>Messages</small><b>{health.get('message_count', 0)}</b></div><div class="stat"><small>Unread</small><b>{health.get('unread_count', 0)}</b></div><div class="stat"><small>Threads</small><b>{health.get('thread_count', 0)}</b></div></div></section><section class="card"><h2>Боты и роли</h2><table><tbody>{rows}</tbody></table></section></main></body></html>"""
+    return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SharipovAI · Agent Control</title><style>{_css()}</style></head><body><main><section class="card"><span class="ok">AGENT CONTROL</span><h1>Связь AI-ботов и контроль</h1><p>Одинаковая логика чата для сайта, Mini App и Telegram: отдельные диалоги, журнал, self-check, pause и Learning.</p><p><a href="/">Главная</a> · <a href="/api/bot-network/health">JSON health</a> · <a href="/api/bot-network/matrix">JSON matrix</a></p></section><section class="card"><div class="grid"><div class="stat"><small>Ботов</small><b>{health.get('bot_count', 0)}</b></div><div class="stat"><small>Messages</small><b>{health.get('message_count', 0)}</b></div><div class="stat"><small>Unread</small><b>{health.get('unread_count', 0)}</b></div><div class="stat"><small>Threads</small><b>{health.get('thread_count', 0)}</b></div></div></section><section class="card"><h2>Боты и роли</h2><table><tbody>{rows}</tbody></table></section></main></body></html>"""
 
 
 def _bot_row(bot: str, responsibility: str) -> str:
