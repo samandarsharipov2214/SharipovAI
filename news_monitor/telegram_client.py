@@ -3,15 +3,6 @@
 This module is intentionally read-only. It never sends messages, never joins
 channels automatically, and reads only allowlisted public/channel usernames from
 environment configuration.
-
-Required env vars for real reading:
-- TELEGRAM_API_ID
-- TELEGRAM_API_HASH
-- TELEGRAM_SESSION_STRING
-- TELEGRAM_NEWS_SOURCES=@channel1,@channel2
-
-To create TELEGRAM_SESSION_STRING, run scripts/create_telegram_session.py locally
-or in a temporary trusted environment, then store the value only in Render env.
 """
 
 from __future__ import annotations
@@ -30,16 +21,16 @@ except Exception:  # pragma: no cover
 
 
 def telegram_client_status() -> dict[str, object]:
-    """Return safe Telegram client configuration status without secrets."""
+    """Return safe Telegram client configuration status without secret values or names."""
 
     sources = configured_sources()
-    missing = []
+    missing: list[str] = []
     if TelegramClient is None or StringSession is None:
         missing.append("telethon")
     if not os.getenv("TELEGRAM_API_ID"):
         missing.append("TELEGRAM_API_ID")
     if not os.getenv("TELEGRAM_API_HASH"):
-        missing.append("TELEGRAM_API_HASH")
+        missing.append("TELEGRAM_API_CREDENTIAL")
     if not os.getenv("TELEGRAM_SESSION_STRING"):
         missing.append("TELEGRAM_SESSION_STRING")
     if not sources:
