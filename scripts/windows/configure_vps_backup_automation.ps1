@@ -10,6 +10,47 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 Set-Location $ProjectRoot
 
+function Invoke-NativeCapture {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [Parameter(Mandatory = $true)][string[]]$Arguments
+    )
+
+    $previousPreference = $ErrorActionPreference
+    $output = @()
+    $exitCode = 1
+    try {
+        $ErrorActionPreference = "SilentlyContinue"
+        $output = & $FilePath @Arguments 2>$null
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+
+    [pscustomobject]@{
+        ExitCode = $exitCode
+        Output = ((@($output) -join "`n").Trim())
+    }
+}
+
+function Invoke-NativeInteractive {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [Parameter(Mandatory = $true)][string[]]$Arguments
+    )
+
+    $previousPreference = $ErrorActionPreference
+    $exitCode = 1
+    try {
+        $ErrorActionPreference = "Continue"
+        & $FilePath @Arguments | Out-Host
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    return $exitCode
+}
+
 if ($VpsHost -notmatch '^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$') { throw "VPS host is invalid." }
 if ($VpsUser -notmatch '^[A-Za-z_][A-Za-z0-9_-]{0,31}$') { throw "VPS user is invalid." }
 if ($IntervalMinutes -lt 15) { throw "IntervalMinutes must be at least 15." }
@@ -35,31 +76,29 @@ if (-not (Test-Path $keyPath -PathType Leaf)) {
 
 $publicKeyOutput = & $keygen.Source -y -f $keyPath
 $keygenExitCode = $LASTEXITCODE
-$publicKeyBase = if ($null -eq $publicKeyOutput) { "" } else { ((@($publicKeyOutput) -join "").Trim()) }
-if ($keygenExitCode -ne 0 -or $publicKeyBase -notmatch '^ssh-ed25519 [A-Za-z0-9+/=]+$') {
+$publicKeyRaw = if ($null -eq $publicKeyOutput) { "" } else { ((@($publicKeyOutput) -join " ").Trim()) }
+if ($keygenExitCode -ne 0 -or $publicKeyRaw -notmatch '^(ssh-ed25519)\s+([A-Za-z0-9+/=]+)(?:\s+.*)?$') {
     throw "Failed to derive a valid SSH public key from the private key."
 }
+$publicKeyBase = "$($Matches[1]) $($Matches[2])"
 $publicKey = "$publicKeyBase sharipovai-backup@$env:COMPUTERNAME"
 [IO.File]::WriteAllText($publicKeyPath, $publicKey + "`n", [Text.Encoding]::ASCII)
 
 $target = "$VpsUser@$VpsHost"
-$probeOutput = & $ssh.Source -i $keyPath -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=15 $target "printf backup-key-ok" 2>$null
-$probeExitCode = $LASTEXITCODE
-$probe = if ($null -eq $probeOutput) { "" } else { ([string]$probeOutput).Trim() }
+$probeArguments = @("-i", $keyPath, "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", "-o", "ConnectTimeout=15", $target, "printf backup-key-ok")
+$probe = Invoke-NativeCapture -FilePath $ssh.Source -Arguments $probeArguments
 
-if ($probeExitCode -ne 0 -or $probe -ne "backup-key-ok") {
+if ($probe.ExitCode -ne 0 -or $probe.Output -ne "backup-key-ok") {
     $remoteKeyPath = "/tmp/sharipovai_backup_ed25519.pub"
-    & $scp.Source $publicKeyPath "$target`:$remoteKeyPath"
-    if ($LASTEXITCODE -ne 0) { throw "Failed to upload the backup SSH public key to the VPS." }
+    $uploadExitCode = Invoke-NativeInteractive -FilePath $scp.Source -Arguments @($publicKeyPath, "$target`:$remoteKeyPath")
+    if ($uploadExitCode -ne 0) { throw "Failed to upload the backup SSH public key to the VPS." }
 
     $remoteInstall = "umask 077; mkdir -p /root/.ssh; touch /root/.ssh/authorized_keys; chmod 700 /root/.ssh; chmod 600 /root/.ssh/authorized_keys; grep -Fqx -f $remoteKeyPath /root/.ssh/authorized_keys || cat $remoteKeyPath >> /root/.ssh/authorized_keys; rm -f $remoteKeyPath"
-    & $ssh.Source $target $remoteInstall
-    if ($LASTEXITCODE -ne 0) { throw "Failed to install the backup SSH key on the VPS." }
+    $installExitCode = Invoke-NativeInteractive -FilePath $ssh.Source -Arguments @($target, $remoteInstall)
+    if ($installExitCode -ne 0) { throw "Failed to install the backup SSH key on the VPS." }
 
-    $probeOutput = & $ssh.Source -i $keyPath -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=15 $target "printf backup-key-ok"
-    $probeExitCode = $LASTEXITCODE
-    $probe = if ($null -eq $probeOutput) { "" } else { ([string]$probeOutput).Trim() }
-    if ($probeExitCode -ne 0 -or $probe -ne "backup-key-ok") {
+    $probe = Invoke-NativeCapture -FilePath $ssh.Source -Arguments $probeArguments
+    if ($probe.ExitCode -ne 0 -or $probe.Output -ne "backup-key-ok") {
         throw "Passwordless VPS authentication check failed after key installation."
     }
 }
