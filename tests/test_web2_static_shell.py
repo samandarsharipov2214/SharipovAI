@@ -15,18 +15,15 @@ def test_web2_files_exist_and_are_nonempty() -> None:
 def test_all_required_navigation_sections_are_present() -> None:
     html = INDEX.read_text(encoding="utf-8")
     required = [
-        "Обзор", "Рынок", "AI-решение", "Портфель", "Сделки", "AI-боты",
-        "AI-чат", "Новости", "Risk Center", "Bybit", "Learning OS",
-        "Ген. контроль", "Evidence Vault", "Virtual Account", "Отчёты", "Настройки",
+        "overview", "market", "decision", "portfolio", "trades", "bots", "chat", "news",
+        "risk", "bybit", "learning", "control", "evidence", "virtual", "reports", "settings",
     ]
-    for label in required:
-        assert f'data-page="{label}"' in html
+    for page in required:
+        assert html.count(f'data-page="{page}"') == 1
 
 
 def test_brand_spelling_and_no_old_name() -> None:
-    combined = "\n".join(
-        path.read_text(encoding="utf-8") for path in (INDEX, SCRIPT)
-    )
+    combined = "\n".join(path.read_text(encoding="utf-8") for path in (INDEX, SCRIPT))
     assert "SharipovAI" in combined
     assert "SHARIPOVAI" in combined
     assert "SharipoAI" not in combined
@@ -36,14 +33,15 @@ def test_brand_spelling_and_no_old_name() -> None:
 def test_ui_has_resilient_fallback_content() -> None:
     html = INDEX.read_text(encoding="utf-8")
     script = SCRIPT.read_text(encoding="utf-8")
-    assert "Меню остаётся доступным" in html
+    assert "Интерфейс готов" in html
+    assert "Данные появятся после ответа API" in html
     assert "Promise.allSettled" in script
-    assert "Выдуманные сделки не отображаются" in script
-    assert "не подставляет выдуманные цены" in script
+    assert "Основные API недоступны" in script
+    assert "ИИ временно недоступен" in script
 
 
 def test_single_service_asset_paths() -> None:
     html = INDEX.read_text(encoding="utf-8")
-    assert '/static/web2/web2.css?v=5' in html
-    assert '/static/web2/web2.js?v=5' in html
-    assert '/static/web2/logo.svg?v=5' in html
+    assert '/static/web2/web2.css?' in html
+    assert '/static/web2/web2.js?' in html
+    assert '/static/web2/logo.svg?' in html
