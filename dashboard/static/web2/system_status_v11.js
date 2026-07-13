@@ -9,16 +9,16 @@
   const state = { loadedAt: null, results: {}, errors: {} };
 
   const checks = {
-    health: { label: 'Сервер и API', url: '/api/health' },
-    market: { label: 'Поток котировок Bybit', url: '/api/market/bybit-websocket/status' },
-    account: { label: 'Личный кабинет Bybit', url: '/api/exchange/account/snapshot' },
-    bots: { label: 'Реестр ИИ', url: '/api/ai-bots' },
-    run: { label: 'Контур решений', url: '/api/run' },
-    news: { label: 'Новостной контур', url: '/api/social-news' },
-    learning: { label: 'Контур обучения', url: '/api/learning-os/status' },
-    evidence: { label: 'Хранилище доказательств', url: '/api/evidence-vault/recent' },
-    virtual: { label: 'Виртуальный счёт', url: '/api/virtual-account/state' },
-    reports: { label: 'Система отчётов', url: '/api/ai-control-center/daily-report' }
+    health: { label: 'Сервер и API', url: '/api/health', required: true },
+    market: { label: 'Поток котировок Bybit', url: '/api/market/bybit-websocket/status', required: true },
+    account: { label: 'Личный кабинет Bybit', url: '/api/exchange/account/status', required: false },
+    bots: { label: 'Реестр ИИ', url: '/api/ai-bots', required: true },
+    run: { label: 'Контур решений', url: '/api/run', required: true },
+    news: { label: 'Новостной контур', url: '/api/social-news', required: true },
+    learning: { label: 'Контур обучения', url: '/api/learning-os/status', required: true },
+    evidence: { label: 'Хранилище доказательств', url: '/api/evidence-vault/recent', required: true },
+    virtual: { label: 'Виртуальный счёт', url: '/api/virtual-account/state', required: true },
+    reports: { label: 'Система отчётов', url: '/api/ai-control-center/daily-report', required: true }
   };
 
   async function getJson(url) {
@@ -37,11 +37,30 @@
         ? [data.news?.items, data.news, data.items, data.articles]
         : key === 'evidence'
           ? [data.items, data.records, data.events]
-          : key === 'account'
-            ? [data.positions, data.snapshot?.positions, data.orders]
+          : key === 'learning'
+            ? [data.items, data.lessons, data.memory?.recent_lessons]
             : [];
     const found = candidates.find(Array.isArray);
     return found ? found.length : null;
+  }
+
+  function semanticState(key) {
+    const result = state.results[key];
+    const error = state.errors[key];
+    if (!result || error) return { level: 'bad', label: 'НЕДОСТУПЕН', detail: error || 'нет ответа' };
+    const data = result.data || {};
+    if (key === 'account') {
+      if (data.credentials_configured !== true || data.sync_enabled === false) {
+        return { level: 'optional', label: 'НЕ НАСТРОЕН', detail: 'необязательный личный API; виртуальный режим активен' };
+      }
+      if (data.connected === true) return { level: 'ok', label: 'ПОДКЛЮЧЁН', detail: 'read-only snapshot подтверждён' };
+      return { level: 'bad', label: 'ОШИБКА', detail: data.last_error || 'учётные данные заданы, но snapshot не получен' };
+    }
+    const status = String(data.status || data.state || '').toLowerCase();
+    if (['error', 'unavailable', 'failed', 'offline'].includes(status)) {
+      return { level: 'bad', label: 'НЕДОСТУПЕН', detail: data.message || data.error || status };
+    }
+    return { level: 'ok', label: 'ДОСТУПЕН', detail: 'нет' };
   }
 
   function verifiedAi(data) {
@@ -59,19 +78,19 @@
   function serviceCard(key) {
     const meta = checks[key];
     const result = state.results[key];
-    const error = state.errors[key];
-    const ok = Boolean(result) && !error;
+    const semantic = semanticState(key);
     const count = result ? itemCount(key, result.data) : null;
-    return `<article class="status-service ${ok ? 'ok' : 'bad'}">
+    const css = semantic.level === 'bad' ? 'bad' : 'ok';
+    return `<article class="status-service ${css}">
       <div class="status-service-head">
         <span class="status-dot"></span>
-        <div><b>${esc(meta.label)}</b><small>${esc(meta.url)}</small></div>
-        <strong>${ok ? 'ДОСТУПЕН' : 'НЕДОСТУПЕН'}</strong>
+        <div><b>${esc(meta.label)}</b><small>${esc(meta.url)}${meta.required ? '' : ' · необязательный'}</small></div>
+        <strong>${esc(semantic.label)}</strong>
       </div>
       <div class="status-service-body">
-        <span>Задержка: <b>${ok ? `${result.latencyMs} мс` : '—'}</b></span>
+        <span>Задержка: <b>${result ? `${result.latencyMs} мс` : '—'}</b></span>
         <span>Записей: <b>${count == null ? '—' : count}</b></span>
-        <span>Ошибка: <b>${error ? esc(error) : 'нет'}</b></span>
+        <span>Состояние: <b>${esc(semantic.detail)}</b></span>
       </div>
     </article>`;
   }
@@ -80,24 +99,25 @@
     const content = $('content');
     if (!content) return;
     const keys = Object.keys(checks);
-    const available = keys.filter((key) => state.results[key] && !state.errors[key]).length;
+    const required = keys.filter((key) => checks[key].required);
+    const available = required.filter((key) => semanticState(key).level === 'ok').length;
     const ai = verifiedAi(state.results.bots?.data);
     const market = state.results.market?.data || {};
-    const accountOk = Boolean(state.results.account && !state.errors.account);
-    const overall = available === keys.length ? 'ВСЕ СИСТЕМЫ ДОСТУПНЫ' : available > 0 ? 'ЧАСТЬ СИСТЕМ НЕДОСТУПНА' : 'СИСТЕМА НЕ ОТВЕЧАЕТ';
-    const tone = available === keys.length ? 'positive' : 'negative';
+    const account = semanticState('account');
+    const overall = available === required.length ? 'ОСНОВНЫЕ СИСТЕМЫ ДОСТУПНЫ' : available > 0 ? 'ЧАСТЬ ОСНОВНЫХ СИСТЕМ НЕДОСТУПНА' : 'СИСТЕМА НЕ ОТВЕЧАЕТ';
+    const tone = available === required.length ? 'positive' : 'negative';
 
-    content.innerHTML = `<div class="title"><h1>Состояние системы</h1><p>Единая проверка сервисов SharipovAI без выдуманных статусов</p></div>
+    content.innerHTML = `<div class="title"><h1>Состояние системы</h1><p>Основные сервисы и необязательные подключения проверяются раздельно</p></div>
       <section class="metrics">
-        <article class="card"><span>Общее состояние</span><strong class="${tone}">${overall}</strong><small>${available}/${keys.length} источников отвечают</small></article>
+        <article class="card"><span>Общее состояние</span><strong class="${tone}">${overall}</strong><small>${available}/${required.length} основных источников отвечают</small></article>
         <article class="card"><span>ИИ с подтверждением</span><strong>${ai.verified}/${ai.total}</strong><small>Свежий сигнал до 90 секунд</small></article>
-        <article class="card"><span>Bybit</span><strong class="${accountOk ? 'positive' : 'negative'}">${accountOk ? 'ПОДКЛЮЧЁН' : 'НЕ ПОДТВЕРЖДЁН'}</strong><small>Личный API</small></article>
+        <article class="card"><span>Личный Bybit API</span><strong class="${account.level === 'bad' ? 'negative' : 'positive'}">${esc(account.label)}</strong><small>${esc(account.detail)}</small></article>
         <article class="card"><span>Поток рынка</span><strong>${esc(market.status || market.state || (state.results.market ? 'ОТВЕЧАЕТ' : '—'))}</strong><small>Публичный WebSocket</small></article>
         <article class="card"><span>Последняя проверка</span><strong>${esc(state.loadedAt ? new Date(state.loadedAt).toLocaleTimeString('ru-RU') : '—')}</strong><small>Локальное время</small></article>
       </section>
       <div class="status-actions"><button id="statusRefresh" class="action">Проверить сейчас</button><span>Проверено: ${esc(state.loadedAt ? nowText() : 'ещё не проверено')}</span></div>
       <section class="status-grid">${keys.map(serviceCard).join('')}</section>
-      <article class="panel wide"><small>ПРАВИЛО ДОСТОВЕРНОСТИ</small><h2>Как читать статусы</h2><p>«Доступен» означает только успешный ответ конкретного API в этой проверке. Это не доказывает прибыльность, качество решения или выполнение торговли. При отсутствии ответа система показывает «Недоступен», а не продолжает изображать работу.</p></article>`;
+      <article class="panel wide"><small>ПРАВИЛО ДОСТОВЕРНОСТИ</small><h2>Как читать статусы</h2><p>«Доступен» означает успешный и семантически корректный ответ API. «Не настроен» для личного Bybit API не считается поломкой: виртуальная торговля продолжает использовать публичные котировки, а реальные ордера остаются заблокированными.</p></article>`;
     $('statusRefresh')?.addEventListener('click', load);
   }
 
