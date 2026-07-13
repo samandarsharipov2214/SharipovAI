@@ -85,9 +85,9 @@ def test_restore_drill_rejects_destination_inside_source(tmp_path: Path) -> None
 def test_windows_restore_wrapper_stays_passive_and_retains_reports() -> None:
     script = (ROOT / "scripts/windows/test_isolated_restore.ps1").read_text(encoding="utf-8-sig")
     assert "-m tools.isolated_restore_drill" in script
-    assert "runtime\remote_backups\current" in script
-    assert "runtime\restore_drills" in script
-    assert "runtime\restore_drill_status.json" in script
+    assert r"runtime\remote_backups\current" in script
+    assert r"runtime\restore_drills" in script
+    assert r"runtime\restore_drill_status.json" in script
     assert "RetainRuns = 12" in script
     assert "Select-Object -Skip $RetainRuns" in script
     assert "activation_performed" in script
@@ -107,7 +107,7 @@ def test_weekly_restore_installer_is_passive_and_start_when_available() -> None:
     assert "-RetainRuns $RetainRuns" in script
     assert 'DayOfWeek = "Sunday"' in script
     assert 'Time = "04:00"' in script
-    assert "runtime\restore_drill_status.json" in script
+    assert r"runtime\restore_drill_status.json" in script
     assert "activation_performed" in script
     assert "network_services_started" in script
     assert "bootstrap_pc_node" not in script
