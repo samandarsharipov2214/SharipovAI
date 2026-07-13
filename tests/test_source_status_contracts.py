@@ -88,6 +88,7 @@ def test_web2_counts_core_services_and_marks_private_bybit_optional():
 
     assert "/api/learning-os/status" in core
     assert "/api/evidence-vault/recent" in core
+    assert "/api/market/bybit-websocket/status" in core
     assert "/api/exchange/account/status" in core
     assert "required: false" in core
     assert "основных API" in core
@@ -95,8 +96,10 @@ def test_web2_counts_core_services_and_marks_private_bybit_optional():
 
     assert "/api/exchange/account/status" in system
     assert "НЕ НАСТРОЕН" in system
-    assert "не считается поломкой" in system
-    assert "основных источников отвечают" in system
+    assert "Не влияет на виртуальную торговлю" in system
+    assert "Автоматическая проверка каждые 15 секунд" in system
+    assert "Записей:" not in system
+    assert "Состояние:" not in system
 
     assert "/api/currency/usd-rub" in overview
     assert "Рубли ₽" in overview
