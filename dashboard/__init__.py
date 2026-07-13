@@ -6,6 +6,12 @@ idempotent so Codex/tests may also import ``dashboard.app`` directly.
 from __future__ import annotations
 
 from .app import app, create_app
+from .lifecycle_compat import ensure_event_handler_compat
+
+# FastAPI/Starlette runtime combinations may expose lifecycle registration only
+# on ``app.router``. Install the compatibility method before feature installers.
+ensure_event_handler_compat(app)
+
 from .ai_organ_state_api import install_ai_organ_state_api
 from .autonomous_trading_api import install_autonomous_trading_api
 from .bybit_account_api import install_bybit_account_api
