@@ -2,7 +2,7 @@
   'use strict';
 
   const PAGE_OWNERS = new Map([
-    ['overview', 'sections_v10.js'],
+    ['overview', 'overview_runtime_v25.js'],
     ['market', 'market_terminal_v13.js'],
     ['decision', 'sections_v10.js'],
     ['portfolio', 'portfolio_risk_v16.js'],
@@ -12,7 +12,7 @@
     ['news', 'news_center_v12.js'],
     ['risk', 'portfolio_risk_v16.js'],
     ['bybit', 'exchange_execution_settings_v18.js'],
-    ['learning', 'learning_evidence_reports_v17.js'],
+    ['learning', 'learning_runtime_v25.js'],
     ['control', 'general_control_v15.js'],
     ['evidence', 'learning_evidence_reports_v17.js'],
     ['virtual', 'exchange_execution_settings_v18.js'],
@@ -72,7 +72,7 @@
 
   function installContentOwnership() {
     const content = document.getElementById('content');
-    if (!content || content.dataset.navigationOwnership === 'v23') return;
+    if (!content || content.dataset.navigationOwnership === 'v25') return;
     const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML');
     if (!descriptor?.get || !descriptor?.set) return;
 
@@ -86,7 +86,7 @@
         if (writeAllowed(new Error().stack || '')) descriptor.set.call(this, value);
       },
     });
-    content.dataset.navigationOwnership = 'v23';
+    content.dataset.navigationOwnership = 'v25';
   }
 
   function currentLanguage() {
@@ -109,18 +109,18 @@
 
   function installLabelGuard() {
     const nav = document.getElementById('nav');
-    if (!nav || nav.dataset.labelGuard === 'v23') return;
+    if (!nav || nav.dataset.labelGuard === 'v25') return;
     const observer = new MutationObserver(restoreLabelsAndAria);
     observer.observe(nav, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['class', 'data-page'] });
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ['lang'] });
-    nav.dataset.labelGuard = 'v23';
+    nav.dataset.labelGuard = 'v25';
     restoreLabelsAndAria();
   }
 
   function installHashNavigation() {
     const nav = document.getElementById('nav');
-    if (!nav || nav.dataset.hashNavigation === 'v23') return;
-    nav.dataset.hashNavigation = 'v23';
+    if (!nav || nav.dataset.hashNavigation === 'v25') return;
+    nav.dataset.hashNavigation = 'v25';
 
     nav.addEventListener('click', (event) => {
       const button = event.target.closest('button[data-page]');
@@ -150,7 +150,7 @@
     activePage,
     ownerFor: (page) => PAGE_OWNERS.get(page) || '',
     writeAllowed,
-    version: 23,
+    version: 25,
   });
 
   install();
