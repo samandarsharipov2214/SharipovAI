@@ -22,7 +22,9 @@ def test_private_api_requires_auth_when_auth_is_enabled(monkeypatch) -> None:
     response = client.get("/api/run")
 
     assert response.status_code == 401
-    assert response.json() == {"error": "authentication_required"}
+    payload = response.json()
+    assert payload["status"] == "unauthorized"
+    assert payload["error"] == "authentication_required"
 
 
 def test_access_request_is_recorded_without_creating_password_user(monkeypatch, tmp_path: Path) -> None:
@@ -108,39 +110,25 @@ def test_telegram_ignores_message_without_chat(monkeypatch) -> None:
 
 
 class _FakeRunner:
-    """Fake runner for crash-hardening tests."""
-
-    def run(self) -> RunnerOutput:
-        """Return deterministic runner output."""
-
+    def run_once(self) -> RunnerOutput:
         return RunnerOutput(
             decision="BUY",
-            confidence=88.0,
-            risk_level="LOW",
-            portfolio_value=10000.0,
-            paper_cash=9500.0,
-            paper_equity=10000.0,
-            learning_summary=LearningSummary(
+            confidence=80,
+            risk=20,
+            explanation="test",
+            learning=LearningSummary(
                 total_trades=1,
                 wins=1,
                 losses=0,
                 win_rate=100.0,
-                average_profit=0.0,
+                average_profit=1.0,
                 average_loss=0.0,
-                best_trade=0.0,
+                best_trade=1.0,
                 worst_trade=0.0,
-                recommendations=["More data required."],
+                recommendations=[],
             ),
-            report="Crash hardening runner completed.",
-            reason="Crash hardening decision reason.",
-            consensus="UNANIMOUS",
-            consensus_agreement=100.0,
-            paper_pnl=0.0,
-            open_positions=1,
         )
 
 
 def _runner_factory() -> _FakeRunner:
-    """Return a fake runner."""
-
     return _FakeRunner()
