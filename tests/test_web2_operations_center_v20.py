@@ -7,8 +7,10 @@ WEB2 = ROOT / "dashboard" / "static" / "web2"
 
 def test_operations_center_assets_are_connected() -> None:
     index = (WEB2 / "index.html").read_text(encoding="utf-8")
-    assert "/static/web2/operations_center_v20.css?v=20" in index
-    assert "/static/web2/operations_center_v20.js?v=20" in index
+    assert "/static/web2/operations_center_v20.css?" in index
+    assert "/static/web2/operations_center_v20.js?" in index
+    assert (WEB2 / "operations_center_v20.css").is_file()
+    assert (WEB2 / "operations_center_v20.js").is_file()
 
 
 def test_operations_center_uses_existing_read_only_health_apis() -> None:
