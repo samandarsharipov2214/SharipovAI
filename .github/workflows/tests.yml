@@ -87,8 +87,7 @@ jobs:
         run: python -m compileall -q .
 
       - name: Import application safely
-        run: |
-          python -c "import dashboard; assert dashboard.app is not None; print('dashboard import: ok')"
+        run: python -c "import dashboard; assert dashboard.app is not None; print('dashboard import: ok')"
 
       - name: Verify execution safety defaults
         run: |
@@ -102,4 +101,22 @@ jobs:
           PY
 
       - name: Run test suite
-        run: python -m pytest -q --disable-warnings --maxfail=1
+        id: pytest
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q --disable-warnings --maxfail=1 2>&1 | tee pytest-full.log
+
+      - name: Upload pytest evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-full-evidence
+          path: pytest-full.log
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Fail when tests failed
+        if: steps.pytest.outcome == 'failure'
+        run: exit 1
