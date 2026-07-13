@@ -119,3 +119,33 @@ def _trade_row(trade: dict[str, Any], number: int) -> str:
         f"<td>{escape('yes' if trade.get('real_order_placed') else 'no')}</td>"
         f"<td>{escape(str(trade.get('quote_source', trade.get('source', ''))))}</td></tr>"
     )
+
+
+def _money(value: Any) -> str:
+    try:
+        return f"{float(value):,.1f}".replace(",", " ")
+    except (TypeError, ValueError):
+        return "—"
+
+
+def _price(value: Any) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "—"
+    digits = 1 if abs(number) >= 100 else 2 if abs(number) >= 10 else 4
+    return f"{number:,.{digits}f}".replace(",", " ")
+
+
+def _format_time(value: Any) -> str:
+    try:
+        seconds = int(value or 0)
+    except (TypeError, ValueError):
+        seconds = 0
+    if seconds <= 0:
+        return "—"
+    return datetime.fromtimestamp(seconds, tz=timezone.utc).strftime("%d.%m %H:%M:%S UTC")
+
+
+def _css() -> str:
+    return "body{margin:0;background:#070b12;color:#eef4ff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}main{padding:18px;max-width:1600px;margin:auto}.card{background:#111827;border:1px solid #243044;border-radius:18px;padding:16px;margin:12px 0;overflow:auto}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}.stat{background:#0b1220;border:1px solid #1f2a3d;border-radius:14px;padding:12px}.stat small{display:block;color:#8ea2c4}.stat b{font-size:18px}table{width:100%;border-collapse:collapse;font-size:13px;min-width:1500px}td,th{padding:10px;border-bottom:1px solid #243044;text-align:left;vertical-align:top}td:nth-child(12),td:nth-child(13){min-width:260px;white-space:normal}.ok{display:inline-block;background:#10b981;color:#03130d;border-radius:999px;padding:6px 10px;font-weight:900}a{color:#60a5fa;font-weight:800}"
