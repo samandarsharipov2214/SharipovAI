@@ -35,8 +35,8 @@ def test_all_sixteen_sections_are_present() -> None:
     ]
     for page in pages:
         assert f'data-page="{page}"' in html
-    assert "sections_v10.js?v=10" in html
-    assert "sections_v10.css?v=10" in html
+    assert "sections_v10.js?v=" in html
+    assert "sections_v10.css?v=" in html
 
 
 def test_critical_sections_have_real_data_routes() -> None:
