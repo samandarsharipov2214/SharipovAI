@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from storage import ProjectDatabase
 
 from .ai_organ_state_api import AIOrganRuntimeMonitor
+from .lifecycle_compat import ensure_event_handler_compat
 
 
 class SafeAIOrganRuntimeMonitor(AIOrganRuntimeMonitor):
@@ -74,10 +75,11 @@ class SafeAIOrganRuntimeMonitor(AIOrganRuntimeMonitor):
 def install_ai_organ_state_api(app: FastAPI) -> None:
     if getattr(app.state, "ai_organ_state_api_installed", False):
         return
-    app.state.ai_organ_state_api_installed = True
     database = getattr(app.state, "project_database", None)
     if not isinstance(database, ProjectDatabase):
         raise RuntimeError("ProjectDatabase must be installed before AI organ monitor")
+    ensure_event_handler_compat(app)
+    app.state.ai_organ_state_api_installed = True
     monitor = SafeAIOrganRuntimeMonitor(app, database)
     app.state.ai_organ_runtime_monitor = monitor
     app.add_event_handler("startup", monitor.start)
