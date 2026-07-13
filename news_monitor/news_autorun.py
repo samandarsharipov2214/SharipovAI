@@ -106,6 +106,7 @@ def refresh_news_now(*, reason: str = "manual", limit_per_source: int | None = N
                 "status": "ok" if raw_items else "empty",
                 "reason": reason,
                 "rss": result.get("rss", {}),
+                "items": raw_items,
                 "item_count": len(raw_items),
                 "working_sources": working_sources,
                 "errors": errors,
