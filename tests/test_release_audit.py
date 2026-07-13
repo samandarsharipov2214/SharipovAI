@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from scripts.release_audit import _audit_blueprint, _audit_runtime_environment, audit_repository
@@ -24,14 +25,21 @@ def configure_safe_runtime(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("EXCHANGE_BASE_URL", "https://api-testnet.bybit.com")
     monkeypatch.setenv("EXECUTION_JOURNAL_FILE", str(tmp_path / "execution-journal.json"))
     for name in (
-        "BYBIT_MAINNET_API_KEY",
-        "BYBIT_MAINNET_API_SECRET",
-        "BYBIT_READONLY_API_KEY",
-        "BYBIT_READONLY_API_SECRET",
-        "BYBIT_TESTNET_API_KEY",
-        "BYBIT_TESTNET_API_SECRET",
+        "BYBIT_MAINNET_API_KEY", "BYBIT_MAINNET_API_SECRET", "BYBIT_READONLY_API_KEY",
+        "BYBIT_READONLY_API_SECRET", "BYBIT_TESTNET_API_KEY", "BYBIT_TESTNET_API_SECRET",
     ):
         monkeypatch.delenv(name, raising=False)
+
+
+def _copy_vps_contract(tmp_path: Path) -> Path:
+    source = Path(".").resolve()
+    root = tmp_path / "repo"
+    deploy = root / "deploy" / "vps"
+    deploy.mkdir(parents=True)
+    for name in ("docker-compose.yml", "Caddyfile", "update_from_main.sh"):
+        shutil.copy2(source / "deploy" / "vps" / name, deploy / name)
+    shutil.copy2(source / "Dockerfile", root / "Dockerfile")
+    return root
 
 
 def test_current_repository_release_audit_passes(monkeypatch, tmp_path: Path) -> None:
@@ -42,38 +50,32 @@ def test_current_repository_release_audit_passes(monkeypatch, tmp_path: Path) ->
     assert any(item.name == "execution_journal_database" and item.status == "pass" for item in report.checks)
 
 
-def test_unsafe_render_testnet_value_is_detected(tmp_path: Path) -> None:
-    source = Path("render.yaml").read_text(encoding="utf-8")
-    unsafe = source.replace(
-        '- key: TESTNET_EXECUTION_ENABLED\n        value: "0"',
-        '- key: TESTNET_EXECUTION_ENABLED\n        value: "1"',
-        1,
-    )
-    (tmp_path / "render.yaml").write_text(unsafe, encoding="utf-8")
+def test_unsafe_vps_testnet_value_is_detected(tmp_path: Path) -> None:
+    root = _copy_vps_contract(tmp_path)
+    compose_path = root / "deploy" / "vps" / "docker-compose.yml"
+    source = compose_path.read_text(encoding="utf-8")
+    compose_path.write_text(source.replace('TESTNET_EXECUTION_ENABLED: "0"', 'TESTNET_EXECUTION_ENABLED: "1"', 1), encoding="utf-8")
     seen = {}
 
     def record(name, passed, detail, **kwargs):
         seen[name] = (passed, detail)
 
-    _audit_blueprint(tmp_path, record)
-    assert seen["render_testnet_locked"][0] is False
+    _audit_blueprint(root, record)
+    assert seen["vps_testnet_locked"][0] is False
 
 
-def test_enabled_render_bridge_is_detected(tmp_path: Path) -> None:
-    source = Path("render.yaml").read_text(encoding="utf-8")
-    unsafe = source.replace(
-        '- key: AUTONOMOUS_TESTNET_BRIDGE_ENABLED\n        value: "0"',
-        '- key: AUTONOMOUS_TESTNET_BRIDGE_ENABLED\n        value: "1"',
-        1,
-    )
-    (tmp_path / "render.yaml").write_text(unsafe, encoding="utf-8")
+def test_enabled_vps_bridge_is_detected(tmp_path: Path) -> None:
+    root = _copy_vps_contract(tmp_path)
+    compose_path = root / "deploy" / "vps" / "docker-compose.yml"
+    source = compose_path.read_text(encoding="utf-8")
+    compose_path.write_text(source.replace('AUTONOMOUS_TESTNET_BRIDGE_ENABLED: "0"', 'AUTONOMOUS_TESTNET_BRIDGE_ENABLED: "1"', 1), encoding="utf-8")
     seen = {}
 
     def record(name, passed, detail, **kwargs):
         seen[name] = passed
 
-    _audit_blueprint(tmp_path, record)
-    assert seen["render_testnet_locked"] is False
+    _audit_blueprint(root, record)
+    assert seen["vps_testnet_locked"] is False
 
 
 def test_missing_runtime_auth_kill_switch_and_enabled_live_are_blocked(monkeypatch) -> None:
