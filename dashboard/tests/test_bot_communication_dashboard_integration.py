@@ -33,7 +33,7 @@ def test_bot_network_endpoints_installed_in_dashboard(tmp_path, monkeypatch) -> 
 
     page = client.get("/bot-network")
     assert page.status_code == 200
-    assert "Связь AI-ботов" in page.text
+    assert "Связь и контроль AI-ботов" in page.text
 
 
 def test_launch_check_contains_bot_network(tmp_path, monkeypatch) -> None:
