@@ -95,4 +95,15 @@ jobs:
           PY
 
       - name: Run test suite
-        run: python -m pytest -q --disable-warnings --maxfail=1
+        run: |
+          set -o pipefail
+          python -m pytest -q --disable-warnings --maxfail=1 2>&1 | tee tests-pytest.log
+
+      - name: Upload pytest diagnostic
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tests-pytest-failure-log
+          path: tests-pytest.log
+          if-no-files-found: error
+          retention-days: 3
