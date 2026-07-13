@@ -157,6 +157,8 @@ def install_demo_api(app: FastAPI) -> None:
             ("GET", "/api/demo/state"),
             ("POST", "/api/demo/chat"),
             ("POST", "/api/chat/message"),
+            ("GET", "/api/social-news"),
+            ("POST", "/api/social-news/rss/refresh"),
         ),
     )
 
