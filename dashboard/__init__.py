@@ -16,6 +16,7 @@ from .ai_organ_state_safe_api import install_ai_organ_state_api
 from .autonomous_trading_api import install_autonomous_trading_api
 from .bybit_account_api import install_bybit_account_api
 from .control_plane_api import install_control_plane_api
+from .currency_api import install_currency_api
 from .dashboard2_api import install_dashboard2_api
 from .database_api import install_database_api
 from .exceptions import DashboardError
@@ -36,6 +37,7 @@ install_market_data_api(app)
 install_autonomous_trading_api(app)
 install_execution_stages_api(app)
 install_bybit_account_api(app)
+install_currency_api(app)
 install_control_plane_api(app)
 install_dashboard2_api(app)
 install_private_order_ws_api(app)
