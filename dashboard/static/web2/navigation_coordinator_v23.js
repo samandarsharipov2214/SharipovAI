@@ -2,13 +2,13 @@
   'use strict';
 
   const PAGE_OWNERS = new Map([
-    ['overview', 'sections_v10.js'],
+    ['overview', 'overview_decision_v24.js'],
     ['market', 'market_terminal_v13.js'],
-    ['decision', 'sections_v10.js'],
+    ['decision', 'overview_decision_v24.js'],
     ['portfolio', 'portfolio_risk_v16.js'],
     ['trades', 'exchange_execution_settings_v18.js'],
     ['bots', 'ai_center_v14.js'],
-    ['chat', 'web2.js'],
+    ['chat', 'web2_core_v24.js'],
     ['news', 'news_center_v12.js'],
     ['risk', 'portfolio_risk_v16.js'],
     ['bybit', 'exchange_execution_settings_v18.js'],
@@ -122,7 +122,7 @@
     ownerFor,
     canRender,
     restoreLabels: restoreLabelsAndAria,
-    version: 23,
+    version: 24,
   });
 
   install();
