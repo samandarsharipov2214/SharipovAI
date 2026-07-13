@@ -1,9 +1,8 @@
-"""Security-enhanced SharipovAI dashboard entrypoint.
+"""Security-enhanced SharipovAI dashboard compatibility entrypoint.
 
-Run with:
-    python -m uvicorn dashboard.secure_app:app --reload
+The production VPS uses ``dashboard:app``. This module remains for role and
+lockout tests and serves the same canonical Web2 shell.
 """
-
 from __future__ import annotations
 
 import os
@@ -15,17 +14,16 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from runner import SharipovAIRunner
-
 from .app import _clean_username, _login_page_html, _record_security_event, _safe_next_url, _valid_credentials, create_app
 from .security_guard import DEFAULT_LOCK_SECONDS, DEFAULT_MAX_FAILED_ATTEMPTS, LoginAttemptGuard
 from .user_admin import verify_password
+from .web2_host import install_web2_host
 
 
 def create_secure_app(runner_factory: Any | None = None) -> FastAPI:
-    """Create dashboard app with login lockout protection enabled."""
-
+    """Create dashboard app with lockout protection and canonical Web2."""
     dashboard = create_app(runner_factory=runner_factory)
+    install_web2_host(dashboard)
     dashboard.add_middleware(LoginLockoutMiddleware)
 
     @dashboard.get("/api/security/login-attempts")
