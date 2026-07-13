@@ -5,11 +5,11 @@ ROOT="/opt/sharipovai-repo"
 PUBLIC_URL="https://85-137-88-17.sslip.io"
 SERVICE="sharipovai"
 
-echo "[1/2] Running the protected SharipovAI deployment with market intelligence tests..."
+echo "[1/3] Running the protected SharipovAI deployment with market intelligence tests..."
 cd "$ROOT"
 bash scripts/deploy_market_paper_runtime.sh
 
-echo "[2/2] Verifying v34 TradingView height fix, v33 intelligence and public HTTPS health..."
+echo "[2/3] Verifying v34 TradingView height fix, v33 intelligence and public HTTPS health..."
 docker exec "$SERVICE" sh -lc '
 set -Eeuo pipefail
 index=/app/dashboard/static/web2/index.html
@@ -66,7 +66,7 @@ grep -F "Комиссии" /app/dashboard/static/web2/overview_runtime_v25.js >/
 grep -F "Чистый результат" /app/dashboard/static/web2/overview_runtime_v25.js >/dev/null
 grep -F "цена справа является текущей, а не ценой выхода" /app/dashboard/static/web2/exchange_execution_settings_v18.js >/dev/null
 grep -F "data-trade-filter" /app/dashboard/static/web2/exchange_execution_settings_v18.js >/dev/null
-python -m py_compile /app/dashboard/market_intelligence_api.py /app/dashboard/web2_host.py /app/dashboard/currency_api.py /app/dashboard/trade_explanations.py /app/dashboard/paper_activity_api.py
+python -m py_compile /app/dashboard/market_intelligence_api.py /app/dashboard/web2_host.py /app/dashboard/currency_api.py /app/dashboard/trade_explanations.py /app/dashboard/paper_activity_api.py /app/dashboard/telegram_webhook_api.py /app/telegram_health.py
 '
 docker exec -e PYTHONPATH=/app "$SERVICE" python - <<'PY'
 import asyncio
@@ -83,6 +83,8 @@ for path in (
     "/api/currency/usd-rub",
     "/api/market-intelligence/snapshot",
     "/api/market-intelligence/replay",
+    "/api/telegram/status",
+    "/telegram/webhook",
 ):
     assert path in routes, f"missing source route: {path}"
 
@@ -135,4 +137,33 @@ curl --fail --silent --show-error "$PUBLIC_URL/static/web2/tradingview_widget_he
 curl --fail --silent --show-error "$PUBLIC_URL/static/web2/market_intelligence_v33.js?v=33" | grep -F "Replay Lab" >/dev/null
 curl --fail --silent --show-error "$PUBLIC_URL/health"
 echo
-echo "Web2 v34 TradingView height fix, v33 intelligence and public health deployed and verified."
+
+echo "[3/3] Repairing and verifying Telegram webhook..."
+docker exec -e PYTHONPATH=/app -e EXPECTED_PUBLIC_URL="$PUBLIC_URL" "$SERVICE" python - <<'PY'
+import os
+import time
+
+from dashboard.telegram_webhook_api import _set_webhook
+from telegram_health import telegram_health
+
+expected = os.environ["EXPECTED_PUBLIC_URL"].rstrip("/")
+configured = os.environ.get("WEBAPP_URL", "").rstrip("/")
+assert os.environ.get("BOT_TOKEN", "").strip(), "BOT_TOKEN is missing in deploy/vps/.env.vps"
+assert configured == expected, f"WEBAPP_URL must be {expected}, got {configured or '<empty>'}"
+
+result = _set_webhook()
+assert result.get("status") == "ok", result
+
+last = None
+for _ in range(10):
+    last = telegram_health()
+    info = last.get("webhook_info", {}).get("result", {})
+    if last.get("verdict") == "working" and info.get("url") == f"{expected}/telegram/webhook" and not info.get("last_error_message"):
+        print("TELEGRAM_WEBHOOK_OK", info.get("url"), "pending", info.get("pending_update_count", 0))
+        break
+    time.sleep(2)
+else:
+    raise AssertionError(last)
+PY
+
+echo "Web2 v34, v33 intelligence, Telegram webhook and public health deployed and verified."
