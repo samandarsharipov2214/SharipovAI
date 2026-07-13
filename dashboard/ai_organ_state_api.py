@@ -19,6 +19,8 @@ from fastapi import FastAPI
 from ai_architecture_registry import CANONICAL_AI_ORGANS
 from storage import ProjectDatabase
 
+from .lifecycle_compat import ensure_event_handler_compat
+
 
 @dataclass(frozen=True, slots=True)
 class OrganRuntimeState:
@@ -34,13 +36,7 @@ class OrganRuntimeState:
 
 
 class AIOrganRuntimeMonitor:
-    def __init__(
-        self,
-        app: FastAPI,
-        database: ProjectDatabase,
-        *,
-        clock_ms: Callable[[], int] | None = None,
-    ) -> None:
+    def __init__(self, app: FastAPI, database: ProjectDatabase, *, clock_ms: Callable[[], int] | None = None) -> None:
         self.app = app
         self.database = database
         self.database.initialize()
@@ -110,10 +106,7 @@ class AIOrganRuntimeMonitor:
                 with self._lock:
                     self._last_error = f"{type(exc).__name__}: {exc}"
                 try:
-                    self.database.append_event(
-                        "ai_organ_monitor_error",
-                        {"error": self._last_error, "checked_at_ms": self.clock_ms()},
-                    )
+                    self.database.append_event("ai_organ_monitor_error", {"error": self._last_error, "checked_at_ms": self.clock_ms()})
                 except Exception:
                     continue
 
@@ -135,25 +128,12 @@ class AIOrganRuntimeMonitor:
         ]
 
     @staticmethod
-    def _state(
-        organ_id: str,
-        responsibilities: dict[str, str],
-        now: int,
-        evidence: list[str],
-        blockers: list[str],
-    ) -> OrganRuntimeState:
+    def _state(organ_id: str, responsibilities: dict[str, str], now: int, evidence: list[str], blockers: list[str]) -> OrganRuntimeState:
         if blockers:
             status = "blocked" if any(item.startswith("critical:") for item in blockers) else "degraded"
         else:
             status = "healthy"
-        return OrganRuntimeState(
-            organ_id=organ_id,
-            status=status,
-            responsibility=responsibilities[organ_id],
-            evidence=tuple(evidence),
-            blockers=tuple(blockers),
-            checked_at_ms=now,
-        )
+        return OrganRuntimeState(organ_id, status, responsibilities[organ_id], tuple(evidence), tuple(blockers), now)
 
     def _general_controller(self) -> tuple[list[str], list[str]]:
         evidence, blockers = [], []
@@ -285,10 +265,11 @@ class AIOrganRuntimeMonitor:
 def install_ai_organ_state_api(app: FastAPI) -> None:
     if getattr(app.state, "ai_organ_state_api_installed", False):
         return
-    app.state.ai_organ_state_api_installed = True
     database = getattr(app.state, "project_database", None)
     if not isinstance(database, ProjectDatabase):
         raise RuntimeError("ProjectDatabase must be installed before AI organ monitor")
+    ensure_event_handler_compat(app)
+    app.state.ai_organ_state_api_installed = True
     monitor = AIOrganRuntimeMonitor(app, database)
     app.state.ai_organ_runtime_monitor = monitor
     app.add_event_handler("startup", monitor.start)
