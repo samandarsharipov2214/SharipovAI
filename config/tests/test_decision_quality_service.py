@@ -158,4 +158,7 @@ def test_synthetic_settlement_cannot_train_reputation(tmp_path) -> None:
             evidence_class="synthetic_simulation",
             verified_market_data=False,
         )
-    assert service.meta.reputations_snapshot() == {}
+    snapshot = service.meta.reputations_snapshot()
+    assert snapshot
+    assert all(row["total_predictions"] == 0 for row in snapshot.values())
+    assert all(row["pnl_contribution"] == 0.0 for row in snapshot.values())
