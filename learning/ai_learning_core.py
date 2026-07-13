@@ -6,6 +6,7 @@ but canonical ownership is defined by ai_architecture_registry.py.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from ai_architecture_registry import canonical_id
@@ -78,14 +79,22 @@ def evaluate_exam(bot_name: str, answers: dict[str, str]) -> dict[str, Any]:
     details: list[dict[str, Any]] = []
     for question in questions:
         question_id = question["id"]
-        answer = answers.get(question_id, "").lower()
-        expected_keywords = [keyword.lower() for keyword in question["expected_keywords"]]
-        ok = all(keyword in answer for keyword in expected_keywords)
+        answer = answers.get(question_id, "")
+        expected_keywords = [str(keyword) for keyword in question["expected_keywords"]]
+        ok = all(_contains_concept(answer, keyword) for keyword in expected_keywords)
         if ok:
             passed += 1
-        details.append({"id": question_id, "passed": ok, "expected_keywords": expected_keywords})
+        details.append({"id": question_id, "passed": ok, "expected_keywords": [item.casefold() for item in expected_keywords]})
     score = round((passed / total) * 100, 2) if total else 0.0
     return {"status": "ok", "bot": _clean_bot_name(bot_name), "canonical_owner": pack["canonical_owner"], "score": score, "passed": passed, "total": total, "details": details}
+
+
+def _contains_concept(answer: str, expected: str) -> bool:
+    """Match a short expected concept without making Russian word order brittle."""
+
+    answer_tokens = set(re.findall(r"[\wё]+", str(answer).casefold(), flags=re.UNICODE))
+    expected_tokens = set(re.findall(r"[\wё]+", str(expected).casefold(), flags=re.UNICODE))
+    return bool(expected_tokens) and expected_tokens.issubset(answer_tokens)
 
 
 def _bot_goal(bot: str) -> str:
