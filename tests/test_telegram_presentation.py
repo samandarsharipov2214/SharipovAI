@@ -49,4 +49,4 @@ def test_main_keyboard_has_current_decision_action() -> None:
     keyboard = main_keyboard()
     texts = [button["text"] for row in keyboard["inline_keyboard"] for button in row]
     assert any("решение" in text.lower() or "обзор" in text.lower() for text in texts)
-    assert any(button.get("callback_data") == "now" for row in keyboard["inline_keyboard"] for button in row)
+    assert any(button.get("callback_data") == "overview" for row in keyboard["inline_keyboard"] for button in row)
