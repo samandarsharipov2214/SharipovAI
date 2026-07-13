@@ -1,4 +1,4 @@
-"""Tests for persistent demo account API."""
+"""Tests for the deprecated read-only Demo compatibility API."""
 
 from __future__ import annotations
 
@@ -9,137 +9,90 @@ from fastapi.testclient import TestClient
 from dashboard import create_app
 
 
-def test_demo_state_is_funded_by_default(monkeypatch, tmp_path: Path) -> None:
-    """Demo state should start funded, not at zero."""
+def _configure_virtual_state(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VIRTUAL_ACCOUNT_STATE_FILE", str(tmp_path / "virtual.json"))
+    monkeypatch.setenv("VIRTUAL_ACCOUNT_BOOTSTRAP_TICKS", "0")
+    monkeypatch.setenv("VIRTUAL_ACCOUNT_MAX_CATCH_UP_TICKS", "0")
 
-    monkeypatch.setenv("DEMO_STATE_FILE", str(tmp_path / "demo_state.json"))
+
+def test_demo_state_is_deprecated_virtual_account_mirror(monkeypatch, tmp_path: Path) -> None:
+    _configure_virtual_state(monkeypatch, tmp_path)
     client = TestClient(create_app())
-
     response = client.get("/api/demo/state")
-
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "ok"
-    assert payload["state"]["equity"] == 10000.0
-    assert payload["state"]["cash"] == 10000.0
-    assert payload["state"]["open_positions"] == 0
-    assert "exchange_status" in payload["state"]
-    assert "online_monitoring" in payload["state"]
-    assert payload["state"]["online_monitoring"]["demo_account_online"] is True
+    assert payload["deprecated"] is True
+    assert payload["use"] == "/api/virtual-account/state"
+    assert payload["state"]["mode"] == "VIRTUAL_ACCOUNT"
+    assert payload["state"]["synthetic_prices_used"] is False
+    assert payload["state"]["legacy_execution_enabled"] is False
     assert payload["state"]["online_monitoring"]["real_orders_blocked"] is True
 
 
-def test_demo_balance_can_be_changed(monkeypatch, tmp_path: Path) -> None:
-    """User should be able to change virtual demo balance."""
+def test_demo_balance_mutation_is_blocked(monkeypatch, tmp_path: Path) -> None:
+    _configure_virtual_state(monkeypatch, tmp_path)
+    response = TestClient(create_app()).post("/api/demo/balance", json={"balance": 20000})
+    assert response.status_code == 409
+    payload = response.json()
+    assert payload["status"] == "blocked"
+    assert payload["real_orders_blocked"] is True
 
-    monkeypatch.setenv("DEMO_STATE_FILE", str(tmp_path / "demo_state.json"))
-    client = TestClient(create_app())
 
-    response = client.post("/api/demo/balance", json={"balance": 20000})
-
+def test_demo_chat_remains_informational(monkeypatch, tmp_path: Path) -> None:
+    _configure_virtual_state(monkeypatch, tmp_path)
+    response = TestClient(create_app()).post("/api/demo/chat", json={"message": "какой статус системы"})
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "ok"
-    assert payload["state"]["equity"] == 20000.0
-    assert payload["state"]["cash"] == 20000.0
-    assert "20000.00" in payload["message"]
+    assert payload["deprecated"] is True
+    assert payload["state"]["legacy_execution_enabled"] is False
 
 
-def test_demo_chat_can_find_bybit_best_conditions(monkeypatch, tmp_path: Path) -> None:
-    """AI chat should answer Bybit cost intelligence questions."""
-
-    monkeypatch.setenv("DEMO_STATE_FILE", str(tmp_path / "demo_state.json"))
-    monkeypatch.setenv("EXCHANGE_MODE", "sandbox")
-    client = TestClient(create_app())
-
-    response = client.post("/api/demo/chat", json={"message": "найди выгодные условия Bybit"})
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["status"] == "ok"
-    assert "Bybit cost intelligence" in payload["reply"]
-    assert "Самый дешёвый" in payload["reply"]
-    assert "USDT займ" in payload["reply"]
-    assert "bybit_costs" in payload["state"]
-
-
-def test_demo_chat_returns_json_when_engine_fails(monkeypatch) -> None:
-    """Demo chat should return useful JSON instead of a 500 on internal errors."""
-
+def test_demo_chat_returns_json_when_engine_fails(monkeypatch, tmp_path: Path) -> None:
     import dashboard.demo_api as demo_api
+
+    _configure_virtual_state(monkeypatch, tmp_path)
 
     def broken_run_ai_command(_message: str) -> dict[str, object]:
         raise RuntimeError("boom")
 
     monkeypatch.setattr(demo_api, "run_ai_command", broken_run_ai_command)
-    client = TestClient(create_app())
-
-    response = client.post("/api/demo/chat", json={"message": "найди выгодные условия Bybit"})
-
+    response = TestClient(create_app()).post("/api/demo/chat", json={"message": "проверь систему"})
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "error"
-    assert "выгодные условия Bybit" in payload["reply"]
-    assert payload["state"]["equity"] == 10000.0
+    assert "проверь систему" in payload["reply"]
+    assert payload["state"]["mode"] == "VIRTUAL_ACCOUNT"
 
 
-def test_demo_chat_can_buy_virtual_btc_with_exchange_preview_fee(monkeypatch, tmp_path: Path) -> None:
-    """AI chat should execute a virtual buy with exchange-preview commission math."""
-
-    monkeypatch.setenv("DEMO_STATE_FILE", str(tmp_path / "demo_state.json"))
-    monkeypatch.setenv("EXCHANGE_MODE", "sandbox")
-    monkeypatch.setenv("EXCHANGE_DEFAULT_FEE_RATE", "0.001")
+def test_demo_chat_blocks_virtual_buy_without_creating_trade(monkeypatch, tmp_path: Path) -> None:
+    _configure_virtual_state(monkeypatch, tmp_path)
     client = TestClient(create_app())
-
+    before = client.get("/api/demo/state").json()["state"]["trades"]
     response = client.post("/api/demo/chat", json={"message": "купи BTC виртуально"})
-
-    assert response.status_code == 200
+    after = client.get("/api/demo/state").json()["state"]["trades"]
     payload = response.json()
-    assert payload["status"] == "ok"
-    assert "купил" in payload["reply"].lower()
-    assert "Комиссия входа" in payload["reply"]
-    assert payload["state"]["open_positions"] == 1
-    assert payload["state"]["cash"] < 10000.0
-    assert payload["state"]["total_fees"] > 0
-    assert payload["state"]["commission_drag"] > 0
-    assert payload["state"]["break_even_price"] >= 50000.0
-    assert payload["state"]["trades"][-1]["side"] == "BUY"
-    assert payload["state"]["trades"][-1]["fee"] >= 0
-    assert payload["state"]["trades"][-1]["break_even_price"] >= 50000.0
+    assert response.status_code == 200
+    assert payload["status"] == "blocked"
+    assert payload["real_orders_blocked"] is True
+    assert payload["use"] == "/api/virtual-account/tick"
+    assert after == before
 
 
-def test_demo_chat_can_sell_virtual_position_after_commissions(monkeypatch, tmp_path: Path) -> None:
-    """AI chat should close a virtual position and report net PnL after fees."""
-
-    monkeypatch.setenv("DEMO_STATE_FILE", str(tmp_path / "demo_state.json"))
-    monkeypatch.setenv("EXCHANGE_MODE", "sandbox")
-    monkeypatch.setenv("EXCHANGE_DEFAULT_FEE_RATE", "0.001")
+def test_demo_chat_blocks_virtual_sell_without_creating_trade(monkeypatch, tmp_path: Path) -> None:
+    _configure_virtual_state(monkeypatch, tmp_path)
     client = TestClient(create_app())
-
-    client.post("/api/demo/chat", json={"message": "купи BTC"})
+    before = client.get("/api/demo/state").json()["state"]["trades"]
     response = client.post("/api/demo/chat", json={"message": "продай BTC"})
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["state"]["open_positions"] == 0
-    assert payload["state"]["trades"][-1]["side"] == "SELL"
-    assert payload["state"]["trades"][-1]["fee"] >= 0
-    assert payload["state"]["trades"][-1]["net_pnl"] <= 0
-    assert "net PnL после комиссий" in payload["reply"]
+    after = client.get("/api/demo/state").json()["state"]["trades"]
+    assert response.json()["status"] == "blocked"
+    assert after == before
 
 
-def test_demo_chat_online_monitoring(monkeypatch, tmp_path: Path) -> None:
-    """AI chat should report online monitoring for demo and exchange."""
-
-    monkeypatch.setenv("DEMO_STATE_FILE", str(tmp_path / "demo_state.json"))
-    monkeypatch.setenv("EXCHANGE_MODE", "sandbox")
-    client = TestClient(create_app())
-
-    response = client.post("/api/demo/chat", json={"message": "мониторинг онлайн биржи"})
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert "Онлайн-мониторинг" in payload["reply"]
-    assert "Биржевой connector" in payload["reply"]
-    assert payload["state"]["online_monitoring"]["demo_account_online"] is True
-    assert payload["state"]["online_monitoring"]["real_orders_blocked"] is True
+def test_demo_online_monitoring_is_truthful(monkeypatch, tmp_path: Path) -> None:
+    _configure_virtual_state(monkeypatch, tmp_path)
+    state = TestClient(create_app()).get("/api/demo/state").json()["state"]
+    assert state["online_monitoring"]["demo_account_online"] is True
+    assert state["online_monitoring"]["exchange_connector_online"] is False
+    assert state["online_monitoring"]["real_orders_blocked"] is True
