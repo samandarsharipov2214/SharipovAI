@@ -12,13 +12,23 @@ on:
       - 'tests/**'
       - 'requirements.txt'
       - 'Dockerfile'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/full_project_audit.py'
+      - '.github/workflows/full-project-audit.yml'
+      - 'dashboard/**'
+      - 'deploy/**'
+      - 'tests/**'
+      - 'requirements.txt'
+      - 'Dockerfile'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: sharipovai-full-audit
+  group: sharipovai-full-audit-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
