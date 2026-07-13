@@ -20,7 +20,7 @@
     ['settings', 'exchange_execution_settings_v18.js'],
     ['system-status', 'system_status_v11.js'],
     ['operations', 'operations_center_v20.js'],
-    ['incidents', 'incident_center_v21.js'],
+    ['incidents', 'incident_center_v24.js'],
   ]);
 
   const PAGE_LABELS = {
