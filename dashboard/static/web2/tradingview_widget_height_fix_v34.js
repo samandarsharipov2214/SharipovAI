@@ -24,12 +24,10 @@
     if (!host) return;
     const container = host.querySelector('.tv32-widget-container');
     const widget = host.querySelector('.tradingview-widget-container__widget');
-    const height = Math.max(
-      numericHeight(host.style.minHeight),
-      numericHeight(host.style.height),
-      numericHeight(container?.style.height),
-      DEFAULT_HEIGHT,
-    );
+    const height = numericHeight(container?.style.height)
+      || numericHeight(host.style.minHeight)
+      || numericHeight(host.style.height)
+      || DEFAULT_HEIGHT;
     const widgetHeight = Math.max(372, height - 28);
 
     host.style.setProperty('--tv32-widget-height', `${height}px`);
@@ -49,11 +47,11 @@
 
     host.querySelectorAll('iframe').forEach((frame) => {
       const directContainerChild = frame.parentElement === container;
-      const frameHeight = directContainerChild ? widgetHeight : '100%';
+      const frameHeight = directContainerChild ? `${widgetHeight}px` : '100%';
       frame.style.display = 'block';
       frame.style.width = '100%';
-      frame.style.height = typeof frameHeight === 'number' ? `${frameHeight}px` : frameHeight;
-      frame.style.minHeight = typeof frameHeight === 'number' ? `${frameHeight}px` : frameHeight;
+      frame.style.height = frameHeight;
+      frame.style.minHeight = frameHeight;
       frame.setAttribute('width', '100%');
       frame.setAttribute('height', String(widgetHeight));
     });
