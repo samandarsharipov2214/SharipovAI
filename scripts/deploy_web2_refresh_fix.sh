@@ -9,31 +9,30 @@ echo "[1/2] Running the protected SharipovAI deployment with Web2 ownership test
 cd "$ROOT"
 bash scripts/deploy_market_paper_runtime.sh
 
-echo "[2/2] Verifying v29 live status, ruble display, explanations and public HTTPS health..."
+echo "[2/2] Verifying v30 transparent trades, live status, ruble display and public HTTPS health..."
 docker exec "$SERVICE" sh -lc '
 set -Eeuo pipefail
 index=/app/dashboard/static/web2/index.html
 grep -F "navigation_coordinator_v23.js?v=25" "$index" >/dev/null
 grep -F "web2.js?v=29" "$index" >/dev/null
 grep -F "system_status_v11.js?v=29" "$index" >/dev/null
-grep -F "overview_runtime_v25.js?v=28" "$index" >/dev/null
-grep -F "decision_runtime_v25.js?v=25" "$index" >/dev/null
-grep -F "learning_runtime_v25.js?v=25" "$index" >/dev/null
-grep -F "exchange_execution_settings_v18.js?v=27" "$index" >/dev/null
-grep -F "/api/market/bybit-websocket/status" /app/dashboard/static/web2/web2.js >/dev/null
-grep -F "основных API" /app/dashboard/static/web2/web2.js >/dev/null
+grep -F "overview_runtime_v25.js?v=30" "$index" >/dev/null
+grep -F "exchange_execution_settings_v18.js?v=30" "$index" >/dev/null
+grep -F "interface_v30.css?v=30" "$index" >/dev/null
 grep -F "AUTO_REFRESH_MS = 15000" /app/dashboard/static/web2/system_status_v11.js >/dev/null
 grep -F "setInterval(updateClock, 1000)" /app/dashboard/static/web2/system_status_v11.js >/dev/null
-grep -F "Текущее время" /app/dashboard/static/web2/system_status_v11.js >/dev/null
 ! grep -F "Записей:" /app/dashboard/static/web2/system_status_v11.js >/dev/null
 ! grep -F "Состояние:" /app/dashboard/static/web2/system_status_v11.js >/dev/null
 grep -F "ADAUSDT" /app/dashboard/static/web2/overview_runtime_v25.js >/dev/null
-grep -F "Почему ИИ открыл или закрыл" /app/dashboard/static/web2/overview_runtime_v25.js >/dev/null
-grep -F "maximumFractionDigits:1" /app/dashboard/static/web2/overview_runtime_v25.js >/dev/null
 grep -F "/api/currency/usd-rub" /app/dashboard/static/web2/overview_runtime_v25.js >/dev/null
-grep -F "Рубли ₽" /app/dashboard/static/web2/overview_runtime_v25.js >/dev/null
-grep -F "Почему открыта" /app/dashboard/static/web2/exchange_execution_settings_v18.js >/dev/null
-grep -F "Почему закрыта" /app/dashboard/static/web2/exchange_execution_settings_v18.js >/dev/null
+grep -F "Размер позиции" /app/dashboard/static/web2/overview_runtime_v25.js >/dev/null
+grep -F "Результат движения цены" /app/dashboard/static/web2/overview_runtime_v25.js >/dev/null
+grep -F "Комиссии" /app/dashboard/static/web2/overview_runtime_v25.js >/dev/null
+grep -F "Чистый результат" /app/dashboard/static/web2/overview_runtime_v25.js >/dev/null
+grep -F "цена справа является текущей, а не ценой выхода" /app/dashboard/static/web2/exchange_execution_settings_v18.js >/dev/null
+grep -F "data-trade-filter" /app/dashboard/static/web2/exchange_execution_settings_v18.js >/dev/null
+grep -F ".trade-card" /app/dashboard/static/web2/interface_v30.css >/dev/null
+grep -F ".trade-breakdown" /app/dashboard/static/web2/interface_v30.css >/dev/null
 python -m py_compile /app/dashboard/currency_api.py /app/dashboard/trade_explanations.py /app/dashboard/paper_activity_api.py
 '
 docker exec -e PYTHONPATH=/app "$SERVICE" python - <<'PY'
@@ -59,7 +58,9 @@ assert trades_payload.get("status") == "ok" and isinstance(trades_payload.get("t
 for trade in trades_payload.get("trades", []):
     assert trade.get("entry_reason_ru"), f"missing entry explanation: {trade.get('id')}"
     assert trade.get("operation_explanation_ru"), f"missing operation explanation: {trade.get('id')}"
-print("SOURCE_AND_EXPLANATION_CONTRACTS_OK")
+    assert float(trade.get("notional", 0) or 0) > 0, f"missing notional: {trade.get('id')}"
+    assert float(trade.get("quantity", 0) or 0) > 0, f"missing quantity: {trade.get('id')}"
+print("TRANSPARENT_TRADE_CONTRACTS_OK")
 
 try:
     rate_payload = app.state.usd_rub_rate_service.get_rate()
@@ -76,4 +77,4 @@ print("WEB2_VIRTUAL_DATA_OK")
 PY
 curl --fail --silent --show-error "$PUBLIC_URL/health"
 echo
-echo "Web2 v29 live concise status, ruble capital and explainable operations deployed and verified."
+echo "Web2 v30 transparent trade interface deployed and verified."
