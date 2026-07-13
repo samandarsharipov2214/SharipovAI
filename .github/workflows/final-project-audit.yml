@@ -1,0 +1,124 @@
+name: Final Project Audit
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'dashboard/**'
+      - 'scripts/final_project_audit.py'
+      - 'scripts/release_audit.py'
+      - 'deploy/**'
+      - 'tests/**'
+      - 'requirements.txt'
+      - '.github/workflows/final-project-audit.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'dashboard/**'
+      - 'scripts/final_project_audit.py'
+      - 'scripts/release_audit.py'
+      - 'deploy/**'
+      - 'tests/**'
+      - 'requirements.txt'
+      - '.github/workflows/final-project-audit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: final-project-audit-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static-audit:
+    name: Five-phase static audit
+    runs-on: [self-hosted, linux, x64, sharipovai-ci]
+    timeout-minutes: 45
+    env:
+      PYTHONUNBUFFERED: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+      ADMIN_USERNAME: ci-admin
+      ADMIN_PASSWORD: ci-test-password
+      AUTH_SECRET: ci-test-secret
+      SHARIPOVAI_DISABLE_AUTH: '1'
+      SHARIPOVAI_DATABASE_REQUIRED: '1'
+      MARKET_STREAM_ENABLED: '0'
+      FEATURE_BYBIT_WEBSOCKET: '0'
+      BYBIT_ACCOUNT_SYNC_ENABLED: '0'
+      AUTONOMOUS_PAPER_ENABLED: '0'
+      AUTONOMOUS_TESTNET_ENABLED: '0'
+      AUTONOMOUS_TESTNET_BRIDGE_ENABLED: '0'
+      TESTNET_EXECUTION_ENABLED: '0'
+      EXCHANGE_LIVE_TRADING_ENABLED: '0'
+      FEATURE_BYBIT_PRIVATE_ORDER_WS: '0'
+      BYBIT_ALLOW_LEGACY_EXCHANGE_CREDENTIALS: '0'
+      EXECUTION_KILL_SWITCH: '1'
+      AUTONOMOUS_TRADING_STAGE: '2'
+      EXCHANGE_MODE: sandbox
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Prepare isolated runtime state
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          RUNTIME_DIR="${RUNNER_TEMP}/sharipovai-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          rm -rf "$RUNTIME_DIR"
+          mkdir -p "$RUNTIME_DIR"
+          echo "SHARIPOVAI_DATA_DIR=$RUNTIME_DIR" >> "$GITHUB_ENV"
+          echo "DATABASE_URL=sqlite:///$RUNTIME_DIR/sharipovai.db" >> "$GITHUB_ENV"
+          echo "NEWS_MONITOR_STATE_FILE=$RUNTIME_DIR/news-monitor.json" >> "$GITHUB_ENV"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip --quiet
+          python -m pip install -r requirements.txt --quiet
+      - name: Initialize canonical database
+        run: python scripts/migrate_project_db.py
+      - name: Run full pytest suite
+        id: pytest
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q --tb=short 2>&1 | tee final-pytest.log
+      - name: Run five-phase static audit
+        id: audit
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m scripts.final_project_audit --mode static 2>&1 | tee final-audit-static.log
+      - name: Upload static evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sharipovai-final-static-audit
+          path: |
+            audit-results/final-audit-static.json
+            audit-results/final-audit-static.md
+            final-audit-static.log
+            final-pytest.log
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Fail when verification failed
+        if: steps.pytest.outcome == 'failure' || steps.audit.outcome == 'failure'
+        run: exit 1
+
+  live-vps-audit:
+    name: Read-only live VPS audit
+    needs: static-audit
+    if: github.event_name != 'pull_request' && always()
+    runs-on: [self-hosted, linux, x64, sharipovai-ci]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run loopback-only live audit
+        shell: bash
+        run: python3 -m scripts.final_project_audit --mode live --base-url http://127.0.0.1:8000
