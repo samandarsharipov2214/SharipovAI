@@ -1,4 +1,4 @@
-"""Regression tests for AI bots center and dashboard chat answers."""
+"""Regression tests for the evidence-based AI center and dashboard chat."""
 
 from __future__ import annotations
 
@@ -9,41 +9,45 @@ from learning_engine import LearningSummary
 from runner import RunnerOutput
 
 
-def test_ai_bots_page_renders_supervisor_and_agents() -> None:
-    """AI bots page exposes the general controller and bot statuses."""
-
+def test_ai_bots_page_renders_canonical_runtime_organs() -> None:
     client = TestClient(create_app(runner_factory=_runner_factory))
     response = client.get("/ai-bots?lang=ru")
 
     assert response.status_code == 200
     assert "AI-боты" in response.text
     assert "Генеральный контролёр AI" in response.text
-    assert "Market Agent" in response.text
-    assert "News Agent" in response.text
-    assert "Risk Engine" in response.text
-    assert "Security Guard" in response.text
-    assert "Список ботов и их работа" in response.text
+    assert "Канонических органов: 9" in response.text
+    assert "runtime monitor" in response.text
+    assert "выдуманные статусы не используются" in response.text
 
 
-def test_ai_bots_api_returns_supervisor_summary() -> None:
-    """AI bots API returns stable bot summary and supervisor report."""
-
+def test_ai_bots_api_returns_truthful_supervisor_summary() -> None:
     client = TestClient(create_app(runner_factory=_runner_factory))
     response = client.get("/api/ai-bots")
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["status"] == "ok"
-    assert payload["supervisor"]["name"] == "Генеральный контролёр AI"
-    assert payload["summary"]["total_bots"] >= 10
-    assert payload["summary"]["active"] >= 8
-    assert any(bot["name"] == "Market Agent" for bot in payload["bots"])
-    assert any(bot["name"] == "Security Guard" for bot in payload["bots"])
+    assert payload["status"] in {"ok", "warning"}
+    assert payload["supervisor"]["name"] == "General Controller"
+    assert payload["summary"]["canonical_ai_count"] == 9
+    assert payload["summary"]["total_bots"] == 9
+    assert len(payload["bots"]) == 9
+    assert payload["synthetic_fallback_used"] is False
+    assert {bot["id"] for bot in payload["bots"]} == {
+        "general_controller",
+        "market_intelligence",
+        "news_intelligence",
+        "risk_engine",
+        "portfolio_engine",
+        "virtual_execution",
+        "decision_quality",
+        "learning_engine",
+        "security_guard",
+    }
+    assert all(bot["status"] in {"working", "degraded", "unknown"} for bot in payload["bots"])
 
 
 def test_chat_answers_identity_like_ai_assistant() -> None:
-    """Chat identity response must not fall back to primitive canned hints."""
-
     client = TestClient(create_app(runner_factory=_runner_factory))
     response = client.post("/api/chat/message", json={"message": "ты ИИ или бот?"})
 
@@ -56,8 +60,6 @@ def test_chat_answers_identity_like_ai_assistant() -> None:
 
 
 def test_chat_answers_what_was_bought_with_trade_details() -> None:
-    """Chat should answer concrete trade questions with concrete positions."""
-
     client = TestClient(create_app(runner_factory=_runner_factory))
     response = client.post("/api/chat/message", json={"message": "что купил?"})
 
@@ -71,8 +73,6 @@ def test_chat_answers_what_was_bought_with_trade_details() -> None:
 
 
 def test_chat_answers_unknown_question_with_system_state() -> None:
-    """Unknown chat questions should still produce a useful system-state answer."""
-
     client = TestClient(create_app(runner_factory=_runner_factory))
     response = client.post("/api/chat/message", json={"message": "что происходит вообще?"})
 
@@ -84,11 +84,7 @@ def test_chat_answers_unknown_question_with_system_state() -> None:
 
 
 class _FakeRunner:
-    """Fake runner for chat and AI-bot tests."""
-
     def run(self) -> RunnerOutput:
-        """Return deterministic runner output."""
-
         return RunnerOutput(
             decision="BUY",
             confidence=99.9,
@@ -117,6 +113,4 @@ class _FakeRunner:
 
 
 def _runner_factory() -> _FakeRunner:
-    """Return fake runner."""
-
     return _FakeRunner()
