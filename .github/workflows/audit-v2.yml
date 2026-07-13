@@ -1,0 +1,47 @@
+name: Audit v2
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+      - name: Run tests
+        id: tests
+        continue-on-error: true
+        run: python -m pytest -q --disable-warnings --maxfail=100 | tee pytest-v2.log
+      - name: Run five-phase static audit
+        id: audit
+        continue-on-error: true
+        run: python scripts/audit_v2.py --mode static | tee audit-v2-static.log
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-v2-static
+          path: |
+            audit-results/audit-v2-static.json
+            audit-results/audit-v2-static.md
+            pytest-v2.log
+            audit-v2-static.log
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Enforce result
+        if: steps.tests.outcome == 'failure' || steps.audit.outcome == 'failure'
+        run: exit 1
