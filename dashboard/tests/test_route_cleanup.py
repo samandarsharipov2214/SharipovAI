@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from dashboard.route_cleanup import remove_legacy_routes
+from dashboard.route_cleanup import remove_legacy_routes, retain_last_registered_routes
 
 
 def test_exact_legacy_route_is_removed_before_canonical_registration() -> None:
@@ -27,6 +27,25 @@ def test_exact_legacy_route_is_removed_before_canonical_registration() -> None:
     response = TestClient(app).get("/api/example")
     assert response.status_code == 200
     assert response.json() == {"owner": "canonical"}
+
+
+def test_last_registered_canonical_route_replaces_reintroduced_legacy_owner() -> None:
+    app = FastAPI()
+
+    @app.get("/api/example")
+    def legacy() -> dict[str, str]:
+        return {"owner": "legacy"}
+
+    @app.get("/api/example")
+    def compatibility_wrapper() -> dict[str, str]:
+        return {"owner": "compatibility"}
+
+    @app.get("/api/example")
+    def canonical() -> dict[str, str]:
+        return {"owner": "canonical"}
+
+    assert retain_last_registered_routes(app, (("GET", "/api/example"),)) == 2
+    assert TestClient(app).get("/api/example").json() == {"owner": "canonical"}
 
 
 def test_cleanup_does_not_remove_other_method_or_path() -> None:
