@@ -36,6 +36,8 @@ docker compose run --rm --no-deps \
   -e PAPER_ACTIVITY_AUTORUN_ENABLED=0 \
   --entrypoint sh "$SERVICE" -lc '
 set -Eeuo pipefail
+export PYTHONPATH="/app${PYTHONPATH:+:$PYTHONPATH}"
+cd /app
 python -m pytest \
   tests/test_market_paper_engine.py \
   tests/test_news_intelligence_runtime.py \
@@ -73,6 +75,8 @@ docker compose run --rm --no-deps \
   -e PAPER_ACTIVITY_AUTORUN_ENABLED=0 \
   --entrypoint sh "$SERVICE" -lc '
 set -Eeuo pipefail
+export PYTHONPATH="/app${PYTHONPATH:+:$PYTHONPATH}"
+cd /app
 log=/tmp/sharipovai-candidate.log
 uvicorn dashboard.app:app --host 127.0.0.1 --port 8000 >"$log" 2>&1 &
 pid=$!
@@ -126,7 +130,7 @@ if [[ "$health" != "healthy" ]]; then
 fi
 
 echo "[5/5] Verifying the running market-backed virtual account..."
-docker exec "$SERVICE" python /app/scripts/verify_market_paper_runtime.py
+docker exec -e PYTHONPATH=/app "$SERVICE" python /app/scripts/verify_market_paper_runtime.py
 
 trap - ERR
 echo "Market-backed virtual account deployed and verified."
