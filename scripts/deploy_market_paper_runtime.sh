@@ -120,7 +120,8 @@ python -m pytest \
   tests/test_ai_organ_safe_runtime.py \
   tests/test_verify_market_paper_runtime_script.py \
   tests/test_config_loader_cwd.py \
-  tests/test_web2_page_ownership.py -q
+  tests/test_web2_page_ownership.py \
+  tests/test_source_status_contracts.py -q
 python -m py_compile \
   /app/market_paper_engine.py \
   /app/paper_activity_autorun.py \
@@ -130,6 +131,9 @@ python -m py_compile \
   /app/dashboard/ai_organ_state_safe_api.py \
   /app/dashboard/paper_activity_api.py \
   /app/dashboard/realtime_status_api.py \
+  /app/dashboard/learning_os_api.py \
+  /app/dashboard/evidence_vault_api.py \
+  /app/dashboard/source_status_compat_api.py \
   /app/news_intelligence/models.py \
   /app/news_intelligence/sources.py \
   /app/news_intelligence/agents.py \
@@ -151,6 +155,9 @@ assert "/health" in paths, "health route missing"
 assert "/api/virtual-account/state" in paths, "virtual account route missing"
 assert "/api/news-agents/status" in paths, "news agents route missing"
 assert "/api/system/ai-organs" in paths, "AI organ monitor route missing"
+assert "/api/learning-os/status" in paths, "Learning OS status route missing"
+assert "/api/evidence-vault/recent" in paths, "Evidence Vault recent route missing"
+assert "/api/exchange/account/status" in paths, "Bybit account status route missing"
 print("FULL_APP_IMPORT_OK")
 PY
 '
