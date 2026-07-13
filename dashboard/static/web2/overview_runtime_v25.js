@@ -4,12 +4,16 @@
   const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
   const arr = (...values) => values.find(Array.isArray) || [];
   const symbols = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT','ADAUSDT'];
-  const state = { virtual:null, bots:null, news:null, run:null, quotes:{}, health:null, loadedAt:null, errors:{}, symbol:savedSymbol() };
+  const state = {
+    virtual:null, bots:null, news:null, run:null, quotes:{}, health:null, fx:null, fxError:'',
+    loadedAt:null, errors:{}, symbol:savedSymbol(), displayCurrency:savedCurrency(),
+  };
 
   const active = () => (window.SharipovAIPageCoordinator?.activePage?.() || document.querySelector('#nav button.active[data-page]')?.dataset.page) === 'overview';
   const get = async (url) => { const response=await fetch(url,{credentials:'same-origin',cache:'no-store'}); if(!response.ok) throw new Error(String(response.status)); return response.json(); };
   const money = (value) => Number.isFinite(Number(value)) ? Number(value).toLocaleString('ru-RU',{minimumFractionDigits:1,maximumFractionDigits:1}) : '—';
   const resultMoney = (value) => Number.isFinite(Number(value)) ? Number(value).toLocaleString('ru-RU',{minimumFractionDigits:1,maximumFractionDigits:1}) : '—';
+  const rubles = (value) => Number.isFinite(Number(value)) ? Math.round(Number(value)).toLocaleString('ru-RU') : '—';
   const price = (value) => {
     const number=Number(value); if(!Number.isFinite(number)) return '—';
     const digits=Math.abs(number)>=100?1:Math.abs(number)>=10?2:4;
@@ -26,6 +30,34 @@
     try{candidate ||= JSON.parse(localStorage.getItem('sharipovai-settings')||'{}').defaultSymbol||'';}catch{}
     candidate=String(candidate).replace(/[^A-Za-z0-9]/g,'').toUpperCase();
     return symbols.includes(candidate)?candidate:'BTCUSDT';
+  }
+  function savedCurrency(){
+    const candidate=String(localStorage.getItem('sharipovai-display-currency')||'RUB').toUpperCase();
+    return candidate==='USDT'?'USDT':'RUB';
+  }
+  function fxRate(){
+    const rate=Number(state.fx?.rub_per_usdt_estimate??state.fx?.rub_per_usd);
+    return Number.isFinite(rate)&&rate>0?rate:null;
+  }
+  function displayAmount(value){
+    const amount=Number(value);
+    if(!Number.isFinite(amount)) return '—';
+    const rate=fxRate();
+    if(state.displayCurrency==='RUB'&&rate) return `≈ ${rubles(amount*rate)} ₽`;
+    return `${money(amount)} USDT`;
+  }
+  function displayAmountNote(value, baseNote){
+    const amount=Number(value), rate=fxRate();
+    if(!Number.isFinite(amount)) return baseNote;
+    if(state.displayCurrency==='RUB') return rate?`${money(amount)} USDT · ${baseNote}`:`${money(amount)} USDT · курс RUB временно недоступен`;
+    return rate?`≈ ${rubles(amount*rate)} ₽ · ${baseNote}`:baseNote;
+  }
+  function fxStatus(){
+    const rate=fxRate();
+    if(!rate) return state.fxError?`Курс рублей временно недоступен: ${state.fxError}`:'Курс рублей загружается';
+    const date=state.fx?.effective_date||'дата не передана';
+    const stale=state.fx?.stale?' · сохранённый курс':'';
+    return `1 USDT ≈ ${price(rate)} ₽ · ${state.fx?.source||'Банк России'} · ${date}${stale}`;
   }
   function virtualData(){
     const raw=state.virtual||{};
@@ -83,12 +115,13 @@
     const tradeRows=latest.length?`<table class="v10-table"><thead><tr><th>Пара</th><th>Операция</th><th>Статус</th><th>Вход</th><th>Текущая / выход</th><th>Net PnL</th><th>Почему ИИ открыл или закрыл</th></tr></thead><tbody>${latest.map(x=>`<tr><td>${esc(x.symbol||x.asset||'—')}</td><td>${esc(actionLabel(x))}</td><td>${esc(x.status||'—')}</td><td>${esc(price(x.entry_price))}</td><td>${esc(price(x.exit_price??x.current_price))}</td><td class="${Number(x.net_pnl)>=0?'positive':'negative'}">${esc(resultMoney(x.net_pnl))} USDT</td><td>${esc(operationReason(x))}</td></tr>`).join('')}</tbody></table>`:empty('Виртуальные операции пока не получены.');
     const newsRows=news.length?news.map(x=>`<div class="news-item"><b>${esc(x.title||x.headline||'Новость')}</b><small>${esc(x.source||x.publisher||'Источник не указан')}</small></div>`).join(''):empty('Подтверждённые новости пока не получены.');
     content.innerHTML=`<div class="title"><h1>Центр управления</h1><p>Рабочая сводка по виртуальному счёту, рынку, ИИ и источникам</p></div>
+      <div class="status-actions"><label>Показывать капитал <select id="overviewDisplayCurrency"><option value="RUB" ${state.displayCurrency==='RUB'?'selected':''}>Рубли ₽</option><option value="USDT" ${state.displayCurrency==='USDT'?'selected':''}>USDT</option></select></label><span>${esc(fxStatus())}</span></div>
       <section class="metrics">
-        ${card('Капитал',s.equity!=null?money(s.equity)+' USDT':'—','Виртуальный счёт · рыночный PnL')}
-        ${card('Доступно',s.cash!=null?money(s.cash)+' USDT':'—','Свободный виртуальный капитал')}
+        ${card('Капитал',s.equity!=null?displayAmount(s.equity):'—',displayAmountNote(s.equity,'Виртуальный счёт · рыночный PnL'))}
+        ${card('Доступно',s.cash!=null?displayAmount(s.cash):'—',displayAmountNote(s.cash,'Свободный виртуальный капитал'))}
         ${card('Открытые позиции',String(open),'По подтверждённым котировкам')}
         ${card('Закрытые сделки',String(closed),'Фактический журнал')}
-        ${card('Net PnL',Number.isFinite(pnl)?resultMoney(pnl)+' USDT':'—','С учётом комиссий',Number.isFinite(pnl)?(pnl>=0?'positive':'negative'):'')}
+        ${card('Net PnL',Number.isFinite(pnl)?displayAmount(pnl):'—',displayAmountNote(pnl,'С учётом комиссий'),Number.isFinite(pnl)?(pnl>=0?'positive':'negative'):'')}
         ${card('ИИ с подтверждением',`${verified}/${bots.length}`,'Сигнал до 90 секунд',verified?'positive':'')}
       </section>
       <section class="v10-grid">
@@ -101,6 +134,11 @@
   }
 
   function bindOverviewControls(){
+    $('overviewDisplayCurrency')?.addEventListener('change',(event)=>{
+      state.displayCurrency=event.target.value==='USDT'?'USDT':'RUB';
+      localStorage.setItem('sharipovai-display-currency',state.displayCurrency);
+      render();
+    });
     $('overviewSymbol')?.addEventListener('change',(event)=>{
       state.symbol=symbols.includes(event.target.value)?event.target.value:'BTCUSDT';
       localStorage.setItem('sharipovai-market-symbol',state.symbol);
@@ -123,13 +161,15 @@
       ['virtual','/api/virtual-account/state'],['bots','/api/ai-bots'],['news','/api/social-news'],
       ['run','/api/run'],['health','/api/system/health'],
     ];
-    const [coreResults,quoteResults]=await Promise.all([
+    const [coreResults,quoteResults,fxResult]=await Promise.all([
       Promise.allSettled(entries.map(([,url])=>get(url))),
       Promise.allSettled(symbols.map(symbol=>get(`/api/market/quote/${symbol}`))),
+      get('/api/currency/usd-rub').then(value=>({ok:true,value})).catch(error=>({ok:false,error})),
     ]);
     state.errors={};
     coreResults.forEach((result,index)=>{const key=entries[index][0];if(result.status==='fulfilled')state[key]=result.value;else state.errors[key]=result.reason?.message||'недоступно';});
     quoteResults.forEach((result,index)=>{const symbol=symbols[index];if(result.status==='fulfilled')state.quotes[symbol]=result.value;else state.errors[`quote_${symbol}`]=result.reason?.message||'недоступно';});
+    if(fxResult.ok){state.fx=fxResult.value;state.fxError='';}else{state.fxError=fxResult.error?.message||'недоступно';}
     state.loadedAt=new Date().toLocaleString('ru-RU');
     render();
   }
