@@ -188,6 +188,7 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                     f"verified_settlement_error:{type(exc).__name__}: {exc}",
                     symbol,
                 )
+            self._finalize_constructed_trade(trade)
 
     def _trade(
         self,
@@ -217,6 +218,36 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                 "canonical_entry_authorized": True,
                 "authorization_single_use": True,
             }
+        )
+        self._finalize_constructed_trade(trade)
+
+    def _finalize_constructed_trade(self, trade: dict[str, Any]) -> None:
+        """Allow one additive enrichment during the same atomic paper tick.
+
+        The base loop persists the initial trade while recording its event. Council
+        metadata and verified settlement are added immediately afterwards. Existing
+        financial/identity fields may never change; only new keys may be appended.
+        """
+
+        key = str(trade.get("trade_id") or "").strip()
+        if not key:
+            raise RuntimeError("constructed paper trade has no trade_id")
+        existing = self.database.get_json(self.trade_namespace, key)
+        if existing is None:
+            return
+        current = existing.get("value")
+        if not isinstance(current, dict):
+            raise RuntimeError("constructed paper trade evidence is invalid")
+        for field, value in current.items():
+            if trade.get(field) != value:
+                raise RuntimeError(f"immutable paper trade field changed during enrichment: {field}")
+        if current == trade:
+            return
+        self.database.put_json(
+            self.trade_namespace,
+            key,
+            trade,
+            expected_version=int(existing["version"]),
         )
 
     def _proposal_state_snapshot(self) -> dict[str, Any]:
