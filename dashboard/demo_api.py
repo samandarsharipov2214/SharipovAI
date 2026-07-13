@@ -15,12 +15,17 @@ from fastapi.responses import JSONResponse
 from ai_chat_orchestrator import answer_chat
 from paper_activity_engine import PaperActivityEngine
 from .dashboard_contracts_middleware import install_dashboard_contracts_middleware
-from .route_cleanup import remove_legacy_routes
+from .route_cleanup import remove_legacy_routes, retain_last_registered_routes
 from .stabilization_compat import install_stabilization_compat
 from .web2_host import install_web2_host
 
 _CANONICAL_STATE_ROUTE = "/api/virtual-account/state"
 _CANONICAL_TICK_ROUTE = "/api/virtual-account/tick"
+_DEMO_ROUTE_SPECS = (
+    ("GET", "/api/demo/state"),
+    ("POST", "/api/demo/chat"),
+    ("POST", "/api/chat/message"),
+)
 
 
 def _canonical_state() -> dict[str, Any]:
@@ -167,13 +172,7 @@ def install_demo_api(app: FastAPI) -> None:
 
     remove_legacy_routes(
         app,
-        (
-            ("GET", "/api/demo/state"),
-            ("POST", "/api/demo/chat"),
-            ("POST", "/api/chat/message"),
-            ("GET", "/api/social-news"),
-            ("POST", "/api/social-news/rss/refresh"),
-        ),
+        (*_DEMO_ROUTE_SPECS, ("GET", "/api/social-news"), ("POST", "/api/social-news/rss/refresh")),
     )
 
     @app.get("/api/demo/state")
@@ -204,6 +203,8 @@ def install_demo_api(app: FastAPI) -> None:
     @app.post("/api/demo/reset")
     def demo_reset(_payload: dict[str, Any] | None = Body(default=None)) -> JSONResponse:
         return _blocked_write("reset")
+
+    retain_last_registered_routes(app, _DEMO_ROUTE_SPECS)
 
 
 __all__ = ["install_demo_api", "load_shared_state", "run_ai_command"]
