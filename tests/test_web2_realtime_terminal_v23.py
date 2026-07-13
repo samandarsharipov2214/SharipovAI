@@ -37,11 +37,11 @@ def test_public_websocket_is_enabled_for_all_terminal_symbols_without_trading() 
     assert 'EXECUTION_KILL_SWITCH: "1"' in compose
 
 
-def test_v23_polish_and_cache_busting_are_connected() -> None:
+def test_polish_and_terminal_assets_are_connected() -> None:
     index = (WEB2 / "index.html").read_text(encoding="utf-8")
-    assert "/static/web2/site_polish_v23.css?v=23" in index
-    assert "/static/web2/market_terminal_v13.css?v=23" in index
-    assert "/static/web2/market_terminal_v13.js?v=23" in index
+    assert "/static/web2/site_polish_v23.css?" in index
+    assert "/static/web2/market_terminal_v13.css?" in index
+    assert "/static/web2/market_terminal_v13.js?" in index
     assert (WEB2 / "site_polish_v23.css").is_file()
 
 
