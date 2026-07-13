@@ -17,27 +17,40 @@ rollback() {
   if [[ -n "$old_image_ref" ]] && docker image inspect "$ROLLBACK_TAG" >/dev/null 2>&1; then
     echo "New runtime verification failed; restoring previous SharipovAI image."
     docker tag "$ROLLBACK_TAG" "$old_image_ref"
-    docker compose up -d --force-recreate "$SERVICE"
+    docker compose up -d --no-deps --force-recreate "$SERVICE"
   fi
 }
-trap rollback ERR
+
+on_error() {
+  status=$?
+  rollback || true
+  exit "$status"
+}
+trap on_error ERR
 
 docker compose build "$SERVICE"
 docker compose run --rm --no-deps "$SERVICE" \
   python -m pytest tests/test_market_paper_engine.py -q
-docker compose up -d --force-recreate "$SERVICE"
+docker compose up -d --no-deps --force-recreate "$SERVICE"
 
-for _ in $(seq 1 40); do
+health="starting"
+for _ in $(seq 1 90); do
   health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$SERVICE" 2>/dev/null || true)"
   if [[ "$health" == "healthy" ]]; then
+    break
+  fi
+  if [[ "$health" == "unhealthy" || "$health" == "exited" || "$health" == "dead" ]]; then
     break
   fi
   sleep 2
 done
 
-health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$SERVICE")"
 if [[ "$health" != "healthy" ]]; then
-  echo "SharipovAI health check failed: $health" >&2
+  echo "SharipovAI health check failed after 180s: $health" >&2
+  docker inspect "$SERVICE" --format '{{json .State}}' 2>/dev/null || true
+  docker logs --tail 120 "$SERVICE" 2>/dev/null || true
+  rollback || true
+  trap - ERR
   exit 1
 fi
 
