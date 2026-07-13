@@ -1,10 +1,10 @@
 (() => {
   'use strict';
 
-  const VERSION = 31;
+  const VERSION = 32;
   const PAGE_OWNERS = new Map([
     ['overview', 'overview_runtime_v25.js'],
-    ['market', 'market_terminal_v13.js'],
+    ['market', 'tradingview_market_v32.js'],
     ['decision', 'decision_runtime_v25.js'],
     ['portfolio', 'portfolio_risk_v16.js'],
     ['trades', 'exchange_execution_settings_v18.js'],
@@ -63,7 +63,7 @@
 
   function writeAllowed(stack) {
     const value = String(stack || '');
-    if (value.includes('sections_v10.js')) return false;
+    if (value.includes('sections_v10.js') || value.includes('market_terminal_v13.js')) return false;
     const activeOwner = PAGE_OWNERS.get(activePage());
     const callerOwner = scriptFromStack(value);
     if (activeOwner) {
