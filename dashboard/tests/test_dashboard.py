@@ -145,10 +145,15 @@ def test_stress_lab_scenarios_and_run_api_work() -> None:
 
 
 def test_ai_improvement_api_is_read_only() -> None:
-    payload = TestClient(create_app(runner_factory=_runner_factory)).get("/api/ai-improvement").json()
-    assert payload["status"] == "ok"
+    response = TestClient(create_app(runner_factory=_runner_factory)).get("/api/ai-improvement")
+    assert response.status_code == 200
+    payload = response.json()
     assert payload["recommendations"]
-    assert all(item.get("automatic") is False for item in payload["recommendations"])
+    assert payload.get("constitution")
+    assert payload.get("generated_at")
+    forbidden = {"execute", "apply", "auto_apply", "write", "deploy"}
+    assert not (forbidden & set(payload))
+    assert all(not (forbidden & set(item)) for item in payload["recommendations"])
 
 
 def test_logo_and_favicon_routes_work() -> None:
