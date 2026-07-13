@@ -66,6 +66,7 @@ jobs:
 
       - name: Run targeted stabilization tests
         run: |
+          set -o pipefail
           python -m pytest \
             dashboard/tests/test_admin_secure_app_roles.py \
             dashboard/tests/test_password_change_flow.py \
@@ -74,13 +75,15 @@ jobs:
             dashboard/tests/test_crash_hardening.py \
             dashboard/tests/test_dashboard.py \
             dashboard/tests/test_demo_api.py \
-            -q --tb=short
+            -q --tb=short 2>&1 | tee dashboard-tests.log
 
       - name: Upload dashboard diagnostic
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: dashboard-stabilization-diagnostic
-          path: dashboard-import-diagnostic.txt
+          path: |
+            dashboard-import-diagnostic.txt
+            dashboard-tests.log
           if-no-files-found: warn
           retention-days: 3
