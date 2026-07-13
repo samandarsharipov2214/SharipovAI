@@ -21,7 +21,7 @@ def test_private_api_requires_auth_when_auth_is_enabled(monkeypatch) -> None:
     assert response.status_code == 401
     assert response.json() == {
         "status": "unauthorized",
-        "detail": "authentication required",
+        "error": "authentication_required",
     }
 
 
