@@ -34,7 +34,7 @@ def test_bridge_does_nothing_when_autonomous_testnet_disabled(tmp_path, monkeypa
     assert snapshot["journal"]["accepted_orders"] == 0
 
 
-def test_stage_controller_uses_persisted_testnet_evidence(tmp_path, monkeypatch) -> None:
+def test_stage_controller_rejects_unverified_paper_history(tmp_path, monkeypatch) -> None:
     paper = tmp_path / "paper.json"
     trades = []
     for index in range(30):
@@ -47,5 +47,5 @@ def test_stage_controller_uses_persisted_testnet_evidence(tmp_path, monkeypatch)
     from autonomous_trading.stage_controller import StageController
     assessment = StageController(str(paper), journal=journal).assess()
     assert assessment.metrics["verified_testnet_orders"] == 50.0
-    assert assessment.eligible_stage == 3
-    assert any("владельца" in item for item in assessment.blockers)
+    assert assessment.eligible_stage == 2
+    assert any("подтвержд" in item.lower() for item in assessment.blockers)
