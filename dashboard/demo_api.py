@@ -1,126 +1,145 @@
-"""Persistent paper-trading API shared by website, Mini App and Telegram."""
+"""Deprecated read-only compatibility API for the canonical Virtual Account.
+
+Legacy clients may still read ``/api/demo/*`` while migrating to
+``/api/virtual-account/*``. This module never invents prices, creates trades, or
+changes balances. All execution-like requests are blocked fail-closed.
+"""
 from __future__ import annotations
 
-import json
 import os
-from pathlib import Path
 from typing import Any
 
 from fastapi import Body, FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from ai_chat_orchestrator import answer_chat
+from paper_activity_engine import PaperActivityEngine
 from .dashboard_contracts_middleware import install_dashboard_contracts_middleware
 from .stabilization_compat import install_stabilization_compat
 
+_CANONICAL_STATE_ROUTE = "/api/virtual-account/state"
+_CANONICAL_TICK_ROUTE = "/api/virtual-account/tick"
 
-def _path() -> Path:
-    return Path(os.getenv("DEMO_STATE_FILE", "data/demo_state.json"))
 
-
-def _default_state() -> dict[str, Any]:
+def _canonical_state() -> dict[str, Any]:
+    raw = PaperActivityEngine().state(catch_up=False)
+    summary = raw.get("summary", {}) if isinstance(raw, dict) else {}
+    trades = list(raw.get("trades", [])) if isinstance(raw, dict) else []
+    positions = list(raw.get("positions", [])) if isinstance(raw, dict) and isinstance(raw.get("positions"), list) else []
+    open_positions = int(summary.get("open_positions", len(positions)) or 0)
+    equity = float(summary.get("equity", raw.get("equity", 10_000.0)) or 0.0)
+    cash = float(summary.get("cash", raw.get("cash", equity)) or 0.0)
+    net_pnl = float(summary.get("net_pnl", raw.get("net_pnl", 0.0)) or 0.0)
+    total_fees = float(summary.get("total_fees", raw.get("total_fees", 0.0)) or 0.0)
     return {
-        "mode": "PAPER",
-        "equity": 10000.0,
-        "cash": 10000.0,
-        "pnl": 0.0,
-        "net_pnl": 0.0,
-        "total_fees": 0.0,
-        "commission_drag": 0.0,
-        "break_even_price": 0.0,
-        "open_positions": 0,
-        "positions": [],
-        "trades": [],
-        "exchange_status": {"mode": os.getenv("EXCHANGE_MODE", "sandbox"), "connected": True},
-        "online_monitoring": {"demo_account_online": True, "exchange_connector_online": True, "real_orders_blocked": True, "live_execution_enabled": False},
-        "bybit_costs": {"cheapest_product": "spot maker", "cheapest_borrow": "USDT займ"},
-        "integration": {"website": True, "mini_app": True, "telegram": True, "source": "dashboard.demo_api"},
+        **(raw if isinstance(raw, dict) else {}),
+        "mode": "VIRTUAL_ACCOUNT",
+        "equity": equity,
+        "cash": cash,
+        "pnl": net_pnl,
+        "net_pnl": net_pnl,
+        "total_fees": total_fees,
+        "commission_drag": total_fees,
+        "open_positions": open_positions,
+        "positions": positions,
+        "trades": trades,
+        "exchange_status": {
+            "mode": os.getenv("EXCHANGE_MODE", "sandbox"),
+            "connected": False,
+            "verified": False,
+            "reason": "legacy demo adapter has no exchange authority",
+        },
+        "online_monitoring": {
+            "demo_account_online": True,
+            "exchange_connector_online": False,
+            "real_orders_blocked": True,
+            "live_execution_enabled": False,
+        },
+        "bybit_costs": {
+            "status": "not_verified_in_legacy_adapter",
+            "source": "canonical market/exchange APIs required",
+        },
+        "integration": {
+            "website": True,
+            "mini_app": True,
+            "telegram": True,
+            "source": "canonical_virtual_account",
+        },
+        "synthetic_prices_used": False,
+        "legacy_execution_enabled": False,
     }
 
 
-def _load() -> dict[str, Any]:
-    path = _path()
-    if not path.exists():
-        state = _default_state()
-        _save(state)
-        return state
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        base = _default_state()
-        if isinstance(data, dict):
-            base.update(data)
-        base["integration"] = {"website": True, "mini_app": True, "telegram": True, "source": "dashboard.demo_api"}
-        return base
-    except Exception:
-        return _default_state()
+def _state_response() -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "deprecated": True,
+        "use": _CANONICAL_STATE_ROUTE,
+        "state": _canonical_state(),
+    }
 
 
-def _save(state: dict[str, Any]) -> None:
-    path = _path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_suffix(path.suffix + ".tmp")
-    temp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
-    temp.replace(path)
+def run_ai_command(message: str) -> dict[str, Any]:
+    """Run informational chat against the read-only canonical state."""
+
+    return answer_chat(message, _canonical_state())
 
 
-def _buy(state: dict[str, Any]) -> str:
-    price = 60000.0
-    notional = 1000.0
-    fee_rate = float(os.getenv("EXCHANGE_DEFAULT_FEE_RATE", "0.001"))
-    fee = round(notional * fee_rate, 2)
-    quantity = (notional - fee) / price
-    break_even = round(price * (1 + 2 * fee_rate), 2)
-    state["cash"] = round(float(state["cash"]) - notional, 2)
-    state["open_positions"] = 1
-    state["positions"] = [{"symbol": "BTCUSDT", "quantity": quantity, "entry_price": price, "entry_fee": fee}]
-    state["trades"].append({"side": "BUY", "symbol": "BTCUSDT", "price": price, "quantity": quantity, "fee": fee, "break_even_price": break_even, "source": "shared_system"})
-    state["total_fees"] = round(float(state.get("total_fees", 0)) + fee, 2)
-    state["commission_drag"] = state["total_fees"]
-    state["break_even_price"] = break_even
-    state["equity"] = round(float(state["cash"]) + notional - fee, 2)
-    _save(state)
-    return f"SharipovAI купил BTC виртуально. Комиссия входа: {fee:.2f} USDT. Break-even: {break_even:.2f}."
-
-
-def _sell(state: dict[str, Any]) -> str:
-    fee_rate = float(os.getenv("EXCHANGE_DEFAULT_FEE_RATE", "0.001"))
-    position = (state.get("positions") or [{}])[0]
-    entry_price = float(position.get("entry_price", 60000.0))
-    quantity = float(position.get("quantity", 0.0))
-    exit_price = entry_price
-    gross = quantity * exit_price
-    fee = round(gross * fee_rate, 2)
-    entry_fee = float(position.get("entry_fee", 0.0))
-    net_pnl = round(-entry_fee - fee, 2)
-    state["cash"] = round(float(state["cash"]) + gross - fee, 2)
-    state["open_positions"] = 0
-    state["positions"] = []
-    state["trades"].append({"side": "SELL", "symbol": "BTCUSDT", "price": exit_price, "quantity": quantity, "fee": fee, "net_pnl": net_pnl, "source": "shared_system"})
-    state["total_fees"] = round(float(state.get("total_fees", 0)) + fee, 2)
-    state["commission_drag"] = state["total_fees"]
-    state["pnl"] = net_pnl
-    state["net_pnl"] = net_pnl
-    state["equity"] = state["cash"]
-    _save(state)
-    return f"BTC продан виртуально. net PnL после комиссий: {net_pnl:.2f} USDT."
+def _is_execution_request(message: str) -> bool:
+    text = message.casefold()
+    execution_words = ("купи", "купить", "buy", "продай", "продать", "sell")
+    return "btc" in text and any(word in text for word in execution_words)
 
 
 def _chat(message: str) -> dict[str, Any]:
-    state = _load()
-    text = message.lower()
-    if "купи" in text and "btc" in text:
-        reply = _buy(state)
-        state = _load()
-        source_ai = "Paper Trading Bot + Risk Engine"
-    elif "продай" in text and "btc" in text:
-        reply = _sell(state)
-        state = _load()
-        source_ai = "Paper Trading Bot + Portfolio Engine"
-    else:
-        result = answer_chat(message, state)
-        reply = str(result.get("reply", "Команда обработана."))
-        source_ai = str(result.get("source_ai", "AI Chat Orchestrator"))
-    return {"status": "ok", "reply": reply, "source_ai": source_ai, "state": state, "integration": state["integration"]}
+    state = _canonical_state()
+    if _is_execution_request(message):
+        return {
+            "status": "blocked",
+            "reply": (
+                "Legacy Demo execution отключён: выдуманные цены и сделки запрещены. "
+                f"Используйте канонический Virtual Account через {_CANONICAL_TICK_ROUTE}; "
+                "новый вход требует Decision Quality, General Controller и Risk evidence."
+            ),
+            "source_ai": "Security Guard + Virtual Execution",
+            "state": state,
+            "deprecated": True,
+            "use": _CANONICAL_TICK_ROUTE,
+            "real_orders_blocked": True,
+        }
+    try:
+        result = run_ai_command(message)
+    except Exception as exc:
+        return {
+            "status": "error",
+            "reply": f"Не удалось обработать запрос «{message}»: {type(exc).__name__}.",
+            "source_ai": "AI Chat Orchestrator",
+            "state": state,
+            "deprecated": True,
+            "use": _CANONICAL_STATE_ROUTE,
+        }
+    return {
+        "status": "ok",
+        "reply": str(result.get("reply", "Команда обработана.")),
+        "source_ai": str(result.get("source_ai", "AI Chat Orchestrator")),
+        "state": state,
+        "integration": state["integration"],
+        "deprecated": True,
+        "use": _CANONICAL_STATE_ROUTE,
+    }
+
+
+def _blocked_write(action: str) -> JSONResponse:
+    return JSONResponse(
+        {
+            "status": "blocked",
+            "detail": f"Legacy demo {action} is disabled",
+            "deprecated": True,
+            "use": _CANONICAL_STATE_ROUTE,
+            "real_orders_blocked": True,
+        },
+        status_code=409,
+    )
 
 
 def install_demo_api(app: FastAPI) -> None:
@@ -130,12 +149,10 @@ def install_demo_api(app: FastAPI) -> None:
         return
     app.state.demo_api_installed = True
 
-    # This middleware deliberately supersedes legacy duplicate routes from
-    # dashboard.routes. It guarantees one source of truth for all interfaces.
     @app.middleware("http")
     async def shared_demo_contract(request: Request, call_next):
         if request.url.path == "/api/demo/state" and request.method == "GET":
-            return JSONResponse({"status": "ok", "state": _load()})
+            return JSONResponse(_state_response())
         if request.url.path == "/api/demo/chat" and request.method == "POST":
             try:
                 payload = await request.json()
@@ -149,24 +166,20 @@ def install_demo_api(app: FastAPI) -> None:
         return HTMLResponse("""<!doctype html><html lang='ru'><head><meta charset='utf-8'><title>Вход в SharipovAI</title></head><body><main><h1>Вход в SharipovAI</h1><form method='post' action='/login'><input name='username' placeholder='Логин'><input name='password' type='password' placeholder='Пароль'><button type='submit'>Войти</button></form></main></body></html>""")
 
     @app.get("/api/demo/state/shared")
-    def demo_state_shared() -> dict[str, object]:
-        return {"status": "ok", "state": _load()}
+    def demo_state_shared() -> dict[str, Any]:
+        return _state_response()
 
     @app.post("/api/demo/balance")
-    def demo_balance(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, object]:
-        balance = float((payload or {}).get("balance", 10000.0))
-        state = _default_state()
-        state["equity"] = balance
-        state["cash"] = balance
-        _save(state)
-        return {"status": "ok", "message": f"Виртуальный баланс установлен: {balance:.2f} USDT", "state": state}
+    def demo_balance(_payload: dict[str, Any] | None = Body(default=None)) -> JSONResponse:
+        return _blocked_write("balance mutation")
 
     @app.post("/api/demo/chat/shared")
-    def demo_chat_shared(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, object]:
+    def demo_chat_shared(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
         return _chat(str((payload or {}).get("message", "")).strip())
 
     @app.post("/api/demo/reset")
-    def demo_reset(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, object]:
-        state = _default_state()
-        _save(state)
-        return {"status": "ok", "message": "Виртуальный счёт сброшен.", "state": state}
+    def demo_reset(_payload: dict[str, Any] | None = Body(default=None)) -> JSONResponse:
+        return _blocked_write("reset")
+
+
+__all__ = ["install_demo_api", "run_ai_command"]
