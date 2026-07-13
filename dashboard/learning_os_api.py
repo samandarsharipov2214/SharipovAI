@@ -33,31 +33,31 @@ def install_learning_os_api(app: FastAPI) -> None:
 
     @app.get("/api/learning-os/status")
     def learning_os_status_api() -> dict[str, Any]:
-        """Return the compact, UI-stable Learning OS contract.
+        """Return a lightweight read-only contract for frequent UI polling.
 
-        This is an alias over the canonical snapshot, not a synthetic fallback.
-        The normalized ``items`` collection lets every dashboard version consume
-        the same persistent learning memory without guessing nested keys.
+        Unlike the full snapshot, this endpoint does not run bot exams and does
+        not write new exam rows every time the dashboard refreshes.
         """
 
-        snap = snapshot()
-        memory_snapshot = snap.get("memory", {}) if isinstance(snap.get("memory"), dict) else {}
+        memory_snapshot = memory().snapshot()
         lessons = memory_snapshot.get("recent_lessons", [])
         if not isinstance(lessons, list):
             lessons = []
-        summary = snap.get("summary", {}) if isinstance(snap.get("summary"), dict) else {}
+        summary = {
+            "lesson_count": int(memory_snapshot.get("lesson_count", 0) or 0),
+            "mistake_count": int(memory_snapshot.get("mistake_count", 0) or 0),
+            "exam_count": int(memory_snapshot.get("exam_count", 0) or 0),
+        }
         return {
             "status": "ok",
-            "system": snap.get("system", "SharipovAI Learning OS"),
-            "mode": snap.get("mode", "controlled_self_learning"),
+            "system": "SharipovAI Learning OS",
+            "mode": "controlled_self_learning",
             "source": "learning_memory",
             "summary": summary,
             "count": len(lessons),
             "items": lessons,
             "lessons": lessons,
-            "bots": snap.get("bots", []),
             "memory": memory_snapshot,
-            "snapshot": snap,
         }
 
     @app.post("/api/learning-os/close-gap")
