@@ -9,21 +9,47 @@ import tomllib
 from .models import AppConfig, MarketConfig, NewsConfig, PaperConfig, RiskConfig
 
 
-def load_config(path: str | Path = "config/default.toml") -> AppConfig:
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_CONFIG_PATH = Path(__file__).resolve().with_name("default.toml")
+
+
+def load_config(path: str | Path | None = None) -> AppConfig:
     """Load application configuration from a TOML file.
 
+    The built-in configuration is resolved relative to this package rather than
+    the process working directory, so imports remain reliable from Docker exec,
+    systemd, tests, and maintenance scripts.  Explicit relative paths continue
+    to resolve from the caller's current directory when that file exists; when
+    it does not, they fall back to the project root for backwards compatibility.
+
     Args:
-        path: Path to the TOML configuration file.
+        path: Optional path to a TOML configuration file.
 
     Returns:
         Parsed application configuration.
     """
 
-    config_path = Path(path)
+    config_path = _resolve_config_path(path)
     with config_path.open("rb") as file:
         payload = tomllib.load(file)
 
     return _parse_app_config(payload)
+
+
+def _resolve_config_path(path: str | Path | None) -> Path:
+    if path is None:
+        return DEFAULT_CONFIG_PATH
+
+    candidate = Path(path).expanduser()
+    if candidate.is_absolute() or candidate.exists():
+        return candidate
+
+    project_candidate = PROJECT_ROOT / candidate
+    if project_candidate.exists():
+        return project_candidate
+
+    # Preserve the caller-facing error path when neither location exists.
+    return candidate
 
 
 def _parse_app_config(payload: Mapping[str, Any]) -> AppConfig:
@@ -84,3 +110,6 @@ def _mapping(value: Any) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise TypeError("Configuration section must be a mapping.")
     return value
+
+
+__all__ = ["DEFAULT_CONFIG_PATH", "PROJECT_ROOT", "load_config"]
