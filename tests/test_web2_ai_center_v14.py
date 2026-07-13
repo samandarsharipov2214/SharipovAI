@@ -6,8 +6,10 @@ WEB = ROOT / "dashboard" / "static" / "web2"
 
 def test_ai_center_assets_are_connected() -> None:
     index = (WEB / "index.html").read_text(encoding="utf-8")
-    assert "/static/web2/ai_center_v14.js?v=14" in index
-    assert "/static/web2/ai_center_v14.css?v=14" in index
+    assert "/static/web2/ai_center_v14.js?v=" in index
+    assert "/static/web2/ai_center_v14.css?v=" in index
+    assert (WEB / "ai_center_v14.js").is_file()
+    assert (WEB / "ai_center_v14.css").is_file()
 
 
 def test_ai_center_uses_real_project_apis() -> None:
