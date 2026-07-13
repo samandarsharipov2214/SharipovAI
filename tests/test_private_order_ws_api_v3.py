@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import importlib
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import dashboard.app as dashboard_app
 from dashboard.private_order_ws_api import install_private_order_ws_api
+
+
+dashboard_app = importlib.import_module("dashboard.app")
 
 
 class Worker:
