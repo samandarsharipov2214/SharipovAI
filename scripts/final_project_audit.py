@@ -8,7 +8,6 @@ import re
 import shutil
 import socket
 import subprocess
-import sys
 import time
 import urllib.error
 import urllib.request
@@ -49,26 +48,31 @@ def command(args: list[str], timeout: int = 120) -> tuple[int, str]:
 
 def tracked_files() -> list[Path]:
     code, output = command(["git", "ls-files"])
-    if code != 0:
+    if code:
         return []
     return [ROOT / item for item in output.splitlines() if item and (ROOT / item).is_file()]
 
 
-def static_phase_1() -> None:
+def phase_1_architecture() -> None:
     files = tracked_files()
     python_files = [path for path in files if path.suffix == ".py"]
-    failures: list[str] = []
+    syntax_errors: list[str] = []
     for path in python_files:
         try:
             ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         except Exception as exc:
-            failures.append(f"{path.relative_to(ROOT)}: {type(exc).__name__}: {exc}")
-    add(1, "architecture", "python_syntax", not failures, f"python_files={len(python_files)}; errors={failures[:20]}", "critical", "Исправить синтаксис Python.")
+            syntax_errors.append(f"{path.relative_to(ROOT)}: {type(exc).__name__}: {exc}")
+    add(1, "architecture", "python_syntax", not syntax_errors, f"python_files={len(python_files)}; errors={syntax_errors[:20]}", "critical", "Исправить синтаксис Python.")
 
-    old = [path for path in (ROOT / "dashboard/templates/index.html", ROOT / "dashboard/static/mini-app-live.js") if path.exists()]
-    add(1, "architecture", "old_site_removed", not old, f"remaining={[str(path.relative_to(ROOT)) for path in old]}", "medium", "Удалить остатки старого интерфейса.")
+    legacy = [path for path in (ROOT / "dashboard/templates/index.html", ROOT / "dashboard/static/mini-app-live.js") if path.exists()]
+    add(1, "architecture", "old_site_removed", not legacy, f"remaining={[str(path.relative_to(ROOT)) for path in legacy]}", "medium", "Удалить остатки старого интерфейса.")
 
-    oversized = []
+    requirements = ROOT / "requirements.txt"
+    dependency_lines = [line.strip() for line in requirements.read_text(encoding="utf-8").splitlines() if line.strip() and not line.startswith("#")] if requirements.exists() else []
+    broad = [line for line in dependency_lines if any(token in line for token in (">=", "~=", "*"))]
+    add(1, "dependencies", "reproducible_dependencies", not broad, f"dependencies={len(dependency_lines)}; broad={broad}", "medium", "Закрепить проверенные версии.")
+
+    oversized: list[str] = []
     for path in files:
         try:
             if path.stat().st_size > 1_000_000 and "data/" not in path.relative_to(ROOT).as_posix():
@@ -77,52 +81,60 @@ def static_phase_1() -> None:
             pass
     add(1, "architecture", "no_oversized_source_files", not oversized, f"oversized={oversized[:20]}", "low", "Вынести большие генерируемые файлы из Git.")
 
-    requirements = ROOT / "requirements.txt"
-    lines = [line.strip() for line in requirements.read_text(encoding="utf-8").splitlines() if line.strip() and not line.startswith("#")] if requirements.exists() else []
-    broad = [line for line in lines if ">=" in line or "~=" in line or "*" in line]
-    add(1, "dependencies", "reproducible_dependencies", not broad, f"dependencies={len(lines)}; broad={broad}", "medium", "Зафиксировать проверенные версии или lock-файл.")
 
+def phase_2_ai_backend() -> None:
+    safe_defaults = {
+        "SHARIPOVAI_DISABLE_AUTH": "1",
+        "MARKET_STREAM_ENABLED": "0",
+        "FEATURE_BYBIT_WEBSOCKET": "0",
+        "BYBIT_ACCOUNT_SYNC_ENABLED": "0",
+        "EXECUTION_KILL_SWITCH": "1",
+        "EXCHANGE_LIVE_TRADING_ENABLED": "0",
+        "TESTNET_EXECUTION_ENABLED": "0",
+        "AUTONOMOUS_TESTNET_ENABLED": "0",
+        "AUTONOMOUS_TESTNET_BRIDGE_ENABLED": "0",
+        "EXCHANGE_MODE": "sandbox",
+    }
+    for name, value in safe_defaults.items():
+        os.environ.setdefault(name, value)
 
-def static_phase_2() -> None:
-    os.environ.setdefault("SHARIPOVAI_DISABLE_AUTH", "1")
-    os.environ.setdefault("MARKET_STREAM_ENABLED", "0")
-    os.environ.setdefault("FEATURE_BYBIT_WEBSOCKET", "0")
-    os.environ.setdefault("BYBIT_ACCOUNT_SYNC_ENABLED", "0")
-    os.environ.setdefault("EXECUTION_KILL_SWITCH", "1")
-    os.environ.setdefault("EXCHANGE_LIVE_TRADING_ENABLED", "0")
-    os.environ.setdefault("TESTNET_EXECUTION_ENABLED", "0")
-    os.environ.setdefault("AUTONOMOUS_TESTNET_ENABLED", "0")
-    os.environ.setdefault("AUTONOMOUS_TESTNET_BRIDGE_ENABLED", "0")
-    os.environ.setdefault("EXCHANGE_MODE", "sandbox")
     try:
         import dashboard
 
-        routes = list(dashboard.app.routes)
-        add(2, "backend", "application_import", True, f"routes={len(routes)}", "critical")
+        openapi_paths = set(dashboard.app.openapi().get("paths", {}))
+        flat_routes = list(dashboard.app.routes)
+        add(2, "backend", "application_import", True, f"openapi_paths={len(openapi_paths)}; top_level_routes={len(flat_routes)}", "critical")
     except Exception as exc:
         add(2, "backend", "application_import", False, f"{type(exc).__name__}: {exc}", "critical", "Исправить импорт приложения.")
         return
 
-    owners: dict[tuple[str, str], int] = {}
-    paths: set[str] = set()
-    for route in routes:
-        path = str(getattr(route, "path", ""))
-        paths.add(path)
-        for method in set(getattr(route, "methods", set()) or set()):
-            key = (method, path)
-            owners[key] = owners.get(key, 0) + 1
-    duplicates = [f"{method} {path} x{count}" for (method, path), count in owners.items() if count > 1]
-    add(2, "backend", "unique_route_ownership", not duplicates, f"duplicates={duplicates}", "high", "Убрать дубли method+path.")
-
     required = {
-        "/health", "/api/health", "/api/run", "/api/ai-bots", "/api/social-news",
-        "/api/system/database/status", "/api/system/health", "/api/system/recovery-plan",
-        "/api/system/local-audit", "/api/market/bybit-websocket/status",
-        "/api/exchange/account/snapshot", "/api/learning-os/status",
-        "/api/evidence-vault/recent", "/api/virtual-account/state",
+        "/health",
+        "/api/health",
+        "/api/run",
+        "/api/ai-bots",
+        "/api/social-news",
+        "/api/system/database/status",
+        "/api/system/health",
+        "/api/system/recovery-plan",
+        "/api/system/local-audit",
+        "/api/market/bybit-websocket/status",
+        "/api/exchange/account/snapshot",
+        "/api/learning-os/status",
+        "/api/evidence-vault/recent",
+        "/api/virtual-account/state",
     }
-    missing = sorted(required - paths)
+    missing = sorted(required - openapi_paths)
     add(2, "backend", "required_api_contract", not missing, f"missing={missing}", "critical", "Восстановить обязательные API маршруты.")
+
+    methods: dict[tuple[str, str], int] = {}
+    for path, operations in dashboard.app.openapi().get("paths", {}).items():
+        for method in operations:
+            if method.lower() in {"get", "post", "put", "patch", "delete", "options", "head"}:
+                key = (method.upper(), path)
+                methods[key] = methods.get(key, 0) + 1
+    duplicates = [f"{method} {path} x{count}" for (method, path), count in methods.items() if count > 1]
+    add(2, "backend", "unique_route_ownership", not duplicates, f"duplicates={duplicates}", "high", "Убрать дубли method+path.")
 
     try:
         from ai_architecture_registry import CANONICAL_AI_ORGANS
@@ -133,13 +145,16 @@ def static_phase_2() -> None:
         add(2, "ai", "canonical_ai_organs", False, f"{type(exc).__name__}: {exc}", "critical", "Восстановить реестр ИИ.")
 
 
-def static_phase_3() -> None:
-    from scripts.release_audit import audit_repository
+def phase_3_infrastructure() -> None:
+    try:
+        from scripts.release_audit import audit_repository
 
-    report = audit_repository(ROOT, runtime=False)
-    add(3, "infrastructure", "release_audit", report.status == "ok", f"errors={list(report.errors)}; warnings={list(report.warnings)}", "critical", "Исправить fail-closed release audit.")
+        report = audit_repository(ROOT, runtime=False)
+        add(3, "infrastructure", "release_audit", report.status == "ok", f"errors={list(report.errors)}; warnings={list(report.warnings)}", "critical", "Исправить fail-closed release audit.")
+    except Exception as exc:
+        add(3, "infrastructure", "release_audit", False, f"{type(exc).__name__}: {exc}", "critical", "Исправить release audit.")
 
-    shell_errors = []
+    shell_errors: list[str] = []
     bash = shutil.which("bash")
     if bash:
         for relative in ("deploy/vps/update_from_main.sh", "deploy/vps/remote_agent.sh"):
@@ -150,9 +165,15 @@ def static_phase_3() -> None:
                     shell_errors.append(f"{relative}: {output}")
     add(3, "infrastructure", "shell_syntax", not shell_errors, f"errors={shell_errors}", "critical", "Исправить shell-синтаксис.")
 
+    compose = ROOT / "deploy/vps/docker-compose.yml"
+    text = compose.read_text(encoding="utf-8") if compose.exists() else ""
+    safe = all(marker in text for marker in ('EXCHANGE_LIVE_TRADING_ENABLED: "0"', 'TESTNET_EXECUTION_ENABLED: "0"', 'EXECUTION_KILL_SWITCH: "1"', 'EXCHANGE_MODE: sandbox'))
+    add(3, "security", "execution_defaults_locked", safe, f"safe_defaults={safe}", "critical", "Зафиксировать безопасные флаги VPS.")
 
-def static_phase_4() -> None:
-    index = ROOT / "dashboard/static/web2/index.html"
+
+def phase_4_frontend() -> None:
+    web = ROOT / "dashboard/static/web2"
+    index = web / "index.html"
     html = index.read_text(encoding="utf-8") if index.exists() else ""
     add(4, "frontend", "web2_index", bool(html), str(index.relative_to(ROOT)), "critical", "Восстановить Web2 index.")
     if not html:
@@ -163,42 +184,42 @@ def static_phase_4() -> None:
     add(4, "frontend", "navigation_unique", not duplicates and len(pages) >= 16, f"pages={len(pages)}; duplicates={duplicates}", "high", "Оставить один пункт на раздел.")
 
     assets = re.findall(r'(?:src|href)="/static/web2/([^"?]+)', html)
-    missing = [asset for asset in assets if not (ROOT / "dashboard/static/web2" / asset).is_file()]
-    add(4, "frontend", "assets_exist", not missing, f"assets={len(assets)}; missing={missing}", "critical", "Исправить ссылки на JS/CSS.")
+    missing_assets = [asset for asset in assets if not (web / asset).is_file()]
+    add(4, "frontend", "assets_exist", not missing_assets, f"assets={len(assets)}; missing={missing_assets}", "critical", "Исправить ссылки на JS/CSS.")
 
     node = shutil.which("node")
-    errors = []
-    loaded_js = [ROOT / "dashboard/static/web2" / asset for asset in assets if asset.endswith(".js")]
+    js_errors: list[str] = []
+    loaded_js = [web / asset for asset in assets if asset.endswith(".js") and (web / asset).is_file()]
     if node:
         for path in loaded_js:
             code, output = command([node, "--check", str(path)])
             if code:
-                errors.append(f"{path.name}: {output}")
-    add(4, "frontend", "javascript_syntax", bool(node) and not errors, f"node={bool(node)}; checked={len(loaded_js)}; errors={errors}", "critical", "Проверять JS через Node и исправить синтаксис.")
+                js_errors.append(f"{path.name}: {output}")
+    add(4, "frontend", "javascript_syntax", bool(node) and not js_errors, f"node={bool(node)}; checked={len(loaded_js)}; errors={js_errors}", "critical", "Проверять JS через Node и исправить синтаксис.")
 
-    synthetic = []
+    synthetic: list[str] = []
     for path in loaded_js:
-        text = path.read_text(encoding="utf-8", errors="ignore")
+        source = path.read_text(encoding="utf-8", errors="ignore")
         for token in ("Math.random(", "mockData", "fakeData"):
-            if token in text:
+            if token in source:
                 synthetic.append(f"{path.name}:{token}")
-    add(4, "truthfulness", "no_synthetic_loaded_data", not synthetic, f"matches={synthetic}", "critical", "Удалить синтетические данные из загружаемого интерфейса.")
+    add(4, "truthfulness", "no_synthetic_loaded_data", not synthetic, f"matches={synthetic}", "critical", "Удалить синтетические данные из рабочего интерфейса.")
 
 
-def static_phase_5() -> None:
+def phase_5_quality_security() -> None:
     patterns = {
         "private_key": re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
         "github_token": re.compile(r"gh[pousr]_[A-Za-z0-9_]{20,}"),
         "telegram_token": re.compile(r"\b\d{8,12}:[A-Za-z0-9_-]{30,}\b"),
     }
-    findings = []
+    findings: list[str] = []
     allowed = {".py", ".js", ".json", ".yml", ".yaml", ".sh", ".md", ".env", ".toml"}
     for path in tracked_files():
         if path.suffix.lower() not in allowed or path.name.endswith(".example"):
             continue
-        text = path.read_text(encoding="utf-8", errors="ignore")
+        source = path.read_text(encoding="utf-8", errors="ignore")
         for name, pattern in patterns.items():
-            if pattern.search(text):
+            if pattern.search(source):
                 findings.append(f"{path.relative_to(ROOT)}:{name}")
     add(5, "security", "no_committed_secrets", not findings, f"findings={findings}", "critical", "Отозвать секреты и удалить их из истории Git.")
 
@@ -209,11 +230,10 @@ def static_phase_5() -> None:
 def get_json(url: str, timeout: float = 8.0) -> tuple[bool, int, float, Any, str]:
     started = time.perf_counter()
     try:
-        request = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "SharipovAI-Audit/3"})
+        request = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "SharipovAI-Audit/4"})
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            raw = response.read(2_000_000)
-            latency = (time.perf_counter() - started) * 1000
-            return 200 <= response.status < 300, response.status, latency, json.loads(raw.decode("utf-8")), "ok"
+            payload = json.loads(response.read(2_000_000).decode("utf-8"))
+            return 200 <= response.status < 300, response.status, (time.perf_counter() - started) * 1000, payload, "ok"
     except urllib.error.HTTPError as exc:
         return False, exc.code, (time.perf_counter() - started) * 1000, None, f"HTTP {exc.code}"
     except Exception as exc:
@@ -248,19 +268,19 @@ def live_phases(base_url: str) -> None:
     used = disk.used / disk.total * 100 if disk.total else 100.0
     add(3, "vps", "disk_below_85_percent", used < 85, f"used_percent={used:.1f}; free_bytes={disk.free}", "high", "Освободить диск и настроить ротацию.")
 
-    memory_total = memory_available = 0
+    total = available = 0
     try:
         for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
             if line.startswith("MemTotal:"):
-                memory_total = int(line.split()[1]) * 1024
+                total = int(line.split()[1]) * 1024
             elif line.startswith("MemAvailable:"):
-                memory_available = int(line.split()[1]) * 1024
+                available = int(line.split()[1]) * 1024
     except OSError:
         pass
-    used_memory = (1 - memory_available / memory_total) * 100 if memory_total else 100.0
-    add(3, "vps", "memory_below_90_percent", used_memory < 90, f"used_percent={used_memory:.1f}; available_bytes={memory_available}", "high", "Найти утечку памяти.")
+    used_memory = (1 - available / total) * 100 if total else 100.0
+    add(3, "vps", "memory_below_90_percent", used_memory < 90, f"used_percent={used_memory:.1f}; available_bytes={available}", "high", "Найти утечку памяти.")
 
-    ports = {}
+    ports: dict[int, bool] = {}
     for port in (80, 443, 8000):
         sock = socket.socket()
         sock.settimeout(0.5)
@@ -281,10 +301,7 @@ def write_report(mode: str) -> int:
             phase_stats[item.phase]["passed"] += 1
         elif item.severity in severities:
             severities[item.severity] += 1
-    phase_percent = {
-        str(phase): round(data["passed"] / data["total"] * 100) if data["total"] else None
-        for phase, data in phase_stats.items()
-    }
+    phase_percent = {str(phase): round(data["passed"] / data["total"] * 100) if data["total"] else None for phase, data in phase_stats.items()}
     overall = round(sum(item.passed for item in checks) / len(checks) * 100) if checks else 0
     payload = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -294,9 +311,7 @@ def write_report(mode: str) -> int:
         "severity": severities,
         "checks": [asdict(item) for item in checks],
     }
-    json_path = OUT / f"final-audit-{mode}.json"
-    markdown_path = OUT / f"final-audit-{mode}.md"
-    json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    (OUT / f"final-audit-{mode}.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     names = {1: "Архитектура", 2: "ИИ и backend", 3: "Инфраструктура", 4: "Сайт", 5: "Качество и безопасность"}
     lines = [
@@ -325,7 +340,7 @@ def write_report(mode: str) -> int:
     lines += ["## Все проверки", "", "| Фаза | Область | Проверка | Результат |", "|---:|---|---|---|"]
     for item in checks:
         lines.append(f"| {item.phase} | {item.area} | {item.name} | {'PASS' if item.passed else item.severity.upper()} |")
-    markdown_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    (OUT / f"final-audit-{mode}.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(json.dumps({"overall_percent": overall, "severity": severities, "checks": len(checks)}, ensure_ascii=False))
     return 1 if severities["critical"] else 0
 
@@ -335,13 +350,12 @@ def main() -> int:
     parser.add_argument("--mode", choices=("static", "live"), default="static")
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
     args = parser.parse_args()
-
     if args.mode == "static":
-        static_phase_1()
-        static_phase_2()
-        static_phase_3()
-        static_phase_4()
-        static_phase_5()
+        phase_1_architecture()
+        phase_2_ai_backend()
+        phase_3_infrastructure()
+        phase_4_frontend()
+        phase_5_quality_security()
     else:
         live_phases(args.base_url)
     return write_report(args.mode)
