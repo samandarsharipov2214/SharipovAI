@@ -33,6 +33,10 @@ def install_source_status_compat_api(app: FastAPI) -> None:
             items = evidence.get("recent_decisions", [])
             if not isinstance(items, list):
                 items = []
+            raw_reputation = snap.get("source_reputation", [])
+            reputation = raw_reputation.get("sources", []) if isinstance(raw_reputation, dict) else raw_reputation
+            if not isinstance(reputation, list):
+                reputation = []
             return {
                 "status": "ok",
                 "source": "evidence_vault",
@@ -45,5 +49,5 @@ def install_source_status_compat_api(app: FastAPI) -> None:
                     "outcome_count": int(evidence.get("outcome_count", 0) or 0),
                     "source_count": int(evidence.get("source_count", 0) or 0),
                 },
-                "source_reputation": snap.get("source_reputation", []),
+                "source_reputation": reputation,
             }

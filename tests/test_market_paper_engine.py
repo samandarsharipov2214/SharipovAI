@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from dashboard.trade_explanations import enrich_virtual_state, explain_trade
 from market_paper_engine import MarketPaperActivityEngine
 
 
@@ -89,3 +90,41 @@ def test_catch_up_never_fabricates_historical_trades(tmp_path) -> None:
     assert result["catch_up_ticks"] == 1
     assert result["historical_prices_fabricated"] is False
     assert engine.state()["summary"]["trade_count"] == 1
+
+
+def test_trade_explanation_backfills_legacy_sell_reason() -> None:
+    state = {
+        "trades": [
+            {
+                "symbol": "SOL/USDT",
+                "side": "SELL",
+                "status": "OPEN",
+                "signal_change_24h_percent": -2.125,
+                "quote_source": "bybit",
+            }
+        ]
+    }
+
+    enrich_virtual_state(state)
+
+    trade = state["trades"][0]
+    assert "Продажа SOL/USDT" in trade["entry_reason_ru"]
+    assert "-2.125%" in trade["entry_reason_ru"]
+    assert "0.35%" in trade["entry_reason_ru"]
+    assert "Позиция ещё открыта" in trade["operation_explanation_ru"]
+
+
+def test_trade_explanation_maps_close_reason() -> None:
+    trade = {
+        "symbol": "BTC/USDT",
+        "side": "BUY",
+        "status": "CLOSED",
+        "signal_change_24h_percent": 1.5,
+        "close_reason": "take_profit",
+    }
+
+    explain_trade(trade)
+
+    assert "Покупка BTC/USDT" in trade["entry_reason_ru"]
+    assert trade["close_reason_ru"] == "достигнута цель прибыли"
+    assert "Закрытие" in trade["operation_explanation_ru"]

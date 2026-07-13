@@ -54,6 +54,7 @@
 
   const headerChecks = [
     { key: 'health', url: '/api/health', required: true },
+    { key: 'market', url: '/api/market/bybit-websocket/status', required: true },
     { key: 'run', url: '/api/run', required: true },
     { key: 'bots', url: '/api/ai-bots', required: true },
     { key: 'news', url: '/api/social-news', required: true },
