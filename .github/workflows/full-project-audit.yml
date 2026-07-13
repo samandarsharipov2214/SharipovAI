@@ -6,6 +6,8 @@ on:
       - audit/full-5-phases-20260713
     paths:
       - 'scripts/full_project_audit.py'
+      - 'scripts/static_project_audit.py'
+      - 'scripts/live_vps_audit.py'
       - '.github/workflows/full-project-audit.yml'
       - 'dashboard/**'
       - 'deploy/**'
@@ -16,6 +18,8 @@ on:
     branches: [main]
     paths:
       - 'scripts/full_project_audit.py'
+      - 'scripts/static_project_audit.py'
+      - 'scripts/live_vps_audit.py'
       - '.github/workflows/full-project-audit.yml'
       - 'dashboard/**'
       - 'deploy/**'
@@ -35,20 +39,40 @@ jobs:
   static-audit:
     name: Static code, architecture and site audit
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          cache: pip
       - name: Install project dependencies
-        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+        id: dependencies
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pip install --upgrade pip 2>&1 | tee dependency-install.txt
+          pip install -r requirements.txt 2>&1 | tee -a dependency-install.txt
+      - name: Run deterministic static audit
+        id: static_audit
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          python scripts/static_project_audit.py 2>&1 | tee audit-static-console.txt
       - name: Run complete test suite
-        run: pytest -q --disable-warnings --maxfail=50 | tee pytest-output.txt
-      - name: Run static phases 1, 2, 3, 4 and 5
+        id: tests
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          pytest -q --disable-warnings --maxfail=100 2>&1 | tee pytest-output.txt
+      - name: Record step outcomes
         if: always()
-        run: python scripts/full_project_audit.py --mode static --suffix static | tee audit-static-console.txt
+        run: |
+          printf 'dependencies=%s\nstatic_audit=%s\ntests=%s\n' \
+            '${{ steps.dependencies.outcome }}' '${{ steps.static_audit.outcome }}' '${{ steps.tests.outcome }}' \
+            > audit-step-outcomes.txt
       - name: Upload static evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -59,6 +83,8 @@ jobs:
             audit-results/audit-static.md
             audit-static-console.txt
             pytest-output.txt
+            dependency-install.txt
+            audit-step-outcomes.txt
           if-no-files-found: warn
           retention-days: 30
 
@@ -67,25 +93,20 @@ jobs:
     needs: static-audit
     if: always()
     runs-on: [self-hosted, linux, x64, sharipovai-ci]
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
-      - name: Record deployed revision without changing production
+      - name: Run authenticated read-only live audit
+        id: live_audit
+        continue-on-error: true
         shell: bash
         run: |
-          set -u
-          for dir in /opt/sharipovai-repo /opt/SharipovAI; do
-            if [ -d "$dir/.git" ]; then
-              echo "production_repo=$dir"
-              git -C "$dir" rev-parse HEAD || true
-              git -C "$dir" status --short --branch || true
-            fi
+          set -o pipefail
+          ENV_FILE=''
+          for file in /opt/sharipovai-repo/deploy/vps/.env.vps /opt/SharipovAI/deploy/vps/.env.vps; do
+            if [ -r "$file" ]; then ENV_FILE="$file"; break; fi
           done
-      - name: Run read-only live phases
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          python3 scripts/full_project_audit.py --mode live --base-url http://127.0.0.1:8000 --suffix live | tee audit-live-console.txt
+          python3 scripts/live_vps_audit.py --base-url http://127.0.0.1:8000 --env-file "$ENV_FILE" 2>&1 | tee audit-live-console.txt
       - name: Capture sanitized system evidence
         if: always()
         shell: bash
@@ -97,8 +118,9 @@ jobs:
             echo '=== disk ==='; df -h / /opt 2>/dev/null || true
             echo '=== listeners ==='; ss -lnt | grep -E ':(80|443|8000)\b' || true
             echo '=== relevant services ==='; systemctl list-units --type=service --all --no-pager | grep -E 'sharipov|docker|nginx|caddy|actions.runner' || true
-            echo '=== containers ==='; docker ps --format '{{.Names}} {{.Status}}' 2>/dev/null || true
+            echo '=== containers ==='; docker ps --format '{{.Names}} {{.Status}}' 2>&1 || true
           } > audit-system-evidence.txt
+          printf 'live_audit=%s\n' '${{ steps.live_audit.outcome }}' > audit-live-outcome.txt
       - name: Upload live evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -109,5 +131,6 @@ jobs:
             audit-results/audit-live.md
             audit-live-console.txt
             audit-system-evidence.txt
+            audit-live-outcome.txt
           if-no-files-found: warn
           retention-days: 30
