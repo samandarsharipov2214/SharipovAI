@@ -1,0 +1,6 @@
+#tv32Widget{height:var(--tv32-widget-height,720px)!important;min-height:var(--tv32-widget-height,720px)!important;overflow:hidden}
+#tv32Widget>.tv32-widget-container{display:flex!important;flex-direction:column!important;width:100%!important;height:100%!important;min-height:100%!important}
+#tv32Widget .tradingview-widget-container__widget{display:block!important;flex:1 1 auto!important;width:100%!important;height:calc(100% - 28px)!important;min-height:calc(100% - 28px)!important;overflow:hidden!important}
+#tv32Widget .tradingview-widget-container__widget>iframe{display:block!important;width:100%!important;height:100%!important;min-height:100%!important;border:0!important}
+#tv32Widget>.tv32-widget-container>iframe{display:block!important;width:100%!important;height:calc(100% - 28px)!important;min-height:calc(100% - 28px)!important;border:0!important}
+#tv32Widget .tradingview-widget-copyright{flex:0 0 28px!important;height:28px!important;min-height:28px!important}
