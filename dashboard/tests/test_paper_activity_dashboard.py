@@ -10,30 +10,38 @@ class DummyRunner:
         raise RuntimeError("not used")
 
 
-def test_paper_activity_api_installed_via_dashboard(tmp_path, monkeypatch) -> None:
+def test_virtual_activity_api_is_truthful_when_autorun_is_disabled(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("PAPER_ACTIVITY_STATE_FILE", str(tmp_path / "paper.json"))
     monkeypatch.setenv("PAPER_ACTIVITY_AUTORUN_ENABLED", "0")
     client = TestClient(create_app(runner_factory=DummyRunner))
 
-    state = client.get("/api/paper-activity/state")
-    assert state.status_code == 200
-    assert state.json()["state"]["summary"]["trade_count"] >= 1
-    assert state.json()["autorun"]["enabled"] is False
+    state_response = client.get("/api/paper-activity/state")
+    assert state_response.status_code == 200
+    payload = state_response.json()
+    before_count = payload["state"]["summary"]["trade_count"]
+    assert before_count >= 0
+    assert payload["autorun"]["enabled"] is False
+    assert all(trade.get("real_order_placed") is False for trade in payload["state"].get("trades", []))
 
     tick = client.post("/api/paper-activity/tick", json={"force": True})
     assert tick.status_code == 200
-    assert tick.json()["state"]["summary"]["trade_count"] >= 2
+    tick_payload = tick.json()
+    assert tick_payload["status"] in {"ok", "wait", "blocked", "closed_position"}
 
     trades = client.get("/api/paper-activity/trades")
     assert trades.status_code == 200
-    assert trades.json()["summary"]["trade_count"] == len(trades.json()["trades"])
+    trades_payload = trades.json()
+    assert trades_payload["summary"]["trade_count"] == len(trades_payload["trades"])
+    assert all(trade.get("real_order_placed") is False for trade in trades_payload["trades"])
 
     page = client.get("/paper-activity")
     assert page.status_code == 200
-    assert "Paper Activity Engine" in page.text
+    assert "Paper Activity Engine compatibility mode" in page.text
     assert "Все сделки" in page.text
     assert "JSON all trades" in page.text
     assert "Autorun" in page.text
+    assert "Real orders" in page.text
+    assert "blocked" in page.text
 
 
 def test_paper_activity_catch_up_endpoint(tmp_path, monkeypatch) -> None:
