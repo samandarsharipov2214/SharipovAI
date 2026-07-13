@@ -1,19 +1,6 @@
 name: Full Project Audit
 
 on:
-  push:
-    branches:
-      - audit/full-5-phases-20260713
-    paths:
-      - 'scripts/full_project_audit.py'
-      - 'scripts/static_project_audit.py'
-      - 'scripts/live_vps_audit.py'
-      - '.github/workflows/full-project-audit.yml'
-      - 'dashboard/**'
-      - 'deploy/**'
-      - 'tests/**'
-      - 'requirements.txt'
-      - 'Dockerfile'
   pull_request:
     branches: [main]
     paths:
@@ -32,7 +19,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: sharipovai-full-audit-${{ github.event.pull_request.number || github.ref }}
+  group: sharipovai-full-audit
   cancel-in-progress: true
 
 jobs:
