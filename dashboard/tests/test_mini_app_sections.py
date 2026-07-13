@@ -24,16 +24,20 @@ def test_mini_app_uses_current_web2_navigation() -> None:
         assert label in text
 
 
-def test_mini_app_exposes_truthful_exchange_fields() -> None:
-    response = _client().get("/?lang=ru")
+def test_mini_app_exchange_renderer_is_truthful_and_fail_closed() -> None:
+    response = _client().get("/static/web2/exchange_execution_settings_v18.js")
     assert response.status_code == 200
     text = response.text
-    assert "Реальные свечи и котировки с Bybit" in text
-    assert "Реальные ордера заблокированы" in text
-    assert "Выдуманные" not in text or "не отображаются" in text
+    assert "Фактические данные личного кабинета" in text
+    assert "Подключение не подтверждено" in text
+    assert "Синтетический баланс запрещён" in text
+    assert "без демонстрационных записей" in text
+    assert "/api/exchange/account/snapshot" in text
+    assert "/api/virtual-account/state" in text
+    assert "Math.random" not in text
 
 
-def test_mini_app_exchange_renderer_is_display_only() -> None:
+def test_mini_app_legacy_renderer_is_display_only() -> None:
     response = _client().get("/static/mini-app-live.js")
     assert response.status_code == 200
     text = response.text
