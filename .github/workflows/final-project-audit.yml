@@ -89,7 +89,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          python scripts/final_project_audit.py --mode static 2>&1 | tee final-audit-static.log
+          python -m scripts.final_project_audit --mode static 2>&1 | tee final-audit-static.log
 
       - name: Record outcomes
         if: always()
@@ -128,7 +128,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          python3 scripts/final_project_audit.py --mode live --base-url http://127.0.0.1:8000 2>&1 | tee final-audit-live.log
+          python3 -m scripts.final_project_audit --mode live --base-url http://127.0.0.1:8000 2>&1 | tee final-audit-live.log
 
       - name: Capture sanitized VPS evidence
         if: always()
