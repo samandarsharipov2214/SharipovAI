@@ -9,8 +9,8 @@ def test_system_status_assets_exist_and_are_loaded() -> None:
     index = (WEB / "index.html").read_text(encoding="utf-8")
     assert (WEB / "system_status_v11.js").is_file()
     assert (WEB / "system_status_v11.css").is_file()
-    assert "system_status_v11.css?v=11" in index
-    assert "system_status_v11.js?v=11" in index
+    assert "/static/web2/system_status_v11.css?" in index
+    assert "/static/web2/system_status_v11.js?" in index
 
 
 def test_system_status_checks_real_project_endpoints() -> None:
@@ -18,7 +18,7 @@ def test_system_status_checks_real_project_endpoints() -> None:
     required = {
         "/api/health",
         "/api/market/bybit-websocket/status",
-        "/api/exchange/account/snapshot",
+        "/api/exchange/account/status",
         "/api/ai-bots",
         "/api/run",
         "/api/social-news",
@@ -35,5 +35,6 @@ def test_system_status_does_not_claim_success_without_response() -> None:
     script = (WEB / "system_status_v11.js").read_text(encoding="utf-8")
     assert "Promise.allSettled" in script
     assert "НЕДОСТУПЕН" in script
-    assert "Это не доказывает прибыльность" in script
+    assert "Доступен» означает успешный и семантически корректный ответ API" in script
+    assert "реальные ордера остаются заблокированными" in script
     assert "Math.random" not in script
