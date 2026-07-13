@@ -43,7 +43,7 @@ def _policy() -> CapitalAllocationPolicy:
 
 
 def test_market_engine_opens_and_persists_real_price_trade(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("VIRTUAL_ACCOUNT_MAX_OPEN", "5")
+    monkeypatch.setenv("VIRTUAL_ACCOUNT_MAX_OPEN", "8")
     path = tmp_path / "virtual_account.json"
     factory = lambda symbol: _payload(symbol)
     engine = MarketPaperActivityEngine(
@@ -57,8 +57,8 @@ def test_market_engine_opens_and_persists_real_price_trade(tmp_path, monkeypatch
     assert result["status"] == "ok"
     trade = result["trade"]
     assert trade["entry_price"] == 100.0
-    assert trade["notional"] == 1600.0
-    assert trade["quantity"] == 16.0
+    assert trade["notional"] == 2000.0
+    assert trade["quantity"] == 20.0
     assert trade["capital_allocation"]["reserve_percent"] == 20.0
     assert trade["leverage"] == 1.0
     assert trade["quote_source"] == "test-exchange"
@@ -71,7 +71,7 @@ def test_market_engine_opens_and_persists_real_price_trade(tmp_path, monkeypatch
     ).state()
     assert reloaded["summary"]["trade_count"] == 1
     assert reloaded["summary"]["open_positions"] == 1
-    assert reloaded["summary"]["deployed_notional"] == 1600.0
+    assert reloaded["summary"]["deployed_notional"] == 2000.0
     assert reloaded["summary"]["reserve_percent"] == 20.0
     assert reloaded["summary"]["market_price_accounting"] is True
 
