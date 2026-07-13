@@ -39,11 +39,13 @@ set -Eeuo pipefail
 python -m pytest \
   tests/test_market_paper_engine.py \
   tests/test_news_intelligence_runtime.py \
-  tests/test_lifecycle_compat.py -q
+  tests/test_lifecycle_compat.py \
+  tests/test_ai_organ_safe_runtime.py -q
 python -m py_compile \
   /app/market_paper_engine.py \
   /app/paper_activity_autorun.py \
   /app/dashboard/lifecycle_compat.py \
+  /app/dashboard/ai_organ_state_safe_api.py \
   /app/dashboard/paper_activity_api.py \
   /app/dashboard/realtime_status_api.py \
   /app/news_intelligence/models.py \
@@ -57,6 +59,7 @@ paths = {getattr(route, "path", "") for route in app.routes}
 assert "/health" in paths, "health route missing"
 assert "/api/virtual-account/state" in paths, "virtual account route missing"
 assert "/api/news-agents/status" in paths, "news agents route missing"
+assert "/api/system/ai-organs" in paths, "AI organ monitor route missing"
 print("FULL_APP_IMPORT_OK")
 PY
 '
