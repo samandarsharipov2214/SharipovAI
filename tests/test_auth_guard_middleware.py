@@ -45,7 +45,7 @@ def test_auth_is_enabled_by_default(monkeypatch) -> None:
     assert html.status_code == 303
     assert html.headers["location"] == "/login?next=/"
     assert api.status_code == 401
-    assert api.json()["status"] == "unauthorized"
+    assert api.json() == {"error": "authentication_required"}
 
 
 def test_authenticated_session_can_access_private_routes(monkeypatch) -> None:
