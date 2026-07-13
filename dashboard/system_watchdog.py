@@ -16,6 +16,8 @@ from typing import Any, Callable
 
 from fastapi import FastAPI
 
+from .lifecycle_compat import ensure_event_handler_compat
+
 
 SafeAction = Callable[[], Any]
 
@@ -236,6 +238,7 @@ class SystemWatchdogManager:
 def install_system_watchdog(app: FastAPI) -> None:
     if getattr(app.state, "system_watchdog_installed", False):
         return
+    ensure_event_handler_compat(app)
     app.state.system_watchdog_installed = True
     manager = SystemWatchdogManager(app)
     app.state.system_watchdog = manager
