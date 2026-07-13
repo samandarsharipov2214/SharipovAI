@@ -55,7 +55,7 @@ def install_global_auth_guard(app: FastAPI) -> None:
 
         if path.startswith("/api/"):
             return JSONResponse(
-                {"status": "unauthorized", "detail": "authentication required"},
+                {"status": "unauthorized", "error": "authentication_required"},
                 status_code=401,
             )
 
