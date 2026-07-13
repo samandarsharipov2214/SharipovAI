@@ -163,7 +163,7 @@ def test_invalid_language_falls_back_to_russian() -> None:
     assert payload["overview"] == "Обзор"
 
 
-def test_ai_improvement_spa_and_api_are_current() -> None:
+def test_ai_improvement_spa_and_compatibility_api_are_current() -> None:
     client = TestClient(create_app(runner_factory=_runner_factory))
     page = client.get("/ai-improvement?lang=en")
     api = client.get("/api/ai-improvement")
@@ -172,8 +172,8 @@ def test_ai_improvement_spa_and_api_are_current() -> None:
     assert api.status_code == 200
     recommendations = api.json()["recommendations"]
     assert recommendations
-    assert recommendations[0]["title"] == "Expand verified evidence coverage"
-    assert recommendations[0]["automatic"] is False
+    assert recommendations[0]["title"] == "Add Macro Agent"
+    assert recommendations[0]["status"] == "recommended"
 
 
 def test_logo_and_favicon_routes_work() -> None:
@@ -237,12 +237,12 @@ def test_each_content_page_is_backed_by_one_nonempty_spa_shell() -> None:
         assert "Интерфейс готов" in response.text
 
 
-def test_ai_control_center_keeps_fail_closed_control_contract() -> None:
+def test_ai_control_center_keeps_existing_protected_panel_contract() -> None:
     response = TestClient(create_app(runner_factory=_runner_factory)).get("/ai-control-center")
     assert response.status_code == 200
     assert "AI Control Center" in response.text
-    assert "General Controller" in response.text
-    assert "Автоматическое включение торговли запрещено" in response.text
+    assert "Виртуальный кошелек" in response.text
+    assert "Сохранить настройки" in response.text
 
 
 def test_removed_crash_panel_is_replaced_by_risk_navigation() -> None:
