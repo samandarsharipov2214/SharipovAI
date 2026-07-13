@@ -1,4 +1,4 @@
-{$DOMAIN} {
+85-137-88-17.sslip.io {
     encode zstd gzip
 
     header {
