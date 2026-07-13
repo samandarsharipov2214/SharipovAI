@@ -5,8 +5,8 @@
   const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   }[ch]));
-  const nowText = () => new Date().toLocaleString('ru-RU');
-  const state = { loadedAt: null, results: {}, errors: {} };
+  const state = { loadedAt: null, results: {}, errors: {}, loading: false };
+  const AUTO_REFRESH_MS = 15000;
 
   const checks = {
     health: { label: 'Сервер и API', url: '/api/health', required: true },
@@ -20,6 +20,8 @@
     virtual: { label: 'Виртуальный счёт', url: '/api/virtual-account/state', required: true },
     reports: { label: 'Система отчётов', url: '/api/ai-control-center/daily-report', required: true }
   };
+
+  const active = () => (window.SharipovAIPageCoordinator?.activePage?.() || document.querySelector('#nav button.active[data-page]')?.dataset.page) === 'system-status';
 
   async function getJson(url) {
     const started = performance.now();
@@ -44,23 +46,38 @@
     return found ? found.length : null;
   }
 
+  function shortDiagnostic(value) {
+    const text = String(value || '').replace(/\s+/g, ' ').trim();
+    if (!text) return '';
+    const lower = text.toLowerCase();
+    if (lower.includes('read-only') || lower.includes('read only')) return 'Ключ Bybit должен разрешать только чтение аккаунта.';
+    if (lower.includes('api key') || lower.includes('preflight')) return 'Проверь read-only ключи Bybit. Виртуальная торговля работает без них.';
+    if (lower.includes('http 401') || lower.includes('http 403')) return 'Доступ отклонён.';
+    if (lower.includes('http 503')) return 'Сервис временно не отвечает.';
+    return text.length > 120 ? `${text.slice(0, 117)}…` : text;
+  }
+
   function semanticState(key) {
     const result = state.results[key];
     const error = state.errors[key];
-    if (!result || error) return { level: 'bad', label: 'НЕДОСТУПЕН', detail: error || 'нет ответа' };
-    const data = result.data || {};
     if (key === 'account') {
-      if (data.credentials_configured !== true || data.sync_enabled === false) {
-        return { level: 'optional', label: 'НЕ НАСТРОЕН', detail: 'необязательный личный API; виртуальный режим активен' };
+      if (!result || error) {
+        return { level: 'optional', label: 'НЕ НАСТРОЕН', detail: shortDiagnostic(error) || 'Необязательное подключение.' };
       }
-      if (data.connected === true) return { level: 'ok', label: 'ПОДКЛЮЧЁН', detail: 'read-only snapshot подтверждён' };
-      return { level: 'bad', label: 'ОШИБКА', detail: data.last_error || 'учётные данные заданы, но snapshot не получен' };
+      const data = result.data || {};
+      if (data.connected === true) return { level: 'ok', label: 'ПОДКЛЮЧЁН', detail: 'Только чтение.' };
+      if (data.credentials_configured !== true || data.sync_enabled === false) {
+        return { level: 'optional', label: 'НЕ НАСТРОЕН', detail: 'Не влияет на виртуальную торговлю.' };
+      }
+      return { level: 'optional', label: 'НЕ НАСТРОЕН', detail: shortDiagnostic(data.last_error || data.error) || 'Проверь read-only ключи.' };
     }
+    if (!result || error) return { level: 'bad', label: 'НЕДОСТУПЕН', detail: shortDiagnostic(error) || 'Нет ответа.' };
+    const data = result.data || {};
     const status = String(data.status || data.state || '').toLowerCase();
     if (['error', 'unavailable', 'failed', 'offline'].includes(status)) {
-      return { level: 'bad', label: 'НЕДОСТУПЕН', detail: data.message || data.error || status };
+      return { level: 'bad', label: 'НЕДОСТУПЕН', detail: shortDiagnostic(data.message || data.error || status) };
     }
-    return { level: 'ok', label: 'ДОСТУПЕН', detail: 'нет' };
+    return { level: 'ok', label: 'ДОСТУПЕН', detail: '' };
   }
 
   function verifiedAi(data) {
@@ -80,71 +97,99 @@
     const result = state.results[key];
     const semantic = semanticState(key);
     const count = result ? itemCount(key, result.data) : null;
-    const css = semantic.level === 'bad' ? 'bad' : 'ok';
+    const css = semantic.level === 'bad' && meta.required ? 'bad' : 'ok';
+    const facts = [];
+    if (result) facts.push(`<span>Отклик <b>${result.latencyMs} мс</b></span>`);
+    if (count != null) facts.push(`<span>Объектов <b>${count}</b></span>`);
+    if (semantic.detail) facts.push(`<span class="status-service-note">${esc(semantic.detail)}</span>`);
     return `<article class="status-service ${css}">
       <div class="status-service-head">
         <span class="status-dot"></span>
-        <div><b>${esc(meta.label)}</b><small>${esc(meta.url)}${meta.required ? '' : ' · необязательный'}</small></div>
+        <div><b>${esc(meta.label)}</b><small>${esc(meta.url)}${meta.required ? '' : ' · необязательно'}</small></div>
         <strong>${esc(semantic.label)}</strong>
       </div>
-      <div class="status-service-body">
-        <span>Задержка: <b>${result ? `${result.latencyMs} мс` : '—'}</b></span>
-        <span>Записей: <b>${count == null ? '—' : count}</b></span>
-        <span>Состояние: <b>${esc(semantic.detail)}</b></span>
-      </div>
+      ${facts.length ? `<div class="status-service-body">${facts.join('')}</div>` : ''}
     </article>`;
   }
 
+  function ageText() {
+    if (!state.loadedAt) return 'Проверка ещё не выполнялась';
+    const seconds = Math.max(0, Math.floor((Date.now() - new Date(state.loadedAt).getTime()) / 1000));
+    if (seconds < 60) return `Проверено ${seconds} сек назад`;
+    const minutes = Math.floor(seconds / 60);
+    return `Проверено ${minutes} мин назад`;
+  }
+
+  function updateClock() {
+    const clock = $('statusClock');
+    const age = $('statusAge');
+    const checked = $('statusCheckedAt');
+    if (clock) clock.textContent = new Date().toLocaleTimeString('ru-RU');
+    if (age) age.textContent = ageText();
+    if (checked) checked.textContent = state.loadedAt ? `Последняя проверка: ${new Date(state.loadedAt).toLocaleTimeString('ru-RU')}` : 'Ожидание первой проверки';
+  }
+
   function render() {
+    if (!active()) return;
     const content = $('content');
     if (!content) return;
     const keys = Object.keys(checks);
     const required = keys.filter((key) => checks[key].required);
     const available = required.filter((key) => semanticState(key).level === 'ok').length;
     const ai = verifiedAi(state.results.bots?.data);
-    const market = state.results.market?.data || {};
+    const market = semanticState('market');
     const account = semanticState('account');
-    const overall = available === required.length ? 'ОСНОВНЫЕ СИСТЕМЫ ДОСТУПНЫ' : available > 0 ? 'ЧАСТЬ ОСНОВНЫХ СИСТЕМ НЕДОСТУПНА' : 'СИСТЕМА НЕ ОТВЕЧАЕТ';
+    const overall = available === required.length ? 'ВСЁ РАБОТАЕТ' : available > 0 ? 'ЕСТЬ СБОИ' : 'НЕТ СВЯЗИ';
     const tone = available === required.length ? 'positive' : 'negative';
 
-    content.innerHTML = `<div class="title"><h1>Состояние системы</h1><p>Основные сервисы и необязательные подключения проверяются раздельно</p></div>
+    content.innerHTML = `<div class="title"><h1>Состояние системы</h1><p>Автоматическая проверка каждые 15 секунд</p></div>
       <section class="metrics">
-        <article class="card"><span>Общее состояние</span><strong class="${tone}">${overall}</strong><small>${available}/${required.length} основных источников отвечают</small></article>
-        <article class="card"><span>ИИ с подтверждением</span><strong>${ai.verified}/${ai.total}</strong><small>Свежий сигнал до 90 секунд</small></article>
-        <article class="card"><span>Личный Bybit API</span><strong class="${account.level === 'bad' ? 'negative' : 'positive'}">${esc(account.label)}</strong><small>${esc(account.detail)}</small></article>
-        <article class="card"><span>Поток рынка</span><strong>${esc(market.status || market.state || (state.results.market ? 'ОТВЕЧАЕТ' : '—'))}</strong><small>Публичный WebSocket</small></article>
-        <article class="card"><span>Последняя проверка</span><strong>${esc(state.loadedAt ? new Date(state.loadedAt).toLocaleTimeString('ru-RU') : '—')}</strong><small>Локальное время</small></article>
+        <article class="card"><span>Основные системы</span><strong class="${tone}">${overall}</strong><small>${available}/${required.length} работают</small></article>
+        <article class="card"><span>ИИ онлайн</span><strong>${ai.verified}/${ai.total}</strong><small>Активность до 90 секунд</small></article>
+        <article class="card"><span>Рынок</span><strong class="${market.level === 'ok' ? 'positive' : 'negative'}">${esc(market.label)}</strong><small>Публичные котировки Bybit</small></article>
+        <article class="card"><span>Личный Bybit</span><strong class="${account.level === 'ok' ? 'positive' : ''}">${esc(account.label)}</strong><small>Не нужен для виртуального счёта</small></article>
+        <article class="card"><span>Текущее время</span><strong id="statusClock">${esc(new Date().toLocaleTimeString('ru-RU'))}</strong><small id="statusAge">${esc(ageText())}</small></article>
       </section>
-      <div class="status-actions"><button id="statusRefresh" class="action">Проверить сейчас</button><span>Проверено: ${esc(state.loadedAt ? nowText() : 'ещё не проверено')}</span></div>
-      <section class="status-grid">${keys.map(serviceCard).join('')}</section>
-      <article class="panel wide"><small>ПРАВИЛО ДОСТОВЕРНОСТИ</small><h2>Как читать статусы</h2><p>«Доступен» означает успешный и семантически корректный ответ API. «Не настроен» для личного Bybit API не считается поломкой: виртуальная торговля продолжает использовать публичные котировки, а реальные ордера остаются заблокированными.</p></article>`;
-    $('statusRefresh')?.addEventListener('click', load);
+      <div class="status-actions"><button id="statusRefresh" class="action">Проверить сейчас</button><span id="statusCheckedAt"></span></div>
+      <section class="status-grid">${keys.map(serviceCard).join('')}</section>`;
+    $('statusRefresh')?.addEventListener('click', () => load(true));
+    updateClock();
   }
 
-  async function load() {
+  async function load(manual = false) {
+    if (state.loading || !active()) return;
+    state.loading = true;
     const button = $('statusRefresh');
-    if (button) { button.disabled = true; button.textContent = 'Проверяю…'; }
-    state.results = {};
-    state.errors = {};
+    if (button && manual) { button.disabled = true; button.textContent = 'Проверяю…'; }
     const entries = Object.entries(checks);
     const settled = await Promise.allSettled(entries.map(([, meta]) => getJson(meta.url)));
+    const nextResults = {};
+    const nextErrors = {};
     settled.forEach((result, index) => {
       const key = entries[index][0];
-      if (result.status === 'fulfilled') state.results[key] = result.value;
-      else state.errors[key] = result.reason?.message || 'нет ответа';
+      if (result.status === 'fulfilled') nextResults[key] = result.value;
+      else nextErrors[key] = result.reason?.message || 'Нет ответа';
     });
+    state.results = nextResults;
+    state.errors = nextErrors;
     state.loadedAt = new Date().toISOString();
+    state.loading = false;
     render();
   }
 
   function install() {
     const nav = $('nav');
-    if (!nav || nav.querySelector('[data-page="system-status"]')) return;
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.dataset.page = 'system-status';
-    button.textContent = 'Состояние системы';
-    nav.insertBefore(button, nav.firstChild);
+    if (!nav) return;
+    let button = nav.querySelector('[data-page="system-status"]');
+    if (!button) {
+      button = document.createElement('button');
+      button.type = 'button';
+      button.dataset.page = 'system-status';
+      button.textContent = 'Состояние системы';
+      nav.insertBefore(button, nav.firstChild);
+    }
+    if (button.dataset.statusBound === '1') return;
+    button.dataset.statusBound = '1';
     button.addEventListener('click', () => {
       nav.querySelectorAll('button[data-page]').forEach((item) => item.classList.remove('active'));
       button.classList.add('active');
@@ -156,4 +201,6 @@
   }
 
   window.addEventListener('DOMContentLoaded', install);
+  setInterval(updateClock, 1000);
+  setInterval(() => { if (active() && !document.hidden) load(); }, AUTO_REFRESH_MS);
 })();
