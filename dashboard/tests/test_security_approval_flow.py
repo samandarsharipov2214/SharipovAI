@@ -30,6 +30,9 @@ def test_admin_can_approve_access_request_and_created_user_can_login(tmp_path: P
     monkeypatch.setenv("AUTH_USERS_FILE", str(tmp_path / "users.json"))
     monkeypatch.setenv("AUTH_ACCESS_REQUESTS_FILE", str(tmp_path / "access_requests.json"))
     monkeypatch.setenv("AUTH_SECURITY_EVENTS_FILE", str(tmp_path / "security_events.json"))
+    monkeypatch.setenv("ADMIN_USERNAME", "ci-admin")
+    monkeypatch.setenv("ADMIN_PASSWORD", "ci-admin-password")
+    monkeypatch.setenv("AUTH_SECRET", "ci-auth-secret")
     app = create_app(runner_factory=FakeRunner)
     client = TestClient(app)
 
@@ -43,8 +46,18 @@ def test_admin_can_approve_access_request_and_created_user_can_login(tmp_path: P
     )
     assert register_response.status_code == 202
 
+    admin_login = client.post(
+        "/login",
+        data={"username": "ci-admin", "password": "ci-admin-password", "next": "/"},
+        follow_redirects=False,
+    )
+    assert admin_login.status_code == 303
+
     requests_response = client.get("/api/security/access-requests")
-    request_id = requests_response.json()["requests"][0]["id"]
+    assert requests_response.status_code == 200
+    requests_payload = requests_response.json()
+    assert requests_payload["status"] == "ok"
+    request_id = requests_payload["requests"][0]["id"]
 
     approve_response = client.post(f"/api/security/access-requests/{request_id}/approve")
     assert approve_response.status_code == 200
@@ -53,6 +66,7 @@ def test_admin_can_approve_access_request_and_created_user_can_login(tmp_path: P
     assert approve_payload["username"] == "pilot01"
     assert approve_payload["temporary_password"].startswith("SA-")
 
+    client.get("/logout", follow_redirects=False)
     login_response = client.post(
         "/login",
         data={"username": "pilot01", "password": approve_payload["temporary_password"]},
