@@ -24,13 +24,19 @@ def test_mini_app_uses_current_web2_navigation() -> None:
         assert label in text
 
 
-def test_mini_app_exposes_truthful_exchange_fields() -> None:
+def test_mini_app_loads_verified_market_terminal_without_fake_fallback() -> None:
     response = _client().get("/?lang=ru")
     assert response.status_code == 200
     text = response.text
-    assert "Реальные свечи и котировки с Bybit" in text
-    assert "Реальные ордера заблокированы" in text
-    assert "Выдуманные" not in text or "не отображаются" in text
+    assert "market_terminal_v13.js" in text
+    assert 'data-page="market"' in text
+
+    renderer = _client().get("/static/web2/market_terminal_v13.js")
+    assert renderer.status_code == 200
+    script = renderer.text
+    assert "/api/market" in script or "/api/exchange" in script
+    assert "Math.random" not in script
+    assert "synthetic" not in script.lower() or "synthetic_fallback_used" in script
 
 
 def test_mini_app_exchange_renderer_is_display_only() -> None:
