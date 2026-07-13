@@ -1,0 +1,114 @@
+from __future__ import annotations
+
+import json
+import sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
+
+import pytest
+
+from tools.backup_integrity import BackupIntegrityError, sha256, verify_snapshot
+from tools.isolated_restore_drill import run_restore_drill
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def make_snapshot(root: Path) -> Path:
+    snapshot = root / "snapshot"
+    data = snapshot / "data"
+    data.mkdir(parents=True)
+
+    database = data / "sharipovai_shared.db"
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE events (id INTEGER PRIMARY KEY, value TEXT NOT NULL)")
+        connection.execute("INSERT INTO events(value) VALUES (?)", ("restore-drill",))
+        connection.commit()
+
+    settings = data / "settings.json"
+    settings.write_text(json.dumps({"live_trading": False}), encoding="utf-8")
+
+    files = []
+    for path in sorted(data.rglob("*")):
+        if path.is_file():
+            files.append(
+                {
+                    "path": path.relative_to(data).as_posix(),
+                    "bytes": path.stat().st_size,
+                    "sha256": sha256(path),
+                }
+            )
+    manifest = {
+        "schema": 1,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "files": files,
+        "file_count": len(files),
+        "source": "test",
+    }
+    (snapshot / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    return snapshot
+
+
+def test_restore_drill_copies_and_reverifies_snapshot(tmp_path: Path) -> None:
+    source = make_snapshot(tmp_path / "source")
+    report = run_restore_drill(source, tmp_path / "drills")
+
+    assert report["status"] == "ok"
+    assert report["activation_performed"] is False
+    assert report["network_services_started"] is False
+    assert report["file_count"] == 2
+    assert report["sqlite_checks"] == [
+        {"path": "sharipovai_shared.db", "status": "ok", "result": ["ok"]}
+    ]
+
+    restored = Path(report["restored_snapshot"])
+    restored_manifest = verify_snapshot(restored)
+    assert restored_manifest["file_count"] == 2
+    assert Path(report["report_path"]).is_file()
+
+
+def test_restore_drill_rejects_tampered_source(tmp_path: Path) -> None:
+    source = make_snapshot(tmp_path / "source")
+    (source / "data" / "settings.json").write_text("tampered", encoding="utf-8")
+
+    with pytest.raises(BackupIntegrityError, match="backup size mismatch|checksum mismatch"):
+        run_restore_drill(source, tmp_path / "drills")
+
+
+def test_restore_drill_rejects_destination_inside_source(tmp_path: Path) -> None:
+    source = make_snapshot(tmp_path / "source")
+
+    with pytest.raises(BackupIntegrityError, match="outside the source snapshot"):
+        run_restore_drill(source, source / "restore-drills")
+
+
+def test_windows_restore_wrapper_stays_passive_and_retains_reports() -> None:
+    script = (ROOT / "scripts/windows/test_isolated_restore.ps1").read_text(encoding="utf-8-sig")
+    assert "-m tools.isolated_restore_drill" in script
+    assert "runtime\remote_backups\current" in script
+    assert "runtime\restore_drills" in script
+    assert "runtime\restore_drill_status.json" in script
+    assert "RetainRuns = 12" in script
+    assert "Select-Object -Skip $RetainRuns" in script
+    assert "activation_performed" in script
+    assert "network_services_started" in script
+    assert "bootstrap_pc_node" not in script
+    assert "docker" not in script.lower()
+    assert "Start-Process" not in script
+
+
+def test_weekly_restore_installer_is_passive_and_start_when_available() -> None:
+    script = (ROOT / "scripts/windows/install_weekly_restore_drill.ps1").read_text(encoding="utf-8-sig")
+    assert '"SharipovAI Weekly Restore Drill"' in script
+    assert "New-ScheduledTaskTrigger -Weekly" in script
+    assert "-DaysOfWeek $scheduledDay" in script
+    assert "-StartWhenAvailable" in script
+    assert "-MultipleInstances IgnoreNew" in script
+    assert "-RetainRuns $RetainRuns" in script
+    assert 'DayOfWeek = "Sunday"' in script
+    assert 'Time = "04:00"' in script
+    assert "runtime\restore_drill_status.json" in script
+    assert "activation_performed" in script
+    assert "network_services_started" in script
+    assert "bootstrap_pc_node" not in script
+    assert "docker" not in script.lower()

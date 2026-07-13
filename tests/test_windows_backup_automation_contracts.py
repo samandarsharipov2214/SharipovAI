@@ -34,6 +34,15 @@ def test_one_command_setup_creates_and_verifies_dedicated_key() -> None:
     assert "authorized_keys" in script
     assert "/tmp/sharipovai_backup_ed25519.pub" in script
     assert "grep -Fqx -f" in script
+    assert "publicKeyRaw" in script
+    assert "(?:\\s+.*)?$" in script
+    assert '$publicKeyBase = "$($Matches[1]) $($Matches[2])"' in script
+    assert "function Invoke-NativeCapture" in script
+    assert "function Invoke-NativeInteractive" in script
+    assert '$ErrorActionPreference = "SilentlyContinue"' in script
+    assert '$ErrorActionPreference = "Continue"' in script
+    assert "Invoke-NativeCapture -FilePath $ssh.Source" in script
+    assert "Invoke-NativeInteractive -FilePath $scp.Source" in script
     assert "BatchMode=yes" in script
     assert "backup-key-ok" in script
     assert "install_vps_backup_sync.ps1" in script
