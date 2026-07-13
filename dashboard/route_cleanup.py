@@ -10,9 +10,15 @@ def remove_legacy_routes(
     app: FastAPI,
     specifications: Iterable[tuple[str, str]],
     *,
-    owner_module: str = "dashboard.routes",
+    owner_module: str | None = "dashboard.routes",
 ) -> int:
-    """Remove exact method/path routes owned by an explicitly legacy module."""
+    """Remove exact method/path routes before a canonical owner is installed.
+
+    By default only endpoints from ``dashboard.routes`` are removed. A canonical
+    installer may pass ``owner_module=None`` when it owns the exact route slot and
+    runs before registering its replacement. This remains bounded by both HTTP
+    method and exact path, so unrelated routes cannot be removed accidentally.
+    """
 
     targets = {(method.upper(), path) for method, path in specifications}
     kept = []
@@ -23,7 +29,8 @@ def remove_legacy_routes(
         endpoint = getattr(route, "endpoint", None)
         module_name = str(getattr(endpoint, "__module__", ""))
         matches = any(target_path == path and target_method in methods for target_method, target_path in targets)
-        if matches and module_name == owner_module:
+        owned = owner_module is None or module_name == owner_module
+        if matches and owned:
             removed += 1
             continue
         kept.append(route)
