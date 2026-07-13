@@ -3,8 +3,15 @@
   const $ = id => document.getElementById(id);
   const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const list = (...values) => values.find(Array.isArray) || [];
-  const number = value => Number.isFinite(Number(value)) ? Number(value).toLocaleString('ru-RU',{maximumFractionDigits:8}) : '—';
-  const time = value => { if(!value) return '—'; const d=new Date(value); return Number.isNaN(d.getTime())?'—':d.toLocaleString('ru-RU'); };
+  const rawNumber = value => Number.isFinite(Number(value)) ? Number(value) : null;
+  const number = value => rawNumber(value) != null ? Number(value).toLocaleString('ru-RU',{maximumFractionDigits:8}) : '—';
+  const time = value => {
+    if(!value) return '—';
+    const numeric=Number(value);
+    const normalized=Number.isFinite(numeric) && numeric>0 && numeric<1e12 ? numeric*1000 : value;
+    const d=new Date(normalized);
+    return Number.isNaN(d.getTime())?'—':d.toLocaleString('ru-RU');
+  };
   const request = async url => { const r=await fetch(url,{cache:'no-store',credentials:'same-origin'}); if(!r.ok) throw new Error(String(r.status)); return r.json(); };
   const empty = text => `<div class="x18-empty">${esc(text)}</div>`;
   const card = (label,value,note='') => `<article class="x18-card"><span>${esc(label)}</span><b>${esc(value)}</b><small>${esc(note)}</small></article>`;
@@ -22,32 +29,53 @@
     return {data,positions:list(data.positions,raw.positions),orders:list(data.orders,raw.orders),trades:list(data.trades,data.executions,raw.trades,raw.executions),assets:list(data.assets,data.coins,data.coin,raw.assets)};
   }
 
+  function virtualPayload(raw){
+    const state=raw?.state && typeof raw.state==='object' ? raw.state : raw || {};
+    return {state,summary:state.summary||raw?.summary||{},trades:list(state.trades,raw?.trades,state.orders,state.history)};
+  }
+
+  function virtualRows(items){
+    if(!items.length) return empty('Виртуальные операции пока не получены.');
+    return `<table class="x18-table"><thead><tr><th>Открыта</th><th>Закрыта</th><th>Пара</th><th>Сторона</th><th>Статус</th><th>Вход</th><th>Текущая / выход</th><th>Net PnL</th><th>Комиссия</th><th>Причина</th></tr></thead><tbody>${items.slice().reverse().slice(0,200).map(x=>`<tr><td>${time(x.opened_at||x.time||x.created_at)}</td><td>${x.closed_at?time(x.closed_at):'—'}</td><td>${esc(x.symbol||x.asset||'—')}</td><td>${esc(x.side||'—')}</td><td>${esc(x.status||'—')}</td><td>${esc(number(x.entry_price))}</td><td>${esc(number(x.exit_price??x.current_price))}</td><td>${esc(number(x.net_pnl))}</td><td>${esc(number(x.fee))}</td><td>${esc(x.close_reason_ru||x.reason_ru||'—')}</td></tr>`).join('')}</tbody></table>`;
+  }
+
+  function realRows(items){
+    if(!items.length) return empty('Реальных исполнений нет. Реальная торговля заблокирована настройками безопасности.');
+    return `<table class="x18-table"><thead><tr><th>Время</th><th>Пара</th><th>Сторона</th><th>Цена</th><th>Количество</th><th>Результат</th></tr></thead><tbody>${items.slice(0,200).map(x=>`<tr><td>${time(x.execTime||x.createdTime||x.time||x.created_at)}</td><td>${esc(x.symbol||'—')}</td><td>${esc(x.side||'—')}</td><td>${esc(x.execPrice??x.price??'—')}</td><td>${esc(x.execQty??x.qty??x.size??'—')}</td><td>${esc(x.closedPnl??x.pnl??x.orderStatus??x.status??'—')}</td></tr>`).join('')}</tbody></table>`;
+  }
+
   async function bybit(){
     const out=$('content'); if(!out)return; out.innerHTML=title('Bybit','Проверка личного кабинета и состояния подключения')+empty('Загрузка…');
     try{
       const a=await account(), d=a.data;
       const equity=d.total_equity??d.totalEquity??d.equity;
       const available=d.total_available_balance??d.totalAvailableBalance??d.available_balance;
-      out.innerHTML=title('Bybit','Фактические данные личного кабинета')+`<section class="x18-metrics">${card('Подключение','ПОДТВЕРЖДЕНО','Получен проверенный ответ личного API')}${card('Капитал',equity!=null?number(equity)+' USDT':'—')}${card('Доступно',available!=null?number(available)+' USDT':'—')}${card('Позиции',String(a.positions.length))}${card('Ордера',String(a.orders.length))}</section><section class="x18-grid">${panel('Активы',a.assets.length?`<table class="x18-table"><thead><tr><th>Актив</th><th>Баланс</th><th>Доступно</th></tr></thead><tbody>${a.assets.map(x=>`<tr><td>${esc(x.coin||x.asset||x.symbol||'—')}</td><td>${esc(x.walletBalance??x.balance??'—')}</td><td>${esc(x.availableBalance??x.available??'—')}</td></tr>`).join('')}</tbody></table>`:empty('Состав активов не передан.'),'wide')}${panel('Безопасность','<p>Данные доступа не отображаются. Вывод средств должен быть отключён. Синтетический баланс запрещён.</p>')}</section>`;
-    } catch { out.innerHTML=title('Bybit','Подключение не подтверждено')+empty('Личный API Bybit не вернул подтверждённые данные счёта.'); }
+      out.innerHTML=title('Bybit','Фактические данные личного кабинета')+`<section class="x18-metrics">${card('Подключение','ПОДТВЕРЖДЕНО','Получен проверенный ответ личного API')}${card('Капитал',equity!=null?number(equity)+' USDT':'—')}${card('Доступно',available!=null?number(available)+' USDT':'—')}${card('Позиции',String(a.positions.length))}${card('Ордера',String(a.orders.length))}</section><section class="x18-grid">${panel('Активы',a.assets.length?`<table class="x18-table"><thead><tr><th>Актив</th><th>Баланс</th><th>Доступно</th></tr></thead><tbody>${a.assets.map(x=>`<tr><td>${esc(x.coin||x.asset||x.symbol||'—')}</td><td>${esc(x.walletBalance??x.balance??'—')}</td><td>${esc(x.availableBalance??x.available??'—')}</td></tr>`).join('')}</tbody></table>`:empty('Состав активов не передан.'),'wide')}${panel('Безопасность','<p>Данные доступа не отображаются. Вывод средств отключён. Реальные сделки требуют отдельного разрешения.</p>')}</section>`;
+    } catch { out.innerHTML=title('Bybit','Подключение не подтверждено')+empty('Личный API Bybit не вернул подтверждённые данные счёта. Виртуальные сделки доступны в разделах «Сделки» и «Виртуальный счёт».'); }
   }
 
   async function trades(){
-    const out=$('content'); if(!out)return; out.innerHTML=title('Сделки','Реальный журнал исполнения')+empty('Загрузка…');
-    try{
-      const a=await account(), items=a.trades.length?a.trades:a.orders;
-      const rows=items.length?`<table class="x18-table"><thead><tr><th>Время</th><th>Пара</th><th>Сторона</th><th>Цена</th><th>Количество</th><th>Результат</th></tr></thead><tbody>${items.slice(0,200).map(x=>`<tr><td>${time(x.execTime||x.createdTime||x.time||x.created_at)}</td><td>${esc(x.symbol||'—')}</td><td>${esc(x.side||'—')}</td><td>${esc(x.execPrice??x.price??'—')}</td><td>${esc(x.execQty??x.qty??x.size??'—')}</td><td>${esc(x.closedPnl??x.pnl??x.orderStatus??x.status??'—')}</td></tr>`).join('')}</tbody></table>`:empty('Подтверждённые исполнения не получены.');
-      out.innerHTML=title('Сделки','Операции из личного кабинета без демонстрационных записей')+`<section class="x18-metrics">${card('Записей',String(items.length))}${card('Источник','Bybit')}${card('Обновлено',new Date().toLocaleTimeString('ru-RU'))}</section>${panel('История исполнения',rows,'wide')}`;
-    } catch { out.innerHTML=title('Сделки','Журнал недоступен')+empty('Биржа не вернула подтверждённую историю операций.'); }
+    const out=$('content'); if(!out)return; out.innerHTML=title('Сделки','Виртуальные операции и реальные исполнения показаны раздельно')+empty('Загрузка…');
+    const [virtualResult,realResult]=await Promise.allSettled([request('/api/virtual-account/trades'),account()]);
+    if(virtualResult.status!=='fulfilled'){
+      out.innerHTML=title('Сделки','Журнал виртуальных операций недоступен')+empty('API виртуального счёта не вернул историю операций.');
+      return;
+    }
+    const virtual=virtualPayload(virtualResult.value), summary=virtual.summary, items=virtual.trades;
+    const realItems=realResult.status==='fulfilled'?(realResult.value.trades.length?realResult.value.trades:realResult.value.orders):[];
+    const realNote=realResult.status==='fulfilled'?'Личный API Bybit отвечает':'Личный API Bybit не подключён; реальные ордера заблокированы';
+    out.innerHTML=title('Сделки','Виртуальный счёт использует реальные котировки Bybit, но не размещает реальные ордера')+
+      `<section class="x18-metrics">${card('Всего виртуальных',String(summary.trade_count??items.length))}${card('Открыто',String(summary.open_positions??items.filter(x=>String(x.status).toUpperCase()==='OPEN').length))}${card('Закрыто',String(summary.closed_positions??items.filter(x=>String(x.status).toUpperCase()==='CLOSED').length))}${card('Net PnL',number(summary.net_pnl)+' USDT')}${card('Комиссии',number(summary.total_fees)+' USDT')}${card('Реальные ордера',summary.real_orders_blocked===false?'РАЗРЕШЕНЫ':'ЗАБЛОКИРОВАНЫ',realNote)}</section>`+
+      `<section class="x18-grid">${panel('Виртуальные сделки по рыночным ценам',virtualRows(items),'wide')}${panel('Реальные исполнения Bybit',realRows(realItems),'wide')}</section>`;
   }
 
   async function virtualAccount(){
     const out=$('content'); if(!out)return; out.innerHTML=title('Виртуальный счёт','Проверка стратегий без риска капиталом')+empty('Загрузка…');
     try{
-      const d=await request('/api/virtual-account/state');
-      if(d?.verified === false || d?.status === 'error' || d?.status === 'unavailable') throw new Error('Виртуальный счёт не подтверждён');
-      const items=list(d.trades,d.orders,d.history);
-      out.innerHTML=title('Виртуальный счёт','Симуляция на реальных рыночных данных')+`<section class="x18-metrics">${card('Баланс',d.balance!=null?number(d.balance)+' USDT':d.equity!=null?number(d.equity)+' USDT':'—')}${card('PnL',d.pnl!=null?number(d.pnl)+' USDT':'—')}${card('Просадка',d.drawdown_percent!=null?number(d.drawdown_percent)+'%':'—')}${card('Сделки',String(items.length||d.trade_count||0))}</section>${panel('Операции',items.length?`<table class="x18-table"><thead><tr><th>Время</th><th>Актив</th><th>Сторона</th><th>Результат</th></tr></thead><tbody>${items.slice(0,100).map(x=>`<tr><td>${time(x.time||x.created_at)}</td><td>${esc(x.symbol||x.asset||'—')}</td><td>${esc(x.side||'—')}</td><td>${esc(x.net_pnl??x.pnl??x.status??'—')}</td></tr>`).join('')}</tbody></table>`:empty('Операции пока не получены.'),'wide')}`;
+      const raw=await request('/api/virtual-account/state');
+      if(raw?.verified === false || raw?.status === 'error' || raw?.status === 'unavailable') throw new Error('Виртуальный счёт не подтверждён');
+      const d=virtualPayload(raw), s=d.summary, items=d.trades;
+      out.innerHTML=title('Виртуальный счёт','Исполнение виртуальное; котировки, комиссии и PnL рыночные')+`<section class="x18-metrics">${card('Баланс',number(s.cash??s.balance)+' USDT')}${card('Капитал',number(s.equity)+' USDT')}${card('Net PnL',number(s.net_pnl)+' USDT')}${card('Комиссии',number(s.total_fees)+' USDT')}${card('Открыто',String(s.open_positions??0))}${card('Закрыто',String(s.closed_positions??0))}</section>${panel('Все виртуальные операции',virtualRows(items),'wide')}`;
     } catch { out.innerHTML=title('Виртуальный счёт','Контур симуляции недоступен')+empty('Состояние виртуального счёта не подтверждено.'); }
   }
 
