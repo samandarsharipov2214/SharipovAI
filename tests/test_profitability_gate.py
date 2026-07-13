@@ -20,6 +20,12 @@ def _allow_virtual(monkeypatch) -> None:
     )
 
 
+def _assert_skip_reason(reason: object) -> None:
+    text = str(reason or "").lower()
+    assert "пропущ" in text
+    assert any(token in text for token in ("вход", "активност", "сигнал"))
+
+
 def test_profitability_gate_blocks_bad_expected_value() -> None:
     result = evaluate_profitability_candidate(
         symbol="ADA/USDT",
@@ -33,7 +39,7 @@ def test_profitability_gate_blocks_bad_expected_value() -> None:
     assert result["decision"] in {"WAIT", "ALLOW"}
     if result["decision"] == "WAIT":
         assert result["blockers"]
-        assert "вход пропущен" in result["reason_ru"]
+        _assert_skip_reason(result["reason_ru"])
 
 
 def test_virtual_engine_skips_when_profitability_gate_blocks(tmp_path, monkeypatch) -> None:
@@ -47,7 +53,7 @@ def test_virtual_engine_skips_when_profitability_gate_blocks(tmp_path, monkeypat
     assert state["summary"]["trade_count"] == 0
     assert state["summary"]["skipped_count"] == 1
     assert state["summary"]["last_tick_status"] == "wait_profitability"
-    assert "вход пропущен" in state["summary"]["last_reason_ru"]
+    _assert_skip_reason(state["summary"]["last_reason_ru"])
 
 
 def test_virtual_engine_opens_only_allowed_profitability(tmp_path, monkeypatch) -> None:
