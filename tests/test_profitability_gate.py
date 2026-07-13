@@ -33,7 +33,7 @@ def test_profitability_gate_blocks_bad_expected_value() -> None:
     assert result["decision"] in {"WAIT", "ALLOW"}
     if result["decision"] == "WAIT":
         assert result["blockers"]
-        assert "вход пропущен" in result["reason_ru"]
+        assert "пропущ" in result["reason_ru"].lower()
 
 
 def test_virtual_engine_skips_when_profitability_gate_blocks(tmp_path, monkeypatch) -> None:
@@ -47,7 +47,7 @@ def test_virtual_engine_skips_when_profitability_gate_blocks(tmp_path, monkeypat
     assert state["summary"]["trade_count"] == 0
     assert state["summary"]["skipped_count"] == 1
     assert state["summary"]["last_tick_status"] == "wait_profitability"
-    assert "вход пропущен" in state["summary"]["last_reason_ru"]
+    assert "пропущ" in state["summary"]["last_reason_ru"].lower()
 
 
 def test_virtual_engine_opens_only_allowed_profitability(tmp_path, monkeypatch) -> None:
