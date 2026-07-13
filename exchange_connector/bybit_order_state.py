@@ -175,16 +175,17 @@ class BybitOrderStateStore:
             if not isinstance(raw, Mapping):
                 errors.append(f"journal row {index} is not an object")
                 continue
+            normalized_row = dict(raw)
             link = str(raw.get("order_link_id") or raw.get("orderLinkId") or "").strip()
             order_id = str(raw.get("order_id") or raw.get("orderId") or "").strip()
             if link:
-                if link in journal_by_link and journal_by_link[link] != dict(raw):
+                if link in journal_by_link and journal_by_link[link] != normalized_row:
                     errors.append(f"duplicate journal orderLinkId {link}")
-                journal_by_link[link] = dict(raw)
+                journal_by_link[link] = normalized_row
             if order_id:
-                if order_id in journal_by_order and journal_by_order[order_id] != dict(raw):
+                if order_id in journal_by_order and journal_by_order[order_id] != normalized_row:
                     errors.append(f"duplicate journal orderId {order_id}")
-                journal_by_order[order_id] = dict(raw)
+                journal_by_order[order_id] = normalized_row
 
         matched: list[str] = []
         for order in managed:
@@ -277,8 +278,6 @@ def _merge(existing: OrderState | None, new: OrderState) -> tuple[str, OrderStat
         raise ValueError("orderLinkId changed")
     if new.updated_time_ms < existing.updated_time_ms:
         raise ValueError("out-of-order updatedTime")
-    if new.cum_exec_qty < existing.cum_exec_qty - _TOLERANCE:
-        raise ValueError("cumExecQty regression")
     merged = replace(new, order_id=new.order_id or existing.order_id, order_link_id=new.order_link_id or existing.order_link_id)
     same_execution = (
         merged.status == existing.status
@@ -292,6 +291,8 @@ def _merge(existing: OrderState | None, new: OrderState) -> tuple[str, OrderStat
         if not same_execution:
             raise ValueError("terminal order cannot change")
         return ("accepted", merged) if identity_enriched else ("duplicate", existing)
+    if new.cum_exec_qty < existing.cum_exec_qty - _TOLERANCE:
+        raise ValueError("cumExecQty regression")
     if new.updated_time_ms == existing.updated_time_ms:
         if same_execution and identity_enriched:
             return "accepted", merged
