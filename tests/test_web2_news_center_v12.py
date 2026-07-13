@@ -8,8 +8,10 @@ CSS = ROOT / "dashboard/static/web2/news_center_v12.css"
 
 def test_news_center_assets_are_connected():
     html = INDEX.read_text(encoding="utf-8")
-    assert "news_center_v12.js?v=12" in html
-    assert "news_center_v12.css?v=12" in html
+    assert "news_center_v12.js?v=" in html
+    assert "news_center_v12.css?v=" in html
+    assert JS.is_file()
+    assert CSS.is_file()
     assert 'data-page="news"' in html
 
 
