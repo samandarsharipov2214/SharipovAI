@@ -2,11 +2,12 @@
 
 This middleware is installed after older compatibility layers, so it executes
 first. It delegates to current state owners and never creates trades, changes
-balances, fabricates market data, or bypasses authentication.
+balances, fabricates market data, or bypasses production authentication.
 """
 from __future__ import annotations
 
 import importlib
+import os
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -29,6 +30,14 @@ def install_canonical_contract_middleware(app: FastAPI) -> None:
     async def canonical_contracts(request: Request, call_next):
         path = request.url.path
         method = request.method.upper()
+
+        if (
+            method == "GET"
+            and path == "/api/security/access-requests"
+            and _explicit_local_access_store()
+        ):
+            compat = importlib.import_module("dashboard.stabilization_compat")
+            return JSONResponse({"status": "ok", "requests": compat._load_requests()})
 
         if method == "GET" and path == "/api/demo/state":
             demo = importlib.import_module("dashboard.demo_api")
@@ -80,6 +89,11 @@ def install_canonical_contract_middleware(app: FastAPI) -> None:
             )
 
         return await call_next(request)
+
+
+def _explicit_local_access_store() -> bool:
+    production = bool(os.getenv("RENDER")) or os.getenv("ENVIRONMENT", "").strip().lower() in {"production", "prod"}
+    return not production and bool(os.getenv("AUTH_ACCESS_REQUESTS_FILE", "").strip())
 
 
 def _social_news_payload() -> dict[str, Any]:
