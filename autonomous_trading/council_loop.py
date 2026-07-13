@@ -173,6 +173,7 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
             trade["verified_market_data"] = True
             trade["canonical_exit_protective"] = True
             net = float(trade.get("net_pnl") or 0.0)
+            settlement_error = ""
             try:
                 settlement = self.decision_runtime.settle_exit(
                     decision_id,
@@ -182,13 +183,15 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                 trade["decision_settlement"] = settlement
                 trade["reputation_recorded"] = bool(settlement.get("reputation_recorded"))
             except Exception as exc:
-                trade["decision_settlement_error"] = f"{type(exc).__name__}: {exc}"
+                settlement_error = f"{type(exc).__name__}: {exc}"
+                trade["decision_settlement_error"] = settlement_error
+            self._finalize_constructed_trade(trade)
+            if settlement_error:
                 self._event(
                     "ERROR",
-                    f"verified_settlement_error:{type(exc).__name__}: {exc}",
+                    f"verified_settlement_error:{settlement_error}",
                     symbol,
                 )
-            self._finalize_constructed_trade(trade)
 
     def _trade(
         self,
