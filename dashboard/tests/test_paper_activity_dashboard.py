@@ -36,8 +36,8 @@ def test_virtual_activity_api_is_truthful_when_autorun_is_disabled(tmp_path, mon
 
     page = client.get("/paper-activity")
     assert page.status_code == 200
-    assert "Paper Activity Engine compatibility mode" in page.text
-    assert "Все сделки" in page.text
+    assert "Market-backed paper execution" in page.text
+    assert "Все виртуальные сделки" in page.text
     assert "JSON all trades" in page.text
     assert "Autorun" in page.text
     assert "Real orders" in page.text
