@@ -93,16 +93,65 @@ def install_bot_communication_api(app: FastAPI) -> None:
         if not text:
             return {"status": "empty_message", "reply": "Напиши вопрос AI-боту."}
 
-        # Prefixing guarantees the same agent routing in web, Mini App and Telegram.
+        # A direct chat is also an auditable inter-bot exchange. General Controller
+        # cannot send a message to itself, so Security Guard acts as the trusted
+        # requester for that one target. Every other target is queried by General
+        # Controller. Both messages share one durable thread.
+        requester = "security_guard" if requested_bot == "general_controller" else "general_controller"
+        bus = network()
+        question = bus.send_message(
+            sender=requester,
+            recipient=requested_bot,
+            message_type="question",
+            topic="direct_chat",
+            payload={"message": text, "source": "dashboard_bot_chat"},
+            priority="normal",
+        )
+        if question.get("status") != "ok":
+            return {
+                "status": "persistence_error",
+                "bot": requested_bot,
+                "reply": "Не удалось сохранить вопрос в журнале AI-ботов.",
+                "message": question,
+            }
+
         routed_text = f"{requested_bot}: {text}"
-        answer = answer_chat(routed_text, state)
+        try:
+            generated = answer_chat(routed_text, state)
+        except Exception as exc:
+            generated = {
+                "status": "error",
+                "reply": f"Ответ AI-бота не сформирован: {type(exc).__name__}.",
+                "source_ai": requested_bot,
+                "intent": "agent_chat_error",
+                "data": {},
+            }
+
+        answer_record = bus.send_message(
+            sender=requested_bot,
+            recipient=requester,
+            message_type="answer",
+            topic="direct_chat",
+            payload={
+                "reply": str(generated.get("reply", "Ответ не сформирован.")),
+                "source_ai": str(generated.get("source_ai", requested_bot)),
+                "intent": str(generated.get("intent", "agent_chat")),
+            },
+            thread_id=str(question["thread_id"]),
+            priority="normal",
+        )
+        status = str(generated.get("status", "ok"))
+        if answer_record.get("status") != "ok":
+            status = "persistence_error"
         return {
-            "status": answer.get("status", "ok"),
+            "status": status,
             "bot": requested_bot,
-            "reply": answer.get("reply", "Ответ не сформирован."),
-            "source_ai": answer.get("source_ai", requested_bot),
-            "intent": answer.get("intent", "agent_chat"),
-            "data": answer.get("data", {}),
+            "reply": generated.get("reply", "Ответ не сформирован."),
+            "source_ai": generated.get("source_ai", requested_bot),
+            "intent": generated.get("intent", "agent_chat"),
+            "data": generated.get("data", {}),
+            "message": question,
+            "answer": answer_record,
         }
 
     @app.get("/api/bot-network/inbox/{bot_name}")
