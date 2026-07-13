@@ -52,6 +52,18 @@
     uz: { hello: 'Salom, Samandar 👋', sub: 'SharipovAI — tahlil, boshqaruv va nazorat markazi', refresh: 'Yangilash', active: 'AI rejimi faol', safe: 'Xavfsiz ijro' },
   };
 
+  const headerChecks = [
+    { key: 'health', url: '/api/health', required: true },
+    { key: 'run', url: '/api/run', required: true },
+    { key: 'bots', url: '/api/ai-bots', required: true },
+    { key: 'news', url: '/api/social-news', required: true },
+    { key: 'learning', url: '/api/learning-os/status', required: true },
+    { key: 'evidence', url: '/api/evidence-vault/recent', required: true },
+    { key: 'virtual', url: '/api/virtual-account/state', required: true },
+    { key: 'reports', url: '/api/ai-control-center/daily-report', required: true },
+    { key: 'account', url: '/api/exchange/account/status', required: false },
+  ];
+
   const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
   }[char]));
@@ -119,22 +131,37 @@
     return response.json();
   }
 
+  function payloadHealthy(data) {
+    const status = String(data?.status || '').toLowerCase();
+    return !['error', 'unavailable', 'failed', 'offline'].includes(status);
+  }
+
   async function loadHeaderStatus() {
-    const endpoints = [
-      '/api/health', '/api/run', '/api/exchange/account/snapshot', '/api/ai-bots',
-      '/api/social-news', '/api/learning-os/status', '/api/evidence-vault/recent',
-      '/api/virtual-account/state', '/api/ai-control-center/daily-report',
-    ];
-    const results = await Promise.allSettled(endpoints.map(get));
-    const ok = results.filter((result) => result.status === 'fulfilled').length;
+    const results = await Promise.allSettled(headerChecks.map((check) => get(check.url)));
+    const inspected = headerChecks.map((check, index) => {
+      const result = results[index];
+      const data = result.status === 'fulfilled' ? result.value : null;
+      return { ...check, data, responded: result.status === 'fulfilled', healthy: result.status === 'fulfilled' && payloadHealthy(data) };
+    });
+    const core = inspected.filter((item) => item.required);
+    const coreOk = core.filter((item) => item.healthy).length;
+    const account = inspected.find((item) => item.key === 'account');
+    const accountConnected = Boolean(account?.healthy && account?.data?.credentials_configured && account?.data?.connected);
+
     if ($('systemLabel')) {
-      $('systemLabel').textContent = ok
-        ? tr(`Система работает · ${ok}/${endpoints.length} API`, `System online · ${ok}/${endpoints.length} APIs`, `Tizim ishlamoqda · ${ok}/${endpoints.length} API`)
-        : tr('API недоступен', 'API unavailable', 'API mavjud emas');
+      $('systemLabel').textContent = coreOk
+        ? tr(`Система работает · ${coreOk}/${core.length} основных API`, `System online · ${coreOk}/${core.length} core APIs`, `Tizim ishlamoqda · ${coreOk}/${core.length} asosiy API`)
+        : tr('Основные API недоступны', 'Core APIs unavailable', 'Asosiy API mavjud emas');
+    }
+    if ($('modeText')) {
+      $('modeText').dataset.dynamic = '1';
+      $('modeText').textContent = accountConnected
+        ? tr('Bybit read-only · реальные ордера заблокированы', 'Bybit read-only · real orders blocked', 'Bybit read-only · real orderlar bloklangan')
+        : tr('Виртуальная торговля · публичные котировки Bybit', 'Virtual trading · public Bybit quotes', 'Virtual savdo · Bybit ommaviy kotirovkalari');
     }
     if (notice) {
-      if (ok < endpoints.length) {
-        notice.textContent = tr(`Часть источников недоступна (${ok}/${endpoints.length}).`, `Some sources are unavailable (${ok}/${endpoints.length}).`, `Ayrim manbalar mavjud emas (${ok}/${endpoints.length}).`);
+      if (coreOk < core.length) {
+        notice.textContent = tr(`Недоступны основные источники (${coreOk}/${core.length}). Откройте «Состояние системы» для деталей.`, `Core sources unavailable (${coreOk}/${core.length}). Open System status for details.`, `Asosiy manbalar mavjud emas (${coreOk}/${core.length}). Tafsilotlar uchun Tizim holatini oching.`);
         notice.classList.remove('hidden');
       } else {
         notice.classList.add('hidden');
