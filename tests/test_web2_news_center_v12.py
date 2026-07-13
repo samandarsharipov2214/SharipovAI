@@ -8,9 +8,11 @@ CSS = ROOT / "dashboard/static/web2/news_center_v12.css"
 
 def test_news_center_assets_are_connected():
     html = INDEX.read_text(encoding="utf-8")
-    assert "news_center_v12.js?v=12" in html
-    assert "news_center_v12.css?v=12" in html
+    assert "/static/web2/news_center_v12.js?" in html
+    assert "/static/web2/news_center_v12.css?" in html
     assert 'data-page="news"' in html
+    assert JS.is_file()
+    assert CSS.is_file()
 
 
 def test_news_center_uses_real_api_and_source_fields():
@@ -26,7 +28,7 @@ def test_news_center_uses_real_api_and_source_fields():
 
 def test_news_center_has_no_demo_news_payload():
     source = JS.read_text(encoding="utf-8").lower()
-    forbidden = ["math.random", "demo headline", "пример новости", "тестовая новость"]
+    forbidden = ["math.random", "demo headline", "пример новости", "тестовая новость", "mockdata", "fakedata"]
     for marker in forbidden:
         assert marker not in source
 
@@ -38,4 +40,4 @@ def test_news_center_has_filters_and_mobile_styles():
     assert "importantNewsOnly" in source
     assert "newsSearch" in source
     assert "newsFilter" in source
-    assert "@media(max-width:760px)" in css
+    assert "@media(max-width:760px)" in css.replace(" ", "")
