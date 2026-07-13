@@ -7,13 +7,13 @@ import json
 import os
 import time
 from typing import Any
-from urllib.parse import parse_qsl
+from urllib.parse import parse_qsl, urlparse
 
 import httpx
 from fastapi import BackgroundTasks, Body, FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
 
-from telegram_system_adapter import handle_callback, handle_message, main_keyboard, send_message, setup_bot_commands
+from telegram_system_adapter import CANONICAL_WEBAPP_URL, handle_callback, handle_message, main_keyboard, send_message, setup_bot_commands
 from telegram_health import telegram_health
 
 TELEGRAM_API_TIMEOUT = 20.0
@@ -140,18 +140,18 @@ def _auto_configure_webhook() -> dict[str, Any]:
     enabled = os.getenv("TELEGRAM_AUTO_SET_WEBHOOK", "1").strip().lower()
     if enabled in {"0", "false", "no", "off"}:
         return {"status": "disabled"}
-    if not _bot_token() or not _webapp_url():
-        return {"status": "skipped", "reason": "BOT_TOKEN_or_WEBAPP_URL_missing"}
+    if not _bot_token():
+        return {"status": "skipped", "reason": "BOT_TOKEN_missing"}
     return _set_webhook()
 
 
 def _set_webhook() -> dict[str, Any]:
     webhook_url = f"{_webapp_url()}/telegram/webhook"
     commands = _safe_setup_commands()
-    menu_button = _restore_commands_menu()
+    menu_button = _set_canonical_webapp_menu()
     payload = {"url": webhook_url, "secret_token": _webhook_secret(), "drop_pending_updates": False, "allowed_updates": ["message", "callback_query"], "max_connections": 20}
     result = _telegram("setWebhook", payload)
-    return {"status": "ok" if result.get("ok") else "error", "webhook_url": webhook_url, "secret_token_configured": True, "set_webhook": result, "commands": commands, "menu_button": menu_button, "adapter": "shared_website_system"}
+    return {"status": "ok" if result.get("ok") and menu_button.get("ok") else "error", "webhook_url": webhook_url, "webapp_url": _webapp_url(), "secret_token_configured": True, "set_webhook": result, "commands": commands, "menu_button": menu_button, "adapter": "shared_website_system"}
 
 
 def _delete_webhook() -> dict[str, Any]:
@@ -161,7 +161,7 @@ def _delete_webhook() -> dict[str, Any]:
 
 def _telegram_status() -> dict[str, Any]:
     token = _bot_token()
-    result: dict[str, Any] = {"status": "ok" if token else "missing_token", "bot_token_configured": bool(token), "webapp_url": _webapp_url(), "webhook_endpoint": "/telegram/webhook", "webhook_secret_configured": bool(_webhook_secret()), "mode": "webhook", "miniapp_auth": "/api/telegram/miniapp-auth"}
+    result: dict[str, Any] = {"status": "ok" if token else "missing_token", "bot_token_configured": bool(token), "webapp_url": _webapp_url(), "canonical_webapp_url": CANONICAL_WEBAPP_URL, "render_blocked": True, "webhook_endpoint": "/telegram/webhook", "webhook_secret_configured": bool(_webhook_secret()), "mode": "webhook", "miniapp_auth": "/api/telegram/miniapp-auth"}
     if token:
         result["telegram_get_me"] = _telegram("getMe")
         result["webhook_info"] = _telegram("getWebhookInfo")
@@ -169,9 +169,8 @@ def _telegram_status() -> dict[str, Any]:
     return result
 
 
-def _restore_commands_menu() -> dict[str, Any]:
-    """Restore Telegram's native slash-command menu instead of a Web App button."""
-    return _telegram("setChatMenuButton", {"menu_button": {"type": "commands"}})
+def _set_canonical_webapp_menu() -> dict[str, Any]:
+    return _telegram("setChatMenuButton", {"menu_button": {"type": "web_app", "text": "Открыть SharipovAI", "web_app": {"url": _webapp_url()}}})
 
 
 def _safe_setup_commands() -> dict[str, Any]:
@@ -202,7 +201,16 @@ def _bot_token() -> str:
 
 
 def _webapp_url() -> str:
-    return os.getenv("WEBAPP_URL", "").strip().rstrip("/")
+    configured = os.getenv("WEBAPP_URL", "").strip().rstrip("/")
+    if not configured:
+        return CANONICAL_WEBAPP_URL
+    try:
+        host = (urlparse(configured).hostname or "").lower()
+    except ValueError:
+        host = ""
+    if configured != CANONICAL_WEBAPP_URL or host.endswith(".onrender.com") or host == "render.com":
+        return CANONICAL_WEBAPP_URL
+    return configured
 
 
 def _webhook_secret() -> str:
