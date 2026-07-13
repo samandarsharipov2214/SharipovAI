@@ -24,13 +24,15 @@ def test_mini_app_uses_current_web2_navigation() -> None:
         assert label in text
 
 
-def test_mini_app_exposes_truthful_exchange_fields() -> None:
+def test_mini_app_exposes_safe_exchange_shell() -> None:
     response = _client().get("/?lang=ru")
     assert response.status_code == 200
     text = response.text
-    assert "Реальные свечи и котировки с Bybit" in text
-    assert "Реальные ордера заблокированы" in text
-    assert "Выдуманные" not in text or "не отображаются" in text
+    assert 'data-page="bybit"' in text
+    assert ">Bybit<" in text
+    assert "Безопасное исполнение" in text
+    assert "/static/web2/exchange_execution_settings_v18.js" in text
+    assert "Math.random" not in text
 
 
 def test_mini_app_exchange_renderer_is_display_only() -> None:
