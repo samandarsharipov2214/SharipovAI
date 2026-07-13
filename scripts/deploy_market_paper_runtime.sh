@@ -4,23 +4,30 @@ set -Eeuo pipefail
 ROOT="/opt/sharipovai-repo"
 DEPLOY="$ROOT/deploy/vps"
 SERVICE="sharipovai"
+CADDY_SERVICE="sharipovai-caddy"
 ACTIVE_IMAGE_REF="vps-sharipovai:latest"
-PUBLIC_HEALTH="http://127.0.0.1:8000/health"
+LOCAL_HEALTH="http://127.0.0.1:8000/health"
+PUBLIC_HEALTH="https://85-137-88-17.sslip.io/health"
 
 production_replaced=0
 backup_container=""
 old_network=""
+proxy_network=""
 data_volume=""
 runtime_override=""
 runtime_project="sharipovai-runtime-$(date +%s)-$$"
 
 cd "$DEPLOY"
 
+if docker container inspect "$CADDY_SERVICE" >/dev/null 2>&1; then
+  proxy_network="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "$CADDY_SERVICE" | head -n 1 | tr -d '[:space:]')"
+fi
 if docker container inspect "$SERVICE" >/dev/null 2>&1; then
   old_network="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "$SERVICE" | head -n 1 | tr -d '[:space:]')"
   data_volume="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/var/lib/sharipovai"}}{{.Name}}{{end}}{{end}}' "$SERVICE" | tr -d '[:space:]')"
 fi
-old_network="${old_network:-vps_default}"
+old_network="${proxy_network:-${old_network:-vps_default}}"
+proxy_network="${proxy_network:-$old_network}"
 data_volume="${data_volume:-vps_sharipovai_data}"
 
 cleanup() {
@@ -29,6 +36,29 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+
+refresh_caddy_route() {
+  if ! docker container inspect "$CADDY_SERVICE" >/dev/null 2>&1; then
+    echo "Caddy container is missing." >&2
+    return 1
+  fi
+  if ! docker inspect -f '{{json .NetworkSettings.Networks}}' "$SERVICE" | grep -Fq "\"$proxy_network\""; then
+    docker network connect --alias "$SERVICE" "$proxy_network" "$SERVICE"
+  fi
+  docker restart "$CADDY_SERVICE" >/dev/null
+  for _ in $(seq 1 45); do
+    if curl --fail --silent --show-error "$PUBLIC_HEALTH" >/tmp/public-health.json 2>/tmp/public-health.err; then
+      cat /tmp/public-health.json
+      echo
+      return 0
+    fi
+    sleep 2
+  done
+  echo "Public Caddy route did not recover within 90 seconds." >&2
+  cat /tmp/public-health.err 2>/dev/null || true
+  docker logs --tail 160 "$CADDY_SERVICE" 2>/dev/null || true
+  return 1
+}
 
 rollback() {
   if [[ "$production_replaced" != "1" ]]; then
@@ -43,18 +73,20 @@ rollback() {
 
   if [[ -n "$backup_container" ]] && docker container inspect "$backup_container" >/dev/null 2>&1; then
     docker rename "$backup_container" "$SERVICE"
-    if ! docker inspect -f '{{json .NetworkSettings.Networks}}' "$SERVICE" | grep -Fq "\"$old_network\""; then
-      docker network connect --alias "$SERVICE" "$old_network" "$SERVICE"
+    if ! docker inspect -f '{{json .NetworkSettings.Networks}}' "$SERVICE" | grep -Fq "\"$proxy_network\""; then
+      docker network connect --alias "$SERVICE" "$proxy_network" "$SERVICE"
     fi
     docker start "$SERVICE" >/dev/null
     for _ in $(seq 1 45); do
-      if curl --fail --silent "$PUBLIC_HEALTH" >/dev/null 2>&1; then
-        echo "Previous SharipovAI container restored and healthy."
-        return 0
+      if curl --fail --silent "$LOCAL_HEALTH" >/dev/null 2>&1; then
+        if refresh_caddy_route; then
+          echo "Previous SharipovAI container restored and publicly healthy."
+          return 0
+        fi
       fi
       sleep 2
     done
-    echo "Previous container was restored but did not pass /health within 90 seconds." >&2
+    echo "Previous container was restored but did not pass end-to-end health within 90 seconds." >&2
     docker logs --tail 160 "$SERVICE" 2>/dev/null || true
     return 1
   fi
@@ -70,11 +102,11 @@ on_error() {
 }
 trap on_error ERR
 
-echo "[1/5] Building candidate image..."
+echo "[1/6] Building candidate image..."
 docker compose build "$SERVICE"
 docker image inspect "$ACTIVE_IMAGE_REF" >/dev/null
 
-echo "[2/5] Running focused tests and importing the complete FastAPI graph..."
+echo "[2/6] Running focused tests and importing the complete FastAPI graph..."
 docker compose run --rm --no-deps \
   -e PAPER_ACTIVITY_AUTORUN_ENABLED=0 \
   --entrypoint sh "$SERVICE" -lc '
@@ -123,7 +155,7 @@ print("FULL_APP_IMPORT_OK")
 PY
 '
 
-echo "[3/5] Probing candidate /health in isolation..."
+echo "[3/6] Probing candidate /health in isolation..."
 docker compose run --rm --no-deps \
   -e PAPER_ACTIVITY_AUTORUN_ENABLED=0 \
   --entrypoint sh "$SERVICE" -lc '
@@ -170,7 +202,7 @@ volumes:
 networks:
   default:
     external: true
-    name: ${old_network}
+    name: ${proxy_network}
 YAML
 
 docker compose -p "$runtime_project" \
@@ -178,12 +210,12 @@ docker compose -p "$runtime_project" \
   -f "$runtime_override" \
   config --quiet
 
-echo "[4/5] Replacing production while retaining the previous container for rollback..."
+echo "[4/6] Replacing production while retaining the previous container for rollback..."
 if docker container inspect "$SERVICE" >/dev/null 2>&1; then
   backup_container="${SERVICE}-rollback-$(date +%s)-$$"
   docker stop "$SERVICE" >/dev/null
   docker rename "$SERVICE" "$backup_container"
-  docker network disconnect "$old_network" "$backup_container" >/dev/null 2>&1 || true
+  docker network disconnect "$proxy_network" "$backup_container" >/dev/null 2>&1 || true
 fi
 production_replaced=1
 
@@ -195,7 +227,7 @@ docker compose -p "$runtime_project" \
 health="starting"
 for _ in $(seq 1 90); do
   container_state="$(docker inspect -f '{{.State.Status}}' "$SERVICE" 2>/dev/null || true)"
-  if [[ "$container_state" == "running" ]] && curl --fail --silent "$PUBLIC_HEALTH" >/tmp/production-health.json 2>/dev/null; then
+  if [[ "$container_state" == "running" ]] && curl --fail --silent "$LOCAL_HEALTH" >/tmp/production-health.json 2>/dev/null; then
     health="healthy"
     break
   fi
@@ -215,8 +247,11 @@ if [[ "$health" != "healthy" ]]; then
   exit 1
 fi
 
-echo "[5/5] Verifying the running market-backed virtual account..."
+echo "[5/6] Verifying the running market-backed virtual account..."
 docker exec -e PYTHONPATH=/app "$SERVICE" python /app/scripts/verify_market_paper_runtime.py
+
+echo "[6/6] Refreshing and verifying the public Caddy route..."
+refresh_caddy_route
 
 if [[ -n "$backup_container" ]] && docker container inspect "$backup_container" >/dev/null 2>&1; then
   docker rm "$backup_container" >/dev/null
@@ -225,4 +260,5 @@ fi
 production_replaced=0
 trap - ERR
 echo "Market-backed virtual account deployed and verified."
+echo "Public HTTPS route deployed and verified."
 echo "Real exchange orders remain blocked."
