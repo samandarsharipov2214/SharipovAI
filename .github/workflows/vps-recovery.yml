@@ -4,10 +4,6 @@ on:
   push:
     branches: [main]
     paths:
-      - 'dashboard/**'
-      - 'deploy/vps/**'
-      - 'requirements.txt'
-      - 'Dockerfile'
       - '.github/workflows/vps-recovery.yml'
   workflow_dispatch:
 
@@ -19,80 +15,55 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  recover:
+  diagnose:
     runs-on: [self-hosted, linux, x64, sharipovai-ci]
-    timeout-minutes: 30
+    timeout-minutes: 10
     steps:
-      - name: Inspect runner and deployed service
+      - name: Diagnose the deployed VPS without changing it
         shell: bash
         run: |
           set -u
-          echo "runner_user=$(id -un) uid=$(id -u) host=$(hostname)"
-          echo "utc=$(date -u +%FT%TZ)"
-          echo "=== repository candidates ==="
+          APP_DIR=''
           for dir in /opt/sharipovai-repo /opt/SharipovAI; do
-            if [ -d "$dir/.git" ]; then
-              echo "FOUND $dir"
-              git -C "$dir" rev-parse HEAD 2>&1 || true
-              git -C "$dir" status --short --branch 2>&1 || true
-            fi
+            if [ -d "$dir/.git" ]; then APP_DIR="$dir"; break; fi
           done
-          echo "=== listeners ==="
-          ss -lnt 2>&1 | grep -E ':(80|443|8000)\b' || true
-          echo "=== local health ==="
-          curl -i --max-time 5 http://127.0.0.1:8000/health 2>&1 || true
-          echo "=== services ==="
-          systemctl --no-pager --full status sharipovai-agent.timer sharipovai-agent.service 2>&1 || true
-          systemctl list-units --type=service --all --no-pager 2>&1 | grep -E 'sharipov|caddy|docker|actions.runner' || true
-          echo "=== privilege ==="
-          if [ "$(id -u)" -eq 0 ]; then
-            echo ROOT_AVAILABLE=1
-          elif sudo -n true 2>/dev/null; then
-            echo PASSWORDLESS_SUDO=1
-          else
-            echo PRIVILEGED_DEPLOY_AVAILABLE=0
+
+          echo "runner_user=$(id -un) uid=$(id -u) groups=$(id -Gn) host=$(hostname)"
+          echo "utc=$(date -u +%FT%TZ)"
+          echo "app_dir=${APP_DIR:-missing}"
+
+          if [ -n "$APP_DIR" ]; then
+            echo "=== production checkout ==="
+            ls -ld "$APP_DIR" "$APP_DIR/.git" 2>&1 || true
+            echo "writable=$([ -w "$APP_DIR" ] && echo yes || echo no)"
+            git -c safe.directory="$APP_DIR" -C "$APP_DIR" rev-parse HEAD 2>&1 || true
+            git -c safe.directory="$APP_DIR" -C "$APP_DIR" status --short --branch 2>&1 || true
+            git -c safe.directory="$APP_DIR" -C "$APP_DIR" remote -v 2>&1 | sed -E 's#(https?://)[^/@]+@#\1***@#' || true
           fi
 
-      - name: Deploy latest main when privileged access is available
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          APP_DIR=''
-          for dir in /opt/sharipovai-repo /opt/SharipovAI; do
-            if [ -d "$dir/.git" ]; then APP_DIR="$dir"; break; fi
-          done
-          [ -n "$APP_DIR" ] || { echo 'Production repository was not found under /opt'; exit 1; }
+          echo "=== network listeners ==="
+          ss -lnt 2>&1 || true
+          echo "=== ssh configuration ==="
+          grep -E '^[[:space:]]*(Port|PermitRootLogin|PasswordAuthentication)[[:space:]]' /etc/ssh/sshd_config 2>/dev/null || true
 
-          run_root() {
-            if [ "$(id -u)" -eq 0 ]; then
-              "$@"
-            elif sudo -n true 2>/dev/null; then
-              sudo -n "$@"
-            else
-              echo 'Runner has no root deployment capability. The root maintenance agent must be installed once.'
-              exit 2
-            fi
-          }
-
-          run_root git -C "$APP_DIR" fetch --prune origin main
-          run_root chmod +x "$APP_DIR/deploy/vps/update_from_main.sh"
-          run_root env APP_DIR="$APP_DIR" BRANCH=main HEALTH_URL=http://127.0.0.1:8000/health \
-            bash "$APP_DIR/deploy/vps/update_from_main.sh"
-
-      - name: Verify live build locally
-        if: always()
-        shell: bash
-        run: |
-          set -u
-          APP_DIR=''
-          for dir in /opt/sharipovai-repo /opt/SharipovAI; do
-            if [ -d "$dir/.git" ]; then APP_DIR="$dir"; break; fi
-          done
-          echo "=== deployed commit ==="
-          [ -n "$APP_DIR" ] && git -C "$APP_DIR" rev-parse HEAD 2>&1 || true
-          echo "=== health after recovery ==="
-          curl -i --max-time 8 http://127.0.0.1:8000/health 2>&1 || true
-          echo "=== web asset markers ==="
-          curl -fsS --max-time 8 http://127.0.0.1:8000/ 2>/dev/null \
+          echo "=== service health ==="
+          curl -i --max-time 5 http://127.0.0.1:8000/health 2>&1 || true
+          echo "=== root page ==="
+          curl -i --max-time 5 http://127.0.0.1:8000/ 2>&1 | head -n 35 || true
+          echo "=== deployed asset markers ==="
+          curl -fsS --max-time 5 http://127.0.0.1:8000/ 2>/dev/null \
             | grep -Eo 'navigation_coordinator_v[0-9]+|market_terminal_v[0-9]+|site_polish_v[0-9]+' \
             | sort -u || true
+
+          echo "=== runtime services ==="
+          systemctl --no-pager --full status sharipovai-agent.timer sharipovai-agent.service 2>&1 || true
+          systemctl list-units --type=service --all --no-pager 2>&1 \
+            | grep -E 'sharipov|caddy|docker|actions.runner|ssh' || true
+
+          echo "=== deployment capabilities ==="
+          command -v sudo >/dev/null && sudo -n true 2>/dev/null && echo passwordless_sudo=yes || echo passwordless_sudo=no
+          command -v docker >/dev/null && docker info >/dev/null 2>&1 && echo docker_access=yes || echo docker_access=no
+          [ -n "$APP_DIR" ] && [ -r "$APP_DIR/deploy/vps/.env.vps" ] && echo production_env_readable=yes || echo production_env_readable=no
+
+          echo "=== conclusion ==="
+          echo "This diagnostic is read-only. No repository, service, container, or trading state was changed."
