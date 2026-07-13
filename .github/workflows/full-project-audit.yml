@@ -26,36 +26,39 @@ concurrency:
 jobs:
   static-audit:
     name: Static code, architecture and site audit
-    runs-on: [self-hosted, linux, x64, sharipovai-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Prepare isolated audit environment
+      - name: Install project dependencies
         id: dependencies
         continue-on-error: true
         shell: bash
         run: |
           set -o pipefail
-          python3 -m venv .audit-venv
-          .audit-venv/bin/python -m pip install --upgrade pip 2>&1 | tee dependency-install.txt
-          .audit-venv/bin/pip install -r requirements.txt 2>&1 | tee -a dependency-install.txt
+          python -m pip install --upgrade pip 2>&1 | tee dependency-install.txt
+          python -m pip install -r requirements.txt 2>&1 | tee -a dependency-install.txt
       - name: Run deterministic static audit
         id: static_audit
         continue-on-error: true
         shell: bash
         run: |
           set -o pipefail
-          .audit-venv/bin/python scripts/static_project_audit.py 2>&1 | tee audit-static-console.txt
+          python scripts/static_project_audit.py 2>&1 | tee audit-static-console.txt
       - name: Run complete test suite
         id: tests
         continue-on-error: true
         shell: bash
         run: |
           set -o pipefail
-          .audit-venv/bin/pytest -q --disable-warnings --maxfail=100 2>&1 | tee pytest-output.txt
+          python -m pytest -q --disable-warnings --maxfail=100 2>&1 | tee pytest-output.txt
       - name: Record step outcomes
         if: always()
         run: |
