@@ -1,4 +1,4 @@
-"""Authenticated Bybit execution with hard stage, risk, host and credential gates."""
+"""Authenticated Bybit testnet execution with a compile-time mainnet lock."""
 from __future__ import annotations
 
 import hashlib
@@ -14,6 +14,11 @@ import httpx
 
 from .bybit_credentials import execution_credentials
 from .bybit_hosts import validate_bybit_base_url
+from .execution_contract import (
+    ApprovedExecutionRequest,
+    MAINNET_EXECUTION_COMPILED,
+    validate_execution_request,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,13 +31,20 @@ class ExecutionResult:
     order_id: str | None
     message: str
     raw_code: int | None = None
+    candidate_id: str = ""
+    order_link_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
 class BybitExecutionClient:
-    """Send market orders only after every configured safety gate passes."""
+    """Submit spot testnet orders after all safety gates pass.
+
+    Mainnet execution is compiled out. Environment variables cannot override
+    this restriction. New code must use :meth:`execute` with an immutable
+    :class:`ApprovedExecutionRequest`.
+    """
 
     def __init__(self, client: httpx.Client | None = None) -> None:
         self.mode = os.getenv("EXCHANGE_MODE", "sandbox").strip().lower()
@@ -56,16 +68,71 @@ class BybitExecutionClient:
             "credential_profile": self.credential_profile,
             "credentials_configured": credentials,
             "testnet_execution_enabled": self.mode == "sandbox" and credentials and _truthy("TESTNET_EXECUTION_ENABLED"),
-            "live_execution_enabled": self._live_unlocked(credentials),
+            "live_execution_enabled": False,
+            "mainnet_execution_compiled": MAINNET_EXECUTION_COMPILED,
+            "mainnet_hard_blocked": True,
+            "canonical_execution_contract": "ApprovedExecutionRequest",
             "kill_switch": _truthy("EXECUTION_KILL_SWITCH"),
             "max_notional_usdt": self.max_notional,
         }
 
+    def execute(self, request: ApprovedExecutionRequest, *, now_ms: int | None = None) -> ExecutionResult:
+        """Execute one canonical, short-lived testnet request."""
+
+        current_ms = int(time.time() * 1000) if now_ms is None else int(now_ms)
+        validate_execution_request(request, now_ms=current_ms)
+        if self.mode != "sandbox":
+            raise RuntimeError("Mainnet execution is compiled out; exchange mode must be sandbox")
+        if request.environment.value != "testnet":
+            raise RuntimeError("Canonical exchange execution currently permits testnet only")
+        return self._submit_market_order(
+            symbol=request.symbol,
+            side=request.side.value,
+            quantity=request.quantity,
+            reference_price=request.reference_price,
+            category=request.category.value,
+            order_link_id=request.order_link_id,
+            candidate_id=request.candidate_id,
+        )
+
     def place_market_order(self, *, symbol: str, side: str, quantity: float, reference_price: float) -> ExecutionResult:
+        """Deprecated testnet-only compatibility path.
+
+        This method can never execute in live mode. It remains temporarily for
+        existing testnet bridge code while callers migrate to ``execute``.
+        """
+
+        if self.mode != "sandbox":
+            raise RuntimeError("Mainnet execution is compiled out")
+        return self._submit_market_order(
+            symbol=symbol,
+            side=side,
+            quantity=quantity,
+            reference_price=reference_price,
+            category="spot",
+            order_link_id=_legacy_order_link_id(symbol, side),
+            candidate_id="legacy-testnet-compatibility",
+        )
+
+    def _submit_market_order(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        quantity: float,
+        reference_price: float,
+        category: str,
+        order_link_id: str,
+        candidate_id: str,
+    ) -> ExecutionResult:
+        if self.mode != "sandbox":
+            raise RuntimeError("Mainnet execution is compiled out")
         symbol = _symbol(symbol)
         side = side.strip().title()
         if side not in {"Buy", "Sell"}:
             raise ValueError("side must be BUY or SELL")
+        if category != "spot":
+            raise RuntimeError("Only spot testnet execution is permitted")
         quantity = _positive(quantity, "quantity")
         reference_price = _positive(reference_price, "reference_price")
         notional = quantity * reference_price
@@ -77,23 +144,18 @@ class BybitExecutionClient:
             raise RuntimeError("Execution kill switch is active")
         if not self.api_key or not self.api_secret:
             raise RuntimeError(f"{self.credential_profile} credentials are not configured")
-        if self.mode == "sandbox":
-            if not _truthy("TESTNET_EXECUTION_ENABLED"):
-                raise RuntimeError("Testnet execution is locked")
-        elif self.mode == "live":
-            if not self._live_unlocked(True):
-                raise RuntimeError("Live execution is locked by safety gates")
-        else:
-            raise RuntimeError("Exchange mode does not permit execution")
+        if not _truthy("TESTNET_EXECUTION_ENABLED"):
+            raise RuntimeError("Testnet execution is locked")
 
-        base_url = validate_bybit_base_url(self.base_url, environment=self.mode)
+        base_url = validate_bybit_base_url(self.base_url, environment="sandbox")
         body = {
-            "category": "spot",
+            "category": category,
             "symbol": symbol,
             "side": side,
             "orderType": "Market",
             "qty": _format_number(quantity),
             "marketUnit": "baseCoin",
+            "orderLinkId": order_link_id,
         }
         timestamp = str(int(time.time() * 1000))
         payload = json.dumps(body, separators=(",", ":"))
@@ -122,18 +184,24 @@ class BybitExecutionClient:
         if code != 0:
             raise RuntimeError(f"Bybit rejected order: {data.get('retMsg', 'unknown error')} ({code})")
         order_id = str(data.get("result", {}).get("orderId") or "") or None
-        return ExecutionResult("accepted", self.mode, symbol, side.upper(), quantity, order_id, "Order accepted by Bybit", code)
+        return ExecutionResult(
+            "accepted",
+            self.mode,
+            symbol,
+            side.upper(),
+            quantity,
+            order_id,
+            "Testnet order accepted by Bybit",
+            code,
+            candidate_id,
+            order_link_id,
+        )
 
     def _live_unlocked(self, credentials: bool) -> bool:
-        return all((
-            self.mode == "live",
-            self.credential_profile == "mainnet_execution",
-            credentials,
-            _truthy("EXCHANGE_LIVE_TRADING_ENABLED"),
-            _truthy("LIVE_EXECUTION_MANUAL_UNLOCK"),
-            os.getenv("LIVE_EXECUTION_CONFIRMATION", "") == "I_ACCEPT_REAL_FINANCIAL_RISK",
-            not _truthy("EXECUTION_KILL_SWITCH"),
-        ))
+        """Backward-compatible status hook; mainnet is always hard-blocked."""
+
+        del credentials
+        return False
 
 
 def _truthy(name: str) -> bool:
@@ -166,3 +234,8 @@ def _symbol(value: str) -> str:
 
 def _format_number(value: float) -> str:
     return format(value, ".12f").rstrip("0").rstrip(".")
+
+
+def _legacy_order_link_id(symbol: str, side: str) -> str:
+    seed = f"{_symbol(symbol)}:{str(side).strip().title()}:{time.time_ns()}"
+    return f"SAI-L-{hashlib.sha256(seed.encode('utf-8')).hexdigest()[:24]}"
