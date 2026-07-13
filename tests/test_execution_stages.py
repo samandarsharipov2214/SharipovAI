@@ -17,6 +17,14 @@ def _testnet_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("EXCHANGE_API_SECRET", raising=False)
 
 
+def test_kill_switch_precedes_order_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EXCHANGE_MODE", "sandbox")
+    monkeypatch.setenv("EXECUTION_KILL_SWITCH", "1")
+    client = BybitExecutionClient()
+    with pytest.raises(RuntimeError, match="Execution kill switch is active"):
+        client.place_market_order(symbol="", side="BAD", quantity=0.0, reference_price=0.0)
+
+
 def test_testnet_order_requires_explicit_unlock(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("EXCHANGE_MODE", "sandbox")
     _testnet_credentials(monkeypatch)
