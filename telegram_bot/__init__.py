@@ -32,15 +32,18 @@ def main_keyboard() -> dict[str, Any]:
     rows.extend(
         [
             [
+                {"text": "🟢 Сейчас: решение", "callback_data": "now"},
                 {"text": "📊 Обзор", "callback_data": "overview"},
+            ],
+            [
                 {"text": "💼 Портфель", "callback_data": "portfolio"},
-            ],
-            [
                 {"text": "⚠️ Риск", "callback_data": "risk"},
-                {"text": "🤖 AI чат", "callback_data": "ai_chat"},
             ],
             [
+                {"text": "🤖 AI чат", "callback_data": "ai_chat"},
                 {"text": "📰 Новости", "callback_data": "news"},
+            ],
+            [
                 {"text": "🚦 Торговать?", "callback_data": "trade"},
             ],
         ]
