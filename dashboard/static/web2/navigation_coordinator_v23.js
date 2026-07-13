@@ -4,7 +4,7 @@
   const PAGE_OWNERS = new Map([
     ['overview', 'overview_runtime_v25.js'],
     ['market', 'market_terminal_v13.js'],
-    ['decision', 'sections_v10.js'],
+    ['decision', 'decision_runtime_v25.js'],
     ['portfolio', 'portfolio_risk_v16.js'],
     ['trades', 'exchange_execution_settings_v18.js'],
     ['bots', 'ai_center_v14.js'],
