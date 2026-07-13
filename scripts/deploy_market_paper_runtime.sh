@@ -4,14 +4,29 @@ set -Eeuo pipefail
 ROOT="/opt/sharipovai-repo"
 DEPLOY="$ROOT/deploy/vps"
 SERVICE="sharipovai"
+ACTIVE_IMAGE_REF="vps-sharipovai:latest"
 ROLLBACK_TAG="sharipovai-market-paper-rollback:latest"
 production_replaced=0
+rollback_ready=0
+running_service_present=0
 
 cd "$DEPLOY"
-old_image_id="$(docker inspect -f '{{.Image}}' "$SERVICE" 2>/dev/null || true)"
-old_image_ref="$(docker inspect -f '{{.Config.Image}}' "$SERVICE" 2>/dev/null || true)"
-if [[ -n "$old_image_id" ]]; then
-  docker tag "$old_image_id" "$ROLLBACK_TAG"
+
+if docker container inspect "$SERVICE" >/dev/null 2>&1; then
+  running_service_present=1
+  old_image_id="$(docker inspect -f '{{.Image}}' "$SERVICE" 2>/dev/null || true)"
+  if [[ -n "$old_image_id" ]] && docker image inspect "$old_image_id" >/dev/null 2>&1; then
+    docker tag "$old_image_id" "$ROLLBACK_TAG"
+  else
+    echo "Running image metadata is missing; creating a rollback snapshot from the live SharipovAI container."
+    docker commit --pause=false "$SERVICE" "$ROLLBACK_TAG" >/dev/null
+  fi
+  if docker image inspect "$ROLLBACK_TAG" >/dev/null 2>&1; then
+    rollback_ready=1
+  else
+    echo "Unable to create a rollback image; production was not touched." >&2
+    exit 1
+  fi
 fi
 
 rollback() {
@@ -19,10 +34,12 @@ rollback() {
     echo "Candidate verification failed before production replacement; running service was not touched."
     return 0
   fi
-  if [[ -n "$old_image_ref" ]] && docker image inspect "$ROLLBACK_TAG" >/dev/null 2>&1; then
+  if [[ "$rollback_ready" == "1" ]] && docker image inspect "$ROLLBACK_TAG" >/dev/null 2>&1; then
     echo "New runtime verification failed; restoring previous SharipovAI image."
-    docker tag "$ROLLBACK_TAG" "$old_image_ref"
+    docker tag "$ROLLBACK_TAG" "$ACTIVE_IMAGE_REF"
     docker compose up -d --no-deps --force-recreate "$SERVICE"
+  else
+    echo "Rollback image is unavailable; current container state was left unchanged for inspection." >&2
   fi
 }
 
@@ -49,7 +66,8 @@ python -m pytest \
   tests/test_lifecycle_compat.py \
   tests/test_ai_organ_safe_runtime.py \
   tests/test_verify_market_paper_runtime_script.py \
-  tests/test_config_loader_cwd.py -q
+  tests/test_config_loader_cwd.py \
+  tests/test_web2_page_ownership.py -q
 python -m py_compile \
   /app/market_paper_engine.py \
   /app/paper_activity_autorun.py \
