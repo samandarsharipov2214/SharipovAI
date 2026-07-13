@@ -16,10 +16,12 @@ index=/app/dashboard/static/web2/index.html
 grep -F "navigation_coordinator_v23.js?v=25" "$index" >/dev/null
 grep -F "web2.js?v=25" "$index" >/dev/null
 grep -F "overview_runtime_v25.js?v=25" "$index" >/dev/null
+grep -F "decision_runtime_v25.js?v=25" "$index" >/dev/null
 grep -F "learning_runtime_v25.js?v=25" "$index" >/dev/null
 grep -F "exchange_execution_settings_v18.js?v=25" "$index" >/dev/null
 grep -F "function renderChat()" /app/dashboard/static/web2/web2.js >/dev/null
 grep -F "/api/virtual-account/state" /app/dashboard/static/web2/overview_runtime_v25.js >/dev/null
+grep -F "Каноническое решение" /app/dashboard/static/web2/decision_runtime_v25.js >/dev/null
 grep -F "/api/virtual-account/trades" /app/dashboard/static/web2/learning_runtime_v25.js >/dev/null
 '
 docker exec -e PYTHONPATH=/app "$SERVICE" python - <<'PY'
