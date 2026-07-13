@@ -19,6 +19,7 @@ from .database_api import install_database_api
 from .exceptions import DashboardError
 from .execution_stages_api import install_execution_stages_api
 from .global_auth_guard import install_global_auth_guard
+from .local_audit_api import install_local_audit_api
 from .market_data_api import install_market_data_api
 from .news_agent_network_api import install_news_agent_network_api
 from .private_order_ws_api import install_private_order_ws_api
@@ -33,6 +34,7 @@ def create_app(runner_factory: Any | None = None):
     instance = _create_base_app(runner_factory=runner_factory)
     ensure_event_handler_compat(instance)
     install_web2_host(instance)
+    install_local_audit_api(instance)
     return instance
 
 
@@ -56,6 +58,7 @@ install_global_auth_guard(app)
 # Monitoring is installed after the complete runtime graph and remains non-financial.
 install_ai_organ_state_api(app)
 install_system_health_api(app)
+install_local_audit_api(app)
 install_system_watchdog(app)
 
 try:
