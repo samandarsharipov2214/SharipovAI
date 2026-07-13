@@ -11,7 +11,10 @@ def test_virtual_account_state_write_is_atomic_and_revisioned(tmp_path) -> None:
 
     engine._save({"cash": 9_900.0, "equity": 9_900.0, "trades": []})
     first = json.loads(path.read_text(encoding="utf-8"))
-    engine._save({"cash": 9_800.0, "equity": 9_800.0, "trades": []})
+    next_state = engine._load()
+    next_state["cash"] = 9_800.0
+    next_state["equity"] = 9_800.0
+    engine._save(next_state)
     second = json.loads(path.read_text(encoding="utf-8"))
 
     assert first["state_revision"] == 1
@@ -27,7 +30,10 @@ def test_corrupt_primary_recovers_last_known_good_backup(tmp_path) -> None:
     engine = PaperActivityEngine(path=path)
 
     engine._save({"cash": 9_900.0, "equity": 9_900.0, "trades": []})
-    engine._save({"cash": 9_800.0, "equity": 9_800.0, "trades": []})
+    next_state = engine._load()
+    next_state["cash"] = 9_800.0
+    next_state["equity"] = 9_800.0
+    engine._save(next_state)
     path.write_text("{broken json", encoding="utf-8")
 
     recovered = engine._load()
