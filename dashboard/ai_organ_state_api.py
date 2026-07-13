@@ -76,7 +76,6 @@ class AIOrganRuntimeMonitor:
                 try:
                     setter(state.organ_id, payload)
                 except TypeError:
-                    # Older ProjectDatabase signatures may accept status and payload separately.
                     try:
                         setter(state.organ_id, state.status, payload)
                     except TypeError:
@@ -203,9 +202,9 @@ class AIOrganRuntimeMonitor:
 
     def _risk_engine(self) -> tuple[list[str], list[str]]:
         evidence, blockers = [], []
-        if importlib.util.find_spec("trading_intelligence.trade_gate") is not None:
+        if _module_available("trading_intelligence.trade_gate"):
             evidence.append("trade_gate_module")
-        elif importlib.util.find_spec("trading_candidate") is not None:
+        elif _module_available("trading_candidate"):
             evidence.append("canonical_trading_candidate_validator")
         else:
             blockers.append("critical: no canonical trade validation module found")
@@ -246,7 +245,7 @@ class AIOrganRuntimeMonitor:
     def _decision_quality(self) -> tuple[list[str], list[str]]:
         evidence, blockers = [], []
         for module_name in ("trading_candidate", "exchange_connector.preview_candidate_bridge"):
-            if importlib.util.find_spec(module_name) is not None:
+            if _module_available(module_name):
                 evidence.append(module_name)
             else:
                 blockers.append(f"critical: decision evidence module missing: {module_name}")
@@ -255,7 +254,7 @@ class AIOrganRuntimeMonitor:
     def _learning_engine(self) -> tuple[list[str], list[str]]:
         evidence, blockers = [], []
         candidates = ("learning_engine", "decision_quality", "trading_intelligence")
-        available = [name for name in candidates if importlib.util.find_spec(name) is not None]
+        available = [name for name in candidates if _module_available(name)]
         if available:
             evidence.extend(f"module={name}" for name in available)
         else:
@@ -327,6 +326,13 @@ def _state_from_dict(value: dict[str, Any]) -> OrganRuntimeState:
         blockers=tuple(str(item) for item in value.get("blockers", [])),
         checked_at_ms=int(value.get("checked_at_ms", 0)),
     )
+
+
+def _module_available(name: str) -> bool:
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (AttributeError, ImportError, ModuleNotFoundError, ValueError):
+        return False
 
 
 def _truthy(name: str) -> bool:
