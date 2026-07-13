@@ -165,6 +165,9 @@ def install_demo_api(app: FastAPI) -> None:
         return
     app.state.demo_api_installed = True
 
+    # This installer owns these exact route slots and runs before adding their
+    # canonical replacements. Clear every previous exact owner so route order can
+    # never expose legacy synthetic/demo behavior.
     remove_legacy_routes(
         app,
         (
@@ -174,6 +177,7 @@ def install_demo_api(app: FastAPI) -> None:
             ("GET", "/api/social-news"),
             ("POST", "/api/social-news/rss/refresh"),
         ),
+        owner_module=None,
     )
 
     @app.get("/api/demo/state")
