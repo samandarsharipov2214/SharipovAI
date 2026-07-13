@@ -17,14 +17,22 @@ DATA_DIR = Path(os.getenv("SHARIPOVAI_DATA_DIR", "/var/lib/sharipovai"))
 CONTROL_DIR = DATA_DIR / "deployment_control"
 REQUEST_FILE = CONTROL_DIR / "pending.json"
 STATUS_FILE = CONTROL_DIR / "status.json"
+OWNER_FILE = CONTROL_DIR / "owner.json"
+CLAIM_FILE = CONTROL_DIR / "owner_claim.json"
 CONFIRM_TTL_SECONDS = 300
 _CONFIRMATIONS: dict[int, tuple[str, float]] = {}
 
 
 def admin_ids() -> set[int]:
-    values = []
+    values: list[str] = []
     for name in ("TELEGRAM_ADMIN_USER_ID", "TELEGRAM_ADMIN_CHAT_ID"):
         values.extend(os.getenv(name, "").replace(";", ",").split(","))
+    try:
+        owner = json.loads(OWNER_FILE.read_text(encoding="utf-8"))
+        if isinstance(owner, dict):
+            values.extend([str(owner.get("user_id", "")), str(owner.get("chat_id", ""))])
+    except (OSError, json.JSONDecodeError):
+        pass
     result: set[int] = set()
     for value in values:
         try:
@@ -37,6 +45,35 @@ def admin_ids() -> set[int]:
 def is_admin(actor_id: int | None, chat_id: int | None = None) -> bool:
     configured = admin_ids()
     return bool(configured and ({int(actor_id or 0), int(chat_id or 0)} & configured))
+
+
+def claim_owner(actor_id: int, chat_id: int, code: str) -> tuple[str, dict[str, Any]]:
+    if admin_ids():
+        return "Владелец уже настроен. Повторное присвоение запрещено.", {"inline_keyboard": []}
+    try:
+        claim = json.loads(CLAIM_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        claim = {}
+    expected = str(claim.get("code", ""))
+    expires_at = int(claim.get("expires_at", 0) or 0)
+    if not expected or expires_at < int(time.time()):
+        return "Код активации отсутствует или истёк. Запусти установку host watcher ещё раз.", {"inline_keyboard": []}
+    if not secrets.compare_digest(expected, str(code).strip()):
+        return "Неверный код активации владельца.", {"inline_keyboard": []}
+    _atomic_write(OWNER_FILE, {
+        "user_id": int(actor_id),
+        "chat_id": int(chat_id),
+        "claimed_at": int(time.time()),
+    })
+    try:
+        CLAIM_FILE.unlink()
+    except OSError:
+        pass
+    return (
+        "✅ <b>Телефон назначен владельцем SharipovAI</b>\n\n"
+        "Теперь команды /deploy и /deploy_status доступны только этому Telegram-аккаунту.",
+        {"inline_keyboard": deployment_keyboard(actor_id, chat_id)},
+    )
 
 
 def deployment_keyboard(actor_id: int | None, chat_id: int | None) -> list[list[dict[str, Any]]]:
@@ -171,7 +208,7 @@ def unauthorized_message(actor_id: int | None, chat_id: int | None) -> str:
         "🔐 <b>Владелец Telegram ещё не настроен</b>\n\n"
         f"Твой user ID: <code>{int(actor_id or 0)}</code>\n"
         f"Chat ID: <code>{int(chat_id or 0)}</code>\n"
-        "Для безопасности кнопка обновления скрыта до настройки TELEGRAM_ADMIN_USER_ID."
+        "После установки host watcher отправь: <code>/claim_owner КОД</code>."
     )
 
 
