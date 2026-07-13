@@ -12,7 +12,7 @@ from .lifecycle_compat import ensure_event_handler_compat
 # on ``app.router``. Install the compatibility method before feature installers.
 ensure_event_handler_compat(app)
 
-from .ai_organ_state_api import install_ai_organ_state_api
+from .ai_organ_state_safe_api import install_ai_organ_state_api
 from .autonomous_trading_api import install_autonomous_trading_api
 from .bybit_account_api import install_bybit_account_api
 from .control_plane_api import install_control_plane_api
