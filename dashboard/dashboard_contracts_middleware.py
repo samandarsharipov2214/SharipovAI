@@ -39,6 +39,25 @@ def install_dashboard_contracts_middleware(app: FastAPI) -> None:
                 compat = importlib.import_module("dashboard.stabilization_compat")
                 return compat._approve(path[len(prefix):-len(suffix)])
 
+        # Canonical read-only compatibility owners. These branches intentionally
+        # run before the legacy APIRouter so route order cannot expose synthetic
+        # demo state or the small seeded-news payload.
+        if method == "GET" and path == "/api/demo/state":
+            demo = importlib.import_module("dashboard.demo_api")
+            return JSONResponse(demo._state_response())
+
+        if method == "POST" and path == "/api/demo/chat":
+            payload = await _json_body(request)
+            demo = importlib.import_module("dashboard.demo_api")
+            return JSONResponse(demo._chat(str(payload.get("message", "")).strip()))
+
+        if method == "GET" and path == "/api/social-news":
+            return JSONResponse(_social_news_payload())
+
+        if method == "POST" and path == "/api/social-news/rss/refresh":
+            payload = await _json_body(request)
+            return JSONResponse(_social_rss_refresh(payload))
+
         if method == "GET" and path == "/ai-bots":
             return HTMLResponse(_ai_bots_page())
 
@@ -69,6 +88,28 @@ def install_dashboard_contracts_middleware(app: FastAPI) -> None:
             return HTMLResponse(_control_center_html())
 
         return await call_next(request)
+
+
+def _social_news_payload() -> dict[str, Any]:
+    module = importlib.import_module("dashboard.social_news_api")
+    refresh_status = module.refresh_news_if_stale(reason="api_social_news_stale_check")
+    state = module.load_news_state()
+    news = state.get("news", {}) if isinstance(state.get("news"), dict) else {}
+    raw_items = news.get("items", []) if isinstance(news, dict) else []
+    state["sources"] = module.sources_payload()
+    state["telegram_client"] = module.telegram_client_status()
+    state["rss_reader"] = module.rss_status()
+    state["news_autorun"] = module.news_autorun_status()
+    state["refresh_status"] = refresh_status
+    state["agents"] = module.run_news_agents(raw_items)
+    state["synthetic_fallback_used"] = False
+    return {"status": "ok", **state}
+
+
+def _social_rss_refresh(payload: dict[str, Any]) -> dict[str, Any]:
+    module = importlib.import_module("dashboard.social_news_api")
+    limit = module._safe_int(payload.get("limit_per_source"), 8)
+    return module.refresh_news_now(reason="manual_api_rss_refresh", limit_per_source=limit)
 
 
 def _ai_bots_payload() -> dict[str, Any]:
