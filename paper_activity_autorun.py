@@ -1,6 +1,6 @@
-"""Background autorun loop for Paper Activity Engine.
+"""Background autorun loop for market-backed virtual account execution.
 
-Runs only PAPER/SIMULATION ticks. It never places live orders.
+Runs only virtual-account ticks. It never places live orders.
 """
 
 from __future__ import annotations
@@ -10,7 +10,8 @@ import threading
 import time
 from typing import Any
 
-from paper_activity_engine import PaperActivityEngine, paper_tick_seconds
+from market_paper_engine import PaperActivityEngine
+from paper_activity_engine import paper_tick_seconds
 
 
 _THREAD: threading.Thread | None = None
@@ -23,7 +24,7 @@ def autorun_enabled() -> bool:
 
 
 def start_paper_activity_autorun() -> dict[str, Any]:
-    """Start one background paper activity loop if enabled."""
+    """Start one background virtual-account activity loop if enabled."""
 
     global _THREAD, _LAST_STATUS
     if not autorun_enabled():
@@ -32,7 +33,7 @@ def start_paper_activity_autorun() -> dict[str, Any]:
     if _THREAD and _THREAD.is_alive():
         return {"status": "already_running", "thread_alive": True, **_LAST_STATUS}
     _STOP.clear()
-    _THREAD = threading.Thread(target=_loop, name="paper-activity-autorun", daemon=True)
+    _THREAD = threading.Thread(target=_loop, name="market-paper-autorun", daemon=True)
     _THREAD.start()
     _LAST_STATUS = {"status": "started", "thread_alive": True, "tick_seconds": paper_tick_seconds()}
     return dict(_LAST_STATUS)
@@ -59,6 +60,7 @@ def _loop() -> None:
                 "last_loop_at": int(time.time()),
                 "last_catch_up": catch_up,
                 "summary": state.get("summary", {}),
+                "engine": "market_backed_virtual_account",
                 "tick_seconds": paper_tick_seconds(),
             }
         except Exception as exc:  # pragma: no cover - production safety

@@ -1,10 +1,6 @@
 name: VPS Site Recovery
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/vps-recovery.yml'
   workflow_dispatch:
 
 permissions:
@@ -38,14 +34,10 @@ jobs:
             echo "writable=$([ -w "$APP_DIR" ] && echo yes || echo no)"
             git -c safe.directory="$APP_DIR" -C "$APP_DIR" rev-parse HEAD 2>&1 || true
             git -c safe.directory="$APP_DIR" -C "$APP_DIR" status --short --branch 2>&1 || true
-            git -c safe.directory="$APP_DIR" -C "$APP_DIR" remote -v 2>&1 | sed -E 's#(https?://)[^/@]+@#\1***@#' || true
           fi
 
           echo "=== network listeners ==="
           ss -lnt 2>&1 || true
-          echo "=== ssh configuration ==="
-          grep -E '^[[:space:]]*(Port|PermitRootLogin|PasswordAuthentication)[[:space:]]' /etc/ssh/sshd_config 2>/dev/null || true
-
           echo "=== service health ==="
           curl -i --max-time 5 http://127.0.0.1:8000/health 2>&1 || true
           echo "=== root page ==="
@@ -65,5 +57,4 @@ jobs:
           command -v docker >/dev/null && docker info >/dev/null 2>&1 && echo docker_access=yes || echo docker_access=no
           [ -n "$APP_DIR" ] && [ -r "$APP_DIR/deploy/vps/.env.vps" ] && echo production_env_readable=yes || echo production_env_readable=no
 
-          echo "=== conclusion ==="
-          echo "This diagnostic is read-only. No repository, service, container, or trading state was changed."
+          echo "This workflow is read-only. No repository, service, container, or trading state was changed."
