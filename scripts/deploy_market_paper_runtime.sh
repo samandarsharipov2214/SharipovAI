@@ -38,10 +38,12 @@ docker compose run --rm --no-deps \
 set -Eeuo pipefail
 python -m pytest \
   tests/test_market_paper_engine.py \
-  tests/test_news_intelligence_runtime.py -q
+  tests/test_news_intelligence_runtime.py \
+  tests/test_lifecycle_compat.py -q
 python -m py_compile \
   /app/market_paper_engine.py \
   /app/paper_activity_autorun.py \
+  /app/dashboard/lifecycle_compat.py \
   /app/dashboard/paper_activity_api.py \
   /app/dashboard/realtime_status_api.py \
   /app/news_intelligence/models.py \
