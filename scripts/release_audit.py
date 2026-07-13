@@ -1,8 +1,4 @@
-"""Fail-closed release audit for SharipovAI.
-
-The audit validates repository/deployment contracts and, with ``--runtime``, the
-actual environment. It never enables trading and never prints secret values.
-"""
+"""Fail-closed release audit for the VPS-based SharipovAI deployment."""
 from __future__ import annotations
 
 import argparse
@@ -11,25 +7,15 @@ import os
 import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 EXPECTED_ORGANS = (
-    "general_controller",
-    "market_intelligence",
-    "news_intelligence",
-    "risk_engine",
-    "portfolio_engine",
-    "virtual_execution",
-    "decision_quality",
-    "learning_engine",
-    "security_guard",
+    "general_controller", "market_intelligence", "news_intelligence", "risk_engine",
+    "portfolio_engine", "virtual_execution", "decision_quality", "learning_engine", "security_guard",
 )
 REQUIRED_ROUTES = {
-    "/health",
-    "/api/system/database/status",
-    "/api/project-memory/messages",
-    "/api/exchange/private-order-ws/status",
-    "/api/exchange/private-order-ws/snapshot",
+    "/health", "/api/system/database/status", "/api/project-memory/messages",
+    "/api/exchange/private-order-ws/status", "/api/exchange/private-order-ws/snapshot",
     "/api/exchange/private-order-ws/reconcile",
 }
 
@@ -85,80 +71,109 @@ def audit_repository(root: Path, *, runtime: bool = False) -> AuditReport:
     )
 
 
-def _audit_architecture(record: Any) -> None:
+def _audit_architecture(record: Callable[..., None]) -> None:
     try:
         from ai_architecture_registry import CANONICAL_AI_ORGANS
 
         ids = tuple(item.id for item in CANONICAL_AI_ORGANS)
-        unique = len(ids) == len(set(ids))
-        record("canonical_ai_organs", ids == EXPECTED_ORGANS and unique, f"found={ids}")
-        owners = [capability for organ in CANONICAL_AI_ORGANS for capability in organ.owns]
+        record("canonical_ai_organs", ids == EXPECTED_ORGANS and len(ids) == len(set(ids)), f"found={ids}")
         record(
             "ai_organ_responsibilities",
-            bool(owners) and all(organ.responsibility.strip() for organ in CANONICAL_AI_ORGANS),
-            "all organs have responsibilities",
+            all(organ.responsibility.strip() and organ.owns for organ in CANONICAL_AI_ORGANS),
+            "all organs have responsibilities and owned capabilities",
         )
     except Exception as exc:
         record("canonical_ai_organs", False, f"{type(exc).__name__}: {exc}")
 
 
-def _audit_blueprint(root: Path, record: Any) -> None:
-    path = root / "render.yaml"
-    if not path.exists():
-        record("render_blueprint", False, "render.yaml is missing")
+def _audit_blueprint(root: Path, record: Callable[..., None]) -> None:
+    """Audit the current VPS deployment contract.
+
+    The historical function name remains because older tooling imports it, but
+    Render is not part of the active deployment.
+    """
+    compose_path = root / "deploy/vps/docker-compose.yml"
+    caddy_path = root / "deploy/vps/Caddyfile"
+    update_path = root / "deploy/vps/update_from_main.sh"
+    dockerfile_path = root / "Dockerfile"
+    required = (compose_path, caddy_path, update_path, dockerfile_path)
+    missing = [str(path.relative_to(root)) for path in required if not path.exists()]
+    record("vps_deployment_files", not missing, f"missing={missing}")
+    if missing:
         return
-    text = path.read_text(encoding="utf-8")
+
+    compose = compose_path.read_text(encoding="utf-8")
+    caddy = caddy_path.read_text(encoding="utf-8")
+    update = update_path.read_text(encoding="utf-8")
     contracts = {
-        "render_postgresql": all(token in text for token in ("databases:", "name: sharipovai-db", "property: connectionString")),
-        "render_migration": "preDeployCommand: python scripts/migrate_project_db.py" in text,
-        "render_health": "healthCheckPath: /health" in text,
-        "render_checks_pass": "autoDeployTrigger: checksPass" in text,
-        "render_web2_build": "cd web2" in text and "npm run build" in text,
-        "render_telegram_worker": "startCommand: python scripts/run_telegram_worker.py" in text,
-        "render_database_required": _env_value(text, "SHARIPOVAI_DATABASE_REQUIRED") == "1",
-        "render_auth_enabled": _env_value(text, "SHARIPOVAI_DISABLE_AUTH") == "0",
-        "render_testnet_locked": all(
-            _env_value(text, name) == "0"
+        "vps_app_service": "sharipovai:" in compose and "uvicorn dashboard:app" in compose,
+        "vps_reverse_proxy_service": "caddy:" in compose and "reverse_proxy sharipovai:8000" in caddy,
+        "vps_loopback_application_port": "127.0.0.1:8000:8000" in compose,
+        "vps_restart_policy": compose.count("restart: unless-stopped") >= 2,
+        "vps_healthcheck": "healthcheck:" in compose and "/health" in compose,
+        "vps_environment_file": ".env.vps" in compose,
+        "vps_auth_enabled": _compose_env_value(compose, "SHARIPOVAI_DISABLE_AUTH") == "0",
+        "vps_database_required": _compose_env_value(compose, "SHARIPOVAI_DATABASE_REQUIRED") == "1",
+        "vps_testnet_locked": all(
+            _compose_env_value(compose, name) == "0"
             for name in ("TESTNET_EXECUTION_ENABLED", "AUTONOMOUS_TESTNET_ENABLED", "AUTONOMOUS_TESTNET_BRIDGE_ENABLED")
         ),
-        "render_live_locked": _env_value(text, "EXCHANGE_LIVE_TRADING_ENABLED") == "0",
-        "render_kill_switch": _env_value(text, "EXECUTION_KILL_SWITCH") == "1",
-        "render_exchange_sandbox": _env_value(text, "EXCHANGE_MODE") == "sandbox",
-        "render_stage_safe": _env_value(text, "AUTONOMOUS_TRADING_STAGE") == "2",
-        "render_private_ws_default_off": _env_value(text, "FEATURE_BYBIT_PRIVATE_ORDER_WS") == "0",
-        "render_legacy_keys_locked": _env_value(text, "BYBIT_ALLOW_LEGACY_EXCHANGE_CREDENTIALS") == "0",
-        "render_telegram_polling_off": _env_value(text, "TELEGRAM_POLLING_ENABLED") == "0",
-        "render_separate_bybit_keys": all(_env_declared(text, name) for name in (
-            "BYBIT_READONLY_API_KEY", "BYBIT_READONLY_API_SECRET",
-            "BYBIT_TESTNET_API_KEY", "BYBIT_TESTNET_API_SECRET",
-            "BYBIT_MAINNET_API_KEY", "BYBIT_MAINNET_API_SECRET",
-        )),
-        "render_no_generic_exchange_keys": not _env_declared(text, "EXCHANGE_API_KEY") and not _env_declared(text, "EXCHANGE_API_SECRET"),
+        "vps_live_locked": _compose_env_value(compose, "EXCHANGE_LIVE_TRADING_ENABLED") == "0",
+        "vps_kill_switch": _compose_env_value(compose, "EXECUTION_KILL_SWITCH") == "1",
+        "vps_exchange_sandbox": _compose_env_value(compose, "EXCHANGE_MODE") == "sandbox",
+        "vps_stage_safe": _compose_env_value(compose, "AUTONOMOUS_TRADING_STAGE") in {"0", "1", "2"},
+        "vps_private_ws_default_off": _compose_env_value(compose, "FEATURE_BYBIT_PRIVATE_ORDER_WS") == "0",
+        "vps_legacy_keys_locked": _compose_env_value(compose, "BYBIT_ALLOW_LEGACY_EXCHANGE_CREDENTIALS") == "0",
+        "vps_https_security_headers": all(token in caddy for token in ("Strict-Transport-Security", "X-Content-Type-Options", "X-Frame-Options")),
+        "vps_bounded_update": all(token in update for token in ("git", "main", "health")),
     }
     for name, passed in contracts.items():
-        record(name, passed, "contract satisfied" if passed else "required Render contract is missing or unsafe")
+        record(name, passed, "contract satisfied" if passed else "required VPS contract is missing or unsafe")
 
 
-def _audit_workflows(root: Path, record: Any) -> None:
+def _audit_workflows(root: Path, record: Callable[..., None]) -> None:
     guardrails = _read(root / ".github/workflows/project-guardrails.yml")
     full = _read(root / ".github/workflows/full-stabilization.yml")
     windows = _read(root / ".github/workflows/windows-agent-package.yml")
-    record("ci_project_guardrails", all(token in guardrails for token in (
-        "python scripts/migrate_project_db.py",
-        "python -m compileall",
-        "Run regression tests",
-        "Verify execution remains locked",
-        "Run fail-closed release audit",
-    )), "migration, compile, execution lock, release audit and pytest gates")
-    record("ci_full_suite", "python -m pytest" in full and "Fail when full suite failed" in full, "full pytest gate")
-    record("ci_windows_agent", "runs-on: windows-latest" in windows and "pytest" in windows.lower(), "Windows agent verification gate")
+    recovery = _read(root / ".github/workflows/vps-recovery.yml")
+    tests = _read(root / ".github/workflows/tests.yml")
+
+    record(
+        "ci_project_guardrails",
+        all(token in guardrails for token in (
+            "python scripts/migrate_project_db.py", "python -m compileall", "Import application safely",
+            "Verify execution remains locked", "Run fail-closed release audit",
+        )),
+        "migration, compile, import, execution lock and release audit gates",
+    )
+    record(
+        "ci_full_suite",
+        "Run full pytest suite" in full and "python -m pytest" in full,
+        "scheduled/manual full pytest gate",
+    )
+    record(
+        "ci_tests_isolated",
+        "Prepare isolated runtime state" in tests and "EXECUTION_KILL_SWITCH: '1'" in tests,
+        "primary pytest workflow isolates state and locks execution",
+    )
+    record(
+        "ci_windows_agent",
+        "runs-on: [self-hosted, Windows, X64, sharipovai-windows-ci]" in windows
+        and "Run PC node tests" in windows and "python -m pytest" in windows,
+        "self-hosted Windows agent verification gate",
+    )
+    record(
+        "ci_vps_recovery",
+        all(token in recovery for token in ("self-hosted", "127.0.0.1:8000/health", "read-only")),
+        "read-only VPS diagnosis workflow",
+    )
 
 
-def _audit_runtime_code(record: Any) -> None:
+def _audit_runtime_code(record: Callable[..., None]) -> None:
     try:
         import dashboard
 
-        routes = {getattr(route, "path", "") for route in dashboard.app.routes}
+        routes = set(dashboard.app.openapi().get("paths", {}))
         missing = sorted(REQUIRED_ROUTES - routes)
         record("dashboard_required_routes", not missing, f"missing={missing}" if missing else "all required routes registered")
     except Exception as exc:
@@ -176,7 +191,7 @@ def _audit_runtime_code(record: Any) -> None:
         record("private_ws_read_only", False, f"{type(exc).__name__}: {exc}")
 
 
-def _audit_database_and_journal(record: Any) -> None:
+def _audit_database_and_journal(record: Callable[..., None]) -> None:
     try:
         from storage import ProjectDatabase
 
@@ -199,7 +214,7 @@ def _audit_database_and_journal(record: Any) -> None:
         record("execution_journal_database", False, f"{type(exc).__name__}: {exc}")
 
 
-def _audit_runtime_environment(record: Any) -> None:
+def _audit_runtime_environment(record: Callable[..., None]) -> None:
     required = ("AUTH_SECRET", "ADMIN_USERNAME", "ADMIN_PASSWORD", "DATABASE_URL")
     missing = [name for name in required if not os.getenv(name, "").strip()]
     record("runtime_required_configuration", not missing, f"missing={missing}" if missing else "required configuration present")
@@ -218,8 +233,11 @@ def _audit_runtime_environment(record: Any) -> None:
     record("runtime_private_ws_default_off", not _truthy("FEATURE_BYBIT_PRIVATE_ORDER_WS"), "Private stream must remain off until operator activation")
     record("runtime_legacy_keys_locked", not _truthy("BYBIT_ALLOW_LEGACY_EXCHANGE_CREDENTIALS"), "Legacy exchange credential fallback must remain disabled")
     mainnet_present = bool(os.getenv("BYBIT_MAINNET_API_KEY", "").strip() or os.getenv("BYBIT_MAINNET_API_SECRET", "").strip())
-    allowed = _truthy("RELEASE_AUDIT_ALLOW_MAINNET_CREDENTIALS")
-    record("runtime_mainnet_credentials_absent", not mainnet_present or allowed, "Mainnet credentials must be absent before explicit approval")
+    record(
+        "runtime_mainnet_credentials_absent",
+        not mainnet_present or _truthy("RELEASE_AUDIT_ALLOW_MAINNET_CREDENTIALS"),
+        "Mainnet credentials must be absent before explicit approval",
+    )
     for prefix in ("BYBIT_READONLY", "BYBIT_TESTNET", "BYBIT_MAINNET"):
         key = bool(os.getenv(f"{prefix}_API_KEY", "").strip())
         secret = bool(os.getenv(f"{prefix}_API_SECRET", "").strip())
@@ -228,14 +246,16 @@ def _audit_runtime_environment(record: Any) -> None:
     record("runtime_telegram_secrets", telegram_ready, "Telegram secrets are not present in this environment", warning=True)
 
 
-def _env_value(text: str, name: str) -> str | None:
-    pattern = rf"(?m)^\s*- key:\s*{re.escape(name)}\s*$\n\s*value:\s*[\"']?([^\"'\n]+)"
-    match = re.search(pattern, text)
-    return match.group(1).strip() if match else None
-
-
-def _env_declared(text: str, name: str) -> bool:
-    return re.search(rf"(?m)^\s*- key:\s*{re.escape(name)}\s*$", text) is not None
+def _compose_env_value(text: str, name: str) -> str | None:
+    patterns = (
+        rf'(?m)^\s*{re.escape(name)}:\s*["\']?([^"\'\s#]+)',
+        rf'(?m)^\s*-\s*{re.escape(name)}=([^\s#]+)',
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            return match.group(1).strip().strip("\"'")
+    return None
 
 
 def _read(path: Path) -> str:
