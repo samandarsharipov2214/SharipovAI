@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Body, FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import JSONResponse
 
 from ai_chat_orchestrator import answer_chat
 from .dashboard_contracts_middleware import install_dashboard_contracts_middleware
@@ -32,7 +32,12 @@ def _default_state() -> dict[str, Any]:
         "positions": [],
         "trades": [],
         "exchange_status": {"mode": os.getenv("EXCHANGE_MODE", "sandbox"), "connected": True},
-        "online_monitoring": {"demo_account_online": True, "exchange_connector_online": True, "real_orders_blocked": True, "live_execution_enabled": False},
+        "online_monitoring": {
+            "demo_account_online": True,
+            "exchange_connector_online": True,
+            "real_orders_blocked": True,
+            "live_execution_enabled": False,
+        },
         "bybit_costs": {"cheapest_product": "spot maker", "cheapest_borrow": "USDT займ"},
         "integration": {"website": True, "mini_app": True, "telegram": True, "source": "dashboard.demo_api"},
     }
@@ -105,22 +110,64 @@ def _sell(state: dict[str, Any]) -> str:
     return f"BTC продан виртуально. net PnL после комиссий: {net_pnl:.2f} USDT."
 
 
+def run_ai_command(message: str) -> dict[str, Any]:
+    """Stable compatibility boundary for chat engines and tests.
+
+    The function is intentionally small so failures can be isolated without
+    breaking the HTTP contract. It never places a real order.
+    """
+    state = _load()
+    text = message.lower()
+    if "bybit" in text and any(token in text for token in ("выгод", "услов", "дешев", "комисс")):
+        costs = state.get("bybit_costs", {})
+        return {
+            "reply": (
+                "Bybit cost intelligence: "
+                f"Самый дешёвый продукт — {costs.get('cheapest_product', 'не подтверждено')}; "
+                f"самый дешёвый источник заимствования — {costs.get('cheapest_borrow', 'не подтверждено')}."
+            ),
+            "source_ai": "Exchange Cost AI",
+        }
+    if "мониторинг" in text and any(token in text for token in ("онлайн", "бирж", "exchange")):
+        monitoring = state.get("online_monitoring", {})
+        return {
+            "reply": (
+                "Онлайн-мониторинг: Биржевой connector — "
+                f"{'онлайн' if monitoring.get('exchange_connector_online') else 'не подтверждён'}; "
+                f"демо-счёт — {'онлайн' if monitoring.get('demo_account_online') else 'не подтверждён'}; "
+                "реальные ордера заблокированы."
+            ),
+            "source_ai": "Operations AI",
+        }
+    return answer_chat(message, state)
+
+
 def _chat(message: str) -> dict[str, Any]:
     state = _load()
     text = message.lower()
-    if "купи" in text and "btc" in text:
-        reply = _buy(state)
-        state = _load()
-        source_ai = "Paper Trading Bot + Risk Engine"
-    elif "продай" in text and "btc" in text:
-        reply = _sell(state)
-        state = _load()
-        source_ai = "Paper Trading Bot + Portfolio Engine"
-    else:
-        result = answer_chat(message, state)
-        reply = str(result.get("reply", "Команда обработана."))
-        source_ai = str(result.get("source_ai", "AI Chat Orchestrator"))
-    return {"status": "ok", "reply": reply, "source_ai": source_ai, "state": state, "integration": state["integration"]}
+    try:
+        if "купи" in text and "btc" in text:
+            reply = _buy(state)
+            state = _load()
+            source_ai = "Paper Trading Bot + Risk Engine"
+        elif "продай" in text and "btc" in text:
+            reply = _sell(state)
+            state = _load()
+            source_ai = "Paper Trading Bot + Portfolio Engine"
+        else:
+            result = run_ai_command(message)
+            reply = str(result.get("reply", "Команда обработана."))
+            source_ai = str(result.get("source_ai", "AI Chat Orchestrator"))
+        return {"status": "ok", "reply": reply, "source_ai": source_ai, "state": state, "integration": state["integration"]}
+    except Exception as exc:
+        return {
+            "status": "error",
+            "reply": f"Не удалось обработать запрос «{message}». Система сохранила состояние и не выполнила реальных действий.",
+            "source_ai": "AI Chat Orchestrator",
+            "error": f"{type(exc).__name__}: {exc}",
+            "state": state,
+            "integration": state["integration"],
+        }
 
 
 def install_demo_api(app: FastAPI) -> None:
@@ -130,8 +177,6 @@ def install_demo_api(app: FastAPI) -> None:
         return
     app.state.demo_api_installed = True
 
-    # This middleware deliberately supersedes legacy duplicate routes from
-    # dashboard.routes. It guarantees one source of truth for all interfaces.
     @app.middleware("http")
     async def shared_demo_contract(request: Request, call_next):
         if request.url.path == "/api/demo/state" and request.method == "GET":
@@ -143,10 +188,6 @@ def install_demo_api(app: FastAPI) -> None:
                 payload = {}
             return JSONResponse(_chat(str((payload or {}).get("message", "")).strip()))
         return await call_next(request)
-
-    @app.get("/login", response_class=HTMLResponse)
-    def compatibility_login_page() -> HTMLResponse:
-        return HTMLResponse("""<!doctype html><html lang='ru'><head><meta charset='utf-8'><title>Вход в SharipovAI</title></head><body><main><h1>Вход в SharipovAI</h1><form method='post' action='/login'><input name='username' placeholder='Логин'><input name='password' type='password' placeholder='Пароль'><button type='submit'>Войти</button></form></main></body></html>""")
 
     @app.get("/api/demo/state/shared")
     def demo_state_shared() -> dict[str, object]:
@@ -170,3 +211,6 @@ def install_demo_api(app: FastAPI) -> None:
         state = _default_state()
         _save(state)
         return {"status": "ok", "message": "Виртуальный счёт сброшен.", "state": state}
+
+
+__all__ = ["install_demo_api", "run_ai_command"]
