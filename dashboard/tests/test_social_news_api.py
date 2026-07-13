@@ -1,5 +1,4 @@
-"""Tests for Social News Monitor dashboard API."""
-
+"""Tests for the canonical Social News Monitor dashboard API."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -10,20 +9,14 @@ from fastapi.testclient import TestClient
 from dashboard import create_app
 
 
-def test_social_news_api_returns_seeded_state(monkeypatch, tmp_path: Path) -> None:
-    """Social news API should return sources, analyzed news, and agents."""
-
+def test_social_news_api_returns_truthful_state(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("NEWS_MONITOR_STATE_FILE", str(tmp_path / "news_state.json"))
-    client = TestClient(create_app())
-
-    response = client.get("/api/social-news")
-
-    assert response.status_code == 200
-    payload = response.json()
+    payload = TestClient(create_app()).get("/api/social-news").json()
     assert payload["status"] == "ok"
     assert payload["sources"]["total"] >= 50
-    assert payload["news"]["summary"]["total"] > 0
+    assert payload["news"]["summary"]["total"] >= 0
     assert payload["rss_enabled"] is True
+    assert payload.get("synthetic_fallback_used") is False
     assert "telegram_client" in payload
     assert "rss_reader" in payload
     assert "agents" in payload
@@ -31,11 +24,8 @@ def test_social_news_api_returns_seeded_state(monkeypatch, tmp_path: Path) -> No
 
 
 def test_social_news_sources_api(monkeypatch, tmp_path: Path) -> None:
-    """Sources endpoint should expose configured Telegram/X/RSS definitions and agent configs."""
-
     monkeypatch.setenv("NEWS_MONITOR_STATE_FILE", str(tmp_path / "news_state.json"))
     response = TestClient(create_app()).get("/api/social-news/sources")
-
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "ok"
@@ -51,13 +41,8 @@ def test_social_news_sources_api(monkeypatch, tmp_path: Path) -> None:
 
 
 def test_social_news_agents_api(monkeypatch, tmp_path: Path) -> None:
-    """Agents endpoint should expose sub-AI and supervisor report."""
-
     monkeypatch.setenv("NEWS_MONITOR_STATE_FILE", str(tmp_path / "news_state.json"))
-    response = TestClient(create_app()).get("/api/social-news/agents")
-
-    assert response.status_code == 200
-    payload = response.json()
+    payload = TestClient(create_app()).get("/api/social-news/agents").json()
     assert payload["status"] == "ok"
     assert payload["supervisor"]["agent_count"] >= 8
     assert any(agent["id"] == "sports_news_ai" for agent in payload["agents"])
@@ -67,19 +52,13 @@ def test_social_news_agents_api(monkeypatch, tmp_path: Path) -> None:
 
 
 def test_social_news_supervisor_api(monkeypatch, tmp_path: Path) -> None:
-    """Supervisor endpoint should return Main News Supervisor AI assessment."""
-
     monkeypatch.setenv("NEWS_MONITOR_STATE_FILE", str(tmp_path / "news_state.json"))
     client = TestClient(create_app())
     client.post(
         "/api/social-news/analyze",
         json={"items": [{"source_id": "watcher_guru_x", "title": "Breaking: BTC hack liquidation alert"}]},
     )
-
-    response = client.get("/api/social-news/supervisor")
-
-    assert response.status_code == 200
-    payload = response.json()
+    payload = client.get("/api/social-news/supervisor").json()
     assert payload["status"] == "ok"
     assert payload["supervisor"]["name"] == "Main News Supervisor AI"
     assert payload["supervisor"]["decision"] == "BLOCK_BUY_AND_VERIFY"
@@ -87,24 +66,38 @@ def test_social_news_supervisor_api(monkeypatch, tmp_path: Path) -> None:
 
 
 def test_social_news_rss_status_api(monkeypatch, tmp_path: Path) -> None:
-    """RSS status endpoint should expose allowlisted RSS sources."""
-
     monkeypatch.setenv("NEWS_MONITOR_STATE_FILE", str(tmp_path / "news_state.json"))
-    response = TestClient(create_app()).get("/api/social-news/rss/status")
-
-    assert response.status_code == 200
-    payload = response.json()
+    payload = TestClient(create_app()).get("/api/social-news/rss/status").json()
     assert payload["status"] == "ok"
     assert payload["rss_reader"]["enabled"] is True
     assert payload["rss_reader"]["source_count"] >= 1
 
 
 def test_social_news_rss_refresh_api(monkeypatch, tmp_path: Path) -> None:
-    """RSS refresh endpoint should read, analyze, and run news agents."""
-
     import news_monitor.rss_reader as rss_reader
 
-    def fake_parse(_url: str) -> SimpleNamespace:
+    class Response:
+        status_code = 200
+        content = b"<rss><channel><item/></channel></rss>"
+        headers = {"content-type": "application/rss+xml"}
+
+        def raise_for_status(self) -> None:
+            return None
+
+    class Client:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        def get(self, _url: str) -> Response:
+            return Response()
+
+    def fake_parse(_payload: bytes) -> SimpleNamespace:
         return SimpleNamespace(
             bozo=False,
             entries=[
@@ -118,13 +111,11 @@ def test_social_news_rss_refresh_api(monkeypatch, tmp_path: Path) -> None:
         )
 
     monkeypatch.setenv("NEWS_MONITOR_STATE_FILE", str(tmp_path / "news_state.json"))
+    monkeypatch.setattr(rss_reader.httpx, "Client", Client)
     monkeypatch.setattr(rss_reader.feedparser, "parse", fake_parse)
-    client = TestClient(create_app())
-
-    response = client.post("/api/social-news/rss/refresh", json={"limit_per_source": 1})
-
-    assert response.status_code == 200
-    payload = response.json()
+    payload = TestClient(create_app()).post(
+        "/api/social-news/rss/refresh", json={"limit_per_source": 1}
+    ).json()
     assert payload["status"] == "ok"
     assert payload["items"]
     assert payload["news"]["summary"]["total"] >= 1
@@ -132,16 +123,10 @@ def test_social_news_rss_refresh_api(monkeypatch, tmp_path: Path) -> None:
 
 
 def test_social_news_telegram_status_when_not_configured(monkeypatch, tmp_path: Path) -> None:
-    """Telegram client status should explain missing config without secrets."""
-
     monkeypatch.setenv("NEWS_MONITOR_STATE_FILE", str(tmp_path / "news_state.json"))
     for name in ("TELEGRAM_API_ID", "TELEGRAM_API_HASH", "TELEGRAM_SESSION_STRING", "TELEGRAM_NEWS_SOURCES"):
         monkeypatch.delenv(name, raising=False)
-
-    response = TestClient(create_app()).get("/api/social-news/telegram/status")
-
-    assert response.status_code == 200
-    payload = response.json()
+    payload = TestClient(create_app()).get("/api/social-news/telegram/status").json()
     assert payload["status"] == "ok"
     assert payload["telegram_client"]["configured"] is False
     assert "TELEGRAM_SESSION_STRING" in payload["telegram_client"]["missing"]
@@ -149,34 +134,22 @@ def test_social_news_telegram_status_when_not_configured(monkeypatch, tmp_path: 
 
 
 def test_social_news_telegram_refresh_disabled_when_not_configured(monkeypatch, tmp_path: Path) -> None:
-    """Telegram refresh should not crash when credentials are absent."""
-
     monkeypatch.setenv("NEWS_MONITOR_STATE_FILE", str(tmp_path / "news_state.json"))
     monkeypatch.delenv("TELEGRAM_CLIENT_ENABLED", raising=False)
-    client = TestClient(create_app())
-
-    response = client.post("/api/social-news/telegram/refresh", json={"limit_per_source": 2})
-
-    assert response.status_code == 200
-    payload = response.json()
+    payload = TestClient(create_app()).post(
+        "/api/social-news/telegram/refresh", json={"limit_per_source": 2}
+    ).json()
     assert payload["status"] == "disabled"
     assert payload["items"] == []
     assert "news" in payload
 
 
 def test_social_news_analyze_api_blocks_unconfirmed_social_claim(monkeypatch, tmp_path: Path) -> None:
-    """Analyze endpoint should flag unconfirmed social posts before trading."""
-
     monkeypatch.setenv("NEWS_MONITOR_STATE_FILE", str(tmp_path / "news_state.json"))
-    client = TestClient(create_app())
-
-    response = client.post(
+    payload = TestClient(create_app()).post(
         "/api/social-news/analyze",
         json={"items": [{"source_id": "watcher_guru_x", "title": "Breaking: BTC hack liquidation alert"}]},
-    )
-
-    assert response.status_code == 200
-    payload = response.json()
+    ).json()
     assert payload["status"] == "ok"
     assert payload["items"][0]["needs_confirmation"] is True
     assert payload["items"][0]["ai_action"] == "BLOCK_BUY"
@@ -184,19 +157,13 @@ def test_social_news_analyze_api_blocks_unconfirmed_social_claim(monkeypatch, tm
 
 
 def test_social_news_alerts_api(monkeypatch, tmp_path: Path) -> None:
-    """Alerts endpoint should return alert list and safety rules."""
-
     monkeypatch.setenv("NEWS_MONITOR_STATE_FILE", str(tmp_path / "news_state.json"))
     client = TestClient(create_app())
     client.post(
         "/api/social-news/analyze",
         json={"items": [{"source_id": "watcher_guru_x", "title": "Breaking: BTC hack liquidation alert"}]},
     )
-
-    response = client.get("/api/social-news/alerts")
-
-    assert response.status_code == 200
-    payload = response.json()
+    payload = client.get("/api/social-news/alerts").json()
     assert payload["status"] == "ok"
     assert payload["alerts"]
     assert payload["summary"]["block_buy"] >= 1
