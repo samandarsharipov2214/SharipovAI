@@ -17,6 +17,7 @@ from .exceptions import DashboardError
 from .execution_stages_api import install_execution_stages_api
 from .global_auth_guard import install_global_auth_guard
 from .lifecycle import install_fastapi_lifecycle_compat
+from .login_lockout import install_login_lockout
 from .market_data_api import install_market_data_api
 from .news_agent_network_api import install_news_agent_network_api
 from .private_order_ws_api import install_private_order_ws_api
@@ -41,6 +42,7 @@ install_dashboard2_api(app)
 install_private_order_ws_api(app)
 install_web2_host(app)
 install_global_auth_guard(app)
+install_login_lockout(app)
 # Monitoring is installed after the complete runtime graph and remains non-financial.
 install_ai_organ_state_api(app)
 install_system_health_api(app)
