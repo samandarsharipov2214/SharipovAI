@@ -81,13 +81,13 @@ jobs:
           python -m pip install -r requirements.txt --quiet
       - name: Initialize canonical database
         run: python scripts/migrate_project_db.py
-      - name: Run diagnostic pytest
+      - name: Run full pytest suite
         id: pytest
         continue-on-error: true
         shell: bash
         run: |
           set -o pipefail
-          python -m pytest -q --tb=short --maxfail=1 2>&1 | tee final-pytest.log
+          python -m pytest -q --tb=short 2>&1 | tee final-pytest.log
       - name: Run five-phase static audit
         id: audit
         continue-on-error: true
