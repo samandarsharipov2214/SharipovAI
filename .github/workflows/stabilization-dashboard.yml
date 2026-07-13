@@ -40,6 +40,15 @@ jobs:
       }}
     runs-on: [self-hosted, linux, x64, sharipovai-ci]
     timeout-minutes: 20
+    env:
+      SHARIPOVAI_DISABLE_AUTH: '1'
+      EXECUTION_KILL_SWITCH: '1'
+      TESTNET_EXECUTION_ENABLED: '0'
+      EXCHANGE_LIVE_TRADING_ENABLED: '0'
+      EXCHANGE_MODE: sandbox
+      ADMIN_USERNAME: ci-admin
+      ADMIN_PASSWORD: ci-test-password
+      AUTH_SECRET: ci-test-secret
     steps:
       - name: Checkout
         uses: actions/checkout@v4
