@@ -16,7 +16,11 @@ def _app(monkeypatch, *, username: str | None = None) -> FastAPI:
 
     @app.get("/")
     def root() -> dict[str, str]:
-        return {"status": "public"}
+        return {"status": "private-dashboard"}
+
+    @app.get("/login")
+    def login() -> dict[str, str]:
+        return {"status": "public-login"}
 
     @app.get("/api/private")
     def private_api() -> dict[str, str]:
@@ -42,11 +46,20 @@ def test_bypass_requires_explicit_true_value(monkeypatch) -> None:
     assert auth_disabled() is True
 
 
-def test_public_route_remains_available(monkeypatch) -> None:
+def test_login_route_remains_public(monkeypatch) -> None:
     monkeypatch.delenv("SHARIPOVAI_DISABLE_AUTH", raising=False)
     with TestClient(_app(monkeypatch)) as client:
-        response = client.get("/")
+        response = client.get("/login")
     assert response.status_code == 200
+    assert response.json()["status"] == "public-login"
+
+
+def test_root_dashboard_redirects_anonymous(monkeypatch) -> None:
+    monkeypatch.delenv("SHARIPOVAI_DISABLE_AUTH", raising=False)
+    with TestClient(_app(monkeypatch), follow_redirects=False) as client:
+        response = client.get("/")
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login?next=/"
 
 
 def test_private_api_rejects_anonymous(monkeypatch) -> None:
