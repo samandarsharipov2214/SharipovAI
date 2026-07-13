@@ -19,8 +19,15 @@ from news_monitor.storage import load_news_state
 from paper_activity_autorun import paper_activity_autorun_status
 from sharipovai_constitution import constitution_snapshot, now_iso
 from telegram_health import telegram_health
+from .route_cleanup import retain_last_registered_routes
 
 STARTED_AT = int(time.time())
+_FINAL_CANONICAL_ROUTES = (
+    ("GET", "/api/demo/state"),
+    ("POST", "/api/demo/chat"),
+    ("GET", "/api/social-news"),
+    ("POST", "/api/social-news/rss/refresh"),
+)
 
 
 def install_realtime_status_api(app: FastAPI) -> None:
@@ -46,6 +53,11 @@ def install_realtime_status_api(app: FastAPI) -> None:
     @app.get("/realtime-status", response_class=HTMLResponse)
     def realtime_status_page() -> HTMLResponse:
         return HTMLResponse(_render(build_realtime_status(app)))
+
+    # This installer runs after Demo, Social News and other feature APIs. Keep the
+    # final registered canonical owner for routes that legacy router adapters may
+    # have duplicated earlier in application creation.
+    retain_last_registered_routes(app, _FINAL_CANONICAL_ROUTES)
 
 
 def build_realtime_status(app: FastAPI | None = None) -> dict[str, Any]:
