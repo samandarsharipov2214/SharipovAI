@@ -94,7 +94,26 @@ jobs:
           print('execution safety gates: ok')
           PY
 
-      - name: Run test suite
+      - name: Run focused regression contracts
+        run: |
+          python -m pytest -q --disable-warnings --maxfail=1 \
+            tests/test_global_auth_guard.py \
+            tests/test_profitability_gate.py \
+            tests/test_telegram_presentation.py \
+            dashboard/tests/test_ai_bots_and_chat.py \
+            dashboard/tests/test_bot_chat_persistence_api.py \
+            dashboard/tests/test_bot_communication_dashboard_integration.py \
+            dashboard/tests/test_dashboard.py \
+            dashboard/tests/test_demo_api.py \
+            dashboard/tests/test_evidence_vault_dashboard_integration.py \
+            dashboard/tests/test_learning_os_dashboard_integration.py \
+            dashboard/tests/test_mini_app_sections.py \
+            dashboard/tests/test_paper_activity_dashboard.py \
+            dashboard/tests/test_runtime_truth_integration.py \
+            dashboard/tests/test_social_news_api.py \
+            learning/tests/test_ai_learning_core.py
+
+      - name: Run full test suite
         run: |
           set -o pipefail
           python -m pytest -q --disable-warnings --maxfail=1 2>&1 | tee tests-pytest.log
@@ -105,5 +124,5 @@ jobs:
         with:
           name: tests-pytest-failure-log
           path: tests-pytest.log
-          if-no-files-found: error
+          if-no-files-found: ignore
           retention-days: 3
