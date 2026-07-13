@@ -36,14 +36,12 @@ def test_evidence_vault_endpoints_installed_in_dashboard(tmp_path, monkeypatch) 
 
     page = client.get("/evidence-vault")
     assert page.status_code == 200
-    assert "Память решений" in page.text
+    assert 'data-page="evidence"' in page.text
+    assert "/static/web2/learning_evidence_reports_v17.js" in page.text
 
 
-def test_home_links_evidence_vault() -> None:
-    client = TestClient(create_app(runner_factory=DummyRunner))
-
-    response = client.get("/")
-
+def test_home_exposes_web2_evidence_section() -> None:
+    response = TestClient(create_app(runner_factory=DummyRunner)).get("/")
     assert response.status_code == 200
-    assert "/evidence-vault" in response.text
-    assert "/api/evidence-vault/snapshot" in response.text
+    assert 'data-page="evidence"' in response.text
+    assert "Хранилище доказательств" in response.text
