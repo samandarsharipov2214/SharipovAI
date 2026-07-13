@@ -16,27 +16,13 @@ def test_all_web2_assets_exist() -> None:
 def test_all_sixteen_sections_are_present() -> None:
     html = INDEX.read_text(encoding="utf-8")
     pages = [
-        "overview",
-        "market",
-        "decision",
-        "portfolio",
-        "trades",
-        "bots",
-        "chat",
-        "news",
-        "risk",
-        "bybit",
-        "learning",
-        "control",
-        "evidence",
-        "virtual",
-        "reports",
-        "settings",
+        "overview", "market", "decision", "portfolio", "trades", "bots", "chat", "news",
+        "risk", "bybit", "learning", "control", "evidence", "virtual", "reports", "settings",
     ]
     for page in pages:
-        assert f'data-page="{page}"' in html
-    assert "sections_v10.js?v=10" in html
-    assert "sections_v10.css?v=10" in html
+        assert html.count(f'data-page="{page}"') == 1
+    assert "/static/web2/sections_v10.js?" in html
+    assert "/static/web2/sections_v10.css?" in html
 
 
 def test_critical_sections_have_real_data_routes() -> None:
@@ -70,14 +56,8 @@ def test_truthful_fallbacks_are_explicit() -> None:
 def test_news_and_ai_sections_are_implemented() -> None:
     script = SCRIPT.read_text(encoding="utf-8")
     for function_name in [
-        "newsPage",
-        "botsPage",
-        "controlPage",
-        "riskPage",
-        "learningPage",
-        "evidencePage",
-        "reportsPage",
-        "portfolioPage",
+        "newsPage", "botsPage", "controlPage", "riskPage", "learningPage",
+        "evidencePage", "reportsPage", "portfolioPage",
     ]:
         assert f"function {function_name}" in script
     assert "Открыть источник" in script
