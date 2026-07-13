@@ -17,6 +17,7 @@ from paper_activity_engine import PaperActivityEngine
 from .dashboard_contracts_middleware import install_dashboard_contracts_middleware
 from .route_cleanup import remove_legacy_routes
 from .stabilization_compat import install_stabilization_compat
+from .web2_host import install_web2_host
 
 _CANONICAL_STATE_ROUTE = "/api/virtual-account/state"
 _CANONICAL_TICK_ROUTE = "/api/virtual-account/tick"
@@ -157,6 +158,7 @@ def _blocked_write(action: str) -> JSONResponse:
 
 
 def install_demo_api(app: FastAPI) -> None:
+    install_web2_host(app)
     install_dashboard_contracts_middleware(app)
     install_stabilization_compat(app)
     if getattr(app.state, "demo_api_installed", False):
