@@ -31,7 +31,7 @@ jobs:
          github.event.pull_request.head.repo.full_name == github.repository)
       }}
     runs-on: [self-hosted, linux, x64, sharipovai-ci]
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       PYTHONUNBUFFERED: '1'
       PYTHONDONTWRITEBYTECODE: '1'
@@ -42,10 +42,10 @@ jobs:
       MARKET_STREAM_ENABLED: '0'
       AUTONOMOUS_PAPER_ENABLED: '0'
       AUTONOMOUS_TESTNET_BRIDGE_ENABLED: '0'
-      AUTONOMOUS_PAPER_STATE_FILE: /tmp/sharipovai-autonomous-paper.json
-      MARKET_STREAM_STATE_FILE: /tmp/sharipovai-market-stream.json
-      TESTNET_BRIDGE_STATE_FILE: /tmp/sharipovai-testnet-bridge.json
-      EXECUTION_JOURNAL_FILE: /tmp/sharipovai-execution-journal.json
+      EXECUTION_KILL_SWITCH: '1'
+      TESTNET_EXECUTION_ENABLED: '0'
+      EXCHANGE_LIVE_TRADING_ENABLED: '0'
+      EXCHANGE_MODE: sandbox
 
     steps:
       - name: Checkout
@@ -56,6 +56,27 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
+
+      - name: Prepare isolated runtime state
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          RUNTIME_DIR="${RUNNER_TEMP}/sharipovai-tests-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          rm -rf "$RUNTIME_DIR"
+          mkdir -p "$RUNTIME_DIR"
+          {
+            echo "SHARIPOVAI_DATA_DIR=$RUNTIME_DIR"
+            echo "DATABASE_URL=sqlite:///$RUNTIME_DIR/sharipovai.db"
+            echo "AUTONOMOUS_PAPER_STATE_FILE=$RUNTIME_DIR/autonomous-paper.json"
+            echo "MARKET_STREAM_STATE_FILE=$RUNTIME_DIR/market-stream.json"
+            echo "TESTNET_BRIDGE_STATE_FILE=$RUNTIME_DIR/testnet-bridge.json"
+            echo "EXECUTION_JOURNAL_FILE=$RUNTIME_DIR/execution-journal.json"
+            echo "AUTH_USERS_FILE=$RUNTIME_DIR/users.json"
+            echo "AUTH_ACCESS_REQUESTS_FILE=$RUNTIME_DIR/access-requests.json"
+            echo "AUTH_SECURITY_EVENTS_FILE=$RUNTIME_DIR/security-events.json"
+            echo "AUTH_LOGIN_ATTEMPTS_FILE=$RUNTIME_DIR/login-attempts.json"
+            echo "NEWS_MONITOR_STATE_FILE=$RUNTIME_DIR/news-monitor.json"
+          } >> "$GITHUB_ENV"
 
       - name: Install dependencies
         run: |
@@ -70,12 +91,6 @@ jobs:
           python -c "import dashboard; assert dashboard.app is not None; print('dashboard import: ok')"
 
       - name: Verify execution safety defaults
-        env:
-          AUTONOMOUS_TESTNET_ENABLED: '0'
-          TESTNET_EXECUTION_ENABLED: '0'
-          EXCHANGE_LIVE_TRADING_ENABLED: '0'
-          EXECUTION_KILL_SWITCH: '1'
-          EXCHANGE_MODE: sandbox
         run: |
           python - <<'PY'
           from exchange_connector.bybit_execution import BybitExecutionClient
