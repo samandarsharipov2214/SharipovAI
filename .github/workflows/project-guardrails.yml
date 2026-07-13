@@ -87,7 +87,8 @@ jobs:
 
       - name: Import application safely
         run: |
-          python -c "import dashboard; assert dashboard.app is not None; print('dashboard import: ok')"
+          set -o pipefail
+          python -c "import dashboard; assert dashboard.app is not None; print('dashboard import: ok')" 2>&1 | tee ci-import-diagnostic.txt
 
       - name: Verify execution remains locked
         run: |
@@ -107,11 +108,13 @@ jobs:
           set -o pipefail
           python scripts/release_audit.py --runtime --json 2>&1 | tee release-audit.json
 
-      - name: Upload release audit diagnostic
+      - name: Upload guardrails diagnostic
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: release-audit-diagnostic
-          path: release-audit.json
-          if-no-files-found: error
+          name: guardrails-diagnostic
+          path: |
+            ci-import-diagnostic.txt
+            release-audit.json
+          if-no-files-found: warn
           retention-days: 3
