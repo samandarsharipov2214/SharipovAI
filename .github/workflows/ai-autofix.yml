@@ -20,6 +20,10 @@ permissions:
   issues: write
   actions: read
 
+concurrency:
+  group: ai-autofix-${{ github.event.issue.number || inputs.target_ref || github.ref }}
+  cancel-in-progress: false
+
 jobs:
   ai-autofix:
     if: >-
@@ -27,7 +31,8 @@ jobs:
       (github.event_name == 'issue_comment' &&
        contains(github.event.comment.body, '/ai-autofix') &&
        github.actor == 'samandarsharipov2214')
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, sharipovai-ci]
+    timeout-minutes: 45
 
     steps:
       - name: Resolve target from comment
@@ -41,13 +46,15 @@ jobs:
             if (issue.pull_request) {
               const pull_number = issue.number;
               const pr = await github.rest.pulls.get({owner, repo, pull_number});
+              if (pr.data.head.repo.full_name !== `${owner}/${repo}`) {
+                core.setFailed('Cross-repository pull requests are not eligible for write-capable autofix.');
+                return;
+              }
               core.setOutput('ref', pr.data.head.ref);
               core.setOutput('repo', pr.data.head.repo.full_name);
-              core.setOutput('is_pr', 'true');
             } else {
               core.setOutput('ref', 'main');
               core.setOutput('repo', `${owner}/${repo}`);
-              core.setOutput('is_pr', 'false');
             }
 
       - name: Checkout comment target
@@ -57,6 +64,7 @@ jobs:
           repository: ${{ steps.target.outputs.repo }}
           ref: ${{ steps.target.outputs.ref }}
           token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
 
       - name: Checkout workflow dispatch ref
         if: github.event_name == 'workflow_dispatch'
@@ -64,17 +72,38 @@ jobs:
         with:
           ref: ${{ inputs.target_ref }}
           token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+
+      - name: Prepare isolated safe runtime
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          RUNTIME_DIR="${RUNNER_TEMP}/sharipovai-autofix-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          rm -rf "$RUNTIME_DIR"
+          mkdir -p "$RUNTIME_DIR"
+          {
+            echo "SHARIPOVAI_DATA_DIR=$RUNTIME_DIR"
+            echo "DATABASE_URL=sqlite:///$RUNTIME_DIR/sharipovai.db"
+            echo "AUTONOMOUS_PAPER_STATE_FILE=$RUNTIME_DIR/autonomous-paper.json"
+            echo "MARKET_STREAM_STATE_FILE=$RUNTIME_DIR/market-stream.json"
+            echo "TESTNET_BRIDGE_STATE_FILE=$RUNTIME_DIR/testnet-bridge.json"
+            echo "EXECUTION_JOURNAL_FILE=$RUNTIME_DIR/execution-journal.json"
+            echo "AUTH_USERS_FILE=$RUNTIME_DIR/users.json"
+            echo "AUTH_ACCESS_REQUESTS_FILE=$RUNTIME_DIR/access-requests.json"
+            echo "AUTH_SECURITY_EVENTS_FILE=$RUNTIME_DIR/security-events.json"
+            echo "AUTH_LOGIN_ATTEMPTS_FILE=$RUNTIME_DIR/login-attempts.json"
+          } >> "$GITHUB_ENV"
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          pip install pytest httpx fastapi uvicorn
+          python -m pip install --upgrade pip --quiet
+          python -m pip install -r requirements.txt --quiet
 
       - name: Run AI autofix loop
         env:
@@ -82,22 +111,42 @@ jobs:
           OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-5.5' }}
           AI_AUTOFIX_ATTEMPTS: "2"
           AI_AUTOFIX_TASK: ${{ github.event_name == 'workflow_dispatch' && inputs.task || github.event.comment.body }}
-          ADMIN_USERNAME: Samandar2212
+          ADMIN_USERNAME: ci-admin
           ADMIN_PASSWORD: ci-test-password
           AUTH_SECRET: ci-test-secret
           SHARIPOVAI_DISABLE_AUTH: "1"
-          SHARIPOVAI_DATA_DIR: ${{ github.workspace }}/.ci-data
+          MARKET_STREAM_ENABLED: "0"
+          FEATURE_BYBIT_WEBSOCKET: "0"
+          AUTONOMOUS_PAPER_ENABLED: "0"
+          TESTNET_EXECUTION_ENABLED: "0"
+          AUTONOMOUS_TESTNET_ENABLED: "0"
+          AUTONOMOUS_TESTNET_BRIDGE_ENABLED: "0"
+          EXCHANGE_LIVE_TRADING_ENABLED: "0"
+          EXECUTION_KILL_SWITCH: "1"
+          EXCHANGE_MODE: sandbox
         run: python scripts/ai_autofix.py
         continue-on-error: true
 
+      - name: Reject unsafe generated changes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if git diff -- . ':!*.md' | grep -E '^\+.*(EXCHANGE_LIVE_TRADING_ENABLED|TESTNET_EXECUTION_ENABLED|EXECUTION_KILL_SWITCH).*(1|0)' | grep -E 'LIVE_TRADING_ENABLED.*1|TESTNET_EXECUTION_ENABLED.*1|KILL_SWITCH.*0'; then
+            echo 'AI autofix attempted to weaken execution safety.' >&2
+            exit 1
+          fi
+
       - name: Commit AI changes
         id: commit
+        shell: bash
         run: |
+          set -Eeuo pipefail
           git config user.name "SharipovAI Autofix"
           git config user.email "actions@github.com"
           git status --short
           if [ -n "$(git status --porcelain)" ]; then
-            git add .
+            git add -u
+            git add -- '*.py' '*.js' '*.css' '*.html' '*.yml' '*.yaml' '*.toml' '*.md' 'requirements.txt' 2>/dev/null || true
             git commit -m "fix(ci): AI autofix pytest failures"
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
@@ -114,12 +163,17 @@ jobs:
 
       - name: Final pytest
         env:
-          ADMIN_USERNAME: Samandar2212
+          ADMIN_USERNAME: ci-admin
           ADMIN_PASSWORD: ci-test-password
           AUTH_SECRET: ci-test-secret
           SHARIPOVAI_DISABLE_AUTH: "1"
-          SHARIPOVAI_DATA_DIR: ${{ github.workspace }}/.ci-data
-        run: python -m pytest
+          MARKET_STREAM_ENABLED: "0"
+          FEATURE_BYBIT_WEBSOCKET: "0"
+          TESTNET_EXECUTION_ENABLED: "0"
+          EXCHANGE_LIVE_TRADING_ENABLED: "0"
+          EXECUTION_KILL_SWITCH: "1"
+          EXCHANGE_MODE: sandbox
+        run: python -m pytest -q --tb=short
 
       - name: Upload pytest log
         if: always()
@@ -128,6 +182,7 @@ jobs:
           name: pytest-autofix-log
           path: pytest-autofix.log
           if-no-files-found: ignore
+          retention-days: 14
 
       - name: Comment result
         if: always() && github.event_name == 'issue_comment'
@@ -140,5 +195,5 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.payload.issue.number,
-              body: `AI Autofix finished.\n\n- Target ref: ${{ steps.target.outputs.ref }}\n- Changed files committed: ${changed}\n- Job status: ${conclusion}\n- Check Actions log/artifact: pytest-autofix-log\n\nIf tests still fail, comment \`/ai-autofix continue\` and I will run another pass.`
+              body: `AI Autofix finished.\n\n- Target ref: ${{ steps.target.outputs.ref }}\n- Changed files committed: ${changed}\n- Job status: ${conclusion}\n- Check Actions artifact: pytest-autofix-log.`
             });
