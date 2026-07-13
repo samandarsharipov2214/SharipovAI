@@ -13,7 +13,7 @@ from fastapi import Body, FastAPI
 from fastapi.responses import JSONResponse
 
 from ai_chat_orchestrator import answer_chat
-from paper_activity_engine import PaperActivityEngine
+from market_paper_engine import PaperActivityEngine
 from .dashboard_contracts_middleware import install_dashboard_contracts_middleware
 from .route_cleanup import remove_legacy_routes
 from .stabilization_compat import install_stabilization_compat
