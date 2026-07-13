@@ -112,7 +112,8 @@ def test_overview_supports_multiple_currencies_and_simple_money_precision():
     source = OVERVIEW.read_text(encoding="utf-8")
     for symbol in ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT"):
         assert symbol in source
-    assert "maximumFractionDigits:1" in source
+    assert "const money = (value, digits=1)" in source
+    assert "minimumFractionDigits:digits,maximumFractionDigits:digits" in source
     assert "entry_reason_ru" in source
     assert "signal_change_24h_percent" in source
 
