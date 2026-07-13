@@ -2,11 +2,25 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
+from pathlib import Path
+
+# When Python executes ``/app/scripts/verify_market_paper_runtime.py`` directly,
+# sys.path starts at ``/app/scripts`` rather than the project root.  Add the
+# root explicitly so runtime modules are importable regardless of cwd.
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from market_paper_engine import PaperActivityEngine
 
 
 def main() -> int:
+    if os.getenv("SHARIPOVAI_VERIFY_IMPORT_ONLY", "0").strip().lower() in {"1", "true", "yes", "on"}:
+        print("MARKET_PAPER_VERIFIER_IMPORT_OK")
+        return 0
+
     engine = PaperActivityEngine()
     tick = engine.tick(force=True)
     state = engine.state()
