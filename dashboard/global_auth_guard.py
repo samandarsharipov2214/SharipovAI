@@ -15,6 +15,9 @@ _PUBLIC_EXACT = {
     "/api/health",
     "/startup",
     "/api/security/status",
+    # This route performs an independent loopback-only check before returning
+    # sanitized audit evidence. It never exposes credentials or mutates state.
+    "/api/system/local-audit",
     # Telegram must reach this endpoint without a dashboard session.
     # The webhook handler performs its own secret-token validation.
     "/telegram/webhook",
