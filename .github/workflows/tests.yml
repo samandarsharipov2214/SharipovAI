@@ -50,6 +50,7 @@ jobs:
       LIVE_EXECUTION_CONFIRMATION: ''
       EXECUTION_KILL_SWITCH: '1'
       EXCHANGE_MODE: sandbox
+      EXCHANGE_BASE_URL: https://api-testnet.bybit.com
       AUTONOMOUS_PAPER_STATE_FILE: /tmp/sharipovai-autonomous-paper.json
       VIRTUAL_ACCOUNT_STATE_FILE: /tmp/sharipovai-virtual-account.json
       MARKET_STREAM_STATE_FILE: /tmp/sharipovai-market-stream.json
@@ -95,6 +96,7 @@ jobs:
           assert status['kill_switch'] is True
 
           os.environ['EXCHANGE_MODE'] = 'live'
+          os.environ['EXCHANGE_BASE_URL'] = 'https://api.bybit.com'
           os.environ['EXCHANGE_LIVE_TRADING_ENABLED'] = '1'
           os.environ['LIVE_EXECUTION_MANUAL_UNLOCK'] = '1'
           os.environ['LIVE_EXECUTION_CONFIRMATION'] = 'I_ACCEPT_REAL_FINANCIAL_RISK'
