@@ -93,16 +93,43 @@ def install_bot_communication_api(app: FastAPI) -> None:
         if not text:
             return {"status": "empty_message", "reply": "Напиши вопрос AI-боту."}
 
-        # Prefixing guarantees the same agent routing in web, Mini App and Telegram.
+        bus = network()
+        sender = "security_guard" if requested_bot != "security_guard" else "general_controller"
+        question = bus.send_message(
+            sender=sender,
+            recipient=requested_bot,
+            message_type="question",
+            topic="agent_chat",
+            payload={"message": text, "channel": "dashboard"},
+            priority="normal",
+        )
+        if question.get("status") != "ok":
+            return {"status": "error", "bot": requested_bot, "message": question, "reply": "Не удалось сохранить вопрос."}
+
         routed_text = f"{requested_bot}: {text}"
         answer = answer_chat(routed_text, state)
+        answer_record = bus.reply(
+            original_message_id=str(question["message_id"]),
+            sender=requested_bot,
+            payload={
+                "reply": answer.get("reply", "Ответ не сформирован."),
+                "source_ai": answer.get("source_ai", requested_bot),
+                "intent": answer.get("intent", "agent_chat"),
+                "data": answer.get("data", {}),
+            },
+            message_type="answer",
+            priority="normal",
+        )
+        status = "ok" if answer_record.get("status") == "ok" else "error"
         return {
-            "status": answer.get("status", "ok"),
+            "status": status,
             "bot": requested_bot,
             "reply": answer.get("reply", "Ответ не сформирован."),
             "source_ai": answer.get("source_ai", requested_bot),
             "intent": answer.get("intent", "agent_chat"),
             "data": answer.get("data", {}),
+            "message": question,
+            "answer": answer_record,
         }
 
     @app.get("/api/bot-network/inbox/{bot_name}")
