@@ -8,6 +8,7 @@ from __future__ import annotations
 import html
 import os
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 import httpx
 
@@ -15,6 +16,7 @@ from ai_chat_orchestrator import answer_chat
 from dashboard.demo_api import _load as load_shared_state
 
 API_TIMEOUT = 20.0
+CANONICAL_WEBAPP_URL = "https://85-137-88-17.sslip.io"
 
 
 def _token() -> str:
@@ -25,7 +27,16 @@ def _token() -> str:
 
 
 def _webapp_url() -> str:
-    return os.getenv("WEBAPP_URL", "").strip().rstrip("/")
+    configured = os.getenv("WEBAPP_URL", "").strip().rstrip("/")
+    if not configured:
+        return CANONICAL_WEBAPP_URL
+    try:
+        host = (urlparse(configured).hostname or "").lower()
+    except ValueError:
+        host = ""
+    if configured != CANONICAL_WEBAPP_URL or host.endswith(".onrender.com") or host == "render.com":
+        return CANONICAL_WEBAPP_URL
+    return configured
 
 
 def _telegram(method: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -49,8 +60,6 @@ def send_message(chat_id: int, text: str, keyboard: dict[str, Any] | None = None
 
 
 def _webapp_button() -> list[dict[str, Any]]:
-    if not _webapp_url():
-        return []
     return [{"text": "🚀 Открыть SharipovAI", "web_app": {"url": _webapp_url()}}]
 
 
@@ -60,19 +69,15 @@ def main_keyboard() -> dict[str, Any]:
         [{"text": "⚠️ Risk Center", "callback_data": "risk"}, {"text": "💼 Сделки", "callback_data": "trades"}],
         [{"text": "🧠 Learning", "callback_data": "learning"}, {"text": "📊 Reports", "callback_data": "reports"}],
         [{"text": "🧪 Stress Lab", "callback_data": "stress"}, {"text": "📒 Timeline", "callback_data": "timeline"}],
+        _webapp_button(),
     ]
-    webapp = _webapp_button()
-    if webapp:
-        rows.append(webapp)
     return {"inline_keyboard": rows}
 
 
 def _back_keyboard(extra: list[list[dict[str, Any]]] | None = None) -> dict[str, Any]:
     rows = list(extra or [])
     rows.append([{"text": "⬅️ Главное меню", "callback_data": "menu"}])
-    webapp = _webapp_button()
-    if webapp:
-        rows.append(webapp)
+    rows.append(_webapp_button())
     return {"inline_keyboard": rows}
 
 
@@ -165,7 +170,7 @@ def _overview() -> str:
         f"Net PnL: <b>{float(state.get('net_pnl', 0)):.2f} USDT</b>\n"
         f"Комиссии: <b>{float(state.get('total_fees', 0)):.2f} USDT</b>\n"
         f"Открытые позиции: <b>{int(state.get('open_positions', 0))}</b>\n\n"
-        "Выбери раздел ниже. Внутри каждого раздела теперь есть собственные действия."
+        "Выбери раздел ниже. Новая кнопка Mini App всегда открывает основной VPS SharipovAI."
     )
 
 
@@ -187,6 +192,7 @@ def _status() -> str:
         "📡 <b>Статус интеграции</b>\n\n"
         "Website core: <b>подключён</b>\nAI Chat Orchestrator: <b>подключён</b>\n"
         "Shared paper state: <b>подключён</b>\nBot Communication Network: <b>подключён</b>\n"
+        f"Mini App: <b>{_safe(_webapp_url())}</b>\n"
         f"Exchange mode: <b>{_safe((state.get('exchange_status') or {}).get('mode', 'sandbox'))}</b>\n"
         "LIVE execution: <b>заблокирован</b>"
     )
@@ -235,25 +241,41 @@ def _agent_name(code: str) -> str:
         "general": "General Controller", "market": "Market Agent", "news": "News Agent",
         "risk": "Risk Engine", "portfolio": "Portfolio Engine", "learning": "Learning Engine",
         "stress": "Stress Bot", "security": "Security Guard",
-    }.get(code, "General Controller")
+    }.get(code, code)
 
 
-def _stress_question(code: str) -> str:
-    return {
-        "btc10": "Stress Bot, запусти стресс-сценарий BTC падение 10 процентов и покажи капитал до и после, просадку и защитные действия",
-        "btc20": "Stress Bot, запусти стресс-сценарий BTC падение 20 процентов и покажи капитал до и после, просадку и защитные действия",
-        "market50": "Stress Bot, запусти сценарий обвала всего рынка на 50 процентов",
-        "news": "Stress Bot, запусти сценарий паники в новостях и покажи реакцию News Agent и Risk Engine",
-        "exchange": "Stress Bot, смоделируй недоступность биржи и покажи защитные действия",
-        "network": "Stress Bot, смоделируй потерю интернета и покажи безопасное поведение системы",
-        "black_swan": "Stress Bot, запусти Black Swan сценарий и покажи максимально безопасную реакцию",
-        "last": "Stress Bot, покажи последний стресс-тест, его итог и журнал действий",
-    }.get(code, "Stress Bot, покажи последний стресс-тест")
+def _callback_answer(data: str) -> tuple[str, dict[str, Any]]:
+    if data in {"menu", "overview"}:
+        return _overview(), main_keyboard()
+    if data in {"bots", "risk", "learning", "reports", "stress", "timeline"}:
+        return _section_intro(data)
+    if data.startswith("agent:"):
+        name = _agent_name(data.split(":", 1)[1])
+        return _reply(f"{name}, дай текущий отчёт и укажи риски"), _back_keyboard()
+    if data.startswith("risk:"):
+        action = data.split(":", 1)[1]
+        return _reply(f"Risk Engine: выполни безопасный анализ команды {action}. Реальные ордера запрещены."), risk_keyboard()
+    if data.startswith("learning:"):
+        action = data.split(":", 1)[1]
+        return _reply(f"Learning Engine: покажи {action} по общей базе SharipovAI."), learning_keyboard()
+    if data.startswith("reports:"):
+        action = data.split(":", 1)[1]
+        return _reply(f"Сформируй отчёт SharipovAI: {action}. Используй общую базу и не выдумывай данные."), reports_keyboard()
+    if data.startswith("stress:"):
+        action = data.split(":", 1)[1]
+        return _reply(f"Stress Bot: смоделируй сценарий {action} без реальных ордеров."), stress_keyboard()
+    if data.startswith("timeline:"):
+        action = data.split(":", 1)[1]
+        return _reply(f"Покажи timeline модуля {action} по общей базе SharipovAI."), timeline_keyboard()
+    if data == "trades":
+        return _trades(), _back_keyboard()
+    return _reply(data), _back_keyboard()
 
 
 def handle_callback(callback: dict[str, Any]) -> None:
     callback_id = callback.get("id")
-    chat_id = (callback.get("message") or {}).get("chat", {}).get("id")
+    message = callback.get("message") or {}
+    chat_id = message.get("chat", {}).get("id")
     data = str(callback.get("data") or "")
     if callback_id:
         try:
@@ -262,68 +284,5 @@ def handle_callback(callback: dict[str, Any]) -> None:
             pass
     if not chat_id:
         return
-
-    keyboard = main_keyboard()
-    if data in {"menu", "overview"}:
-        answer = _overview()
-    elif data in {"bots", "risk", "learning", "reports", "stress", "timeline"}:
-        answer, keyboard = _section_intro(data)
-    elif data == "trades":
-        answer = _trades()
-    elif data.startswith("agent:"):
-        name = _agent_name(data.split(":", 1)[1])
-        answer = _reply(f"{name}, дай подробный отчёт: состояние, последние действия, ошибки, текущая задача и тест адекватности")
-        keyboard = _back_keyboard([[{"text": "📒 Журнал этого бота", "callback_data": f"timeline:{data.split(':',1)[1]}"}], [{"text": "✅ Проверить адекватность", "callback_data": f"agentcheck:{data.split(':',1)[1]}"}]])
-    elif data == "bots:check":
-        answer = _reply("General Controller, проверь всех AI-ботов: активность, простои, ошибки и адекватность")
-        keyboard = bots_keyboard()
-    elif data.startswith("agentcheck:"):
-        name = _agent_name(data.split(":", 1)[1])
-        answer = _reply(f"{name}, проведи тест адекватности и честно укажи ограничения")
-        keyboard = bots_keyboard()
-    elif data.startswith("timeline:"):
-        name = _agent_name(data.split(":", 1)[1])
-        answer = _reply(f"{name}, покажи журнал действий по времени: что сделал, кому отправил команду и какой получил результат")
-        keyboard = timeline_keyboard()
-    elif data.startswith("stress:"):
-        answer = _reply(_stress_question(data.split(":", 1)[1]))
-        keyboard = stress_keyboard()
-    elif data.startswith("risk:"):
-        action = data.split(":", 1)[1]
-        prompts = {
-            "safe": "Risk Engine, включи консервативный профиль только для demo и объясни новые лимиты",
-            "normal": "Risk Engine, включи умеренный профиль только для demo и объясни лимиты",
-            "pro": "Risk Engine, оцени агрессивный профиль, но не включай LIVE и перечисли опасности",
-            "stop": "Security Guard и Risk Engine, покажите состояние Emergency Stop и заблокируйте новые demo-входы при критическом риске",
-            "report": "Risk Engine, дай полный отчёт Risk Center",
-            "check": "Risk Engine, проведи тест адекватности и проверь лимиты",
-        }
-        answer = _reply(prompts.get(action, prompts["report"]))
-        keyboard = risk_keyboard()
-    elif data.startswith("learning:"):
-        action = data.split(":", 1)[1]
-        prompts = {
-            "errors": "Learning Engine, покажи последние найденные ошибки",
-            "fixed": "Learning Engine, покажи исправленные ошибки и доказательства",
-            "rules": "Learning Engine, покажи новые правила после обучения",
-            "repeated": "Learning Engine, покажи повторяющиеся ошибки",
-            "check": "Learning Engine, проведи самопроверку и оцени адекватность своих выводов",
-        }
-        answer = _reply(prompts.get(action, prompts["errors"]))
-        keyboard = learning_keyboard()
-    elif data.startswith("reports:"):
-        action = data.split(":", 1)[1]
-        prompts = {
-            "day": "General Controller, дай отчёт за сегодня",
-            "week": "General Controller, дай отчёт за неделю",
-            "month": "General Controller, дай отчёт за месяц",
-            "bots": "General Controller, дай отчёт по вкладу и ошибкам каждого бота",
-            "fees": "Portfolio Engine, дай отчёт по комиссиям и чистому PnL",
-            "drawdown": "Risk Engine, дай отчёт по максимальной просадке и защите капитала",
-        }
-        answer = _reply(prompts.get(action, prompts["day"]))
-        keyboard = reports_keyboard()
-    else:
-        answer = _overview()
-
-    send_message(int(chat_id), answer, keyboard)
+    text, keyboard = _callback_answer(data)
+    send_message(int(chat_id), text, keyboard)
