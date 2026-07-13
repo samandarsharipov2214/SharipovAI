@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from dashboard.ai_organ_state_api import AIOrganRuntimeMonitor, install_ai_organ_state_api
+from dashboard.ai_organ_state_safe_api import SafeAIOrganRuntimeMonitor as AIOrganRuntimeMonitor
+from dashboard.ai_organ_state_safe_api import install_ai_organ_state_api
 from storage import ProjectDatabase
 
 
