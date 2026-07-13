@@ -9,7 +9,7 @@ echo "[1/2] Running the protected SharipovAI deployment with market intelligence
 cd "$ROOT"
 bash scripts/deploy_market_paper_runtime.sh
 
-echo "[2/2] Verifying v33 screener, alerts, replay, TradingView and public HTTPS health..."
+echo "[2/2] Verifying v34 TradingView height fix, v33 intelligence and public HTTPS health..."
 docker exec "$SERVICE" sh -lc '
 set -Eeuo pipefail
 index=/app/dashboard/static/web2/index.html
@@ -18,6 +18,8 @@ grep -F "runtime_render_guard_v24.js?v=31" "$index" >/dev/null
 grep -F "overview_runtime_v25.js?v=31" "$index" >/dev/null
 grep -F "tradingview_market_v32.js?v=32" "$index" >/dev/null
 grep -F "tradingview_market_v32.css?v=32" "$index" >/dev/null
+grep -F "tradingview_widget_height_fix_v34.js?v=34" "$index" >/dev/null
+grep -F "tradingview_widget_height_fix_v34.css?v=34" "$index" >/dev/null
 grep -F "market_intelligence_v33.js?v=33" "$index" >/dev/null
 grep -F "market_intelligence_v33.css?v=33" "$index" >/dev/null
 grep -F "web2.js?v=29" "$index" >/dev/null
@@ -42,6 +44,10 @@ grep -F "/api/market/bybit-websocket/quote/" /app/dashboard/static/web2/tradingv
 grep -F "/api/market/orderbook/" /app/dashboard/static/web2/tradingview_market_v32.js >/dev/null
 grep -F "/api/market/trades/" /app/dashboard/static/web2/tradingview_market_v32.js >/dev/null
 grep -F "/api/virtual-account/state" /app/dashboard/static/web2/tradingview_market_v32.js >/dev/null
+grep -F "--tv32-widget-height" /app/dashboard/static/web2/tradingview_widget_height_fix_v34.css >/dev/null
+grep -F "tradingview-widget-container__widget>iframe" /app/dashboard/static/web2/tradingview_widget_height_fix_v34.css >/dev/null
+grep -F "frame.style.height = frameHeight" /app/dashboard/static/web2/tradingview_widget_height_fix_v34.js >/dev/null
+grep -F "frame.setAttribute('"'"'height'"'"', String(widgetHeight))" /app/dashboard/static/web2/tradingview_widget_height_fix_v34.js >/dev/null
 grep -F "/api/market-intelligence/snapshot" /app/dashboard/static/web2/market_intelligence_v33.js >/dev/null
 grep -F "/api/market-intelligence/replay" /app/dashboard/static/web2/market_intelligence_v33.js >/dev/null
 grep -F "Умный скринер" /app/dashboard/static/web2/market_intelligence_v33.js >/dev/null
@@ -118,11 +124,15 @@ grep -F "navigation_coordinator_v23.js?v=32" <<<"$public_index" >/dev/null
 grep -F "overview_runtime_v25.js?v=31" <<<"$public_index" >/dev/null
 grep -F "tradingview_market_v32.js?v=32" <<<"$public_index" >/dev/null
 grep -F "tradingview_market_v32.css?v=32" <<<"$public_index" >/dev/null
+grep -F "tradingview_widget_height_fix_v34.js?v=34" <<<"$public_index" >/dev/null
+grep -F "tradingview_widget_height_fix_v34.css?v=34" <<<"$public_index" >/dev/null
 grep -F "market_intelligence_v33.js?v=33" <<<"$public_index" >/dev/null
 grep -F "market_intelligence_v33.css?v=33" <<<"$public_index" >/dev/null
 ! grep -F "market_terminal_v13.js" <<<"$public_index" >/dev/null
 curl --fail --silent --show-error "$PUBLIC_URL/static/web2/tradingview_market_v32.js?v=32" | grep -F "embed-widget-advanced-chart.js" >/dev/null
+curl --fail --silent --show-error "$PUBLIC_URL/static/web2/tradingview_widget_height_fix_v34.js?v=34" | grep -F "frame.style.height = frameHeight" >/dev/null
+curl --fail --silent --show-error "$PUBLIC_URL/static/web2/tradingview_widget_height_fix_v34.css?v=34" | grep -F "tradingview-widget-container__widget>iframe" >/dev/null
 curl --fail --silent --show-error "$PUBLIC_URL/static/web2/market_intelligence_v33.js?v=33" | grep -F "Replay Lab" >/dev/null
 curl --fail --silent --show-error "$PUBLIC_URL/health"
 echo
-echo "Web2 v33 smart screener, alerts and replay lab deployed and verified."
+echo "Web2 v34 TradingView height fix, v33 intelligence and public health deployed and verified."
