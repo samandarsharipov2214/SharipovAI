@@ -102,8 +102,11 @@ def install_currency_api(app: FastAPI) -> None:
     service = UsdRubRateService()
     app.state.usd_rub_rate_service = service
 
-    @app.get("/api/currency/usd-rub")
-    def usd_rub_rate() -> dict[str, Any] | JSONResponse:
+    # The endpoint may return either a normal JSON mapping or a prebuilt
+    # JSONResponse with HTTP 503. Disable automatic response-model generation:
+    # FastAPI cannot turn ``dict | JSONResponse`` into a Pydantic field.
+    @app.get("/api/currency/usd-rub", response_model=None)
+    def usd_rub_rate() -> Any:
         try:
             return service.get_rate()
         except Exception as exc:
