@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 
 from ai_chat_orchestrator import answer_chat
 from paper_activity_engine import PaperActivityEngine
+from .canonical_contract_middleware import install_canonical_contract_middleware
 from .dashboard_contracts_middleware import install_dashboard_contracts_middleware
 from .route_cleanup import remove_legacy_routes, retain_last_registered_routes
 from .stabilization_compat import install_stabilization_compat
@@ -166,6 +167,7 @@ def install_demo_api(app: FastAPI) -> None:
     install_web2_host(app)
     install_dashboard_contracts_middleware(app)
     install_stabilization_compat(app)
+    install_canonical_contract_middleware(app)
     if getattr(app.state, "demo_api_installed", False):
         return
     app.state.demo_api_installed = True
