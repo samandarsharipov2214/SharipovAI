@@ -1,8 +1,9 @@
 (() => {
   'use strict';
 
+  const VERSION = 31;
   const content = document.getElementById('content');
-  if (!content || content.dataset.runtimeRenderGuard === 'v24') return;
+  if (!content || content.dataset.runtimeRenderGuard === `v${VERSION}`) return;
 
   const ownDescriptor = Object.getOwnPropertyDescriptor(content, 'innerHTML');
   const prototypeDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML');
@@ -11,6 +12,8 @@
 
   const legacyOverviewMarkers = [
     'Фактическое состояние системы без выдуманных показателей',
+    'Фактическая сводка SharipovAI по всем рабочим контурам',
+    'Последнее решение',
     'Verified system state without invented figures',
     'To‘qima raqamlarsiz tizim holati',
   ];
@@ -41,5 +44,5 @@
     },
   });
 
-  content.dataset.runtimeRenderGuard = 'v24';
+  content.dataset.runtimeRenderGuard = `v${VERSION}`;
 })();
