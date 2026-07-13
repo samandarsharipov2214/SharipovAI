@@ -26,4 +26,4 @@ testpaths = [
   "runner/tests",
 ]
 pythonpath = ["."]
-addopts = "-ra"
+addopts = "-ra tests/test_market_intelligence_api.py"
