@@ -9,21 +9,37 @@ echo "[1/2] Running the protected SharipovAI deployment with Web2 ownership test
 cd "$ROOT"
 bash scripts/deploy_market_paper_runtime.sh
 
-echo "[2/2] Verifying v31 fresh overview, transparent trades and public HTTPS health..."
+echo "[2/2] Verifying v32 TradingView market, transparent trades and public HTTPS health..."
 docker exec "$SERVICE" sh -lc '
 set -Eeuo pipefail
 index=/app/dashboard/static/web2/index.html
-grep -F "navigation_coordinator_v23.js?v=31" "$index" >/dev/null
+grep -F "navigation_coordinator_v23.js?v=32" "$index" >/dev/null
 grep -F "runtime_render_guard_v24.js?v=31" "$index" >/dev/null
 grep -F "overview_runtime_v25.js?v=31" "$index" >/dev/null
+grep -F "tradingview_market_v32.js?v=32" "$index" >/dev/null
+grep -F "tradingview_market_v32.css?v=32" "$index" >/dev/null
 grep -F "web2.js?v=29" "$index" >/dev/null
 grep -F "system_status_v11.js?v=29" "$index" >/dev/null
 grep -F "exchange_execution_settings_v18.js?v=30" "$index" >/dev/null
 grep -F "interface_v30.css?v=30" "$index" >/dev/null
 ! grep -F "sections_v10.js" "$index" >/dev/null
-grep -F "const VERSION = 31" /app/dashboard/static/web2/navigation_coordinator_v23.js >/dev/null
-grep -F "value.includes('"'"'sections_v10.js'"'"')" /app/dashboard/static/web2/navigation_coordinator_v23.js >/dev/null
-grep -F "Фактическая сводка SharipovAI по всем рабочим контурам" /app/dashboard/static/web2/runtime_render_guard_v24.js >/dev/null
+! grep -F "market_terminal_v13.js" "$index" >/dev/null
+! grep -F "market_terminal_v13.css" "$index" >/dev/null
+grep -F "const VERSION = 32" /app/dashboard/static/web2/navigation_coordinator_v23.js >/dev/null
+grep -F "['"'"'market'"'"', '"'"'tradingview_market_v32.js'"'"']" /app/dashboard/static/web2/navigation_coordinator_v23.js >/dev/null
+grep -F "embed-widget-advanced-chart.js" /app/dashboard/static/web2/tradingview_market_v32.js >/dev/null
+grep -F "embed-widget-technical-analysis.js" /app/dashboard/static/web2/tradingview_market_v32.js >/dev/null
+grep -F "embed-widget-screener.js" /app/dashboard/static/web2/tradingview_market_v32.js >/dev/null
+grep -F "embed-widget-crypto-coins-heatmap.js" /app/dashboard/static/web2/tradingview_market_v32.js >/dev/null
+grep -F "embed-widget-market-overview.js" /app/dashboard/static/web2/tradingview_market_v32.js >/dev/null
+grep -F "embed-widget-events.js" /app/dashboard/static/web2/tradingview_market_v32.js >/dev/null
+grep -F "embed-widget-timeline.js" /app/dashboard/static/web2/tradingview_market_v32.js >/dev/null
+grep -F "TradingView встроен как аналитический интерфейс" /app/dashboard/static/web2/tradingview_market_v32.js >/dev/null
+grep -F "Реальная торговля остаётся заблокированной" /app/dashboard/static/web2/tradingview_market_v32.js >/dev/null
+grep -F "/api/market/bybit-websocket/quote/" /app/dashboard/static/web2/tradingview_market_v32.js >/dev/null
+grep -F "/api/market/orderbook/" /app/dashboard/static/web2/tradingview_market_v32.js >/dev/null
+grep -F "/api/market/trades/" /app/dashboard/static/web2/tradingview_market_v32.js >/dev/null
+grep -F "/api/virtual-account/state" /app/dashboard/static/web2/tradingview_market_v32.js >/dev/null
 grep -F "no-store, no-cache, must-revalidate" /app/dashboard/web2_host.py >/dev/null
 grep -F "Размер позиции" /app/dashboard/static/web2/overview_runtime_v25.js >/dev/null
 grep -F "Результат движения цены" /app/dashboard/static/web2/overview_runtime_v25.js >/dev/null
@@ -65,9 +81,12 @@ PY
 headers="$(curl --fail --silent --show-error --head "$PUBLIC_URL/")"
 grep -i -F "cache-control: no-store, no-cache, must-revalidate, max-age=0" <<<"$headers" >/dev/null
 public_index="$(curl --fail --silent --show-error "$PUBLIC_URL/")"
-grep -F "navigation_coordinator_v23.js?v=31" <<<"$public_index" >/dev/null
+grep -F "navigation_coordinator_v23.js?v=32" <<<"$public_index" >/dev/null
 grep -F "overview_runtime_v25.js?v=31" <<<"$public_index" >/dev/null
-! grep -F "sections_v10.js" <<<"$public_index" >/dev/null
+grep -F "tradingview_market_v32.js?v=32" <<<"$public_index" >/dev/null
+grep -F "tradingview_market_v32.css?v=32" <<<"$public_index" >/dev/null
+! grep -F "market_terminal_v13.js" <<<"$public_index" >/dev/null
+curl --fail --silent --show-error "$PUBLIC_URL/static/web2/tradingview_market_v32.js?v=32" | grep -F "embed-widget-advanced-chart.js" >/dev/null
 curl --fail --silent --show-error "$PUBLIC_URL/health"
 echo
-echo "Web2 v31 fresh single-owner overview deployed and verified."
+echo "Web2 v32 TradingView market workspace deployed and verified."
