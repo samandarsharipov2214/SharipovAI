@@ -14,12 +14,13 @@ EXECUTION_UI = WEB2 / "exchange_execution_settings_v18.js"
 def test_page_runtime_script_order_and_cache_version():
     html = INDEX.read_text(encoding="utf-8")
     coordinator = html.index("navigation_coordinator_v23.js?v=25")
-    core = html.index("web2.js?v=25")
+    core = html.index("web2.js?v=26")
     overview = html.index("overview_runtime_v25.js?v=25")
     decision = html.index("decision_runtime_v25.js?v=25")
     learning = html.index("learning_runtime_v25.js?v=25")
     exchange = html.index("exchange_execution_settings_v18.js?v=25")
     assert coordinator < core < overview < decision < learning < exchange
+    assert "system_status_v11.js?v=26" in html
 
 
 def test_one_explicit_owner_for_affected_pages():
