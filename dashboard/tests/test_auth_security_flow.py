@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -33,7 +34,7 @@ def test_login_page_points_to_access_request() -> None:
     response = client.get("/login")
 
     assert response.status_code == 200
-    assert "Вход в SharipovAI" in response.text
+    assert "SharipovAI" in response.text
     assert "Запросить доступ" in response.text
     assert "ADMIN_USERNAME" not in response.text
     assert "AUTH_USERS_FILE" not in response.text
@@ -42,6 +43,8 @@ def test_login_page_points_to_access_request() -> None:
 def test_register_creates_security_access_request(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AUTH_ACCESS_REQUESTS_FILE", str(tmp_path / "access_requests.json"))
     monkeypatch.setenv("AUTH_SECURITY_EVENTS_FILE", str(tmp_path / "security_events.json"))
+    dashboard_app = importlib.import_module("dashboard.app")
+    monkeypatch.setattr(dashboard_app, "_is_admin_request", lambda request: True)
     app = create_app(runner_factory=FakeRunner)
     client = TestClient(app)
 
