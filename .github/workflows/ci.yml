@@ -59,6 +59,7 @@ jobs:
       - name: Запустить полный набор тестов
         env:
           PYTHONPATH: .
+          SHARIPOVAI_DISABLE_AUTH: '1'
           SHARIPOVAI_DATABASE_REQUIRED: '0'
           EXECUTION_KILL_SWITCH: '1'
           TESTNET_EXECUTION_ENABLED: '0'
