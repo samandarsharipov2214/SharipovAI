@@ -9,6 +9,7 @@ on:
       - 'scripts/live_vps_audit.py'
       - '.github/workflows/full-project-audit.yml'
       - 'dashboard/**'
+      - 'news_intelligence/**'
       - 'deploy/**'
       - 'tests/**'
       - 'requirements.txt'
@@ -29,6 +30,9 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - name: Prepare isolated audit environment
         id: dependencies
         continue-on-error: true
