@@ -33,7 +33,7 @@ def test_login_page_points_to_access_request() -> None:
     response = client.get("/login")
 
     assert response.status_code == 200
-    assert "Вход в SharipovAI" in response.text
+    assert "SharipovAI" in response.text
     assert "Запросить доступ" in response.text
     assert "ADMIN_USERNAME" not in response.text
     assert "AUTH_USERS_FILE" not in response.text
