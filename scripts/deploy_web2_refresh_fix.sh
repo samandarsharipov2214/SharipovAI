@@ -9,20 +9,24 @@ echo "[1/2] Running the protected SharipovAI deployment with Web2 ownership test
 cd "$ROOT"
 bash scripts/deploy_market_paper_runtime.sh
 
-echo "[2/2] Verifying v28 ruble display, currencies, explanations and public HTTPS health..."
+echo "[2/2] Verifying v29 live status, ruble display, explanations and public HTTPS health..."
 docker exec "$SERVICE" sh -lc '
 set -Eeuo pipefail
 index=/app/dashboard/static/web2/index.html
 grep -F "navigation_coordinator_v23.js?v=25" "$index" >/dev/null
-grep -F "web2.js?v=26" "$index" >/dev/null
-grep -F "system_status_v11.js?v=26" "$index" >/dev/null
+grep -F "web2.js?v=29" "$index" >/dev/null
+grep -F "system_status_v11.js?v=29" "$index" >/dev/null
 grep -F "overview_runtime_v25.js?v=28" "$index" >/dev/null
 grep -F "decision_runtime_v25.js?v=25" "$index" >/dev/null
 grep -F "learning_runtime_v25.js?v=25" "$index" >/dev/null
 grep -F "exchange_execution_settings_v18.js?v=27" "$index" >/dev/null
-grep -F "/api/exchange/account/status" /app/dashboard/static/web2/web2.js >/dev/null
+grep -F "/api/market/bybit-websocket/status" /app/dashboard/static/web2/web2.js >/dev/null
 grep -F "основных API" /app/dashboard/static/web2/web2.js >/dev/null
-grep -F "НЕ НАСТРОЕН" /app/dashboard/static/web2/system_status_v11.js >/dev/null
+grep -F "AUTO_REFRESH_MS = 15000" /app/dashboard/static/web2/system_status_v11.js >/dev/null
+grep -F "setInterval(updateClock, 1000)" /app/dashboard/static/web2/system_status_v11.js >/dev/null
+grep -F "Текущее время" /app/dashboard/static/web2/system_status_v11.js >/dev/null
+! grep -F "Записей:" /app/dashboard/static/web2/system_status_v11.js >/dev/null
+! grep -F "Состояние:" /app/dashboard/static/web2/system_status_v11.js >/dev/null
 grep -F "ADAUSDT" /app/dashboard/static/web2/overview_runtime_v25.js >/dev/null
 grep -F "Почему ИИ открыл или закрыл" /app/dashboard/static/web2/overview_runtime_v25.js >/dev/null
 grep -F "maximumFractionDigits:1" /app/dashboard/static/web2/overview_runtime_v25.js >/dev/null
@@ -72,4 +76,4 @@ print("WEB2_VIRTUAL_DATA_OK")
 PY
 curl --fail --silent --show-error "$PUBLIC_URL/health"
 echo
-echo "Web2 v28 ruble capital, currencies and explainable operations deployed and verified."
+echo "Web2 v29 live concise status, ruble capital and explainable operations deployed and verified."
