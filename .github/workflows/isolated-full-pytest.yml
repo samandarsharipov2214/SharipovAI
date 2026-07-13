@@ -6,10 +6,11 @@ on:
       - verify/full-pytest-isolated-v2
     paths-ignore:
       - '**/*.md'
+      - '.ci-results/**'
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: isolated-full-pytest-${{ github.ref }}
@@ -43,6 +44,8 @@ jobs:
     steps:
       - name: Checkout isolated verification branch
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -59,10 +62,15 @@ jobs:
         run: python -m compileall -q $(git ls-files '*.py')
 
       - name: Run full regression suite
+        id: pytest
         shell: bash
         run: |
+          set +e
           set -o pipefail
           python -m pytest -q --disable-warnings --maxfail=1 2>&1 | tee isolated-pytest.log
+          code=${PIPESTATUS[0]}
+          echo "exit_code=${code}" >> "$GITHUB_OUTPUT"
+          exit 0
 
       - name: Upload compact pytest diagnostics
         if: always()
@@ -72,3 +80,43 @@ jobs:
           path: isolated-pytest.log
           if-no-files-found: error
           retention-days: 7
+
+      - name: Publish machine-readable result
+        if: always()
+        env:
+          PYTEST_EXIT_CODE: ${{ steps.pytest.outputs.exit_code || '99' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .ci-results
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          log_path = Path('isolated-pytest.log')
+          text = log_path.read_text(encoding='utf-8', errors='replace') if log_path.exists() else ''
+          code = int(os.environ.get('PYTEST_EXIT_CODE', '99'))
+          payload = {
+              'status': 'success' if code == 0 else 'failure',
+              'exit_code': code,
+              'tested_commit': os.environ['GITHUB_SHA'],
+              'run_id': os.environ['GITHUB_RUN_ID'],
+              'log_tail': text[-12000:],
+          }
+          Path('.ci-results/isolated.json').write_text(
+              json.dumps(payload, ensure_ascii=False, indent=2),
+              encoding='utf-8',
+          )
+          PY
+          git config user.name "SharipovAI CI"
+          git config user.email "actions@github.com"
+          git add .ci-results/isolated.json
+          if ! git diff --cached --quiet; then
+            git commit -m "ci: publish isolated pytest result [skip ci]"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
+
+      - name: Fail when regression suite failed
+        if: ${{ steps.pytest.outputs.exit_code != '0' }}
+        run: exit 1
