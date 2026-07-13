@@ -1,6 +1,7 @@
 (() => {
   'use strict';
 
+  const VERSION = 31;
   const PAGE_OWNERS = new Map([
     ['overview', 'overview_runtime_v25.js'],
     ['market', 'market_terminal_v13.js'],
@@ -61,18 +62,19 @@
   }
 
   function writeAllowed(stack) {
+    const value = String(stack || '');
+    if (value.includes('sections_v10.js')) return false;
     const activeOwner = PAGE_OWNERS.get(activePage());
-    const callerOwner = scriptFromStack(stack);
+    const callerOwner = scriptFromStack(value);
     if (activeOwner) {
-      return callerOwner === activeOwner || String(stack || '').includes('navigation_coordinator_v23.js');
+      return callerOwner === activeOwner || value.includes('navigation_coordinator_v23.js');
     }
-    if (callerOwner) return false;
-    return true;
+    return !callerOwner;
   }
 
   function installContentOwnership() {
     const content = document.getElementById('content');
-    if (!content || content.dataset.navigationOwnership === 'v25') return;
+    if (!content || content.dataset.navigationOwnership === `v${VERSION}`) return;
     const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML');
     if (!descriptor?.get || !descriptor?.set) return;
 
@@ -86,7 +88,7 @@
         if (writeAllowed(new Error().stack || '')) descriptor.set.call(this, value);
       },
     });
-    content.dataset.navigationOwnership = 'v25';
+    content.dataset.navigationOwnership = `v${VERSION}`;
   }
 
   function currentLanguage() {
@@ -109,18 +111,18 @@
 
   function installLabelGuard() {
     const nav = document.getElementById('nav');
-    if (!nav || nav.dataset.labelGuard === 'v25') return;
+    if (!nav || nav.dataset.labelGuard === `v${VERSION}`) return;
     const observer = new MutationObserver(restoreLabelsAndAria);
     observer.observe(nav, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['class', 'data-page'] });
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ['lang'] });
-    nav.dataset.labelGuard = 'v25';
+    nav.dataset.labelGuard = `v${VERSION}`;
     restoreLabelsAndAria();
   }
 
   function installHashNavigation() {
     const nav = document.getElementById('nav');
-    if (!nav || nav.dataset.hashNavigation === 'v25') return;
-    nav.dataset.hashNavigation = 'v25';
+    if (!nav || nav.dataset.hashNavigation === `v${VERSION}`) return;
+    nav.dataset.hashNavigation = `v${VERSION}`;
 
     nav.addEventListener('click', (event) => {
       const button = event.target.closest('button[data-page]');
@@ -150,7 +152,7 @@
     activePage,
     ownerFor: (page) => PAGE_OWNERS.get(page) || '',
     writeAllowed,
-    version: 25,
+    version: VERSION,
   });
 
   install();
