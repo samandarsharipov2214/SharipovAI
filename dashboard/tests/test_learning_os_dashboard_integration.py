@@ -25,13 +25,12 @@ def test_learning_os_endpoints_installed_in_dashboard(tmp_path, monkeypatch) -> 
 
     page_response = client.get("/learning-os")
     assert page_response.status_code == 200
-    assert "Самообучение SharipovAI" in page_response.text
+    assert 'data-page="learning"' in page_response.text
+    assert "/static/web2/learning_evidence_reports_v17.js" in page_response.text
 
 
-def test_home_links_learning_os() -> None:
-    client = TestClient(create_app(runner_factory=DummyRunner))
-
-    response = client.get("/")
-
+def test_home_exposes_web2_learning_section() -> None:
+    response = TestClient(create_app(runner_factory=DummyRunner)).get("/")
     assert response.status_code == 200
-    assert "/learning-os" in response.text
+    assert 'data-page="learning"' in response.text
+    assert "Центр обучения" in response.text
