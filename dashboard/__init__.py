@@ -1,7 +1,8 @@
 """Dashboard package entrypoint for SharipovAI OS.
 
-Render starts ``uvicorn dashboard:app``. Feature installers placed here must be
-idempotent so Codex/tests may also import ``dashboard.app`` directly.
+The canonical application is assembled here. Feature installers must be
+idempotent so tests, Codex and the VPS process can import ``dashboard.app``
+without creating duplicate routes or background workers.
 """
 from __future__ import annotations
 
@@ -15,12 +16,18 @@ from .database_api import install_database_api
 from .exceptions import DashboardError
 from .execution_stages_api import install_execution_stages_api
 from .global_auth_guard import install_global_auth_guard
+from .lifecycle import install_fastapi_lifecycle_compat
 from .market_data_api import install_market_data_api
 from .news_agent_network_api import install_news_agent_network_api
 from .private_order_ws_api import install_private_order_ws_api
 from .system_health_api import install_system_health_api
 from .system_watchdog import install_system_watchdog
 from .web2_host import install_web2_host
+
+# FastAPI 0.139+/Starlette 1.x may not expose app.add_event_handler. Install the
+# narrow compatibility adapter before existing runtime modules register startup
+# and shutdown handlers.
+install_fastapi_lifecycle_compat(app)
 
 # The canonical database must exist before any organ creates runtime state.
 install_database_api(app)
