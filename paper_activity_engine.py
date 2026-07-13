@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,7 @@ from trading_intelligence import trade_gate
 DEFAULT_STATE_FILE = "data/virtual_account_activity_state.json"
 LEGACY_STATE_FILE = "data/paper_activity_state.json"
 SYMBOL_ROTATION = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "ADA/USDT"]
+_STATE_LOCK = threading.RLock()
 
 REASON_RU = {
     "not_started": "ещё не запускался",
@@ -70,11 +72,13 @@ def bootstrap_ticks() -> int:
 class PaperActivityEngine:
     """Durable virtual account execution engine.
 
-    The class name stays for backward compatibility with older imports.
+    State writes are atomic and keep one last-known-good backup. The class name
+    stays for backward compatibility with older imports.
     """
 
     def __init__(self, path: str | Path | None = None) -> None:
         self.path = Path(path) if path else paper_state_file()
+        self.backup_path = self.path.with_suffix(f"{self.path.suffix}.bak")
 
     def state(self, *, catch_up: bool = False) -> dict[str, Any]:
         if catch_up:
@@ -89,6 +93,8 @@ class PaperActivityEngine:
             "mode": EXECUTION_MODE,
             "catch_up_on_state": catch_up,
             "profitability_gate": "enabled",
+            "atomic_state": True,
+            "backup_file": str(self.backup_path),
         }
         return virtual_account_state(state)
 
@@ -163,14 +169,7 @@ class PaperActivityEngine:
         return {"status": "ok", "action": "opened_virtual_trade", "reason_ru": state["last_reason_ru"], "profitability": profitability, "trade": trade, "gate": gate, "state": self.state()}
 
     def catch_up(self, *, now: int | None = None, max_ticks: int | None = None) -> dict[str, Any]:
-        """Run missed virtual execution ticks after sleep/redeploy/idle time.
-
-        If the web process was asleep or no scheduler called tick, the first
-        state request can safely catch up a bounded number of virtual-only
-        actions. Empty-state bootstrap is deliberately independent from the
-        normal catch-up cap, because a cap of 1 caused the UI to show only one
-        trade after redeploy.
-        """
+        """Run missed virtual execution ticks after sleep/redeploy/idle time."""
 
         now = int(time.time()) if now is None else int(now)
         limit = int(max_ticks or max_catch_up_ticks())
@@ -295,27 +294,62 @@ class PaperActivityEngine:
             "last_profitability_gate": state.get("last_profitability_gate", {}),
             "execution_mode": EXECUTION_MODE,
             "real_orders_blocked": True,
+            "state_revision": int(state.get("state_revision", 0) or 0),
+            "state_recovered_from_backup": bool(state.get("state_recovered_from_backup", False)),
         }
 
     def _load(self) -> dict[str, Any]:
-        if not self.path.exists():
+        with _STATE_LOCK:
+            primary = _read_state_file(self.path)
+            if primary is not None:
+                primary["state_recovered_from_backup"] = False
+                return _migrate_state(primary)
+
+            backup = _read_state_file(self.backup_path)
+            if backup is not None:
+                recovered = _migrate_state(backup)
+                recovered["state_recovered_from_backup"] = True
+                recovered["state_recovery_source"] = str(self.backup_path)
+                return recovered
+
             legacy = Path(LEGACY_STATE_FILE)
             if legacy.exists() and str(self.path) == DEFAULT_STATE_FILE:
-                try:
-                    data = json.loads(legacy.read_text(encoding="utf-8"))
-                    return _migrate_state(data if isinstance(data, dict) else _default_state())
-                except Exception:
-                    return _default_state()
-            return _default_state()
-        try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
-            return _migrate_state(data if isinstance(data, dict) else _default_state())
-        except Exception:
+                legacy_state = _read_state_file(legacy)
+                if legacy_state is not None:
+                    recovered = _migrate_state(legacy_state)
+                    recovered["state_recovered_from_backup"] = True
+                    recovered["state_recovery_source"] = str(legacy)
+                    return recovered
             return _default_state()
 
     def _save(self, state: dict[str, Any]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(_migrate_state(state), ensure_ascii=False, indent=2), encoding="utf-8")
+        with _STATE_LOCK:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            migrated = _migrate_state(state)
+            migrated["state_revision"] = int(migrated.get("state_revision", 0) or 0) + 1
+            migrated["state_recovered_from_backup"] = False
+            payload = json.dumps(migrated, ensure_ascii=False, indent=2, sort_keys=True)
+            temporary = self.path.with_name(f".{self.path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+            try:
+                with temporary.open("w", encoding="utf-8") as handle:
+                    handle.write(payload)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                if _read_state_file(self.path) is not None:
+                    os.replace(self.path, self.backup_path)
+                os.replace(temporary, self.path)
+            finally:
+                temporary.unlink(missing_ok=True)
+
+
+def _read_state_file(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def _default_state() -> dict[str, Any]:
@@ -336,6 +370,8 @@ def _default_state() -> dict[str, Any]:
         "last_profitability_gate": {},
         "live_execution_enabled": False,
         "real_orders_blocked": True,
+        "state_revision": 0,
+        "state_recovered_from_backup": False,
     }
 
 
@@ -371,6 +407,8 @@ def _migrate_state(state: dict[str, Any]) -> dict[str, Any]:
     migrated.setdefault("skipped_signals", [])
     migrated.setdefault("skipped_count", len(migrated.get("skipped_signals", [])) if isinstance(migrated.get("skipped_signals"), list) else 0)
     migrated.setdefault("last_profitability_gate", {})
+    migrated.setdefault("state_revision", 0)
+    migrated.setdefault("state_recovered_from_backup", False)
     if migrated.get("last_reason") == "trade_gate_blocked_demo":
         migrated["last_reason"] = "trade_gate_blocked_virtual_execution"
     if migrated.get("last_reason") == "opened_paper_trade":
@@ -410,5 +448,4 @@ def _virtual_pnl(tick_count: int, symbol: str, *, expected_net: float = 0.0) -> 
     raw = ((sum(ord(ch) for ch in symbol) + tick_count * 13) % 7) - 2
     noise = raw * 0.08
     target_net = max(-0.25, expected_net * 0.75 + noise)
-    # Return gross pnl; closing code subtracts total fees from it.
     return round(target_net + 0.2, 4)
