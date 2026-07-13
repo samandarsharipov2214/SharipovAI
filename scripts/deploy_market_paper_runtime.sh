@@ -40,10 +40,12 @@ python -m pytest \
   tests/test_market_paper_engine.py \
   tests/test_news_intelligence_runtime.py \
   tests/test_lifecycle_compat.py \
-  tests/test_ai_organ_safe_runtime.py -q
+  tests/test_ai_organ_safe_runtime.py \
+  tests/test_verify_market_paper_runtime_script.py -q
 python -m py_compile \
   /app/market_paper_engine.py \
   /app/paper_activity_autorun.py \
+  /app/scripts/verify_market_paper_runtime.py \
   /app/dashboard/lifecycle_compat.py \
   /app/dashboard/ai_organ_state_safe_api.py \
   /app/dashboard/paper_activity_api.py \
@@ -53,6 +55,8 @@ python -m py_compile \
   /app/news_intelligence/agents.py \
   /app/news_intelligence/hub.py \
   /app/news_intelligence/network.py
+cd /tmp
+SHARIPOVAI_VERIFY_IMPORT_ONLY=1 python /app/scripts/verify_market_paper_runtime.py
 python - <<"PY"
 from dashboard.app import app
 paths = {getattr(route, "path", "") for route in app.routes}
