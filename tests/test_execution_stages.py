@@ -13,10 +13,12 @@ def test_testnet_order_requires_explicit_unlock(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setenv("EXCHANGE_MODE", "sandbox")
     monkeypatch.setenv("EXCHANGE_API_KEY", "key")
     monkeypatch.setenv("EXCHANGE_API_SECRET", "secret")
+    monkeypatch.setenv("EXECUTION_KILL_SWITCH", "0")
+    monkeypatch.setenv("EXECUTION_MAX_NOTIONAL_USDT", "25")
     monkeypatch.delenv("TESTNET_EXECUTION_ENABLED", raising=False)
     client = BybitExecutionClient()
     with pytest.raises(RuntimeError, match="Testnet execution is locked"):
-        client.place_market_order(symbol="BTCUSDT", side="BUY", quantity=0.001, reference_price=50000)
+        client.place_market_order(symbol="BTCUSDT", side="BUY", quantity=0.0001, reference_price=50000)
 
 
 def test_live_requires_all_independent_gates(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -35,6 +37,7 @@ def test_notional_cap_blocks_large_order(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setenv("EXCHANGE_API_KEY", "key")
     monkeypatch.setenv("EXCHANGE_API_SECRET", "secret")
     monkeypatch.setenv("TESTNET_EXECUTION_ENABLED", "1")
+    monkeypatch.setenv("EXECUTION_KILL_SWITCH", "0")
     monkeypatch.setenv("EXECUTION_MAX_NOTIONAL_USDT", "25")
     client = BybitExecutionClient()
     with pytest.raises(RuntimeError, match="exceeds safety cap"):
@@ -56,6 +59,7 @@ def test_signed_testnet_order_returns_order_id(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setenv("EXCHANGE_API_KEY", "key")
     monkeypatch.setenv("EXCHANGE_API_SECRET", "secret")
     monkeypatch.setenv("TESTNET_EXECUTION_ENABLED", "1")
+    monkeypatch.setenv("EXECUTION_KILL_SWITCH", "0")
     transport = httpx.MockTransport(lambda request: httpx.Response(200, json={"retCode": 0, "result": {"orderId": "abc"}}))
     with httpx.Client(transport=transport) as http_client:
         result = BybitExecutionClient(client=http_client).place_market_order(
