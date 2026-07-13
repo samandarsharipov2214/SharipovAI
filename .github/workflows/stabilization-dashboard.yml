@@ -5,19 +5,23 @@ on:
     branches: [main]
     paths:
       - 'dashboard/**'
+      - 'news_intelligence/**'
       - 'agent_health.py'
       - 'learning_engine/**'
       - 'runner/**'
       - 'telegram_bot.py'
+      - 'requirements.txt'
       - '.github/workflows/stabilization-dashboard.yml'
   pull_request:
     branches: [main]
     paths:
       - 'dashboard/**'
+      - 'news_intelligence/**'
       - 'agent_health.py'
       - 'learning_engine/**'
       - 'runner/**'
       - 'telegram_bot.py'
+      - 'requirements.txt'
       - '.github/workflows/stabilization-dashboard.yml'
   workflow_dispatch:
 
@@ -55,16 +59,19 @@ jobs:
 
       - name: Compile dashboard imports
         run: |
-          python -m compileall -q dashboard agent_health.py
+          python -m compileall -q dashboard news_intelligence agent_health.py
           python - <<'PY'
           import agent_health
-          from dashboard.app import create_app
-          app = create_app()
-          print('IMPORT_OK', app.title)
+          import dashboard
+          print('IMPORT_OK', dashboard.app.title)
           PY
 
       - name: Run targeted stabilization tests
+        id: pytest
+        continue-on-error: true
+        shell: bash
         run: |
+          set -o pipefail
           python -m pytest \
             dashboard/tests/test_admin_secure_app_roles.py \
             dashboard/tests/test_password_change_flow.py \
@@ -73,4 +80,44 @@ jobs:
             dashboard/tests/test_crash_hardening.py \
             dashboard/tests/test_dashboard.py \
             dashboard/tests/test_demo_api.py \
-            -q --tb=short
+            tests/test_lifecycle_compat.py \
+            tests/test_news_database_v1.py \
+            tests/test_release_audit.py \
+            -q --tb=short 2>&1 | tee pytest-targeted.log
+
+      - name: Build compact failure report
+        if: always()
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          source = Path('pytest-targeted.log')
+          lines = source.read_text(encoding='utf-8', errors='replace').splitlines() if source.exists() else ['pytest log missing']
+          markers = ('ERROR collecting', 'FAILED ', 'E   ', 'short test summary', 'ModuleNotFoundError', 'ImportError', 'SyntaxError', 'TypeError', 'AssertionError')
+          selected = []
+          for index, line in enumerate(lines):
+              if any(marker in line for marker in markers):
+                  selected.extend(lines[max(0, index - 4):min(len(lines), index + 14)])
+          selected.extend(lines[-100:])
+          compact = []
+          seen = set()
+          for line in selected:
+              if line not in seen:
+                  seen.add(line)
+                  compact.append(line)
+          Path('pytest-summary.txt').write_text('\n'.join(compact[-300:]) + '\n', encoding='utf-8')
+          PY
+
+      - name: Upload exact dashboard report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-pytest-report
+          path: |
+            pytest-targeted.log
+            pytest-summary.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Fail job when tests failed
+        if: steps.pytest.outcome == 'failure'
+        run: exit 1
