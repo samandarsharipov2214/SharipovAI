@@ -36,14 +36,16 @@ def test_evidence_vault_endpoints_installed_in_dashboard(tmp_path, monkeypatch) 
 
     page = client.get("/evidence-vault")
     assert page.status_code == 200
-    assert "Память решений" in page.text
+    assert 'data-page="evidence"' in page.text
+    assert "Хранилище доказательств" in page.text
 
 
-def test_home_links_evidence_vault() -> None:
+def test_home_exposes_evidence_vault_spa_and_api() -> None:
     client = TestClient(create_app(runner_factory=DummyRunner))
 
     response = client.get("/")
 
     assert response.status_code == 200
-    assert "/evidence-vault" in response.text
-    assert "/api/evidence-vault/snapshot" in response.text
+    assert 'data-page="evidence"' in response.text
+    assert "Хранилище доказательств" in response.text
+    assert client.get("/api/evidence-vault/snapshot").status_code == 200
