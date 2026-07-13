@@ -1,0 +1,95 @@
+name: VPS Reachability Confirmation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/vps-confirm-reachability.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sharipovai-vps-confirm-reachability
+  cancel-in-progress: true
+
+jobs:
+  confirm:
+    runs-on: [self-hosted, linux, x64, sharipovai-ci]
+    timeout-minutes: 10
+    steps:
+      - name: Confirm backend, reverse proxy and public identity
+        shell: bash
+        run: |
+          set -u
+          DOMAIN='85-137-88-17.sslip.io'
+          EXPECTED_IP='85.137.88.17'
+          REPORT="$RUNNER_TEMP/vps-confirmation.txt"
+
+          {
+            echo "utc=$(date -u +%FT%TZ)"
+            echo "runner=$(hostname) user=$(id -un) uid=$(id -u)"
+            echo "hostname_ips=$(hostname -I 2>/dev/null | xargs || true)"
+
+            public_ip=''
+            for endpoint in https://api.ipify.org https://ifconfig.me/ip https://icanhazip.com; do
+              value=$(curl -fsS --connect-timeout 4 --max-time 8 "$endpoint" 2>/dev/null | tr -d '[:space:]' || true)
+              if [ -n "$value" ]; then public_ip="$value"; break; fi
+            done
+            echo "public_ip=${public_ip:-unavailable}"
+            if [ -n "$public_ip" ] && [ "$public_ip" = "$EXPECTED_IP" ]; then
+              echo 'public_ip_match=yes'
+            else
+              echo 'public_ip_match=no'
+            fi
+
+            resolved=$(getent ahostsv4 "$DOMAIN" 2>/dev/null | awk 'NR==1{print $1}' || true)
+            echo "domain_resolves_to=${resolved:-unavailable}"
+
+            echo 'listeners:'
+            ss -lnt 2>/dev/null | awk 'NR==1 || $4 ~ /:(22|80|443|8000)$/'
+
+            backend_code=$(curl -sS --connect-timeout 3 --max-time 8 -o "$RUNNER_TEMP/backend-health.json" -w '%{http_code}' http://127.0.0.1:8000/health 2>/dev/null || true)
+            echo "backend_health_code=${backend_code:-000}"
+            echo "backend_health_body=$(tr -d '\r\n' < "$RUNNER_TEMP/backend-health.json" 2>/dev/null || true)"
+
+            http_result=$(curl -sS --connect-timeout 3 --max-time 8 -H "Host: $DOMAIN" -o "$RUNNER_TEMP/caddy-http-body" -w '%{http_code}|%{redirect_url}' http://127.0.0.1/health 2>/dev/null || true)
+            echo "caddy_http=${http_result:-000|}"
+
+            https_code=$(curl -k -sS --connect-timeout 3 --max-time 8 --resolve "$DOMAIN:443:127.0.0.1" -o "$RUNNER_TEMP/caddy-https-body" -w '%{http_code}' "https://$DOMAIN/health" 2>/dev/null || true)
+            echo "caddy_https_code=${https_code:-000}"
+            echo "caddy_https_body=$(tr -d '\r\n' < "$RUNNER_TEMP/caddy-https-body" 2>/dev/null || true)"
+
+            public_code=$(curl -k -sS --connect-timeout 5 --max-time 12 -o "$RUNNER_TEMP/public-health-body" -w '%{http_code}' "https://$DOMAIN/health" 2>/dev/null || true)
+            echo "self_public_https_code=${public_code:-000}"
+            echo "self_public_https_body=$(tr -d '\r\n' < "$RUNNER_TEMP/public-health-body" 2>/dev/null || true)"
+
+            echo "docker_service=$(systemctl is-active docker 2>/dev/null || true)"
+            echo "ssh_service=$(systemctl is-active ssh 2>/dev/null || true)"
+            runner_service=$(systemctl list-unit-files --type=service --no-legend 2>/dev/null | awk '$1 ~ /^actions\.runner\..*\.service$/ {print $1; exit}')
+            echo "runner_service=${runner_service:-missing}"
+            [ -n "$runner_service" ] && echo "runner_service_state=$(systemctl is-active "$runner_service" 2>/dev/null || true)"
+
+            echo 'read_only=yes'
+          } | tee "$REPORT"
+
+          backend_ok=0
+          caddy_ok=0
+          [ "${backend_code:-000}" = '200' ] && backend_ok=1
+          [ "${https_code:-000}" = '200' ] && caddy_ok=1
+          echo "confirmation_backend_ok=$backend_ok" | tee -a "$REPORT"
+          echo "confirmation_caddy_ok=$caddy_ok" | tee -a "$REPORT"
+
+          # This diagnostic intentionally does not modify services, firewall,
+          # repository contents, environment files or trading settings.
+          [ "$backend_ok" -eq 1 ] && [ "$caddy_ok" -eq 1 ]
+
+      - name: Upload confirmation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vps-reachability-confirmation
+          path: ${{ runner.temp }}/vps-confirmation.txt
+          if-no-files-found: error
+          retention-days: 3
