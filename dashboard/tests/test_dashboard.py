@@ -42,7 +42,17 @@ def _runner_factory():
                 consensus_agreement=100.0,
                 reason="Verified test runner",
                 report="Verified test report",
-                learning_summary=LearningSummary(total_trades=1, win_rate=100.0, average_return=5.0),
+                learning_summary=LearningSummary(
+                    total_trades=1,
+                    wins=1,
+                    losses=0,
+                    win_rate=100.0,
+                    average_profit=5.0,
+                    average_loss=0.0,
+                    best_trade=5.0,
+                    worst_trade=5.0,
+                    recommendations=[],
+                ),
             )
 
     return Runner()
