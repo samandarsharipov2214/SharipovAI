@@ -1,7 +1,7 @@
 """Risk-based capital allocation for the SharipovAI virtual account.
 
 The allocator increases position size with account equity while preserving a
-configurable cash reserve.  It is deliberately leverage-free and contains no
+configurable cash reserve. It is deliberately leverage-free and contains no
 exchange write operations.
 """
 from __future__ import annotations
@@ -52,9 +52,10 @@ def build_capital_allocation(
 ) -> dict[str, Any]:
     """Return a deterministic no-leverage allocation plan.
 
-    The deployable amount is divided by the remaining position slots.  A single
-    position is additionally capped by account percentage and by the amount that
-    can be lost at the configured stop including estimated round-trip fees.
+    Each approved position may use up to the configured account percentage. The
+    aggregate reserve, the open-position limit and the stop-loss risk budget are
+    always enforced. This deploys capital faster when valid signals are rare,
+    without allowing one trade to consume the whole account.
     """
 
     policy = policy or CapitalAllocationPolicy.from_environment()
@@ -79,7 +80,7 @@ def build_capital_allocation(
     risk_notional_cap = round(risk_budget / loss_distance_fraction, 4) if loss_distance_fraction > 0 else 0.0
     position_notional_cap = round(clean_equity * policy.max_position_percent / 100.0, 4)
     equal_slot_budget = round(available_to_allocate / remaining_slots, 4) if remaining_slots > 0 else 0.0
-    notional = round(min(equal_slot_budget, position_notional_cap, risk_notional_cap), 2)
+    notional = round(min(available_to_allocate, position_notional_cap, risk_notional_cap), 2)
 
     reason = "allocated"
     allowed = True
