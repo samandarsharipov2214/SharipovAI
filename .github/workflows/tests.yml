@@ -111,6 +111,7 @@ jobs:
             tests/test_execution_contract.py \
             tests/test_capital_allocation.py \
             tests/test_market_paper_engine.py \
+            tests/test_paper_state_recovery.py \
             tests/test_project_change_ledger.py \
             -q --tb=short
 
