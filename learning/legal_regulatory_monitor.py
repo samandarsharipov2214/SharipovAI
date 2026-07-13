@@ -34,8 +34,6 @@ SEVERITY_ORDER = {"info": 1, "watch": 2, "caution": 3, "high": 4, "critical": 5}
 
 
 def legal_monitor_plan(region: str = "global") -> dict[str, Any]:
-    """Return monitoring plan for legal and regulatory changes."""
-
     selected_region = region.strip().lower() or "global"
     sources = sorted(set(REGULATORY_SOURCES.get(selected_region, []) + REGULATORY_SOURCES["global"]))
     tasks = []
@@ -56,8 +54,6 @@ def legal_monitor_plan(region: str = "global") -> dict[str, Any]:
 
 
 def legal_monitor_policy() -> dict[str, Any]:
-    """Return rules for safe legal monitoring."""
-
     return {
         "not_legal_advice": True,
         "rules": [
@@ -73,8 +69,6 @@ def legal_monitor_policy() -> dict[str, Any]:
 
 
 def evaluate_legal_change(change: dict[str, Any]) -> dict[str, Any]:
-    """Evaluate a legal/regulatory change and advise General Controller."""
-
     title = str(change.get("title", "")).strip()
     source_domain = str(change.get("source_domain", "")).strip().lower()
     source_type = str(change.get("source_type", "")).strip().lower()
@@ -109,9 +103,21 @@ def evaluate_legal_change(change: dict[str, Any]) -> dict[str, Any]:
 
 
 def legal_alert_summary(changes: list[dict[str, Any]]) -> dict[str, Any]:
-    """Summarize multiple legal changes for General Controller."""
+    """Summarize raw changes or already evaluated legal alerts.
 
-    evaluated = [evaluate_legal_change(change) for change in changes]
+    Watcher pipelines pass evaluated alerts here. Re-evaluating those objects loses
+    their original text and can incorrectly downgrade a critical official ban to
+    ``continue``. Existing evaluated evidence is therefore preserved verbatim.
+    """
+
+    evaluated = [
+        dict(change)
+        if change.get("status") == "ok"
+        and isinstance(change.get("general_controller_advice"), dict)
+        and str(change.get("severity", "")) in SEVERITY_ORDER
+        else evaluate_legal_change(change)
+        for change in changes
+    ]
     valid = [item for item in evaluated if item.get("status") == "ok"]
     highest = "info"
     for item in valid:
