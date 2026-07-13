@@ -1,6 +1,7 @@
 """FastAPI endpoints for verified read-only market data and order previews."""
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime
 from typing import Any, Callable
 
@@ -21,10 +22,24 @@ _ALLOWED_INTERVALS = {"1", "3", "5", "15", "30", "60", "120", "240", "360", "720
 _ALLOWED_CATEGORIES = {"spot", "linear", "inverse"}
 
 
+def _configure_public_stream_feature() -> None:
+    """Enable the public read-only stream from its guarded runtime switch.
+
+    An explicit FEATURE_BYBIT_WEBSOCKET value always wins. This prevents a
+    general market switch from overriding an operator's explicit shutdown.
+    """
+    if "FEATURE_BYBIT_WEBSOCKET" in os.environ:
+        return
+    enabled = os.getenv("MARKET_STREAM_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+    if enabled:
+        os.environ["FEATURE_BYBIT_WEBSOCKET"] = "1"
+
+
 def install_market_data_api(app: FastAPI) -> None:
     if getattr(app.state, "market_data_api_installed", False):
         return
     app.state.market_data_api_installed = True
+    _configure_public_stream_feature()
     app.state.market_data_service = MarketDataService()
     app.state.bybit_websocket_worker = BybitWebSocketWorker()
     app.state.multi_exchange_consensus = MultiExchangeConsensus(app.state.market_data_service)
@@ -221,7 +236,11 @@ def _register_lifecycle_handler(app: FastAPI, event: str, handler: Callable[[], 
     router = getattr(app, "router", None)
     handlers = getattr(router, f"on_{event}", None) if router is not None else None
     if isinstance(handlers, list):
-        handlers.append(handler)
+        if handler not in handlers:
+            handlers.append(handler)
         return
     if event == "startup":
         handler()
+
+
+__all__ = ["_configure_public_stream_feature", "install_market_data_api"]
