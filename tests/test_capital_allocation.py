@@ -13,11 +13,11 @@ def _policy() -> CapitalAllocationPolicy:
     )
 
 
-def test_first_position_scales_to_equity_and_remaining_slots() -> None:
+def test_first_position_scales_to_equity_and_position_cap() -> None:
     allocation = build_capital_allocation(
         equity=10_000.0,
         open_trades=[],
-        max_open_positions=5,
+        max_open_positions=8,
         stop_loss_percent=0.8,
         fee_rate=0.001,
         requested_risk_percent=1.0,
@@ -25,24 +25,23 @@ def test_first_position_scales_to_equity_and_remaining_slots() -> None:
     )
 
     assert allocation["allowed"] is True
-    assert allocation["notional"] == 1600.0
+    assert allocation["notional"] == 2000.0
     assert allocation["reserve_amount"] == 2000.0
     assert allocation["deployable_capital"] == 8000.0
-    assert allocation["projected_utilization_percent"] == 16.0
+    assert allocation["projected_utilization_percent"] == 20.0
     assert allocation["leverage"] == 1.0
 
 
-def test_allocator_can_deploy_eighty_percent_across_five_positions() -> None:
+def test_allocator_can_deploy_eighty_percent_across_four_positions() -> None:
     open_trades = [
-        {"status": "OPEN", "notional": 1600.0},
-        {"status": "OPEN", "notional": 1600.0},
-        {"status": "OPEN", "notional": 1600.0},
-        {"status": "OPEN", "notional": 1600.0},
+        {"status": "OPEN", "notional": 2000.0},
+        {"status": "OPEN", "notional": 2000.0},
+        {"status": "OPEN", "notional": 2000.0},
     ]
     allocation = build_capital_allocation(
         equity=10_000.0,
         open_trades=open_trades,
-        max_open_positions=5,
+        max_open_positions=8,
         stop_loss_percent=0.8,
         fee_rate=0.001,
         requested_risk_percent=1.0,
@@ -50,7 +49,7 @@ def test_allocator_can_deploy_eighty_percent_across_five_positions() -> None:
     )
 
     assert allocation["allowed"] is True
-    assert allocation["notional"] == 1600.0
+    assert allocation["notional"] == 2000.0
     assert allocation["projected_utilization_percent"] == 80.0
 
     snapshot = capital_snapshot(
@@ -68,7 +67,7 @@ def test_allocator_preserves_reserve_instead_of_using_one_hundred_percent() -> N
     allocation = build_capital_allocation(
         equity=10_000.0,
         open_trades=[{"status": "OPEN", "notional": 8000.0}],
-        max_open_positions=5,
+        max_open_positions=8,
         stop_loss_percent=0.8,
         fee_rate=0.001,
         requested_risk_percent=1.0,
@@ -81,7 +80,7 @@ def test_allocator_preserves_reserve_instead_of_using_one_hundred_percent() -> N
     assert allocation["reserve_amount"] == 2000.0
 
 
-def test_risk_budget_can_reduce_position_below_equal_slot() -> None:
+def test_risk_budget_can_reduce_position_below_position_cap() -> None:
     allocation = build_capital_allocation(
         equity=10_000.0,
         open_trades=[],
@@ -93,8 +92,8 @@ def test_risk_budget_can_reduce_position_below_equal_slot() -> None:
     )
 
     assert allocation["allowed"] is True
-    assert allocation["equal_slot_budget"] == 4000.0
-    assert allocation["risk_notional_cap"] < allocation["equal_slot_budget"]
+    assert allocation["position_notional_cap"] == 2000.0
+    assert allocation["risk_notional_cap"] < allocation["position_notional_cap"]
     assert allocation["notional"] == 980.39
 
 
@@ -102,7 +101,7 @@ def test_requested_risk_is_capped_by_policy() -> None:
     allocation = build_capital_allocation(
         equity=10_000.0,
         open_trades=[],
-        max_open_positions=5,
+        max_open_positions=8,
         stop_loss_percent=0.8,
         fee_rate=0.001,
         requested_risk_percent=25.0,
@@ -111,4 +110,4 @@ def test_requested_risk_is_capped_by_policy() -> None:
 
     assert allocation["requested_risk_percent"] == 25.0
     assert allocation["effective_risk_percent"] == 1.0
-    assert allocation["notional"] == 1600.0
+    assert allocation["notional"] == 2000.0
