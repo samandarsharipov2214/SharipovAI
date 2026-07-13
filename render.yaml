@@ -114,6 +114,14 @@ services:
         value: "60"
       - key: VIRTUAL_ACCOUNT_MAX_OPEN
         value: "8"
+      - key: VIRTUAL_ACCOUNT_RESERVE_PERCENT
+        value: "20"
+      - key: VIRTUAL_ACCOUNT_MAX_POSITION_PERCENT
+        value: "20"
+      - key: VIRTUAL_ACCOUNT_MAX_RISK_PER_TRADE_PERCENT
+        value: "1"
+      - key: VIRTUAL_ACCOUNT_MIN_NOTIONAL_USDT
+        value: "25"
       - key: VIRTUAL_ACCOUNT_MAX_CATCH_UP_TICKS
         value: "48"
       - key: NEWS_AUTORUN_ENABLED
