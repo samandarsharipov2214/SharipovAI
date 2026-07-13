@@ -15,10 +15,10 @@ def test_page_runtime_script_order_and_cache_version():
     html = INDEX.read_text(encoding="utf-8")
     coordinator = html.index("navigation_coordinator_v23.js?v=25")
     core = html.index("web2.js?v=26")
-    overview = html.index("overview_runtime_v25.js?v=25")
+    overview = html.index("overview_runtime_v25.js?v=27")
     decision = html.index("decision_runtime_v25.js?v=25")
     learning = html.index("learning_runtime_v25.js?v=25")
-    exchange = html.index("exchange_execution_settings_v18.js?v=25")
+    exchange = html.index("exchange_execution_settings_v18.js?v=27")
     assert coordinator < core < overview < decision < learning < exchange
     assert "system_status_v11.js?v=26" in html
 
@@ -56,8 +56,27 @@ def test_virtual_first_overview_decision_learning_and_trades_exist():
     assert "/api/virtual-account/trades" in learning
     assert "Закрытые виртуальные сделки" in learning
     assert "/api/virtual-account/trades" in execution
-    assert "Виртуальные сделки по рыночным ценам" in execution
+    assert "Виртуальные операции с объяснениями" in execution
     assert "Реальные исполнения Bybit" in execution
+
+
+def test_overview_supports_multiple_currencies_and_simple_money_precision():
+    source = OVERVIEW.read_text(encoding="utf-8")
+    for symbol in ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT"):
+        assert symbol in source
+    assert "maximumFractionDigits:1" in source
+    assert "Почему ИИ открыл или закрыл" in source
+    assert "entry_reason_ru" in source
+    assert "signal_change_24h_percent" in source
+
+
+def test_trade_pages_show_reasons_and_simple_summary_money():
+    source = EXECUTION_UI.read_text(encoding="utf-8")
+    assert "Почему открыта" in source
+    assert "Почему закрыта" in source
+    assert "entry_reason_ru" in source
+    assert "maximumFractionDigits:1" in source
+    assert "ADAUSDT" in source
 
 
 def test_virtual_account_parses_nested_state_payload():
