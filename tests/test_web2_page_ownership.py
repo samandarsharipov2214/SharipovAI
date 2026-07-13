@@ -15,7 +15,7 @@ def test_page_runtime_script_order_and_cache_version():
     html = INDEX.read_text(encoding="utf-8")
     coordinator = html.index("navigation_coordinator_v23.js?v=25")
     core = html.index("web2.js?v=26")
-    overview = html.index("overview_runtime_v25.js?v=27")
+    overview = html.index("overview_runtime_v25.js?v=28")
     decision = html.index("decision_runtime_v25.js?v=25")
     learning = html.index("learning_runtime_v25.js?v=25")
     exchange = html.index("exchange_execution_settings_v18.js?v=27")
@@ -68,6 +68,17 @@ def test_overview_supports_multiple_currencies_and_simple_money_precision():
     assert "Почему ИИ открыл или закрыл" in source
     assert "entry_reason_ru" in source
     assert "signal_change_24h_percent" in source
+
+
+def test_overview_defaults_to_rubles_and_uses_verified_rate_api():
+    source = OVERVIEW.read_text(encoding="utf-8")
+    assert "sharipovai-display-currency" in source
+    assert "||'RUB'" in source
+    assert "/api/currency/usd-rub" in source
+    assert "rub_per_usdt_estimate" in source
+    assert "Рубли ₽" in source
+    assert "1 USDT ≈" in source
+    assert "Math.round" in source
 
 
 def test_trade_pages_show_reasons_and_simple_summary_money():
