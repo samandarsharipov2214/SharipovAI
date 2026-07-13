@@ -1,0 +1,103 @@
+name: Full Project Audit
+
+on:
+  push:
+    branches:
+      - audit/full-5-phases-20260713
+    paths:
+      - 'scripts/full_project_audit.py'
+      - '.github/workflows/full-project-audit.yml'
+      - 'dashboard/**'
+      - 'deploy/**'
+      - 'tests/**'
+      - 'requirements.txt'
+      - 'Dockerfile'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sharipovai-full-audit
+  cancel-in-progress: true
+
+jobs:
+  static-audit:
+    name: Static code, architecture and site audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install project dependencies
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+      - name: Run complete test suite
+        run: pytest -q --disable-warnings --maxfail=50 | tee pytest-output.txt
+      - name: Run static phases 1, 2, 3, 4 and 5
+        if: always()
+        run: python scripts/full_project_audit.py --mode static --suffix static | tee audit-static-console.txt
+      - name: Upload static evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sharipovai-static-audit
+          path: |
+            audit-results/audit-static.json
+            audit-results/audit-static.md
+            audit-static-console.txt
+            pytest-output.txt
+          if-no-files-found: warn
+          retention-days: 30
+
+  live-vps-audit:
+    name: Live VPS, APIs, AI, Bybit and infrastructure audit
+    needs: static-audit
+    if: always()
+    runs-on: [self-hosted, linux, x64, sharipovai-ci]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Record deployed revision without changing production
+        shell: bash
+        run: |
+          set -u
+          for dir in /opt/sharipovai-repo /opt/SharipovAI; do
+            if [ -d "$dir/.git" ]; then
+              echo "production_repo=$dir"
+              git -C "$dir" rev-parse HEAD || true
+              git -C "$dir" status --short --branch || true
+            fi
+          done
+      - name: Run read-only live phases
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 scripts/full_project_audit.py --mode live --base-url http://127.0.0.1:8000 --suffix live | tee audit-live-console.txt
+      - name: Capture sanitized system evidence
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '=== utc ==='; date -u +%FT%TZ
+            echo '=== kernel ==='; uname -a
+            echo '=== memory ==='; free -h || true
+            echo '=== disk ==='; df -h / /opt 2>/dev/null || true
+            echo '=== listeners ==='; ss -lnt | grep -E ':(80|443|8000)\b' || true
+            echo '=== relevant services ==='; systemctl list-units --type=service --all --no-pager | grep -E 'sharipov|docker|nginx|caddy|actions.runner' || true
+            echo '=== containers ==='; docker ps --format '{{.Names}} {{.Status}}' 2>/dev/null || true
+          } > audit-system-evidence.txt
+      - name: Upload live evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sharipovai-live-vps-audit
+          path: |
+            audit-results/audit-live.json
+            audit-results/audit-live.md
+            audit-live-console.txt
+            audit-system-evidence.txt
+          if-no-files-found: warn
+          retention-days: 30
