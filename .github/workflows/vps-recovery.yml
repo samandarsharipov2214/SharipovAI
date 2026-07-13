@@ -67,3 +67,9 @@ jobs:
 
           echo "=== conclusion ==="
           echo "This diagnostic is read-only. No repository, service, container, or trading state was changed."
+
+      - name: Publish diagnostic notification
+        shell: bash
+        run: |
+          echo '::error::Read-only VPS diagnostic completed; inspect this run before enabling recovery.'
+          exit 1
