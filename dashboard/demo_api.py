@@ -9,12 +9,13 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from fastapi import Body, FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import Body, FastAPI
+from fastapi.responses import JSONResponse
 
 from ai_chat_orchestrator import answer_chat
 from paper_activity_engine import PaperActivityEngine
 from .dashboard_contracts_middleware import install_dashboard_contracts_middleware
+from .route_cleanup import remove_legacy_routes
 from .stabilization_compat import install_stabilization_compat
 
 _CANONICAL_STATE_ROUTE = "/api/virtual-account/state"
@@ -24,8 +25,9 @@ _CANONICAL_TICK_ROUTE = "/api/virtual-account/tick"
 def _canonical_state() -> dict[str, Any]:
     raw = PaperActivityEngine().state(catch_up=False)
     summary = raw.get("summary", {}) if isinstance(raw, dict) else {}
-    trades = list(raw.get("trades", [])) if isinstance(raw, dict) else []
-    positions = list(raw.get("positions", [])) if isinstance(raw, dict) and isinstance(raw.get("positions"), list) else []
+    trades = list(raw.get("trades", [])) if isinstance(raw, dict) and isinstance(raw.get("trades"), list) else []
+    raw_positions = raw.get("positions", []) if isinstance(raw, dict) else []
+    positions = list(raw_positions) if isinstance(raw_positions, list) else list(raw_positions.values()) if isinstance(raw_positions, dict) else []
     open_positions = int(summary.get("open_positions", len(positions)) or 0)
     equity = float(summary.get("equity", raw.get("equity", 10_000.0)) or 0.0)
     cash = float(summary.get("cash", raw.get("cash", equity)) or 0.0)
@@ -149,21 +151,27 @@ def install_demo_api(app: FastAPI) -> None:
         return
     app.state.demo_api_installed = True
 
-    @app.middleware("http")
-    async def shared_demo_contract(request: Request, call_next):
-        if request.url.path == "/api/demo/state" and request.method == "GET":
-            return JSONResponse(_state_response())
-        if request.url.path == "/api/demo/chat" and request.method == "POST":
-            try:
-                payload = await request.json()
-            except Exception:
-                payload = {}
-            return JSONResponse(_chat(str((payload or {}).get("message", "")).strip()))
-        return await call_next(request)
+    remove_legacy_routes(
+        app,
+        (
+            ("GET", "/api/demo/state"),
+            ("POST", "/api/demo/chat"),
+            ("POST", "/api/chat/message"),
+        ),
+    )
 
-    @app.get("/login", response_class=HTMLResponse)
-    def compatibility_login_page() -> HTMLResponse:
-        return HTMLResponse("""<!doctype html><html lang='ru'><head><meta charset='utf-8'><title>Вход в SharipovAI</title></head><body><main><h1>Вход в SharipovAI</h1><form method='post' action='/login'><input name='username' placeholder='Логин'><input name='password' type='password' placeholder='Пароль'><button type='submit'>Войти</button></form></main></body></html>""")
+    @app.get("/api/demo/state")
+    def demo_state() -> dict[str, Any]:
+        return _state_response()
+
+    @app.post("/api/demo/chat")
+    def demo_chat(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
+        return _chat(str((payload or {}).get("message", "")).strip())
+
+    @app.post("/api/chat/message")
+    def chat_message(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
+        result = _chat(str((payload or {}).get("message", "")).strip())
+        return {**result, "run": {"status": result["status"], "mode": "canonical_virtual_account"}}
 
     @app.get("/api/demo/state/shared")
     def demo_state_shared() -> dict[str, Any]:
