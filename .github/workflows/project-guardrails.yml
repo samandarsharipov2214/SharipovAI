@@ -9,12 +9,17 @@ on:
       - 'autonomous_trading/**'
       - 'risk_engine/**'
       - 'trading_core/**'
+      - 'historical_data/**'
+      - 'observability/**'
       - 'storage/**'
       - 'scripts/execution_foundation_audit.py'
+      - 'scripts/research_foundation_audit.py'
       - 'scripts/release_audit.py'
       - 'scripts/migrate_project_db.py'
       - 'requirements.txt'
       - 'requirements-dev.txt'
+      - 'CONSTITUTION.md'
+      - 'README.md'
       - '.github/workflows/project-guardrails.yml'
   pull_request:
     branches: [main]
@@ -24,12 +29,17 @@ on:
       - 'autonomous_trading/**'
       - 'risk_engine/**'
       - 'trading_core/**'
+      - 'historical_data/**'
+      - 'observability/**'
       - 'storage/**'
       - 'scripts/execution_foundation_audit.py'
+      - 'scripts/research_foundation_audit.py'
       - 'scripts/release_audit.py'
       - 'scripts/migrate_project_db.py'
       - 'requirements.txt'
       - 'requirements-dev.txt'
+      - 'CONSTITUTION.md'
+      - 'README.md'
       - '.github/workflows/project-guardrails.yml'
   workflow_dispatch:
 
@@ -110,12 +120,17 @@ jobs:
           import dashboard
           from autonomous_trading import StartupExecutionReconciler
           from exchange_connector import ApprovedExecutionRequest, ExecutionIdempotencyRepository
-          from trading_core import EventDrivenBacktester
+          from historical_data import HistoricalDataLoader
+          from observability import JsonFormatter
+          from trading_core import EventDrivenBacktester, WalkForwardBacktester
           assert dashboard.app is not None
           assert StartupExecutionReconciler is not None
           assert ApprovedExecutionRequest is not None
           assert ExecutionIdempotencyRepository is not None
           assert EventDrivenBacktester is not None
+          assert WalkForwardBacktester is not None
+          assert HistoricalDataLoader is not None
+          assert JsonFormatter is not None
           print('critical imports: ok')
           PY
 
@@ -143,10 +158,18 @@ jobs:
             tests/test_sensitive_api_admin_guard.py \
             tests/test_risk_hard_limits.py \
             tests/test_trading_core_backtest.py \
+            tests/test_trading_core_funding_walk_forward.py \
+            tests/test_benchmark_strategies.py \
+            tests/test_historical_data_layer.py \
+            tests/test_observability.py \
+            tests/test_execution_status_router.py \
             -q --tb=short
 
       - name: Audit execution foundation
         run: python scripts/execution_foundation_audit.py
+
+      - name: Audit research foundation
+        run: python scripts/research_foundation_audit.py --json
 
       - name: Run fail-closed release audit
         env:
