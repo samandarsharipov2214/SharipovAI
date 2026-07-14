@@ -1,9 +1,8 @@
-"""Default-off read-only Bybit private order WebSocket worker.
+"""Default-off read-only Bybit private order and execution WebSocket worker.
 
-The worker authenticates and subscribes only to the private ``order`` topic. It
-has no order create/amend/cancel methods and delegates every event to the
-fail-closed database-backed order state store. Runtime readiness and heartbeat
-are persisted so Testnet startup can require factual private-stream evidence.
+The worker authenticates once, subscribes to ``order`` and ``execution`` and
+routes each topic into a separate fail-closed ProjectDatabase store. It has no
+create, amend or cancel capability.
 """
 from __future__ import annotations
 
@@ -19,6 +18,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from .bybit_credentials import private_stream_credentials
+from .bybit_execution_state import BybitExecutionStateStore
 from .bybit_order_state import BybitOrderStateStore
 from .private_ws_gate import PrivateStreamHealthRepository
 
@@ -27,7 +27,8 @@ _MAINNET_URL = "wss://stream.bybit.com/v5/private"
 _TESTNET_HOSTS = frozenset({"stream-testnet.bybit.com"})
 _MAINNET_HOSTS = frozenset({"stream.bybit.com", "stream.bybit.eu"})
 _AUTH_REQUEST_ID = "sharipovai-private-auth"
-_SUBSCRIBE_REQUEST_ID = "sharipovai-private-orders"
+_SUBSCRIBE_REQUEST_ID = "sharipovai-private-order-execution"
+_REQUIRED_TOPICS = frozenset({"order", "execution"})
 _TRUE = {"1", "true", "yes", "on"}
 
 
@@ -59,12 +60,13 @@ def validate_private_ws_url(value: Any, *, environment: str) -> str:
 
 
 class BybitPrivateOrderWebSocket:
-    """Consume authenticated order events without any trading capability."""
+    """Consume authenticated order lifecycle and execution-fill evidence."""
 
     def __init__(
         self,
         *,
         store: BybitOrderStateStore | None = None,
+        execution_store: BybitExecutionStateStore | None = None,
         health_repository: PrivateStreamHealthRepository | None = None,
         connector: Callable[..., Any] | None = None,
         clock_ms: Callable[[], int] | None = None,
@@ -81,8 +83,15 @@ class BybitPrivateOrderWebSocket:
         self.api_secret = credentials.api_secret
         self.credential_profile = credentials.profile
         self.store = store or BybitOrderStateStore(environment=self.environment)
+        database = getattr(self.store, "database", None)
+        self.execution_store = execution_store or BybitExecutionStateStore(
+            database=database,
+            environment=self.environment,
+        )
+        if getattr(self.execution_store, "database", None).dsn != self.store.database.dsn:
+            raise ValueError("order and execution private stores must use the same database")
         self.health_repository = health_repository or PrivateStreamHealthRepository(
-            database=getattr(self.store, "database", None),
+            database=database,
             environment=self.environment,
         )
         self.receive_timeout = _bounded_float(
@@ -100,9 +109,11 @@ class BybitPrivateOrderWebSocket:
         self._lock = threading.RLock()
         self._connected = False
         self._authenticated = False
-        self._subscribed = False
+        self._subscribed_topics: set[str] = set()
         self._last_error = ""
         self._last_message_at_ms = 0
+        self._last_order_message_at_ms = 0
+        self._last_execution_message_at_ms = 0
         self._last_heartbeat_at_ms = 0
         self._ready_at_ms = 0
         self._reconnect_attempt = 0
@@ -124,7 +135,7 @@ class BybitPrivateOrderWebSocket:
         self._stop.clear()
         self._thread = threading.Thread(
             target=self._run,
-            name="bybit-private-order-websocket",
+            name="bybit-private-order-execution-websocket",
             daemon=True,
         )
         self._thread.start()
@@ -139,6 +150,7 @@ class BybitPrivateOrderWebSocket:
 
     def status(self) -> dict[str, Any]:
         with self._lock:
+            subscribed_topics = sorted(self._subscribed_topics)
             return {
                 "enabled": self.enabled(),
                 "worker_running": bool(self._thread and self._thread.is_alive()),
@@ -148,12 +160,18 @@ class BybitPrivateOrderWebSocket:
                 "credentials_configured": bool(self.api_key and self.api_secret),
                 "connected": self._connected,
                 "authenticated": self._authenticated,
-                "subscribed": self._subscribed,
+                "subscribed": _REQUIRED_TOPICS.issubset(self._subscribed_topics),
+                "subscribed_topics": subscribed_topics,
+                "order_topic_subscribed": "order" in self._subscribed_topics,
+                "execution_topic_subscribed": "execution" in self._subscribed_topics,
                 "ready_at_ms": self._ready_at_ms,
                 "last_message_at_ms": self._last_message_at_ms,
+                "last_order_message_at_ms": self._last_order_message_at_ms,
+                "last_execution_message_at_ms": self._last_execution_message_at_ms,
                 "last_heartbeat_at_ms": self._last_heartbeat_at_ms,
                 "last_error": self._last_error,
                 "reconnect_attempt": self._reconnect_attempt,
+                "read_only_topics": sorted(_REQUIRED_TOPICS),
             }
 
     def snapshot(self) -> dict[str, Any]:
@@ -163,31 +181,37 @@ class BybitPrivateOrderWebSocket:
             now_ms=self._clock_ms(),
             maximum_heartbeat_age_seconds=max(self.receive_timeout * 2.5, 30.0),
         )
+        orders = self.store.snapshot()
+        executions = self.execution_store.snapshot()
+        execution_reconciliation = self.execution_store.reconcile(orders)
         return {
-            "status": "ok" if gate.ready else "unverified",
+            "status": "ok" if gate.ready and execution_reconciliation["restart_safe"] else "unverified",
             "stream": status,
             "gate": gate.to_dict(),
-            "order_state": self.store.snapshot(),
+            "order_state": orders,
+            "execution_state": executions,
+            "execution_reconciliation": execution_reconciliation,
         }
 
     def reconcile(self, journal: Mapping[str, Any] | list[Any]) -> dict[str, Any]:
-        result = self.store.reconcile(journal)
+        order_result = self.store.reconcile(journal)
+        execution_result = self.execution_store.reconcile(self.store.snapshot())
         gate = self.health_repository.evaluate(
             required=self.enabled(),
             now_ms=self._clock_ms(),
             maximum_heartbeat_age_seconds=max(self.receive_timeout * 2.5, 30.0),
         )
+        errors = [*order_result.get("errors", []), *execution_result.get("errors", [])]
         if not gate.ready:
-            result = {
-                **result,
-                "status": "blocked",
-                "restart_safe": False,
-                "errors": [*result["errors"], *gate.failed_gates],
-                "private_stream_gate": gate.to_dict(),
-            }
-        else:
-            result = {**result, "private_stream_gate": gate.to_dict()}
-        return result
+            errors.extend(gate.failed_gates)
+        return {
+            **order_result,
+            "status": "ok" if not errors else "blocked",
+            "restart_safe": not errors,
+            "errors": errors,
+            "private_stream_gate": gate.to_dict(),
+            "execution_reconciliation": execution_result,
+        }
 
     def run_cycle(self) -> None:
         if not self.api_key or not self.api_secret:
@@ -238,11 +262,7 @@ class BybitPrivateOrderWebSocket:
         ).hexdigest()
         connection.send(
             json.dumps(
-                {
-                    "req_id": _AUTH_REQUEST_ID,
-                    "op": "auth",
-                    "args": [self.api_key, expires, signature],
-                },
+                {"req_id": _AUTH_REQUEST_ID, "op": "auth", "args": [self.api_key, expires, signature]},
                 separators=(",", ":"),
             )
         )
@@ -254,16 +274,19 @@ class BybitPrivateOrderWebSocket:
                 {
                     "req_id": _SUBSCRIBE_REQUEST_ID,
                     "op": "subscribe",
-                    "args": ["order"],
+                    "args": sorted(_REQUIRED_TOPICS),
                 },
                 separators=(",", ":"),
             )
         )
-        _validate_subscribe_ack(_decode(connection.recv(timeout=self.receive_timeout)))
+        _validate_subscribe_ack(
+            _decode(connection.recv(timeout=self.receive_timeout)),
+            expected_topics=_REQUIRED_TOPICS,
+        )
         ready_at = self._clock_ms()
         with self._lock:
             self._connected = True
-            self._subscribed = True
+            self._subscribed_topics = set(_REQUIRED_TOPICS)
             self._ready_at_ms = ready_at
             self._last_heartbeat_at_ms = ready_at
             self._last_error = ""
@@ -281,11 +304,17 @@ class BybitPrivateOrderWebSocket:
             if op in {"auth", "subscribe"}:
                 raise RuntimeError("unexpected duplicate private WebSocket control response")
             topic = str(payload.get("topic", ""))
-            if topic != "order" and not topic.startswith("order."):
-                raise RuntimeError(
-                    f"unexpected private WebSocket topic: {topic or 'missing'}"
-                )
-            self.store.ingest_message(payload, received_at_ms=received)
+            root_topic = topic.split(".", 1)[0]
+            if root_topic == "order":
+                self.store.ingest_message(payload, received_at_ms=received)
+                with self._lock:
+                    self._last_order_message_at_ms = received
+            elif root_topic == "execution":
+                self.execution_store.ingest_message(payload, received_at_ms=received)
+                with self._lock:
+                    self._last_execution_message_at_ms = received
+            else:
+                raise RuntimeError(f"unexpected private WebSocket topic: {topic or 'missing'}")
             with self._lock:
                 self._last_message_at_ms = received
                 self._last_heartbeat_at_ms = received
@@ -295,7 +324,7 @@ class BybitPrivateOrderWebSocket:
         with self._lock:
             self._connected = False
             self._authenticated = False
-            self._subscribed = False
+            self._subscribed_topics.clear()
             self._last_error = str(error)[:500]
         self._publish_health()
 
@@ -306,7 +335,6 @@ class BybitPrivateOrderWebSocket:
                 recorded_at_ms=recorded_at_ms or self._clock_ms(),
             )
         except Exception:
-            # Observability persistence must never create a second worker crash.
             pass
 
 
@@ -324,35 +352,36 @@ def _decode(raw: Any) -> dict[str, Any]:
 def _validate_auth_ack(payload: Mapping[str, Any]) -> None:
     if payload.get("op") != "auth" or payload.get("success") is not True:
         raise RuntimeError(
-            f"Bybit private WebSocket authentication rejected: "
+            "Bybit private WebSocket authentication rejected: "
             f"{payload.get('ret_msg') or 'invalid ack'}"
         )
     if payload.get("req_id") not in (None, "", _AUTH_REQUEST_ID):
         raise RuntimeError("Bybit authentication ack has unexpected req_id")
     if str(payload.get("ret_msg", "")) not in {"", "OK"}:
-        raise RuntimeError(
-            f"Bybit authentication rejected: {payload.get('ret_msg')}"
-        )
+        raise RuntimeError(f"Bybit authentication rejected: {payload.get('ret_msg')}")
 
 
-def _validate_subscribe_ack(payload: Mapping[str, Any]) -> None:
+def _validate_subscribe_ack(
+    payload: Mapping[str, Any],
+    *,
+    expected_topics: set[str] | frozenset[str] = _REQUIRED_TOPICS,
+) -> None:
     if payload.get("op") != "subscribe" or payload.get("success") is not True:
         raise RuntimeError(
-            f"Bybit private order subscription rejected: "
+            "Bybit private subscription rejected: "
             f"{payload.get('ret_msg') or 'invalid ack'}"
         )
     if payload.get("req_id") not in (None, "", _SUBSCRIBE_REQUEST_ID):
         raise RuntimeError("Bybit subscription ack has unexpected req_id")
     data = payload.get("data")
     if isinstance(data, Mapping):
-        failed = [str(item) for item in (data.get("failTopics") or [])]
+        failed = {str(item) for item in (data.get("failTopics") or [])}
         succeeded = {str(item) for item in (data.get("successTopics") or [])}
         if failed:
-            raise RuntimeError(
-                f"Bybit private order subscription failed: {', '.join(failed)}"
-            )
-        if succeeded and "order" not in succeeded:
-            raise RuntimeError("Bybit subscription ack is missing order topic")
+            raise RuntimeError(f"Bybit private subscription failed: {', '.join(sorted(failed))}")
+        if succeeded and not set(expected_topics).issubset(succeeded):
+            missing = sorted(set(expected_topics) - succeeded)
+            raise RuntimeError(f"Bybit subscription ack is missing topics: {', '.join(missing)}")
 
 
 def _bounded_float(name: str, default: float, minimum: float, maximum: float) -> float:
