@@ -54,6 +54,7 @@ jobs:
       AUTONOMOUS_TESTNET_ENABLED: '0'
       TESTNET_EXECUTION_ENABLED: '0'
       FEATURE_BYBIT_PRIVATE_ORDER_WS: '0'
+      RUNTIME_FILL_HARVESTER_ENABLED: '0'
       EXCHANGE_LIVE_TRADING_ENABLED: '0'
       LIVE_EXECUTION_MANUAL_UNLOCK: '0'
       LIVE_EXECUTION_CONFIRMATION: ''
@@ -102,9 +103,10 @@ jobs:
           import observability
           import trading_core
           import validation
-          from autonomous_trading import StartupExecutionReconciler
+          from autonomous_trading import ShadowModeTestnetBridge, StartupExecutionReconciler
           from exchange_connector import (
               ApprovedExecutionRequest,
+              BybitTradingReferenceClient,
               ExecutionIdempotencyRepository,
               PrivateStreamHealthRepository,
           )
@@ -115,10 +117,15 @@ jobs:
           assert historical_data.HistoricalDataLoader is not None
           assert observability.JsonFormatter is not None
           assert experiments.ExperimentRegistry is not None
+          assert experiments.AutomaticExperimentRunner is not None
+          assert experiments.ChampionChallengerRegistry is not None
           assert experiments.PromotionGateEngine is not None
           assert validation.FillDivergenceAnalyzer is not None
+          assert validation.RuntimeFillHarvester is not None
           assert StartupExecutionReconciler is not None
+          assert ShadowModeTestnetBridge is not None
           assert ApprovedExecutionRequest is not None
+          assert BybitTradingReferenceClient is not None
           assert ExecutionIdempotencyRepository is not None
           assert PrivateStreamHealthRepository is not None
           assert RiskLimits is not None
@@ -162,6 +169,17 @@ jobs:
           python scripts/research_foundation_audit.py --json \
             2>&1 | tee artifacts/research-audit.json
 
+      - name: Audit shadow campaign foundation
+        id: campaign_audit
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          set -o pipefail
+          python scripts/campaign_foundation_audit.py --json \
+            2>&1 | tee artifacts/campaign-audit.json
+
       - name: Run critical safety and research suite with coverage
         id: critical_suite
         if: always()
@@ -176,13 +194,18 @@ jobs:
             tests/test_startup_reconciliation.py \
             tests/test_private_ws_startup_gate.py \
             tests/test_testnet_bridge_canonical_candidate.py \
+            tests/test_bybit_reference_data.py \
+            tests/test_shadow_mode.py \
+            tests/test_runtime_fill_harvester.py \
             tests/test_risk_hard_limits.py \
             tests/test_capital_allocation.py \
             tests/test_trading_core_backtest.py \
             tests/test_trading_core_funding_walk_forward.py \
             tests/test_benchmark_strategies.py \
             tests/test_historical_data_layer.py \
+            tests/test_automatic_experiment_runner.py \
             tests/test_experiment_registry_promotion.py \
+            tests/test_champion_challenger_registry.py \
             tests/test_fill_divergence_validation.py \
             tests/test_experiment_dashboard.py \
             tests/test_observability.py \
@@ -194,7 +217,9 @@ jobs:
             --cov=exchange_connector.execution_contract \
             --cov=exchange_connector.execution_idempotency \
             --cov=exchange_connector.bybit_execution \
+            --cov=exchange_connector.bybit_reference_data \
             --cov=exchange_connector.private_ws_gate \
+            --cov=autonomous_trading.shadow_mode \
             --cov=autonomous_trading.startup_reconciliation \
             --cov=risk_engine \
             --cov=capital_allocation \
@@ -230,6 +255,7 @@ jobs:
           from pathlib import Path
           sources = [
               Path('artifacts/research-audit.json'),
+              Path('artifacts/campaign-audit.json'),
               Path('artifacts/critical-suite.log'),
               Path('artifacts/pytest-full.log'),
           ]
@@ -258,9 +284,10 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: phase3-promotion-evidence-${{ github.run_id }}
+          name: phase4-shadow-campaign-evidence-${{ github.run_id }}
           path: |
             artifacts/research-audit.json
+            artifacts/campaign-audit.json
             artifacts/critical-suite.log
             artifacts/pytest.xml
             artifacts/pytest-full.log
@@ -270,7 +297,7 @@ jobs:
           retention-days: 14
 
       - name: Preserve truthful failure status
-        if: steps.research_audit.outcome == 'failure' || steps.critical_suite.outcome == 'failure' || steps.full_suite.outcome == 'failure'
+        if: steps.research_audit.outcome == 'failure' || steps.campaign_audit.outcome == 'failure' || steps.critical_suite.outcome == 'failure' || steps.full_suite.outcome == 'failure'
         run: |
           cat artifacts/pytest-summary.txt
           exit 1
