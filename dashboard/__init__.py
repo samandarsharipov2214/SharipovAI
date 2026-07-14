@@ -19,6 +19,7 @@ from .dashboard2_api import install_dashboard2_api
 from .database_api import install_database_api
 from .exceptions import DashboardError
 from .execution_stages_api import install_execution_stages_api
+from .fill_harvester_api import install_fill_harvester_api
 from .global_auth_guard import install_global_auth_guard
 from .market_data_api import install_market_data_api
 from .news_agent_network_api import install_news_agent_network_api
@@ -40,6 +41,7 @@ install_currency_api(app)
 install_control_plane_api(app)
 install_dashboard2_api(app)
 install_private_order_ws_api(app)
+install_fill_harvester_api(app)
 install_source_status_compat_api(app)
 install_operational_routers(app)
 install_web2_host(app)
