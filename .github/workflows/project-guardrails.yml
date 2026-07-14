@@ -10,6 +10,7 @@ on:
       - 'risk_engine/**'
       - 'trading_core/**'
       - 'storage/**'
+      - 'scripts/execution_foundation_audit.py'
       - 'scripts/release_audit.py'
       - 'scripts/migrate_project_db.py'
       - 'requirements.txt'
@@ -24,6 +25,7 @@ on:
       - 'risk_engine/**'
       - 'trading_core/**'
       - 'storage/**'
+      - 'scripts/execution_foundation_audit.py'
       - 'scripts/release_audit.py'
       - 'scripts/migrate_project_db.py'
       - 'requirements.txt'
@@ -142,6 +144,9 @@ jobs:
             tests/test_risk_hard_limits.py \
             tests/test_trading_core_backtest.py \
             -q --tb=short
+
+      - name: Audit execution foundation
+        run: python scripts/execution_foundation_audit.py
 
       - name: Run fail-closed release audit
         env:
