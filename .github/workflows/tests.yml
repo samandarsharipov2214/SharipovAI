@@ -142,10 +142,18 @@ jobs:
           PY
 
       - name: Audit research foundation
-        run: python scripts/research_foundation_audit.py --json
+        id: research_audit
+        continue-on-error: true
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          set -o pipefail
+          python scripts/research_foundation_audit.py --json \
+            2>&1 | tee artifacts/research-audit.json
 
       - name: Run critical safety and research suite with coverage
         id: critical_suite
+        if: always()
         continue-on-error: true
         shell: bash
         run: |
@@ -186,6 +194,7 @@ jobs:
 
       - name: Run complete pytest suite
         id: full_suite
+        if: always()
         continue-on-error: true
         shell: bash
         run: |
@@ -197,14 +206,19 @@ jobs:
       - name: Build compact failure report
         if: always()
         run: |
+          mkdir -p artifacts
           python - <<'PY'
           from pathlib import Path
-          sources = [Path('artifacts/critical-suite.log'), Path('artifacts/pytest-full.log')]
+          sources = [
+              Path('artifacts/research-audit.json'),
+              Path('artifacts/critical-suite.log'),
+              Path('artifacts/pytest-full.log'),
+          ]
           lines = []
           for source in sources:
               lines.append(f'===== {source.name} =====')
               lines.extend(source.read_text(encoding='utf-8', errors='replace').splitlines() if source.exists() else ['log missing'])
-          markers = ('ERROR collecting', 'FAILED ', 'E   ', 'short test summary', 'ModuleNotFoundError', 'ImportError', 'SyntaxError', 'TypeError', 'AssertionError', 'coverage failure')
+          markers = ('"passed": false', '"status": "blocked"', 'ERROR collecting', 'FAILED ', 'E   ', 'short test summary', 'ModuleNotFoundError', 'ImportError', 'SyntaxError', 'TypeError', 'AssertionError', 'coverage failure')
           selected = []
           for index, line in enumerate(lines):
               if any(marker in line for marker in markers):
@@ -227,6 +241,7 @@ jobs:
         with:
           name: phase2-research-evidence-${{ github.run_id }}
           path: |
+            artifacts/research-audit.json
             artifacts/critical-suite.log
             artifacts/pytest.xml
             artifacts/pytest-full.log
@@ -236,7 +251,7 @@ jobs:
           retention-days: 14
 
       - name: Preserve truthful failure status
-        if: steps.critical_suite.outcome == 'failure' || steps.full_suite.outcome == 'failure'
+        if: steps.research_audit.outcome == 'failure' || steps.critical_suite.outcome == 'failure' || steps.full_suite.outcome == 'failure'
         run: |
           cat artifacts/pytest-summary.txt
           exit 1
