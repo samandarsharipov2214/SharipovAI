@@ -123,7 +123,7 @@ def test_requested_risk_is_capped_and_scaled_by_risk_engine() -> None:
         equity=10_000.0,
         open_trades=[],
         max_open_positions=8,
-        stop_loss_percent=0.8,
+        stop_loss_percent=10.0,
         fee_rate=0.001,
         requested_risk_percent=25.0,
         risk_size_multiplier=0.25,
@@ -133,7 +133,8 @@ def test_requested_risk_is_capped_and_scaled_by_risk_engine() -> None:
     assert allocation["requested_risk_percent"] == 25.0
     assert allocation["effective_risk_percent"] == 1.0
     assert allocation["risk_size_multiplier"] == 0.25
-    assert allocation["notional"] == 250.0
+    assert allocation["risk_budget"] == 25.0
+    assert allocation["notional"] == 245.1
 
 
 def test_correlation_cap_blocks_another_major_crypto_position() -> None:
