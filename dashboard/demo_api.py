@@ -173,30 +173,36 @@ def _chat(message: str) -> dict[str, Any]:
             reply = _sell(state)
             state = _load()
             source_ai = "Paper Trading Bot + Portfolio Engine"
-        elif any(word in text for word in ("выгод", "услов", "комисс", "дешев", "bybit")):
-            reply = (
-                "Bybit cost intelligence: Самый дешёвый вариант — spot maker; "
-                "USDT займ имеет минимальную ставку."
-            )
-            source_ai = "Exchange Cost AI"
-        elif "мониторинг" in text:
-            reply = (
-                "Онлайн-мониторинг активен. Биржевой connector подключён, "
-                "реальные ордера заблокированы."
-            )
-            source_ai = "General Controller"
         else:
+            # Call the compatibility engine first so any internal failure is
+            # caught by the fail-safe JSON response for every command class.
             result = run_ai_command(message)
             if not isinstance(result, dict):
                 raise TypeError("run_ai_command must return a mapping")
-            reply = str(result.get("reply", "")).strip()
-            source_ai = str(result.get("source_ai", "AI Command Engine"))
-            if not reply:
-                orchestrated = answer_chat(message, state)
-                reply = str(orchestrated.get("reply", "Команда обработана."))
-                source_ai = str(
-                    orchestrated.get("source_ai", "AI Chat Orchestrator")
+            if any(
+                word in text
+                for word in ("выгод", "услов", "комисс", "дешев", "bybit")
+            ):
+                reply = (
+                    "Bybit cost intelligence: Самый дешёвый вариант — spot maker; "
+                    "USDT займ имеет минимальную ставку."
                 )
+                source_ai = "Exchange Cost AI"
+            elif "мониторинг" in text:
+                reply = (
+                    "Онлайн-мониторинг активен. Биржевой connector подключён, "
+                    "реальные ордера заблокированы."
+                )
+                source_ai = "General Controller"
+            else:
+                reply = str(result.get("reply", "")).strip()
+                source_ai = str(result.get("source_ai", "AI Command Engine"))
+                if not reply:
+                    orchestrated = answer_chat(message, state)
+                    reply = str(orchestrated.get("reply", "Команда обработана."))
+                    source_ai = str(
+                        orchestrated.get("source_ai", "AI Chat Orchestrator")
+                    )
         return {
             "status": "ok",
             "reply": reply,
@@ -230,7 +236,6 @@ def install_demo_api(app: FastAPI) -> None:
         return
     app.state.demo_api_installed = True
 
-    # Supersede duplicate legacy demo routes with one shared state contract.
     @app.middleware("http")
     async def shared_demo_contract(request: Request, call_next):
         if request.url.path == "/api/demo/state" and request.method == "GET":
