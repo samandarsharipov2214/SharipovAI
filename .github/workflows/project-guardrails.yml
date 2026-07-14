@@ -17,6 +17,7 @@ on:
       - 'scripts/execution_foundation_audit.py'
       - 'scripts/research_foundation_audit.py'
       - 'scripts/promotion_foundation_audit.py'
+      - 'scripts/campaign_foundation_audit.py'
       - 'scripts/release_audit.py'
       - 'scripts/migrate_project_db.py'
       - 'requirements.txt'
@@ -40,6 +41,7 @@ on:
       - 'scripts/execution_foundation_audit.py'
       - 'scripts/research_foundation_audit.py'
       - 'scripts/promotion_foundation_audit.py'
+      - 'scripts/campaign_foundation_audit.py'
       - 'scripts/release_audit.py'
       - 'scripts/migrate_project_db.py'
       - 'requirements.txt'
@@ -65,7 +67,7 @@ jobs:
          github.event.pull_request.head.repo.full_name == github.repository)
       }}
     runs-on: [self-hosted, linux, x64, sharipovai-ci]
-    timeout-minutes: 30
+    timeout-minutes: 35
     env:
       PYTHONUNBUFFERED: '1'
       PYTHONDONTWRITEBYTECODE: '1'
@@ -80,6 +82,7 @@ jobs:
       AUTONOMOUS_TESTNET_ENABLED: '0'
       AUTONOMOUS_TESTNET_BRIDGE_ENABLED: '0'
       TESTNET_EXECUTION_ENABLED: '0'
+      RUNTIME_FILL_HARVESTER_ENABLED: '0'
       EXCHANGE_LIVE_TRADING_ENABLED: '0'
       FEATURE_BYBIT_LIVE_EXECUTION: '0'
       FEATURE_BYBIT_TESTNET_EXECUTION: '0'
@@ -126,9 +129,10 @@ jobs:
           import dashboard
           import experiments
           import validation
-          from autonomous_trading import StartupExecutionReconciler
+          from autonomous_trading import ShadowModeTestnetBridge, StartupExecutionReconciler
           from exchange_connector import (
               ApprovedExecutionRequest,
+              BybitTradingReferenceClient,
               ExecutionIdempotencyRepository,
               PrivateStreamHealthRepository,
           )
@@ -137,10 +141,15 @@ jobs:
           from trading_core import EventDrivenBacktester, WalkForwardBacktester
           assert dashboard.app is not None
           assert experiments.ExperimentRegistry is not None
+          assert experiments.AutomaticExperimentRunner is not None
+          assert experiments.ChampionChallengerRegistry is not None
           assert experiments.PromotionGateEngine is not None
           assert validation.FillDivergenceAnalyzer is not None
+          assert validation.RuntimeFillHarvester is not None
           assert StartupExecutionReconciler is not None
+          assert ShadowModeTestnetBridge is not None
           assert ApprovedExecutionRequest is not None
+          assert BybitTradingReferenceClient is not None
           assert ExecutionIdempotencyRepository is not None
           assert PrivateStreamHealthRepository is not None
           assert EventDrivenBacktester is not None
@@ -177,13 +186,18 @@ jobs:
             tests/test_startup_reconciliation.py \
             tests/test_private_ws_startup_gate.py \
             tests/test_testnet_bridge_canonical_candidate.py \
+            tests/test_bybit_reference_data.py \
+            tests/test_shadow_mode.py \
+            tests/test_runtime_fill_harvester.py \
             tests/test_sensitive_api_admin_guard.py \
             tests/test_risk_hard_limits.py \
             tests/test_trading_core_backtest.py \
             tests/test_trading_core_funding_walk_forward.py \
             tests/test_benchmark_strategies.py \
             tests/test_historical_data_layer.py \
+            tests/test_automatic_experiment_runner.py \
             tests/test_experiment_registry_promotion.py \
+            tests/test_champion_challenger_registry.py \
             tests/test_fill_divergence_validation.py \
             tests/test_experiment_dashboard.py \
             tests/test_observability.py \
@@ -224,6 +238,17 @@ jobs:
           python scripts/promotion_foundation_audit.py --json \
             2>&1 | tee artifacts/promotion-audit.json
 
+      - name: Audit shadow campaign foundation
+        id: campaign_audit
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          set -o pipefail
+          python scripts/campaign_foundation_audit.py --json \
+            2>&1 | tee artifacts/campaign-audit.json
+
       - name: Run fail-closed release audit
         id: release_audit
         if: always()
@@ -241,18 +266,19 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: phase3-guardrail-evidence-${{ github.run_id }}
+          name: phase4-shadow-guardrail-evidence-${{ github.run_id }}
           path: |
             artifacts/guardrails-tests.log
             artifacts/execution-audit.json
             artifacts/research-audit.json
             artifacts/promotion-audit.json
+            artifacts/campaign-audit.json
             artifacts/release-audit.json
           if-no-files-found: error
           retention-days: 14
 
       - name: Preserve truthful guardrail status
-        if: steps.regression.outcome == 'failure' || steps.execution_audit.outcome == 'failure' || steps.research_audit.outcome == 'failure' || steps.promotion_audit.outcome == 'failure' || steps.release_audit.outcome == 'failure'
+        if: steps.regression.outcome == 'failure' || steps.execution_audit.outcome == 'failure' || steps.research_audit.outcome == 'failure' || steps.promotion_audit.outcome == 'failure' || steps.campaign_audit.outcome == 'failure' || steps.release_audit.outcome == 'failure'
         run: |
           for file in artifacts/*.json artifacts/*.log; do
             [ -f "$file" ] && { echo "===== $file ====="; cat "$file"; }
