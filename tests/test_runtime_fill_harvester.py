@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from exchange_connector.bybit_execution_state import BybitExecutionStateStore
 from exchange_connector.bybit_order_state import BybitOrderStateStore
 from storage import ProjectDatabase
 from validation.fill_divergence import DivergenceThresholds, FillDivergenceAnalyzer
@@ -12,9 +13,10 @@ def _database(tmp_path) -> ProjectDatabase:
     return database
 
 
-def test_harvester_builds_and_persists_paper_testnet_divergence(tmp_path) -> None:
+def test_harvester_builds_and_persists_actual_execution_divergence(tmp_path) -> None:
     database = _database(tmp_path)
     private = BybitOrderStateStore(database=database, environment="testnet")
+    executions = BybitExecutionStateStore(database=database, environment="testnet")
     analyzer = FillDivergenceAnalyzer(
         DivergenceThresholds(
             minimum_matches=1,
@@ -28,6 +30,7 @@ def test_harvester_builds_and_persists_paper_testnet_divergence(tmp_path) -> Non
     harvester = RuntimeFillHarvester(
         database=database,
         private_orders=private,
+        private_executions=executions,
         analyzer=analyzer,
     )
     trade_id = "paper-shadow-1"
@@ -54,16 +57,14 @@ def test_harvester_builds_and_persists_paper_testnet_divergence(tmp_path) -> Non
         {
             "paper_trade_id": trade_id,
             "experiment_id": "exp-shadow-1",
+            "campaign_id": "campaign-shadow-1",
             "status": "accepted",
             "recorded_at_ms": 1_000_010,
             "symbol": "BTCUSDT",
             "side": "BUY",
             "mirrored_quantity": 0.0005,
             "order_link_id": order_link_id,
-            "trading_reference": {
-                "reference_price": 50_000.0,
-                "taker_fee_rate": 0.0006,
-            },
+            "trading_reference": {"reference_price": 50_000.0},
         },
         expected_version=0,
     )
@@ -91,20 +92,50 @@ def test_harvester_builds_and_persists_paper_testnet_divergence(tmp_path) -> Non
         },
         received_at_ms=1_000_100,
     )
+    executions.ingest_message(
+        {
+            "id": "execution-shadow-1",
+            "topic": "execution.spot",
+            "creationTime": 1_000_100,
+            "data": [
+                {
+                    "category": "spot",
+                    "execId": "exec-shadow-1",
+                    "orderId": "order-shadow-1",
+                    "orderLinkId": order_link_id,
+                    "symbol": "BTCUSDT",
+                    "side": "Buy",
+                    "execPrice": "50000",
+                    "execQty": "0.0005",
+                    "execValue": "25",
+                    "execFee": "0.015",
+                    "feeRate": "0.0006",
+                    "feeCurrency": "USDT",
+                    "isMaker": False,
+                    "execTime": 1_000_100,
+                    "seq": 1,
+                }
+            ],
+        },
+        received_at_ms=1_000_100,
+    )
 
     result = harvester.harvest(
         experiment_id="exp-shadow-1",
+        campaign_id="campaign-shadow-1",
         now_ms=1_000_200,
     )
 
     assert result["status"] == "saved"
     assert result["matched_count"] == 1
     assert result["promotion_eligible"] is True
+    assert result["actual_execution_fees"] is True
     assert result["unmatched_paper_count"] == 0
     assert result["unmatched_testnet_count"] == 0
 
     unchanged = harvester.harvest(
         experiment_id="exp-shadow-1",
+        campaign_id="campaign-shadow-1",
         now_ms=1_000_300,
     )
     assert unchanged["status"] == "unchanged"
