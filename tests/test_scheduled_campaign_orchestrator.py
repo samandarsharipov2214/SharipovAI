@@ -86,6 +86,24 @@ class _FakeCampaign:
         return []
 
 
+class _ActiveCampaign(_FakeCampaign):
+    def __init__(self) -> None:
+        super().__init__()
+        self.active = {
+            "campaign_id": "campaign-existing",
+            "experiment_id": "exp-existing",
+            "scope": "spot:testnet",
+            "status": "running",
+        }
+
+    def list(self, *, limit: int):
+        return [dict(self.active)]
+
+    def run_cycle(self, campaign_id: str, **kwargs):
+        self.cycles.append(campaign_id)
+        return dict(self.active)
+
+
 def test_scheduler_rejects_experiment_without_manual_testnet_approval(tmp_path) -> None:
     database = _database(tmp_path)
     registry = ExperimentRegistry(database)
@@ -131,6 +149,32 @@ def test_due_schedule_launches_once_and_advances_next_run(tmp_path) -> None:
     second = orchestrator.tick(now_ms=1_100_000)
     assert second["launched_campaign_ids"] == []
     assert len(campaign.started) == 1
+
+
+def test_scheduler_defers_due_schedule_while_global_campaign_is_running(tmp_path) -> None:
+    database = _database(tmp_path)
+    registry = ExperimentRegistry(database)
+    _approve_testnet(registry, "exp-approved")
+    campaign = _ActiveCampaign()
+    orchestrator = ScheduledCampaignOrchestrator(database, campaign=campaign)
+    schedule = orchestrator.create_schedule(
+        experiment_id="exp-approved",
+        scope="spot:testnet",
+        interval_seconds=300,
+        actor="owner",
+        start_at_ms=1_000_000,
+    )
+
+    result = orchestrator.tick(now_ms=1_000_000)
+
+    assert result["launched_campaign_ids"] == []
+    assert result["deferred_schedule_ids"] == [schedule["schedule_id"]]
+    assert campaign.started == []
+    assert campaign.cycles == ["campaign-existing"]
+    updated = orchestrator.list_schedules()[0]
+    assert updated["status"] == "deferred"
+    assert updated["last_deferred_reason"] == "global_campaign_authorization_busy"
+    assert updated["next_run_at_ms"] == 1_300_000
 
 
 def test_shadow_campaign_policy_cannot_relax_hard_bounds() -> None:
