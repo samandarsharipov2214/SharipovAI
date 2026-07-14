@@ -39,7 +39,7 @@ jobs:
          github.event.pull_request.head.repo.full_name == github.repository)
       }}
     runs-on: [self-hosted, linux, x64, sharipovai-ci]
-    timeout-minutes: 45
+    timeout-minutes: 50
     env:
       PYTHONUNBUFFERED: '1'
       PYTHONDONTWRITEBYTECODE: '1'
@@ -55,6 +55,7 @@ jobs:
       TESTNET_EXECUTION_ENABLED: '0'
       FEATURE_BYBIT_PRIVATE_ORDER_WS: '0'
       RUNTIME_FILL_HARVESTER_ENABLED: '0'
+      SCHEDULED_CAMPAIGN_ORCHESTRATOR_ENABLED: '0'
       EXCHANGE_LIVE_TRADING_ENABLED: '0'
       LIVE_EXECUTION_MANUAL_UNLOCK: '0'
       LIVE_EXECUTION_CONFIRMATION: ''
@@ -97,6 +98,7 @@ jobs:
       - name: Import critical runtime safely
         run: |
           python - <<'PY'
+          import campaigns
           import dashboard
           import experiments
           import historical_data
@@ -106,12 +108,16 @@ jobs:
           from autonomous_trading import ShadowModeTestnetBridge, StartupExecutionReconciler
           from exchange_connector import (
               ApprovedExecutionRequest,
+              BybitExecutionStateStore,
               BybitTradingReferenceClient,
               ExecutionIdempotencyRepository,
               PrivateStreamHealthRepository,
           )
           from risk_engine import RiskLimits
           assert dashboard.app is not None
+          assert campaigns.ScheduledCampaignOrchestrator is not None
+          assert campaigns.TestnetShadowCampaign is not None
+          assert campaigns.FinalPromotionReportEngine is not None
           assert trading_core.EventDrivenBacktester is not None
           assert trading_core.WalkForwardBacktester is not None
           assert historical_data.HistoricalDataLoader is not None
@@ -125,6 +131,7 @@ jobs:
           assert StartupExecutionReconciler is not None
           assert ShadowModeTestnetBridge is not None
           assert ApprovedExecutionRequest is not None
+          assert BybitExecutionStateStore is not None
           assert BybitTradingReferenceClient is not None
           assert ExecutionIdempotencyRepository is not None
           assert PrivateStreamHealthRepository is not None
@@ -169,7 +176,7 @@ jobs:
           python scripts/research_foundation_audit.py --json \
             2>&1 | tee artifacts/research-audit.json
 
-      - name: Audit shadow campaign foundation
+      - name: Audit scheduled shadow campaign foundation
         id: campaign_audit
         if: always()
         continue-on-error: true
@@ -193,10 +200,14 @@ jobs:
             tests/test_execution_idempotency.py \
             tests/test_startup_reconciliation.py \
             tests/test_private_ws_startup_gate.py \
+            tests/test_private_execution_ws.py \
             tests/test_testnet_bridge_canonical_candidate.py \
             tests/test_bybit_reference_data.py \
+            tests/test_bybit_execution_state.py \
             tests/test_shadow_mode.py \
             tests/test_runtime_fill_harvester.py \
+            tests/test_scheduled_campaign_orchestrator.py \
+            tests/test_final_promotion_report.py \
             tests/test_risk_hard_limits.py \
             tests/test_capital_allocation.py \
             tests/test_trading_core_backtest.py \
@@ -206,6 +217,7 @@ jobs:
             tests/test_automatic_experiment_runner.py \
             tests/test_experiment_registry_promotion.py \
             tests/test_champion_challenger_registry.py \
+            tests/test_leadership_dashboard.py \
             tests/test_fill_divergence_validation.py \
             tests/test_experiment_dashboard.py \
             tests/test_observability.py \
@@ -217,6 +229,7 @@ jobs:
             --cov=exchange_connector.execution_contract \
             --cov=exchange_connector.execution_idempotency \
             --cov=exchange_connector.bybit_execution \
+            --cov=exchange_connector.bybit_execution_state \
             --cov=exchange_connector.bybit_reference_data \
             --cov=exchange_connector.private_ws_gate \
             --cov=autonomous_trading.shadow_mode \
@@ -230,6 +243,7 @@ jobs:
             --cov=observability \
             --cov=dashboard.routers.execution_status \
             --cov=dashboard.routers.experiments \
+            --cov=dashboard.routers.leadership \
             --cov-report=term-missing \
             --cov-report=xml:artifacts/coverage.xml \
             --cov-fail-under=65 \
@@ -284,7 +298,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: phase4-shadow-campaign-evidence-${{ github.run_id }}
+          name: phase5-scheduled-campaign-evidence-${{ github.run_id }}
           path: |
             artifacts/research-audit.json
             artifacts/campaign-audit.json
