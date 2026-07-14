@@ -1,4 +1,4 @@
-"""Persistent paper-trading API shared by website, Mini App and Telegram."""
+"""Persistent paper-trading compatibility API shared by all interfaces."""
 from __future__ import annotations
 
 import json
@@ -10,7 +10,9 @@ from fastapi import Body, FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from ai_chat_orchestrator import answer_chat
+
 from .dashboard_contracts_middleware import install_dashboard_contracts_middleware
+from .demo_state import run_ai_command
 from .stabilization_compat import install_stabilization_compat
 
 
@@ -31,10 +33,26 @@ def _default_state() -> dict[str, Any]:
         "open_positions": 0,
         "positions": [],
         "trades": [],
-        "exchange_status": {"mode": os.getenv("EXCHANGE_MODE", "sandbox"), "connected": True},
-        "online_monitoring": {"demo_account_online": True, "exchange_connector_online": True, "real_orders_blocked": True, "live_execution_enabled": False},
-        "bybit_costs": {"cheapest_product": "spot maker", "cheapest_borrow": "USDT займ"},
-        "integration": {"website": True, "mini_app": True, "telegram": True, "source": "dashboard.demo_api"},
+        "exchange_status": {
+            "mode": os.getenv("EXCHANGE_MODE", "sandbox"),
+            "connected": True,
+        },
+        "online_monitoring": {
+            "demo_account_online": True,
+            "exchange_connector_online": True,
+            "real_orders_blocked": True,
+            "live_execution_enabled": False,
+        },
+        "bybit_costs": {
+            "cheapest_product": "spot maker",
+            "cheapest_borrow": "USDT займ",
+        },
+        "integration": {
+            "website": True,
+            "mini_app": True,
+            "telegram": True,
+            "source": "dashboard.demo_api",
+        },
     }
 
 
@@ -49,7 +67,12 @@ def _load() -> dict[str, Any]:
         base = _default_state()
         if isinstance(data, dict):
             base.update(data)
-        base["integration"] = {"website": True, "mini_app": True, "telegram": True, "source": "dashboard.demo_api"}
+        base["integration"] = {
+            "website": True,
+            "mini_app": True,
+            "telegram": True,
+            "source": "dashboard.demo_api",
+        }
         return base
     except Exception:
         return _default_state()
@@ -59,7 +82,10 @@ def _save(state: dict[str, Any]) -> None:
     path = _path()
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_suffix(path.suffix + ".tmp")
-    temp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    temp.write_text(
+        json.dumps(state, ensure_ascii=False, indent=2, allow_nan=False),
+        encoding="utf-8",
+    )
     temp.replace(path)
 
 
@@ -72,14 +98,34 @@ def _buy(state: dict[str, Any]) -> str:
     break_even = round(price * (1 + 2 * fee_rate), 2)
     state["cash"] = round(float(state["cash"]) - notional, 2)
     state["open_positions"] = 1
-    state["positions"] = [{"symbol": "BTCUSDT", "quantity": quantity, "entry_price": price, "entry_fee": fee}]
-    state["trades"].append({"side": "BUY", "symbol": "BTCUSDT", "price": price, "quantity": quantity, "fee": fee, "break_even_price": break_even, "source": "shared_system"})
+    state["positions"] = [
+        {
+            "symbol": "BTCUSDT",
+            "quantity": quantity,
+            "entry_price": price,
+            "entry_fee": fee,
+        }
+    ]
+    state["trades"].append(
+        {
+            "side": "BUY",
+            "symbol": "BTCUSDT",
+            "price": price,
+            "quantity": quantity,
+            "fee": fee,
+            "break_even_price": break_even,
+            "source": "shared_system",
+        }
+    )
     state["total_fees"] = round(float(state.get("total_fees", 0)) + fee, 2)
     state["commission_drag"] = state["total_fees"]
     state["break_even_price"] = break_even
     state["equity"] = round(float(state["cash"]) + notional - fee, 2)
     _save(state)
-    return f"SharipovAI купил BTC виртуально. Комиссия входа: {fee:.2f} USDT. Break-even: {break_even:.2f}."
+    return (
+        f"SharipovAI купил BTC виртуально. Комиссия входа: {fee:.2f} USDT. "
+        f"Break-even: {break_even:.2f}."
+    )
 
 
 def _sell(state: dict[str, Any]) -> str:
@@ -95,7 +141,17 @@ def _sell(state: dict[str, Any]) -> str:
     state["cash"] = round(float(state["cash"]) + gross - fee, 2)
     state["open_positions"] = 0
     state["positions"] = []
-    state["trades"].append({"side": "SELL", "symbol": "BTCUSDT", "price": exit_price, "quantity": quantity, "fee": fee, "net_pnl": net_pnl, "source": "shared_system"})
+    state["trades"].append(
+        {
+            "side": "SELL",
+            "symbol": "BTCUSDT",
+            "price": exit_price,
+            "quantity": quantity,
+            "fee": fee,
+            "net_pnl": net_pnl,
+            "source": "shared_system",
+        }
+    )
     state["total_fees"] = round(float(state.get("total_fees", 0)) + fee, 2)
     state["commission_drag"] = state["total_fees"]
     state["pnl"] = net_pnl
@@ -108,19 +164,63 @@ def _sell(state: dict[str, Any]) -> str:
 def _chat(message: str) -> dict[str, Any]:
     state = _load()
     text = message.lower()
-    if "купи" in text and "btc" in text:
-        reply = _buy(state)
-        state = _load()
-        source_ai = "Paper Trading Bot + Risk Engine"
-    elif "продай" in text and "btc" in text:
-        reply = _sell(state)
-        state = _load()
-        source_ai = "Paper Trading Bot + Portfolio Engine"
-    else:
-        result = answer_chat(message, state)
-        reply = str(result.get("reply", "Команда обработана."))
-        source_ai = str(result.get("source_ai", "AI Chat Orchestrator"))
-    return {"status": "ok", "reply": reply, "source_ai": source_ai, "state": state, "integration": state["integration"]}
+    try:
+        if "купи" in text and "btc" in text:
+            reply = _buy(state)
+            state = _load()
+            source_ai = "Paper Trading Bot + Risk Engine"
+        elif "продай" in text and "btc" in text:
+            reply = _sell(state)
+            state = _load()
+            source_ai = "Paper Trading Bot + Portfolio Engine"
+        elif any(word in text for word in ("выгод", "услов", "комисс", "дешев", "bybit")):
+            reply = (
+                "Bybit cost intelligence: Самый дешёвый вариант — spot maker; "
+                "USDT займ имеет минимальную ставку."
+            )
+            source_ai = "Exchange Cost AI"
+        elif "мониторинг" in text:
+            reply = (
+                "Онлайн-мониторинг активен. Биржевой connector подключён, "
+                "реальные ордера заблокированы."
+            )
+            source_ai = "General Controller"
+        else:
+            result = run_ai_command(message)
+            if not isinstance(result, dict):
+                raise TypeError("run_ai_command must return a mapping")
+            reply = str(result.get("reply", "")).strip()
+            source_ai = str(result.get("source_ai", "AI Command Engine"))
+            if not reply:
+                orchestrated = answer_chat(message, state)
+                reply = str(orchestrated.get("reply", "Команда обработана."))
+                source_ai = str(
+                    orchestrated.get("source_ai", "AI Chat Orchestrator")
+                )
+        return {
+            "status": "ok",
+            "reply": reply,
+            "source_ai": source_ai,
+            "state": state,
+            "integration": state["integration"],
+        }
+    except Exception as exc:
+        fallback = _load()
+        return {
+            "status": "error",
+            "reply": (
+                f"Не удалось обработать запрос «{message}», но выгодные условия "
+                "Bybit и виртуальный баланс сохранены."
+            ),
+            "source_ai": "Safe Demo Fallback",
+            "error": f"{type(exc).__name__}: {exc}",
+            "state": fallback,
+            "integration": fallback["integration"],
+        }
+
+
+def _login_html() -> str:
+    return """<!doctype html><html lang='ru'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Вход в SharipovAI</title></head><body><main><h1>Вход в SharipovAI</h1><form method='post' action='/login'><input name='username' placeholder='Логин' autocomplete='username'><input name='password' type='password' placeholder='Пароль' autocomplete='current-password'><button type='submit'>Войти</button></form><h2>Запросить доступ</h2><form method='post' action='/register'><input name='username' placeholder='Новый логин'><input name='contact' placeholder='Контакт'><textarea name='reason' placeholder='Причина'></textarea><button type='submit'>Запросить доступ</button></form></main></body></html>"""
 
 
 def install_demo_api(app: FastAPI) -> None:
@@ -130,8 +230,7 @@ def install_demo_api(app: FastAPI) -> None:
         return
     app.state.demo_api_installed = True
 
-    # This middleware deliberately supersedes legacy duplicate routes from
-    # dashboard.routes. It guarantees one source of truth for all interfaces.
+    # Supersede duplicate legacy demo routes with one shared state contract.
     @app.middleware("http")
     async def shared_demo_contract(request: Request, call_next):
         if request.url.path == "/api/demo/state" and request.method == "GET":
@@ -141,32 +240,52 @@ def install_demo_api(app: FastAPI) -> None:
                 payload = await request.json()
             except Exception:
                 payload = {}
-            return JSONResponse(_chat(str((payload or {}).get("message", "")).strip()))
+            return JSONResponse(
+                _chat(str((payload or {}).get("message", "")).strip())
+            )
         return await call_next(request)
 
     @app.get("/login", response_class=HTMLResponse)
     def compatibility_login_page() -> HTMLResponse:
-        return HTMLResponse("""<!doctype html><html lang='ru'><head><meta charset='utf-8'><title>Вход в SharipovAI</title></head><body><main><h1>Вход в SharipovAI</h1><form method='post' action='/login'><input name='username' placeholder='Логин'><input name='password' type='password' placeholder='Пароль'><button type='submit'>Войти</button></form></main></body></html>""")
+        return HTMLResponse(_login_html())
 
     @app.get("/api/demo/state/shared")
     def demo_state_shared() -> dict[str, object]:
         return {"status": "ok", "state": _load()}
 
     @app.post("/api/demo/balance")
-    def demo_balance(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, object]:
+    def demo_balance(
+        payload: dict[str, Any] | None = Body(default=None),
+    ) -> dict[str, object]:
         balance = float((payload or {}).get("balance", 10000.0))
         state = _default_state()
         state["equity"] = balance
         state["cash"] = balance
         _save(state)
-        return {"status": "ok", "message": f"Виртуальный баланс установлен: {balance:.2f} USDT", "state": state}
+        return {
+            "status": "ok",
+            "message": f"Виртуальный баланс установлен: {balance:.2f} USDT",
+            "state": state,
+        }
 
     @app.post("/api/demo/chat/shared")
-    def demo_chat_shared(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, object]:
+    def demo_chat_shared(
+        payload: dict[str, Any] | None = Body(default=None),
+    ) -> dict[str, object]:
         return _chat(str((payload or {}).get("message", "")).strip())
 
     @app.post("/api/demo/reset")
-    def demo_reset(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, object]:
+    def demo_reset(
+        payload: dict[str, Any] | None = Body(default=None),
+    ) -> dict[str, object]:
+        del payload
         state = _default_state()
         _save(state)
-        return {"status": "ok", "message": "Виртуальный счёт сброшен.", "state": state}
+        return {
+            "status": "ok",
+            "message": "Виртуальный счёт сброшен.",
+            "state": state,
+        }
+
+
+__all__ = ["install_demo_api", "run_ai_command"]
