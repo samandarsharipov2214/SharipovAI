@@ -31,7 +31,7 @@ def _dataset(tmp_path):
                 100.0 + i * 0.2 AS close,
                 1000000.0 AS volume,
                 0.0001 AS funding_rate
-            FROM range(100) table(i)
+            FROM range(100) AS generated(i)
         ) TO '{escaped}' (FORMAT PARQUET)
         """
     )
