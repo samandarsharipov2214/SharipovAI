@@ -1,4 +1,5 @@
 """Research experiment persistence and promotion policy."""
+from .adapters import manifest_for_experiment
 from .promotion import (
     PromotionGateEngine,
     PromotionGateReport,
@@ -14,4 +15,5 @@ __all__ = [
     "PromotionGateReport",
     "PromotionPolicy",
     "PromotionTarget",
+    "manifest_for_experiment",
 ]
