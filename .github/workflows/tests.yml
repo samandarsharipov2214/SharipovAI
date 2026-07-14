@@ -53,6 +53,7 @@ jobs:
       AUTONOMOUS_TESTNET_BRIDGE_ENABLED: '0'
       AUTONOMOUS_TESTNET_ENABLED: '0'
       TESTNET_EXECUTION_ENABLED: '0'
+      FEATURE_BYBIT_PRIVATE_ORDER_WS: '0'
       EXCHANGE_LIVE_TRADING_ENABLED: '0'
       LIVE_EXECUTION_MANUAL_UNLOCK: '0'
       LIVE_EXECUTION_CONFIRMATION: ''
@@ -96,20 +97,30 @@ jobs:
         run: |
           python - <<'PY'
           import dashboard
+          import experiments
           import historical_data
           import observability
           import trading_core
+          import validation
           from autonomous_trading import StartupExecutionReconciler
-          from exchange_connector import ApprovedExecutionRequest, ExecutionIdempotencyRepository
+          from exchange_connector import (
+              ApprovedExecutionRequest,
+              ExecutionIdempotencyRepository,
+              PrivateStreamHealthRepository,
+          )
           from risk_engine import RiskLimits
           assert dashboard.app is not None
           assert trading_core.EventDrivenBacktester is not None
           assert trading_core.WalkForwardBacktester is not None
           assert historical_data.HistoricalDataLoader is not None
           assert observability.JsonFormatter is not None
+          assert experiments.ExperimentRegistry is not None
+          assert experiments.PromotionGateEngine is not None
+          assert validation.FillDivergenceAnalyzer is not None
           assert StartupExecutionReconciler is not None
           assert ApprovedExecutionRequest is not None
           assert ExecutionIdempotencyRepository is not None
+          assert PrivateStreamHealthRepository is not None
           assert RiskLimits is not None
           print('critical imports: ok')
           PY
@@ -163,6 +174,7 @@ jobs:
             tests/test_execution_contract.py \
             tests/test_execution_idempotency.py \
             tests/test_startup_reconciliation.py \
+            tests/test_private_ws_startup_gate.py \
             tests/test_testnet_bridge_canonical_candidate.py \
             tests/test_risk_hard_limits.py \
             tests/test_capital_allocation.py \
@@ -170,6 +182,9 @@ jobs:
             tests/test_trading_core_funding_walk_forward.py \
             tests/test_benchmark_strategies.py \
             tests/test_historical_data_layer.py \
+            tests/test_experiment_registry_promotion.py \
+            tests/test_fill_divergence_validation.py \
+            tests/test_experiment_dashboard.py \
             tests/test_observability.py \
             tests/test_execution_status_router.py \
             tests/test_market_paper_engine.py \
@@ -179,13 +194,17 @@ jobs:
             --cov=exchange_connector.execution_contract \
             --cov=exchange_connector.execution_idempotency \
             --cov=exchange_connector.bybit_execution \
+            --cov=exchange_connector.private_ws_gate \
             --cov=autonomous_trading.startup_reconciliation \
             --cov=risk_engine \
             --cov=capital_allocation \
             --cov=trading_core \
             --cov=historical_data \
+            --cov=experiments \
+            --cov=validation \
             --cov=observability \
             --cov=dashboard.routers.execution_status \
+            --cov=dashboard.routers.experiments \
             --cov-report=term-missing \
             --cov-report=xml:artifacts/coverage.xml \
             --cov-fail-under=65 \
@@ -239,7 +258,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: phase2-research-evidence-${{ github.run_id }}
+          name: phase3-promotion-evidence-${{ github.run_id }}
           path: |
             artifacts/research-audit.json
             artifacts/critical-suite.log
