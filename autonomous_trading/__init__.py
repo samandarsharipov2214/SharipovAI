@@ -9,13 +9,17 @@ from .council_provider import AutonomousCouncilProposalProvider
 from .execution_journal import ExecutionJournal
 from .loop import AutonomousPaperLoop
 from .market_stream import MarketStream, StreamQuote
+from .shadow_bridge import ShadowModeTestnetBridge
+from .shadow_mode import ShadowModePlanner, ShadowModePolicy, ShadowOrderPlan
 from .shared_market_stream import SharedVerifiedMarketStream
 from .stage_controller import StageAssessment, StageController
 from .startup_reconciliation import (
     StartupExecutionReconciler,
     StartupReconciliationReport,
 )
-from .testnet_bridge import AutonomousTestnetBridge
+
+# Compatibility name now resolves to the bounded shadow-only implementation.
+AutonomousTestnetBridge = ShadowModeTestnetBridge
 
 __all__ = (
     "AutonomousCouncilProposalProvider",
@@ -29,6 +33,10 @@ __all__ = (
     "MarketStream",
     "PaperDecisionAuthorization",
     "ProposalProvider",
+    "ShadowModePlanner",
+    "ShadowModePolicy",
+    "ShadowModeTestnetBridge",
+    "ShadowOrderPlan",
     "SharedVerifiedMarketStream",
     "StageAssessment",
     "StageController",
