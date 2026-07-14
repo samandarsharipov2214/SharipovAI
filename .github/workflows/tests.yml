@@ -8,6 +8,8 @@ on:
       - 'requirements.txt'
       - 'requirements-dev.txt'
       - 'pyproject.toml'
+      - 'CONSTITUTION.md'
+      - 'README.md'
       - '.github/workflows/tests.yml'
   pull_request:
     branches: [main]
@@ -16,6 +18,8 @@ on:
       - 'requirements.txt'
       - 'requirements-dev.txt'
       - 'pyproject.toml'
+      - 'CONSTITUTION.md'
+      - 'README.md'
       - '.github/workflows/tests.yml'
   workflow_dispatch:
 
@@ -92,12 +96,17 @@ jobs:
         run: |
           python - <<'PY'
           import dashboard
+          import historical_data
+          import observability
           import trading_core
           from autonomous_trading import StartupExecutionReconciler
           from exchange_connector import ApprovedExecutionRequest, ExecutionIdempotencyRepository
           from risk_engine import RiskLimits
           assert dashboard.app is not None
           assert trading_core.EventDrivenBacktester is not None
+          assert trading_core.WalkForwardBacktester is not None
+          assert historical_data.HistoricalDataLoader is not None
+          assert observability.JsonFormatter is not None
           assert StartupExecutionReconciler is not None
           assert ApprovedExecutionRequest is not None
           assert ExecutionIdempotencyRepository is not None
@@ -132,7 +141,10 @@ jobs:
           print('execution safety gates: hard-locked')
           PY
 
-      - name: Run critical safety suite with coverage
+      - name: Audit research foundation
+        run: python scripts/research_foundation_audit.py --json
+
+      - name: Run critical safety and research suite with coverage
         id: critical_suite
         continue-on-error: true
         shell: bash
@@ -147,6 +159,11 @@ jobs:
             tests/test_risk_hard_limits.py \
             tests/test_capital_allocation.py \
             tests/test_trading_core_backtest.py \
+            tests/test_trading_core_funding_walk_forward.py \
+            tests/test_benchmark_strategies.py \
+            tests/test_historical_data_layer.py \
+            tests/test_observability.py \
+            tests/test_execution_status_router.py \
             tests/test_market_paper_engine.py \
             tests/test_paper_state_recovery.py \
             tests/test_project_change_ledger.py \
@@ -158,6 +175,9 @@ jobs:
             --cov=risk_engine \
             --cov=capital_allocation \
             --cov=trading_core \
+            --cov=historical_data \
+            --cov=observability \
+            --cov=dashboard.routers.execution_status \
             --cov-report=term-missing \
             --cov-report=xml:artifacts/coverage.xml \
             --cov-fail-under=65 \
@@ -205,7 +225,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: phase1-test-evidence-${{ github.run_id }}
+          name: phase2-research-evidence-${{ github.run_id }}
           path: |
             artifacts/critical-suite.log
             artifacts/pytest.xml
