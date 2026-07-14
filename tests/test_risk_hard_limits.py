@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from risk_engine import RiskEngine, RiskInput, RiskLevel
+from risk_engine import RiskEngine, RiskInput, RiskLevel, RiskLimits
 
 
 def _safe(**changes) -> RiskInput:
@@ -66,14 +66,24 @@ def test_soft_risk_level_scales_position_without_overriding_hard_limits() -> Non
             correlation_score=50.0,
         )
     )
-    high = RiskEngine().evaluate(
+    research_limits = RiskLimits(
+        max_portfolio_drawdown_percent=100.0,
+        max_daily_loss_percent=100.0,
+        max_weekly_drawdown_percent=100.0,
+        max_portfolio_exposure_percent=100.0,
+        max_asset_exposure_percent=100.0,
+        max_correlated_exposure_percent=100.0,
+        minimum_liquidity_score=1.0,
+        max_open_positions=100,
+    )
+    high = RiskEngine(research_limits).evaluate(
         _safe(
-            portfolio_drawdown=9.0,
-            portfolio_exposure=69.0,
-            asset_exposure=24.0,
-            volatility_score=95.0,
-            liquidity_score=41.0,
-            correlation_score=95.0,
+            portfolio_drawdown=70.0,
+            portfolio_exposure=70.0,
+            asset_exposure=70.0,
+            volatility_score=70.0,
+            liquidity_score=30.0,
+            correlation_score=70.0,
         )
     )
 
