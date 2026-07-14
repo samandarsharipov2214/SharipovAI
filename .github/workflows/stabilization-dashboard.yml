@@ -5,21 +5,29 @@ on:
     branches: [main, agent/maximum-velocity-phase1]
     paths:
       - 'dashboard/**'
+      - 'experiments/**'
+      - 'validation/**'
+      - 'exchange_connector/private_ws_gate.py'
       - 'agent_health.py'
       - 'learning_engine/**'
       - 'runner/**'
       - 'telegram_bot.py'
       - 'tests/test_sensitive_api_admin_guard.py'
+      - 'tests/test_experiment_dashboard.py'
       - '.github/workflows/stabilization-dashboard.yml'
   pull_request:
     branches: [main]
     paths:
       - 'dashboard/**'
+      - 'experiments/**'
+      - 'validation/**'
+      - 'exchange_connector/private_ws_gate.py'
       - 'agent_health.py'
       - 'learning_engine/**'
       - 'runner/**'
       - 'telegram_bot.py'
       - 'tests/test_sensitive_api_admin_guard.py'
+      - 'tests/test_experiment_dashboard.py'
       - '.github/workflows/stabilization-dashboard.yml'
   workflow_dispatch:
 
@@ -45,6 +53,7 @@ jobs:
       EXECUTION_JOURNAL_FILE: /tmp/sharipovai-dashboard-journal-${{ github.run_id }}.json
       EXECUTION_KILL_SWITCH: '1'
       TESTNET_EXECUTION_ENABLED: '0'
+      FEATURE_BYBIT_PRIVATE_ORDER_WS: '0'
       EXCHANGE_LIVE_TRADING_ENABLED: '0'
       EXCHANGE_MODE: sandbox
       MARKET_STREAM_ENABLED: '0'
@@ -72,11 +81,15 @@ jobs:
 
       - name: Compile dashboard imports
         run: |
-          python -m compileall -q dashboard agent_health.py
+          python -m compileall -q dashboard experiments validation agent_health.py
           python - <<'PY'
           import agent_health
+          import experiments
+          import validation
           from dashboard.app import create_app
           app = create_app()
+          assert experiments.ExperimentRegistry is not None
+          assert validation.FillDivergenceAnalyzer is not None
           print('IMPORT_OK', app.title)
           PY
 
@@ -95,6 +108,7 @@ jobs:
             dashboard/tests/test_dashboard.py \
             dashboard/tests/test_demo_api.py \
             tests/test_sensitive_api_admin_guard.py \
+            tests/test_experiment_dashboard.py \
             -q --tb=short 2>&1 | tee pytest-targeted.log
 
       - name: Build compact failure report
