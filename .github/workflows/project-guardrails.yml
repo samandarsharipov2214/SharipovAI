@@ -7,6 +7,7 @@ on:
       - 'dashboard/**'
       - 'exchange_connector/**'
       - 'autonomous_trading/**'
+      - 'campaigns/**'
       - 'risk_engine/**'
       - 'trading_core/**'
       - 'historical_data/**'
@@ -31,6 +32,7 @@ on:
       - 'dashboard/**'
       - 'exchange_connector/**'
       - 'autonomous_trading/**'
+      - 'campaigns/**'
       - 'risk_engine/**'
       - 'trading_core/**'
       - 'historical_data/**'
@@ -67,7 +69,7 @@ jobs:
          github.event.pull_request.head.repo.full_name == github.repository)
       }}
     runs-on: [self-hosted, linux, x64, sharipovai-ci]
-    timeout-minutes: 35
+    timeout-minutes: 40
     env:
       PYTHONUNBUFFERED: '1'
       PYTHONDONTWRITEBYTECODE: '1'
@@ -83,6 +85,7 @@ jobs:
       AUTONOMOUS_TESTNET_BRIDGE_ENABLED: '0'
       TESTNET_EXECUTION_ENABLED: '0'
       RUNTIME_FILL_HARVESTER_ENABLED: '0'
+      SCHEDULED_CAMPAIGN_ORCHESTRATOR_ENABLED: '0'
       EXCHANGE_LIVE_TRADING_ENABLED: '0'
       FEATURE_BYBIT_LIVE_EXECUTION: '0'
       FEATURE_BYBIT_TESTNET_EXECUTION: '0'
@@ -126,12 +129,14 @@ jobs:
       - name: Import application safely
         run: |
           python - <<'PY'
+          import campaigns
           import dashboard
           import experiments
           import validation
           from autonomous_trading import ShadowModeTestnetBridge, StartupExecutionReconciler
           from exchange_connector import (
               ApprovedExecutionRequest,
+              BybitExecutionStateStore,
               BybitTradingReferenceClient,
               ExecutionIdempotencyRepository,
               PrivateStreamHealthRepository,
@@ -140,6 +145,9 @@ jobs:
           from observability import JsonFormatter
           from trading_core import EventDrivenBacktester, WalkForwardBacktester
           assert dashboard.app is not None
+          assert campaigns.ScheduledCampaignOrchestrator is not None
+          assert campaigns.TestnetShadowCampaign is not None
+          assert campaigns.FinalPromotionReportEngine is not None
           assert experiments.ExperimentRegistry is not None
           assert experiments.AutomaticExperimentRunner is not None
           assert experiments.ChampionChallengerRegistry is not None
@@ -149,6 +157,7 @@ jobs:
           assert StartupExecutionReconciler is not None
           assert ShadowModeTestnetBridge is not None
           assert ApprovedExecutionRequest is not None
+          assert BybitExecutionStateStore is not None
           assert BybitTradingReferenceClient is not None
           assert ExecutionIdempotencyRepository is not None
           assert PrivateStreamHealthRepository is not None
@@ -185,10 +194,14 @@ jobs:
             tests/test_execution_idempotency.py \
             tests/test_startup_reconciliation.py \
             tests/test_private_ws_startup_gate.py \
+            tests/test_private_execution_ws.py \
             tests/test_testnet_bridge_canonical_candidate.py \
             tests/test_bybit_reference_data.py \
+            tests/test_bybit_execution_state.py \
             tests/test_shadow_mode.py \
             tests/test_runtime_fill_harvester.py \
+            tests/test_scheduled_campaign_orchestrator.py \
+            tests/test_final_promotion_report.py \
             tests/test_sensitive_api_admin_guard.py \
             tests/test_risk_hard_limits.py \
             tests/test_trading_core_backtest.py \
@@ -198,6 +211,7 @@ jobs:
             tests/test_automatic_experiment_runner.py \
             tests/test_experiment_registry_promotion.py \
             tests/test_champion_challenger_registry.py \
+            tests/test_leadership_dashboard.py \
             tests/test_fill_divergence_validation.py \
             tests/test_experiment_dashboard.py \
             tests/test_observability.py \
@@ -238,7 +252,7 @@ jobs:
           python scripts/promotion_foundation_audit.py --json \
             2>&1 | tee artifacts/promotion-audit.json
 
-      - name: Audit shadow campaign foundation
+      - name: Audit scheduled shadow campaign foundation
         id: campaign_audit
         if: always()
         continue-on-error: true
@@ -266,7 +280,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: phase4-shadow-guardrail-evidence-${{ github.run_id }}
+          name: phase5-scheduled-campaign-guardrails-${{ github.run_id }}
           path: |
             artifacts/guardrails-tests.log
             artifacts/execution-audit.json
