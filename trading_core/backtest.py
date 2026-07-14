@@ -50,7 +50,7 @@ class EventDrivenBacktester:
             max_correlated_exposure_percent=self.config.max_correlated_exposure_percent,
             max_risk_per_trade_percent=self.config.max_risk_per_trade_percent,
             max_daily_loss_percent=100.0,
-            minimum_notional=1.0,
+            minimum_notional=self.config.minimum_notional,
             leverage=1.0,
         )
 
@@ -297,6 +297,7 @@ class EventDrivenBacktester:
                 "fees_included": True,
                 "slippage_included": True,
                 "reserve_percent": self.config.reserve_percent,
+                "minimum_notional": self.config.minimum_notional,
                 "leverage": 1.0,
             },
         )
@@ -335,6 +336,7 @@ class EventDrivenBacktester:
             "max_position_percent": self.config.max_position_percent,
             "max_correlated_exposure_percent": self.config.max_correlated_exposure_percent,
             "max_risk_per_trade_percent": self.config.max_risk_per_trade_percent,
+            "minimum_notional": self.config.minimum_notional,
         }
         for name, value in values.items():
             if isinstance(value, bool) or not math.isfinite(float(value)):
@@ -343,6 +345,8 @@ class EventDrivenBacktester:
             raise ValueError("initial_cash must be positive")
         if self.config.max_open_positions <= 0:
             raise ValueError("max_open_positions must be positive")
+        if self.config.minimum_notional <= 0:
+            raise ValueError("minimum_notional must be positive")
         if not 0 <= self.config.fee_rate <= 0.05:
             raise ValueError("fee_rate must be within 0..0.05")
         if not 0 <= self.config.slippage_bps <= 1_000:
