@@ -87,7 +87,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip --quiet
           python -m pip install -r requirements-dev.txt --quiet
+          python -m pip install --force-reinstall --no-cache-dir duckdb==1.5.4 --quiet
           python -m pip check
+          python - <<'PY'
+          import duckdb
+          assert duckdb.__version__ == '1.5.4'
+          print('duckdb wheel:', duckdb.__version__)
+          PY
 
       - name: Audit Python dependencies
         run: python -m pip_audit -r requirements.txt --progress-spinner off
@@ -187,6 +193,26 @@ jobs:
           python scripts/campaign_foundation_audit.py --json \
             2>&1 | tee artifacts/campaign-audit.json
 
+      - name: Run Phase 5 scheduled campaign regressions
+        id: phase5_suite
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          set -o pipefail
+          python -m pytest \
+            tests/test_bybit_execution_state.py \
+            tests/test_private_execution_ws.py \
+            tests/test_private_order_ws_v3.py \
+            tests/test_runtime_fill_harvester.py \
+            tests/test_scheduled_campaign_orchestrator.py \
+            tests/test_final_promotion_report.py \
+            tests/test_leadership_dashboard.py \
+            tests/test_shadow_mode.py \
+            -q --tb=short \
+            2>&1 | tee artifacts/phase5-suite.log
+
       - name: Run critical safety and research suite with coverage
         id: critical_suite
         if: always()
@@ -196,6 +222,14 @@ jobs:
           mkdir -p artifacts
           set -o pipefail
           python -m pytest \
+            tests/test_historical_data_layer.py \
+            tests/test_automatic_experiment_runner.py \
+            tests/test_experiment_registry_promotion.py \
+            tests/test_champion_challenger_registry.py \
+            tests/test_leadership_dashboard.py \
+            tests/test_experiment_dashboard.py \
+            tests/test_observability.py \
+            tests/test_execution_status_router.py \
             tests/test_execution_contract.py \
             tests/test_execution_idempotency.py \
             tests/test_startup_reconciliation.py \
@@ -213,15 +247,7 @@ jobs:
             tests/test_trading_core_backtest.py \
             tests/test_trading_core_funding_walk_forward.py \
             tests/test_benchmark_strategies.py \
-            tests/test_historical_data_layer.py \
-            tests/test_automatic_experiment_runner.py \
-            tests/test_experiment_registry_promotion.py \
-            tests/test_champion_challenger_registry.py \
-            tests/test_leadership_dashboard.py \
             tests/test_fill_divergence_validation.py \
-            tests/test_experiment_dashboard.py \
-            tests/test_observability.py \
-            tests/test_execution_status_router.py \
             tests/test_market_paper_engine.py \
             tests/test_paper_state_recovery.py \
             tests/test_project_change_ledger.py \
@@ -270,6 +296,7 @@ jobs:
           sources = [
               Path('artifacts/research-audit.json'),
               Path('artifacts/campaign-audit.json'),
+              Path('artifacts/phase5-suite.log'),
               Path('artifacts/critical-suite.log'),
               Path('artifacts/pytest-full.log'),
           ]
@@ -302,6 +329,7 @@ jobs:
           path: |
             artifacts/research-audit.json
             artifacts/campaign-audit.json
+            artifacts/phase5-suite.log
             artifacts/critical-suite.log
             artifacts/pytest.xml
             artifacts/pytest-full.log
@@ -311,7 +339,7 @@ jobs:
           retention-days: 14
 
       - name: Preserve truthful failure status
-        if: steps.research_audit.outcome == 'failure' || steps.campaign_audit.outcome == 'failure' || steps.critical_suite.outcome == 'failure' || steps.full_suite.outcome == 'failure'
+        if: steps.research_audit.outcome == 'failure' || steps.campaign_audit.outcome == 'failure' || steps.phase5_suite.outcome == 'failure' || steps.critical_suite.outcome == 'failure' || steps.full_suite.outcome == 'failure'
         run: |
           cat artifacts/pytest-summary.txt
           exit 1
