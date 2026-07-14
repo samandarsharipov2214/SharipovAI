@@ -238,7 +238,7 @@ class BybitPrivateOrderWebSocket:
                     self._reconnect_attempt += 1
                     attempt = self._reconnect_attempt
                 self._publish_health()
-                if self._wait(float(min(2 ** min(attempt - 1, 5), 30)):
+                if self._wait(float(min(2 ** min(attempt - 1, 5), 30))):
                     break
 
     def _connect(self) -> Any:
