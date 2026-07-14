@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-
 import pytest
 
 from exchange_connector.bybit_execution import BybitExecutionClient
@@ -69,10 +67,36 @@ def test_builds_short_lived_testnet_execution_request() -> None:
 
     assert request.environment is TradingEnvironment.TESTNET
     assert request.notional == 10.0
-    assert request.order_link_id.startswith("SAI-")
-    assert len(request.order_link_id) <= 36
+    assert request.order_link_id.startswith("sai_")
+    assert len(request.order_link_id) == 36
+    assert request.to_order_intent().order_link_id() == request.order_link_id
     assert len(request.candidate_hash) == 64
     validate_execution_request(request, now_ms=10_000_001)
+
+
+def test_same_intent_has_same_identity_and_retry_has_new_identity() -> None:
+    first = build_execution_request(
+        _candidate(),
+        _validation(),
+        quantity=0.0002,
+        now_ms=10_000_000,
+    )
+    duplicate = build_execution_request(
+        _candidate(),
+        _validation(),
+        quantity=0.0002,
+        now_ms=10_000_000,
+    )
+    retry = build_execution_request(
+        _candidate(),
+        _validation(),
+        quantity=0.0002,
+        now_ms=10_000_000,
+        attempt=2,
+    )
+
+    assert duplicate.order_link_id == first.order_link_id
+    assert retry.order_link_id != first.order_link_id
 
 
 def test_mainnet_request_is_compiled_out() -> None:
@@ -103,7 +127,7 @@ def test_invalid_or_non_allow_validation_cannot_execute() -> None:
         )
 
 
-def test_live_client_remains_locked_even_when_environment_flags_are_set(monkeypatch) -> None:
+def test_legacy_execution_entry_point_is_removed(monkeypatch) -> None:
     monkeypatch.setenv("EXCHANGE_MODE", "live")
     monkeypatch.setenv("EXCHANGE_BASE_URL", "https://api.bybit.com")
     monkeypatch.setenv("EXCHANGE_LIVE_TRADING_ENABLED", "1")
@@ -117,7 +141,7 @@ def test_live_client_remains_locked_even_when_environment_flags_are_set(monkeypa
     assert status["live_execution_enabled"] is False
     assert status["mainnet_execution_compiled"] is False
     assert status["mainnet_hard_blocked"] is True
-    with pytest.raises(RuntimeError, match="Mainnet execution is compiled out"):
+    with pytest.raises(RuntimeError, match="legacy place_market_order path is removed"):
         client.place_market_order(
             symbol="BTCUSDT",
             side="Buy",
