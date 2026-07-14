@@ -6,6 +6,7 @@ and blocks startup whenever durable execution state cannot be reconciled.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -171,8 +172,16 @@ class AutonomousTestnetBridge:
                 )
                 safe_quantity = min(paper_quantity, self.client.max_notional / price)
                 now_ms = int(time.time() * 1000)
-                candidate = _candidate_from_trade(trade)
-                validation = validate_trading_candidate(candidate, now_ms=now_ms)
+                candidate = _candidate_from_trade(
+                    trade,
+                    database=self.database,
+                    now_ms=now_ms,
+                )
+                validation = validate_trading_candidate(
+                    candidate,
+                    now_ms=now_ms,
+                    max_market_age_ms=_mirror_max_age_ms(),
+                )
                 request = build_execution_request(
                     candidate,
                     validation,
@@ -473,71 +482,161 @@ class AutonomousTestnetBridge:
                     )
 
 
-def _candidate_from_trade(trade: Mapping[str, Any]) -> TradingCandidate:
+def _candidate_from_trade(
+    trade: Mapping[str, Any],
+    *,
+    database: ProjectDatabase,
+    now_ms: int,
+) -> TradingCandidate:
+    created_at_ms = _positive_int(
+        trade.get("created_at_ms"),
+        "paper trade created_at_ms",
+    )
+    max_age_ms = _mirror_max_age_ms()
+    if now_ms < created_at_ms:
+        raise ValueError("paper trade timestamp is in the future")
+    if now_ms - created_at_ms > max_age_ms:
+        raise ValueError("paper trade is too old for testnet mirroring")
+
     raw = trade.get("execution_candidate")
     if not isinstance(raw, Mapping):
-        raise ValueError("paper trade has no canonical execution_candidate")
+        source_candidate_id = _text(
+            trade.get("candidate_id"),
+            "paper candidate_id",
+        )
+        stored = database.get_json(
+            "trading_candidates",
+            source_candidate_id,
+        )
+        if stored is None or not isinstance(stored.get("value"), Mapping):
+            raise ValueError(
+                "paper trade has no canonical candidate evidence"
+            )
+        raw = stored["value"]
+    source_environment = str(
+        raw.get("environment", "")
+    ).strip().lower()
+    if source_environment not in {"paper", "testnet"}:
+        raise ValueError(
+            "source candidate environment cannot be mirrored"
+        )
+
     symbol = _symbol(raw.get("symbol"))
     trade_symbol = _symbol(trade.get("symbol"))
     if symbol != trade_symbol:
-        raise ValueError("execution candidate symbol does not match paper trade")
+        raise ValueError(
+            "execution candidate symbol does not match paper trade"
+        )
     side = TradingSide(str(raw.get("side", "")).title())
     if side.value.upper() != str(trade.get("side", "")).upper():
-        raise ValueError("execution candidate side does not match paper trade")
-    candidate = TradingCandidate(
-        candidate_id=_text(raw.get("candidate_id"), "candidate_id"),
+        raise ValueError(
+            "execution candidate side does not match paper trade"
+        )
+    source_decision = TradingDecision(
+        str(raw.get("decision", "")).upper()
+    )
+    if source_decision is not TradingDecision.ALLOW:
+        raise ValueError("only an ALLOW paper candidate can be mirrored")
+    paper_price = _positive_number(
+        trade.get("price"),
+        "paper price",
+    )
+    source_price = _positive_number(
+        raw.get("reference_price"),
+        "source reference_price",
+    )
+    deviation = abs(source_price - paper_price) / paper_price * 100.0
+    if deviation > 0.5:
+        raise ValueError(
+            "source candidate price deviates from paper trade"
+        )
+
+    source_candidate_id = _text(
+        raw.get("candidate_id"),
+        "source candidate_id",
+    )
+    trade_id = _text(trade.get("trade_id"), "paper trade_id")
+    mirrored_id = "testnet_" + hashlib.sha256(
+        f"{trade_id}:{source_candidate_id}".encode("utf-8")
+    ).hexdigest()[:32]
+    return TradingCandidate(
+        candidate_id=mirrored_id,
         symbol=symbol,
-        category=TradingCategory(str(raw.get("category", "")).lower()),
+        category=TradingCategory(
+            str(raw.get("category", "")).lower()
+        ),
         side=side,
-        environment=TradingEnvironment(str(raw.get("environment", "")).lower()),
-        market_timestamp_ms=_positive_int(
-            raw.get("market_timestamp_ms"), "market_timestamp_ms"
+        environment=TradingEnvironment.TESTNET,
+        market_timestamp_ms=created_at_ms,
+        received_timestamp_ms=created_at_ms,
+        reference_price=paper_price,
+        data_sources=_string_tuple(
+            raw.get("data_sources"),
+            "data_sources",
         ),
-        received_timestamp_ms=_positive_int(
-            raw.get("received_timestamp_ms"), "received_timestamp_ms"
+        market_regime=MarketRegime(
+            str(raw.get("market_regime", "")).lower()
         ),
-        reference_price=_positive_number(
-            raw.get("reference_price"), "reference_price"
-        ),
-        data_sources=_string_tuple(raw.get("data_sources"), "data_sources"),
-        market_regime=MarketRegime(str(raw.get("market_regime", "")).lower()),
         signal_evidence=_string_tuple(
-            raw.get("signal_evidence"), "signal_evidence"
+            raw.get("signal_evidence"),
+            "signal_evidence",
         ),
         news_evidence=_string_tuple(
-            raw.get("news_evidence", ()), "news_evidence", allow_empty=True
+            raw.get("news_evidence", ()),
+            "news_evidence",
+            allow_empty=True,
         ),
         news_assessment_id=_text(
-            raw.get("news_assessment_id"), "news_assessment_id"
+            raw.get("news_assessment_id"),
+            "news_assessment_id",
         ),
         portfolio_snapshot_id=_text(
-            raw.get("portfolio_snapshot_id"), "portfolio_snapshot_id"
+            raw.get("portfolio_snapshot_id"),
+            "portfolio_snapshot_id",
         ),
-        cost_snapshot_id=_text(raw.get("cost_snapshot_id"), "cost_snapshot_id"),
+        cost_snapshot_id=_text(
+            raw.get("cost_snapshot_id"),
+            "cost_snapshot_id",
+        ),
         estimated_fees=_nonnegative_number(
-            raw.get("estimated_fees", 0.0), "estimated_fees"
+            raw.get("estimated_fees", 0.0),
+            "estimated_fees",
         ),
         estimated_slippage=_nonnegative_number(
-            raw.get("estimated_slippage", 0.0), "estimated_slippage"
+            raw.get("estimated_slippage", 0.0),
+            "estimated_slippage",
         ),
-        risk_score=_range_number(raw.get("risk_score"), "risk_score"),
+        risk_score=_range_number(
+            raw.get("risk_score"),
+            "risk_score",
+        ),
         risk_blocks=_string_tuple(
-            raw.get("risk_blocks", ()), "risk_blocks", allow_empty=True
+            raw.get("risk_blocks", ()),
+            "risk_blocks",
+            allow_empty=True,
         ),
-        confidence=_range_number(raw.get("confidence"), "confidence"),
-        consensus=_range_number(raw.get("consensus"), "consensus"),
-        decision=TradingDecision(str(raw.get("decision", "")).upper()),
-        expires_at_ms=_positive_int(raw.get("expires_at_ms"), "expires_at_ms"),
-        security_approval_id=str(raw.get("security_approval_id", "")),
+        confidence=_range_number(
+            raw.get("confidence"),
+            "confidence",
+        ),
+        consensus=_range_number(
+            raw.get("consensus"),
+            "consensus",
+        ),
+        decision=TradingDecision.ALLOW,
+        expires_at_ms=created_at_ms + max_age_ms,
+        security_approval_id="",
     )
-    if candidate.environment is not TradingEnvironment.TESTNET:
-        raise ValueError("paper trade execution candidate must target testnet")
-    paper_price = _positive_number(trade.get("price"), "paper price")
-    deviation = abs(candidate.reference_price - paper_price) / paper_price * 100.0
-    if deviation > 0.5:
-        raise ValueError("execution candidate price deviates from paper trade")
-    return candidate
 
+
+def _mirror_max_age_ms() -> int:
+    try:
+        configured = int(
+            os.getenv("TESTNET_MIRROR_MAX_TRADE_AGE_MS", "5000")
+        )
+    except (TypeError, ValueError):
+        configured = 5000
+    return min(max(configured, 1000), 5000)
 
 def _truthy(name: str) -> bool:
     return os.getenv(name, "0").strip().lower() in {"1", "true", "yes", "on"}
