@@ -151,7 +151,19 @@ def _audit_workflows(root: Path, record: Any) -> None:
         "Run fail-closed release audit",
     )), "migration, compile, execution lock, release audit and pytest gates")
     record("ci_full_suite", "python -m pytest" in full and "Fail when full suite failed" in full, "full pytest gate")
-    record("ci_windows_agent", "runs-on: windows-latest" in windows and "pytest" in windows.lower(), "Windows agent verification gate")
+    windows_hosted = "runs-on: windows-latest" in windows
+    windows_hardened = all(
+        token in windows
+        for token in (
+            "runs-on: [self-hosted, Windows, X64, sharipovai-windows-ci]",
+            "SHARIPOVAI_WINDOWS_SELF_HOSTED_CI",
+        )
+    )
+    record(
+        "ci_windows_agent",
+        (windows_hosted or windows_hardened) and "pytest" in windows.lower(),
+        "Windows hosted or isolated self-hosted verification gate",
+    )
 
 
 def _audit_runtime_code(record: Any) -> None:
