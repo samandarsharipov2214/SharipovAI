@@ -1,8 +1,9 @@
 """Canonical execution envelope for exchange-bound SharipovAI requests.
 
-A TradingCandidate is analysis evidence. An ApprovedExecutionRequest is the only
-object exchange connectors may submit. Mainnet execution is intentionally
-compiled out in this development stage.
+A :class:`TradingCandidate` is analytical evidence.  An
+:class:`ApprovedExecutionRequest` is the only object an exchange execution
+adapter may submit.  Mainnet execution is deliberately compiled out while the
+project remains in paper/testnet validation.
 """
 from __future__ import annotations
 
@@ -22,14 +23,16 @@ from trading_candidate import (
     TradingSide,
 )
 
+from .bybit_order_identity import OrderIntent
+
 MAINNET_EXECUTION_COMPILED = False
 _MAX_REQUEST_LIFETIME_MS = 10_000
-_ORDER_LINK_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,36}$")
+_ORDER_LINK_PATTERN = re.compile(r"^sai_[0-9a-f]{32}$")
 
 
 @dataclass(frozen=True, slots=True)
 class ApprovedExecutionRequest:
-    """Immutable request accepted by an exchange execution adapter."""
+    """Immutable, short-lived request accepted by an exchange adapter."""
 
     candidate_id: str
     candidate_hash: str
@@ -45,6 +48,7 @@ class ApprovedExecutionRequest:
     portfolio_snapshot_id: str
     cost_snapshot_id: str
     security_approval_id: str = ""
+    attempt: int = 1
 
     @property
     def notional(self) -> float:
@@ -58,6 +62,25 @@ class ApprovedExecutionRequest:
         payload["notional"] = self.notional
         return payload
 
+    def to_order_intent(self) -> OrderIntent:
+        """Return the deterministic idempotency intent for this request."""
+
+        return OrderIntent.create(
+            candidate_id=self.candidate_id,
+            environment=self.environment.value,
+            category=self.category.value,
+            symbol=self.symbol,
+            side=self.side.value,
+            order_type="Market",
+            quantity=self.quantity,
+            price=None,
+            time_in_force="IOC",
+            reduce_only=False,
+            position_idx=0,
+            market_unit="baseCoin",
+            attempt=self.attempt,
+        )
+
 
 def build_execution_request(
     candidate: TradingCandidate,
@@ -65,12 +88,9 @@ def build_execution_request(
     *,
     quantity: float,
     now_ms: int,
+    attempt: int = 1,
 ) -> ApprovedExecutionRequest:
-    """Create a testnet execution request from an already validated candidate.
-
-    Paper candidates belong to the virtual engine. Mainnet candidates remain
-    impossible while ``MAINNET_EXECUTION_COMPILED`` is false.
-    """
+    """Create a canonical testnet execution request from validated evidence."""
 
     if not isinstance(candidate, TradingCandidate):
         raise TypeError("candidate must be TradingCandidate")
@@ -89,12 +109,12 @@ def build_execution_request(
 
     clean_now = _positive_int(now_ms, "now_ms")
     clean_quantity = _positive_float(quantity, "quantity")
+    clean_attempt = _positive_int(attempt, "attempt")
     if candidate.expires_at_ms <= clean_now:
         raise RuntimeError("candidate expired before execution request creation")
 
     candidate_hash = _candidate_hash(candidate)
-    order_link_id = _order_link_id(candidate.candidate_id, candidate_hash)
-    request = ApprovedExecutionRequest(
+    provisional = ApprovedExecutionRequest(
         candidate_id=candidate.candidate_id,
         candidate_hash=candidate_hash,
         symbol=candidate.symbol,
@@ -103,13 +123,16 @@ def build_execution_request(
         environment=candidate.environment,
         quantity=clean_quantity,
         reference_price=_positive_float(candidate.reference_price, "reference_price"),
-        order_link_id=order_link_id,
+        order_link_id="",
         created_at_ms=clean_now,
         expires_at_ms=min(candidate.expires_at_ms, clean_now + _MAX_REQUEST_LIFETIME_MS),
         portfolio_snapshot_id=candidate.portfolio_snapshot_id,
         cost_snapshot_id=candidate.cost_snapshot_id,
         security_approval_id=candidate.security_approval_id,
+        attempt=clean_attempt,
     )
+    order_link_id = provisional.to_order_intent().order_link_id()
+    request = ApprovedExecutionRequest(**{**asdict(provisional), "order_link_id": order_link_id})
     validate_execution_request(request, now_ms=clean_now)
     return request
 
@@ -127,7 +150,7 @@ def validate_execution_request(request: ApprovedExecutionRequest, *, now_ms: int
     ):
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"{name} is required")
-    if request.environment is TradingEnvironment.MAINNET or not MAINNET_EXECUTION_COMPILED and request.environment is TradingEnvironment.MAINNET:
+    if request.environment is TradingEnvironment.MAINNET:
         raise RuntimeError("mainnet execution is compiled out")
     if request.environment is not TradingEnvironment.TESTNET:
         raise RuntimeError("exchange execution currently permits testnet only")
@@ -137,6 +160,7 @@ def validate_execution_request(request: ApprovedExecutionRequest, *, now_ms: int
         raise ValueError("symbol must be uppercase alphanumeric")
     _positive_float(request.quantity, "quantity")
     _positive_float(request.reference_price, "reference_price")
+    _positive_int(request.attempt, "attempt")
     if not math.isfinite(request.notional) or request.notional <= 0:
         raise ValueError("notional must be positive and finite")
     if request.created_at_ms <= 0 or request.created_at_ms > clean_now + 1_000:
@@ -146,19 +170,17 @@ def validate_execution_request(request: ApprovedExecutionRequest, *, now_ms: int
     if request.expires_at_ms - request.created_at_ms > _MAX_REQUEST_LIFETIME_MS:
         raise ValueError("execution request lifetime exceeds hard limit")
     if not _ORDER_LINK_PATTERN.fullmatch(request.order_link_id):
-        raise ValueError("order_link_id must be 1..36 safe characters")
+        raise ValueError("order_link_id must be a canonical sai_ SHA-256 identity")
     if len(request.candidate_hash) != 64 or any(ch not in "0123456789abcdef" for ch in request.candidate_hash):
         raise ValueError("candidate_hash must be a SHA-256 hex digest")
+    intent = request.to_order_intent()
+    if intent.order_link_id() != request.order_link_id:
+        raise ValueError("order_link_id does not match execution intent")
 
 
 def _candidate_hash(candidate: TradingCandidate) -> str:
     payload = json.dumps(candidate.to_dict(), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def _order_link_id(candidate_id: str, candidate_hash: str) -> str:
-    seed = hashlib.sha256(f"{candidate_id}:{candidate_hash}".encode("utf-8")).hexdigest()
-    return f"SAI-{seed[:28]}"
 
 
 def _positive_float(value: Any, name: str) -> float:
