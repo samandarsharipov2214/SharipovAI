@@ -2,7 +2,7 @@ name: Dashboard Stabilization
 
 on:
   push:
-    branches: [main]
+    branches: [main, agent/maximum-velocity-phase1]
     paths:
       - 'dashboard/**'
       - 'agent_health.py'
@@ -41,6 +41,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -64,7 +66,11 @@ jobs:
           PY
 
       - name: Run targeted stabilization tests
+        id: pytest
+        continue-on-error: true
+        shell: bash
         run: |
+          set -o pipefail
           python -m pytest \
             dashboard/tests/test_admin_secure_app_roles.py \
             dashboard/tests/test_password_change_flow.py \
@@ -73,4 +79,48 @@ jobs:
             dashboard/tests/test_crash_hardening.py \
             dashboard/tests/test_dashboard.py \
             dashboard/tests/test_demo_api.py \
-            -q --tb=short
+            -q --tb=short 2>&1 | tee pytest-targeted.log
+
+      - name: Build compact failure report
+        if: always()
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          source = Path('pytest-targeted.log')
+          lines = source.read_text(encoding='utf-8', errors='replace').splitlines() if source.exists() else ['pytest log missing']
+          markers = (
+              'ERROR collecting', 'FAILED ', 'E   ', 'short test summary',
+              'ModuleNotFoundError', 'ImportError', 'SyntaxError', 'TypeError',
+              'AssertionError', 'AttributeError', 'KeyError', 'RuntimeError',
+          )
+          selected = []
+          for index, line in enumerate(lines):
+              if any(marker in line for marker in markers):
+                  selected.extend(lines[max(0, index - 4):min(len(lines), index + 14)])
+          selected.extend(lines[-120:])
+          compact = []
+          seen = set()
+          for line in selected:
+              if line not in seen:
+                  seen.add(line)
+                  compact.append(line)
+          report = '\n'.join(compact[-300:])
+          Path('pytest-targeted-summary.txt').write_text(report, encoding='utf-8')
+          print(report)
+          PY
+
+      - name: Upload targeted pytest diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-targeted-diagnostics
+          path: |
+            pytest-targeted.log
+            pytest-targeted-summary.txt
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Fail when targeted tests failed
+        if: steps.pytest.outcome == 'failure'
+        run: exit 1
