@@ -11,6 +11,10 @@ from .loop import AutonomousPaperLoop
 from .market_stream import MarketStream, StreamQuote
 from .shared_market_stream import SharedVerifiedMarketStream
 from .stage_controller import StageAssessment, StageController
+from .startup_reconciliation import (
+    StartupExecutionReconciler,
+    StartupReconciliationReport,
+)
 from .testnet_bridge import AutonomousTestnetBridge
 
 __all__ = (
@@ -26,7 +30,9 @@ __all__ = (
     "PaperDecisionAuthorization",
     "ProposalProvider",
     "SharedVerifiedMarketStream",
-    "StreamQuote",
     "StageAssessment",
     "StageController",
+    "StartupExecutionReconciler",
+    "StartupReconciliationReport",
+    "StreamQuote",
 )
