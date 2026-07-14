@@ -1,22 +1,22 @@
 # SharipovAI OS
 
 SharipovAI is a safety-first AI trading operating system built around verified
-market evidence, deterministic risk controls, persistent paper trading,
-event-driven strategy research and guarded exchange integration.
+market evidence, deterministic risk controls, persistent experiments, realistic
+paper trading, walk-forward research and guarded exchange integration.
 
 > **Current safety state:** Mainnet execution is compiled out. Testnet is disabled
-> by default and can write only through a short-lived `ApprovedExecutionRequest`
-> with a durable idempotency reservation. An unresolved execution blocks restart.
+> by default and requires `ApprovedExecutionRequest`, durable idempotency, fresh
+> private-order WebSocket evidence and successful startup reconciliation.
 
-SharipovAI does not guarantee profit. Its job is to measure whether a strategy has
-positive expectancy after spread, maker/taker fees, slippage, nonlinear market
-impact, funding, drawdown and execution failure modes.
+SharipovAI does not guarantee profit. It measures whether a strategy has positive
+expectancy after spread, maker/taker fees, slippage, nonlinear market impact,
+funding, drawdown and execution failure modes.
 
 Binding policy: [`CONSTITUTION.md`](CONSTITUTION.md).
 
-## Architecture
+## Canonical architecture
 
-The canonical architecture has nine AI organs:
+SharipovAI has nine top-level AI organs:
 
 1. General Controller
 2. Market Intelligence
@@ -28,47 +28,47 @@ The canonical architecture has nine AI organs:
 8. Learning Engine
 9. Security Guard
 
-`ai_architecture_registry.py` is the ownership source of truth. Infrastructure
-such as storage, execution idempotency, historical data, observability and
-backtesting does not become another AI organ.
+`ai_architecture_registry.py` is the ownership source of truth. Storage,
+validation, experiment registries, monitoring, transport, idempotency and
+backtesting are infrastructure, not extra AI organs.
 
 ## Safety invariants
 
 - `MAINNET_EXECUTION_COMPILED=False` cannot be overridden by environment variables.
 - `EXECUTION_KILL_SWITCH=1` is the safe default.
-- Dashboard, Telegram, agents, strategies and LLM output cannot create raw orders.
-- The legacy `place_market_order()` entry point is removed.
+- Dashboard, Telegram, strategies, agents and LLM output cannot submit raw orders.
 - Exchange writes use `BybitExecutionClient.execute(ApprovedExecutionRequest)`.
-- Every request has a deterministic `sai_...` `orderLinkId` and is reserved in
-  `ProjectDatabase` before the HTTP call.
-- Duplicate and unresolved intents are blocked; transport timeouts are reconciled,
-  never retried blindly.
-- Startup compares idempotency reservations, execution journal and private Bybit
-  order state before Testnet may continue.
+- Every request has a deterministic `sai_...` `orderLinkId` and durable reservation.
+- Duplicate and ambiguous execution intents block retries.
+- Testnet startup requires reconciliation and private-order stream evidence.
 - Paper state is atomic, revisioned and recoverable.
-- Backtests cannot enable Testnet or Mainnet.
-- Secrets, account snapshots, runtime databases and execution journals stay out of Git.
+- Experiment promotion never changes runtime execution flags.
+- Backtests and manual approvals cannot enable Mainnet.
+- Secrets and runtime state stay outside Git, logs, metrics and experiment payloads.
 
 ## Main components
 
 | Component | Responsibility |
 | --- | --- |
-| `dashboard/` | FastAPI dashboard, separated operational routers and auth dependencies |
-| `dashboard/routers/execution_status.py` | Read-only execution, risk, exposure and paper-PnL status |
-| `dashboard/routers/metrics.py` | Prometheus text endpoint with token/admin access |
+| `dashboard/` | FastAPI dashboard, auth dependencies and read-only operational routers |
+| `dashboard/routers/execution_status.py` | Execution, risk, exposure and paper-PnL status |
+| `dashboard/routers/experiments.py` | Backtest results, experiment comparison and promotion reports |
+| `dashboard/routers/metrics.py` | Protected Prometheus text endpoint |
 | `trading_candidate.py` | Fail-closed analytical candidate contract |
 | `exchange_connector/execution_contract.py` | Immutable approved execution envelope |
 | `exchange_connector/execution_idempotency.py` | Durable duplicate/unresolved protection |
-| `exchange_connector/bybit_order_identity.py` | Canonical deterministic order identity registry |
-| `exchange_connector/bybit_order_state.py` | Private order lifecycle and partial-fill state |
-| `autonomous_trading/startup_reconciliation.py` | Restart reconciliation and fail-closed gate |
-| `autonomous_trading/testnet_bridge.py` | Fresh paper-candidate to Testnet mirror |
-| `capital_allocation.py` | Reserve, risk, symbol and correlation exposure allocation |
-| `risk_engine/` | Hard limits, soft score and position-size multiplier |
+| `exchange_connector/bybit_order_state.py` | Private order and partial-fill state |
+| `exchange_connector/bybit_private_order_ws.py` | Read-only authenticated order stream |
+| `exchange_connector/private_ws_gate.py` | Persistent stream readiness/heartbeat gate |
+| `autonomous_trading/startup_reconciliation.py` | Identity, journal, private-state and stream reconciliation |
+| `autonomous_trading/testnet_bridge.py` | Fresh canonical paper-candidate to Testnet mirror |
+| `capital_allocation.py` | Reserve, risk, symbol and correlation allocation |
+| `risk_engine/` | Hard limits and bounded soft-risk size scaling |
 | `trading_core/` | Event-driven backtest, funding, walk-forward and benchmarks |
 | `historical_data/` | Versioned manifests, Parquet validation and DuckDB loading |
+| `experiments/` | Persistent experiment identity and promotion gate reports |
+| `validation/` | Paper/Testnet fill divergence and validation persistence |
 | `observability/` | Structured JSON logging and Prometheus-ready metrics |
-| `paper_activity_engine.py` | Durable virtual-account state |
 | `storage/` | Canonical shared database and Evidence ledger |
 
 ## Canonical execution path
@@ -84,27 +84,13 @@ Verified market evidence
   -> ApprovedExecutionRequest
   -> Idempotency reservation
   -> Bybit Testnet submission
-  -> Private order state
+  -> Private order WebSocket state
   -> Reconciliation
-  -> Outcome/Learning Evidence
+  -> Outcome and Learning Evidence
 ```
 
-```python
-validation = validate_trading_candidate(candidate, now_ms=now_ms)
-request = build_execution_request(
-    candidate,
-    validation,
-    quantity=quantity,
-    now_ms=now_ms,
-)
-result = BybitExecutionClient(database=database).execute(
-    request,
-    now_ms=now_ms,
-)
-```
-
-A timeout after submission leaves the request unresolved. The same request cannot
-be sent again until reconciliation resolves its state.
+A timeout after submission remains unresolved. It is never treated as an automatic
+retry signal.
 
 ## Risk and capital defaults
 
@@ -120,179 +106,166 @@ be sent again until reconciliation resolves its state.
 | Portfolio drawdown stop | 10% |
 | Leverage | 1× |
 
-Hard blocks include stale data, active kill switch, invalid instruments,
-drawdown/loss limits, exposure limits, liquidity floor and maximum positions.
-Soft risk only scales size: `LOW=100%`, `MEDIUM=60%`, `HIGH=25%`,
-`CRITICAL=0%`.
+Hard blocks include stale data, kill switch, invalid instruments, drawdown/loss
+limits, exposure limits, liquidity floor, unresolved identity and unhealthy
+private execution evidence. Soft risk only reduces size.
 
-## Event-driven backtesting
+## Event-driven research
 
 `trading_core.EventDrivenBacktester` processes immutable events in strict
-`(timestamp_ms, symbol)` order. It includes:
+`(timestamp_ms, symbol)` order and models:
 
-- explicit bid and ask spread;
+- bid/ask spread;
 - maker and taker fees;
-- deterministic base slippage;
-- nonlinear impact based on order participation;
-- a hard maximum participation rate;
-- proportional funding accrual for open derivative positions;
-- shared reserve, position, symbol and correlation limits;
+- deterministic slippage;
+- nonlinear participation impact;
+- funding;
+- reserve, symbol and correlation limits;
 - mark-to-market equity, drawdown, Sharpe, Sortino and profit factor;
-- no future lookup or synthetic fills.
+- no future lookup or synthetic fill.
 
-```python
-from trading_core import (
-    BacktestConfig,
-    EventDrivenBacktester,
-    MarketEvent,
-    Side,
-    Signal,
-)
-
-
-class Strategy:
-    def on_market(self, event, portfolio):
-        if event.symbol not in portfolio.positions:
-            return Signal(
-                Side.BUY,
-                requested_risk_percent=1.0,
-                stop_loss_percent=1.0,
-                liquidity_role="taker",
-                reason="entry",
-            )
-        return None
-
-
-events = [
-    MarketEvent(
-        timestamp_ms=1,
-        symbol="BTCUSDT",
-        bid=99.9,
-        ask=100.0,
-        volume=1_000_000.0,
-        funding_rate=0.0001,
-        funding_interval_hours=8.0,
-    )
-]
-result = EventDrivenBacktester(BacktestConfig()).run(events, Strategy())
-print(result.net_pnl, result.total_funding_cost, result.max_drawdown_percent)
-```
-
-## Walk-forward evaluation
-
-`trading_core.WalkForwardBacktester` exposes each strategy factory only to the
-past training slice and evaluates the next sequential out-of-sample slice.
-Rolling and anchored training windows are supported.
-
-```python
-from trading_core import (
-    BacktestConfig,
-    BuyAndHoldStrategy,
-    WalkForwardBacktester,
-    WalkForwardConfig,
-)
-
-runner = WalkForwardBacktester(
-    BacktestConfig(),
-    WalkForwardConfig(
-        train_events=2_000,
-        test_events=500,
-        step_events=500,
-        minimum_windows=6,
-        anchored=False,
-        chain_capital=True,
-    ),
-)
-
-result = runner.run(
-    events,
-    lambda train_events, window_index: BuyAndHoldStrategy(),
-)
-print(result.profitable_window_percent, result.return_percent)
-```
-
-Promotion rules require multiple profitable out-of-sample windows and do not
-permit one favorable in-sample chart to advance a strategy.
-
-## Mandatory benchmark strategies
-
-Every candidate must be compared on the same event set and identical costs with:
+`WalkForwardBacktester` supports sequential rolling and anchored out-of-sample
+windows. Every candidate must be compared on identical data and costs against:
 
 - buy-and-hold;
-- moving-average trend following;
-- rolling breakout;
+- trend following;
+- breakout;
 - mean reversion.
 
-```python
-from trading_core import compare_strategy_to_benchmarks
+## Historical data
 
-comparison = compare_strategy_to_benchmarks(
-    events,
-    strategy_factory=lambda: Strategy(),
-    candidate_name="candidate_v1",
-)
-print(comparison.ranking)
-print(comparison.metadata["candidate_beats_buy_hold"])
-```
-
-The comparison includes spread, fees, slippage, market impact and funding. A
-candidate cannot omit an unfavorable benchmark.
-
-## Historical data layer
-
-`historical_data` uses DuckDB to query Parquet directly. Data is rejected before
-replay when the manifest, schema, ranges, symbols, hashes, prices or duplicate
-checks fail.
-
-Example `manifest.json`:
-
-```json
-{
-  "schema_version": 1,
-  "dataset_id": "bybit-btc-linear-1m",
-  "dataset_version": "2026-07-v1",
-  "venue": "bybit",
-  "market_type": "linear",
-  "source": "verified-export",
-  "symbols": ["BTCUSDT"],
-  "interval_ms": 60000,
-  "timezone": "UTC",
-  "start_timestamp_ms": 1735689600000,
-  "end_timestamp_ms": 1767225540000,
-  "row_count": 525600,
-  "parquet_files": ["btc-usdt-1m.parquet"],
-  "required_columns": ["timestamp_ms", "symbol"],
-  "optional_columns": ["bid", "ask", "close", "volume", "funding_rate"],
-  "default_spread_bps": 2.0,
-  "funding_included": true,
-  "sha256": {}
-}
-```
-
-Validate from CLI:
+`historical_data` validates versioned manifests before creating `MarketEvent`
+objects. It checks provenance, schema, symbol/time ranges, row count, hashes,
+duplicates, price integrity and gaps, then queries Parquet through DuckDB.
 
 ```bash
 python scripts/validate_historical_data.py data/history/manifest.json
 ```
 
-Load canonical events:
+Missing intervals remain visible. The loader never fabricates bars or trades.
+
+## Persistent Experiment Registry
+
+`ExperimentRegistry` stores each research run in `ProjectDatabase` with:
+
+- experiment ID;
+- source commit SHA;
+- manifest ID/version/hash and validation state;
+- strategy and backtest configuration;
+- walk-forward results;
+- benchmark table;
+- data-quality result;
+- paper summary;
+- Paper/Testnet fill validation;
+- automated promotion report;
+- manual approval or rejection.
+
+Example:
 
 ```python
-from historical_data import HistoricalDataLoader
+from dataclasses import asdict
+from experiments import ExperimentRegistry, PromotionGateEngine
 
-with HistoricalDataLoader("data/history/manifest.json") as loader:
-    events = tuple(
-        loader.iter_events(
-            symbols=["BTCUSDT"],
-            start_timestamp_ms=1735689600000,
-        )
-    )
+registry = ExperimentRegistry()
+experiment = registry.create(
+    commit_sha="<git-commit-sha>",
+    manifest={
+        "manifest_id": "bybit-btc-linear-1m",
+        "version": "2026-07-v1",
+        "sha256": "<optional-64-char-hash>",
+        "validated": True,
+    },
+    strategy_name="trend_candidate_v1",
+    strategy_config={"fast": 20, "slow": 100},
+    backtest_config={"fee_rate": 0.001, "slippage_bps": 2.0},
+)
+
+experiment = registry.record_result(
+    experiment["experiment_id"],
+    "walk_forward",
+    asdict(walk_forward_result),
+    actor="research-runner",
+    expected_version=experiment["version"],
+)
 ```
 
-When only `close` exists, bid and ask are derived from the manifest spread. The
-loader never fabricates missing timestamps or trades.
+The registry uses optimistic versions and append-only events. It cannot modify
+execution settings.
 
-## Dashboard and operational views
+## Paper/Testnet fill validation
+
+`FillDivergenceAnalyzer` matches stable execution identities and compares:
+
+- first-fill latency;
+- signed slippage in basis points;
+- requested versus filled quantity;
+- partial-fill rate;
+- fee divergence;
+- unmatched Paper or Testnet fills.
+
+```python
+from validation import FillDivergenceAnalyzer, FillValidationRepository
+
+report = FillDivergenceAnalyzer().analyze(paper_fills, testnet_fills)
+FillValidationRepository().save(
+    report,
+    experiment_id="exp_...",
+    actor="general-controller",
+)
+```
+
+Default promotion tolerances require at least 20 matched pairs, no unmatched fills,
+p95 latency divergence <= 2000 ms, p95 slippage divergence <= 15 bps, partial-fill
+rate <= 20% and maximum fill-ratio delta <= 0.10.
+
+## Private WebSocket startup gate
+
+The private Bybit worker is read-only and subscribes only to the `order` topic.
+When Testnet execution is requested, startup requires persisted evidence that the
+worker is running, connected, authenticated, subscribed and has a fresh heartbeat.
+
+Safe default:
+
+```env
+FEATURE_BYBIT_PRIVATE_ORDER_WS=0
+TESTNET_EXECUTION_ENABLED=0
+AUTONOMOUS_TESTNET_ENABLED=0
+AUTONOMOUS_TESTNET_BRIDGE_ENABLED=0
+```
+
+Enabling Testnet without the private stream produces a blocking reconciliation
+report; it does not fall back to REST-only execution.
+
+## Promotion Gate Engine
+
+Promotion stages:
+
+```text
+READ_ONLY -> PAPER -> TESTNET -> CONTROLLED_MAINNET -> SCALE
+```
+
+`PromotionGateEngine` creates a report. It does not perform promotion itself.
+
+Research -> PAPER requires validated data, six or more OOS windows, at least 60%
+profitable windows, positive all-cost OOS PnL, controlled drawdown, positive
+risk-adjusted score and mandatory benchmark performance.
+
+PAPER -> TESTNET additionally requires sustained paper evidence, fill divergence
+within policy, zero unresolved intents, fresh private stream evidence, startup
+reconciliation and manual approval.
+
+TESTNET -> CONTROLLED_MAINNET remains blocked while Mainnet is compiled out.
+
+Manual approval token format:
+
+```text
+APPROVE:<experiment_id>:<target_stage>
+```
+
+A failed automated gate cannot be manually overridden. A successful approval does
+not change Testnet/Mainnet flags, credentials, capital or deployment.
+
+## Dashboard routes
 
 Start locally:
 
@@ -300,68 +273,57 @@ Start locally:
 uvicorn dashboard:app --reload
 ```
 
-Operational routes:
-
 | Route | Purpose |
 | --- | --- |
-| `/execution-status` | Admin read-only execution, risk, exposure and paper-PnL page |
-| `/api/execution/status` | Same state as JSON |
-| `/api/execution/stage-status` | Existing stage and execution evidence |
-| `/metrics` | Prometheus text format; bearer token or admin authentication |
+| `/execution-status` | Read-only execution, risk, exposure and Paper PnL |
+| `/backtest-results` | Persistent experiment and promotion status |
+| `/experiment-comparison?ids=exp-a,exp-b` | Side-by-side OOS comparison |
+| `/api/experiments` | Experiment registry JSON |
+| `/api/experiments/compare?ids=exp-a,exp-b` | Comparison JSON |
+| `/api/experiments/{id}` | Experiment, history and fill validations |
+| `/metrics` | Protected Prometheus text endpoint |
 | `/virtual-account` | Paper account and trade history |
 
-The execution page does not submit orders. It reports the actual execution lock,
-kill switch, stage, journal, reserve, exposure, paper equity and net PnL.
+Promotion-report and decision endpoints require administrator authentication.
+They never expose a raw order primitive.
 
-For Prometheus scraping in production:
+## Safe environment defaults
 
 ```env
-SHARIPOVAI_METRICS_TOKEN=generate-a-long-random-token
+EXCHANGE_MODE=sandbox
+EXCHANGE_BASE_URL=https://api-testnet.bybit.com
+EXCHANGE_LIVE_TRADING_ENABLED=0
+LIVE_EXECUTION_MANUAL_UNLOCK=0
+TESTNET_EXECUTION_ENABLED=0
+AUTONOMOUS_TESTNET_ENABLED=0
+AUTONOMOUS_TESTNET_BRIDGE_ENABLED=0
+FEATURE_BYBIT_PRIVATE_ORDER_WS=0
+EXECUTION_KILL_SWITCH=1
+EXECUTION_MAX_NOTIONAL_USDT=25
+BYBIT_PRIVATE_WS_GATE_MAX_AGE_SECONDS=60
+
+VIRTUAL_ACCOUNT_RESERVE_PERCENT=20
+VIRTUAL_ACCOUNT_MAX_TOTAL_EXPOSURE_PERCENT=80
+VIRTUAL_ACCOUNT_MAX_POSITION_PERCENT=20
+VIRTUAL_ACCOUNT_MAX_SYMBOL_EXPOSURE_PERCENT=20
+VIRTUAL_ACCOUNT_MAX_CORRELATED_EXPOSURE_PERCENT=35
+VIRTUAL_ACCOUNT_MAX_RISK_PER_TRADE_PERCENT=1
+VIRTUAL_ACCOUNT_MAX_DAILY_LOSS_PERCENT=2
 ```
 
-```bash
-curl -H "Authorization: Bearer $SHARIPOVAI_METRICS_TOKEN" \
-  http://127.0.0.1:8000/metrics
-```
+These values do not enable exchange writes. Mainnet remains unavailable even if
+every environment variable is changed.
 
-Do not put user IDs, symbols with unbounded cardinality, candidate IDs or secrets
-into Prometheus labels.
-
-## Structured logging
-
-`observability.structured_logging` emits one JSON object per record and redacts
-credential-like keys.
-
-```python
-from observability import get_structured_logger, log_event
-import logging
-
-logger = get_structured_logger("sharipovai.research", component="walk_forward")
-log_event(
-    logger,
-    logging.INFO,
-    "walk_forward_completed",
-    event="walk_forward_completed",
-    window_index=3,
-    context={"dataset_id": "bybit-btc-linear-1m"},
-)
-```
-
-HTTP middleware adds request IDs, duration, status and path metrics. Observability
-is read-only and must never change trading output.
-
-## Local setup
+## Development setup
 
 Python 3.12 is required.
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
+source .venv/bin/activate  # Windows PowerShell: .venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -r requirements-dev.txt
 ```
-
-Never commit a populated `.env` or runtime Parquet data by accident.
 
 ## Safety and quality checks
 
@@ -376,65 +338,39 @@ python -m pytest \
   tests/test_execution_contract.py \
   tests/test_execution_idempotency.py \
   tests/test_startup_reconciliation.py \
+  tests/test_private_ws_startup_gate.py \
+  tests/test_experiment_registry_promotion.py \
+  tests/test_fill_divergence_validation.py \
+  tests/test_experiment_dashboard.py \
   tests/test_risk_hard_limits.py \
-  tests/test_capital_allocation.py \
-  tests/test_trading_core_backtest.py \
   tests/test_trading_core_funding_walk_forward.py \
   tests/test_benchmark_strategies.py \
   tests/test_historical_data_layer.py \
-  tests/test_observability.py \
-  tests/test_execution_status_router.py \
   -q --tb=short
 
 python -m pytest -q --tb=short
 ```
 
-CI records critical-module coverage, JUnit output, full pytest logs and a compact
-failure report. A partial or skipped suite is not a green release.
-
-## Safe environment defaults
-
-```env
-EXCHANGE_MODE=sandbox
-EXCHANGE_BASE_URL=https://api-testnet.bybit.com
-EXCHANGE_LIVE_TRADING_ENABLED=0
-LIVE_EXECUTION_MANUAL_UNLOCK=0
-AUTONOMOUS_TESTNET_BRIDGE_ENABLED=0
-AUTONOMOUS_TESTNET_ENABLED=0
-TESTNET_EXECUTION_ENABLED=0
-EXECUTION_KILL_SWITCH=1
-EXECUTION_MAX_NOTIONAL_USDT=25
-TESTNET_MIRROR_MAX_TRADE_AGE_MS=5000
-
-VIRTUAL_ACCOUNT_RESERVE_PERCENT=20
-VIRTUAL_ACCOUNT_MAX_TOTAL_EXPOSURE_PERCENT=80
-VIRTUAL_ACCOUNT_MAX_POSITION_PERCENT=20
-VIRTUAL_ACCOUNT_MAX_SYMBOL_EXPOSURE_PERCENT=20
-VIRTUAL_ACCOUNT_MAX_CORRELATED_EXPOSURE_PERCENT=35
-VIRTUAL_ACCOUNT_MAX_RISK_PER_TRADE_PERCENT=1
-VIRTUAL_ACCOUNT_MAX_DAILY_LOSS_PERCENT=2
-```
-
-These settings do not enable exchange writes. Testnet additionally requires
-isolated Testnet credentials and completed safety/stage gates. Mainnet remains
-unavailable even if every environment flag is changed.
+CI keeps dependency-audit, coverage, JUnit, complete pytest logs and compact failure
+reports. A partial or skipped suite is not a green release.
 
 ## Development workflow
 
-1. Work in a branch and keep PRs draft until factual checks pass.
+1. Work in a branch and keep the PR draft until factual checks pass.
 2. Keep Testnet/Mainnet disabled by default.
-3. Add tests for every execution, risk, persistence, data and strategy change.
-4. Validate every historical manifest before research.
+3. Record every research run in the Experiment Registry.
+4. Validate every historical manifest.
 5. Compare every candidate with all mandatory benchmarks.
-6. Run dependency audit, research audits, critical coverage and complete pytest.
-7. Review the diff for secrets, runtime data and safety-flag changes.
-8. Resolve every ambiguous execution through reconciliation.
-9. Merge only after factual green checks and a documented rollback.
+6. Validate Paper/Testnet execution divergence before Testnet promotion.
+7. Require private WebSocket health and startup reconciliation.
+8. Persist automated reports and separate manual decisions.
+9. Resolve every ambiguous execution before retry.
+10. Merge only after complete green CI and a documented rollback.
 
 ## Security
 
 - Rotate any token or key exposed in chat, screenshots or logs.
 - Separate read-only, Testnet and future Mainnet credentials.
 - Disable withdrawals and transfers for automated keys.
-- Keep production secrets outside Git, logs, metrics and Evidence payloads.
-- Treat unexpected account, position or order state as a kill-switch event.
+- Keep production secrets outside Git, logs, metrics, experiments and Evidence.
+- Treat unexpected account, position, stream or order state as a kill-switch event.
