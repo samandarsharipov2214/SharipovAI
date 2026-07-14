@@ -1,6 +1,6 @@
 # SharipovAI Constitution
 
-Version: `2026.07-execution-research-v3`  
+Version: `2026.07-research-promotion-v4`  
 Status: **Binding development and runtime policy**
 
 This document defines non-negotiable rules. Code, configuration, dashboards,
@@ -115,9 +115,9 @@ Soft risk may only reduce position size: `LOW=1.0`, `MEDIUM=0.6`,
 
 ## 6. Paper-trading realism
 
-Only capital and fills are virtual. Quotes, timestamps, fees, bid/ask spread,
-slippage, funding, risk, drawdown and Evidence must be treated as production
-inputs.
+Only capital and fills are virtual. Quotes, timestamps, maker/taker fees,
+bid/ask spread, nonlinear market impact, slippage, funding, risk, drawdown and
+Evidence must be treated as production inputs.
 
 Paper state must be durable, atomic, revisioned and recoverable from a
 last-known-good backup. Synthetic historical prices, fabricated trades and fake
@@ -127,21 +127,76 @@ A paper trade may reach Testnet only when it references a stored canonical
 `TradingCandidate`, is recent enough for mirroring, matches symbol/side/price and
 passes fresh validation again.
 
-## 7. Backtesting integrity
+## 7. Backtesting and historical-data integrity
 
-1. Backtests process immutable events in chronological order.
-2. Lookahead, future leakage and random time-series train/test splits are
-   forbidden.
-3. Results include bid/ask spread, fees and slippage; funding and latency must be
-   added before derivatives/live promotion.
+1. Backtests process immutable events in chronological `(timestamp, symbol)` order.
+2. Lookahead, future leakage, duplicate bars and random time-series train/test
+   splits are forbidden.
+3. Results include bid/ask spread, maker/taker fees, deterministic slippage,
+   participation-based market impact and funding where applicable.
 4. Backtest, paper and Testnet must converge on shared domain models, cost logic,
    risk limits and capital allocation.
 5. Every run records strategy/config version, data provenance and commit SHA.
-6. Promotion requires out-of-sample and walk-forward evidence, not one profitable
-   in-sample chart.
-7. A backtest is research evidence, never permission to enable Mainnet.
+6. Historical datasets require a versioned manifest with venue, market type,
+   symbols, interval, time range, row count, schema and optional SHA-256 hashes.
+7. Parquet data must pass schema, range, symbol, duplicate and price-integrity
+   validation before it can create `MarketEvent` objects.
+8. Missing intervals are visible evidence and must never be silently fabricated.
+9. A backtest is research evidence, never permission to enable Mainnet.
 
-## 8. Canonical architecture
+## 8. Research promotion gate
+
+A candidate strategy may move from research into sustained PAPER evaluation only
+when every mandatory gate below passes. Passing these gates does not enable
+Testnet or Mainnet automatically.
+
+### 8.1 Required evidence
+
+- a validated, versioned historical-data manifest;
+- reproducible configuration and source commit SHA;
+- spread, maker/taker fees, slippage, market impact and funding included;
+- no lookahead or future-data access;
+- sequential out-of-sample walk-forward evaluation;
+- mandatory comparison with `buy-and-hold`, trend-following, breakout and
+  mean-reversion benchmarks;
+- complete CI, coverage, dependency audit and retained result artifacts.
+
+### 8.2 Minimum quantitative gate
+
+Unless a stricter instrument-specific policy exists, promotion requires:
+
+- at least **6** completed out-of-sample walk-forward windows;
+- at least **60%** profitable out-of-sample windows after all modeled costs;
+- positive aggregate out-of-sample net PnL;
+- maximum drawdown within the active hard risk policy;
+- positive risk-adjusted score;
+- the candidate must beat buy-and-hold and at least two of the four mandatory
+  benchmarks on the same data and cost assumptions;
+- no single walk-forward window may contribute more than **40%** of total positive
+  out-of-sample PnL;
+- no unresolved data-quality warning that could materially improve the result.
+
+A threshold may be made stricter by Risk Engine or General Controller. It may not
+be weakened automatically by a strategy, AI agent, dashboard or optimizer.
+
+### 8.3 Paper and Testnet promotion
+
+Research-to-PAPER additionally requires human review of the manifest, strategy
+code, benchmark table and drawdown path. PAPER-to-TESTNET requires:
+
+- sustained paper evidence over multiple market regimes;
+- measured paper-versus-model fill divergence within an explicitly documented
+  tolerance;
+- zero unresolved execution intents;
+- successful startup reconciliation;
+- no hard risk breach;
+- explicit General Controller and owner approval.
+
+TESTNET-to-CONTROLLED_MAINNET remains impossible while
+`MAINNET_EXECUTION_COMPILED=False`. No metric, benchmark rank or AI confidence may
+override that compile lock.
+
+## 9. Canonical architecture
 
 SharipovAI has nine top-level AI organs:
 
@@ -159,7 +214,7 @@ New capabilities extend an existing owner unless the responsibility is genuinely
 unique. Interfaces, storage, monitoring, transport, idempotency and backtesting
 are infrastructure, not new AI organs.
 
-## 9. Learning and strategy changes
+## 10. Learning and strategy changes
 
 Learning may create lessons, proposals and challenger strategies. It may not:
 
@@ -168,21 +223,28 @@ Learning may create lessons, proposals and challenger strategies. It may not:
 - increase capital or leverage;
 - remove Risk/Security vetoes;
 - reinterpret an unresolved order as failed and retry it;
-- treat confidence as proof of profitability.
+- treat confidence as proof of profitability;
+- optimize against the out-of-sample window after seeing its results;
+- select only favorable benchmarks or omit buy-and-hold.
 
 Promotion requires reproducible tests, out-of-sample evidence, champion/challenger
 comparison and General Controller approval.
 
-## 10. Database and Evidence
+## 11. Database, Evidence and observability
 
 `ProjectDatabase` is the canonical source of truth for execution intents, order
 state, audit, learning and project memory. JSON files are bounded backups/caches,
 not execution authority.
 
-Secrets, seed phrases, private keys, API secrets and credentials are forbidden in
-Git, logs, Evidence, change ledgers, test artifacts and prompts.
+Operational metrics and structured logs must describe actual runtime state. They
+must not claim that execution is enabled when the kill switch, stage gate or
+compile lock blocks it. Metrics are read-only and cannot trigger trading.
 
-## 11. CI and merge rules
+Secrets, seed phrases, private keys, API secrets and credentials are forbidden in
+Git, logs, Prometheus labels, Evidence, change ledgers, test artifacts and prompts.
+Structured logging must redact credential-like fields.
+
+## 12. CI and merge rules
 
 A change is mergeable only when all relevant factual gates complete:
 
@@ -193,6 +255,10 @@ A change is mergeable only when all relevant factual gates complete:
 - hard Mainnet-lock verification;
 - execution/idempotency/reconciliation tests;
 - risk/capital/backtesting safety tests;
+- funding, walk-forward and benchmark tests;
+- historical manifest/Parquet validation tests;
+- dashboard auth, execution-status and observability tests;
+- execution and research foundation audits;
 - critical-module coverage threshold;
 - complete pytest suite;
 - test and coverage artifacts retained;
@@ -202,7 +268,7 @@ A change is mergeable only when all relevant factual gates complete:
 A static score, partial suite or AI statement cannot override a failed or skipped
 full suite. Testnet and Mainnet remain disabled by default in CI.
 
-## 12. Profit and user claims
+## 13. Profit and user claims
 
 SharipovAI reports measured results after all modeled costs. It must not promise
 guaranteed income, fabricate performance or scale capital based only on a
@@ -212,5 +278,6 @@ backtest, confidence score or narrative.
 
 | Version | Date | Summary |
 | --- | --- | --- |
+| `2026.07-research-promotion-v4` | 2026-07-14 | Versioned Parquet/DuckDB data, funding and market-impact modeling, walk-forward evaluation, mandatory benchmark comparison, operational metrics and binding promotion gates. |
 | `2026.07-execution-research-v3` | 2026-07-14 | Durable idempotency, startup reconciliation, hard risk/correlation limits, shared event-driven backtesting and truthful audit/coverage gates. |
 | `2026.07-safety-foundation-v2` | 2026-07-14 | Mainnet compile lock, canonical execution request, atomic paper state and truthful CI policy. |
