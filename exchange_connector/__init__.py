@@ -15,6 +15,7 @@ from .bybit_costs import (
     select_fee_rate,
     vip_progress,
 )
+from .bybit_execution_state import BybitExecutionStateStore, ExecutionFill
 from .bybit_reference_data import (
     BybitTradingReferenceClient,
     FeeSchedule,
@@ -37,11 +38,13 @@ from .safe_client import SafeExchangeConnector
 
 __all__ = (
     "ApprovedExecutionRequest",
+    "BybitExecutionStateStore",
     "BybitTradingReferenceClient",
     "DuplicateExecutionBlocked",
     "ExchangeConfig",
     "ExchangeOrderPreview",
     "ExchangeStatus",
+    "ExecutionFill",
     "ExecutionIdempotencyRepository",
     "FeeSchedule",
     "InstrumentRules",
