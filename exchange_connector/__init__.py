@@ -26,6 +26,7 @@ from .execution_idempotency import (
     ExecutionIdempotencyRepository,
 )
 from .models import ExchangeConfig, ExchangeOrderPreview, ExchangeStatus
+from .private_ws_gate import PrivateStreamGateReport, PrivateStreamHealthRepository
 from .safe_client import SafeExchangeConnector
 
 __all__ = (
@@ -36,6 +37,8 @@ __all__ = (
     "ExchangeStatus",
     "ExecutionIdempotencyRepository",
     "MAINNET_EXECUTION_COMPILED",
+    "PrivateStreamGateReport",
+    "PrivateStreamHealthRepository",
     "SafeExchangeConnector",
     "ai_cost_report",
     "best_trade_venue",
