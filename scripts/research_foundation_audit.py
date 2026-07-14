@@ -3,9 +3,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,11 +95,7 @@ def audit_research_foundation(root: Path) -> AuditReport:
         record("historical_data_layer", False, f"{type(exc).__name__}: {exc}")
 
     try:
-        from observability import (
-            JsonFormatter,
-            observe_http,
-            record_backtest_result,
-        )
+        from observability import JsonFormatter, observe_http, record_backtest_result
 
         record(
             "observability_layer",
@@ -114,9 +115,7 @@ def audit_research_foundation(root: Path) -> AuditReport:
     )
 
     dashboard_entry = _read(root / "dashboard" / "__init__.py")
-    execution_router = _read(
-        root / "dashboard" / "routers" / "execution_status.py"
-    )
+    execution_router = _read(root / "dashboard" / "routers" / "execution_status.py")
     record(
         "dashboard_operational_structure",
         "install_operational_routers" in dashboard_entry
@@ -134,10 +133,13 @@ def audit_research_foundation(root: Path) -> AuditReport:
         "test_observability.py",
         "test_execution_status_router.py",
     )
+    missing_tests = [name for name in required_tests if name not in tests_workflow]
     record(
         "ci_research_suite",
-        all(name in tests_workflow for name in required_tests),
-        "funding, walk-forward, benchmarks, historical data and observability are in CI",
+        not missing_tests,
+        "all required research tests are in CI"
+        if not missing_tests
+        else f"missing tests in CI: {missing_tests}",
     )
 
     constitution = _read(root / "CONSTITUTION.md").lower()
@@ -148,25 +150,29 @@ def audit_research_foundation(root: Path) -> AuditReport:
         "buy-and-hold",
         "funding",
     )
+    missing_policy = [token for token in promotion_tokens if token not in constitution]
     record(
         "binding_promotion_gate",
-        all(token in constitution for token in promotion_tokens),
-        "Constitution contains explicit research promotion rules",
+        not missing_policy,
+        "Constitution contains explicit research promotion rules"
+        if not missing_policy
+        else f"missing Constitution tokens: {missing_policy}",
     )
 
     readme = _read(root / "README.md").lower()
+    documentation_tokens = (
+        "historical_data",
+        "walkforwardbacktester",
+        "/execution-status",
+        "/metrics",
+    )
+    missing_docs = [token for token in documentation_tokens if token not in readme]
     record(
         "research_documentation",
-        all(
-            token in readme
-            for token in (
-                "historical_data",
-                "walkforwardbacktester",
-                "/execution-status",
-                "/metrics",
-            )
-        ),
-        "README documents research, data and operational surfaces",
+        not missing_docs,
+        "README documents research, data and operational surfaces"
+        if not missing_docs
+        else f"missing README tokens: {missing_docs}",
     )
 
     passed = all(check.passed for check in checks)
@@ -178,9 +184,7 @@ def _read(path: Path) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Audit SharipovAI research foundation"
-    )
+    parser = argparse.ArgumentParser(description="Audit SharipovAI research foundation")
     parser.add_argument("--root", default=".")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
