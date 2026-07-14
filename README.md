@@ -1,19 +1,20 @@
 # SharipovAI OS
 
-SharipovAI is a safety-first AI trading operating system built around real market
-evidence, deterministic risk controls, persistent paper trading and guarded
-exchange integration.
+SharipovAI is a safety-first AI trading operating system built around verified
+market evidence, deterministic risk controls, persistent paper trading,
+event-driven strategy research and guarded exchange integration.
 
-> **Current safety state:** Mainnet execution is compiled out. Paper trading is
-> active development functionality. Testnet execution requires explicit flags,
-> credentials, a kill-switch release and an `ApprovedExecutionRequest`.
+> **Current safety state:** Mainnet execution is compiled out. Testnet is disabled
+> by default and can write only through a short-lived `ApprovedExecutionRequest`
+> with a durable idempotency reservation. An unresolved execution blocks restart.
 
-SharipovAI does not guarantee profit. The project is designed to measure whether
-a strategy has positive expectancy after fees, spread, slippage and risk.
+SharipovAI does not guarantee profit. Its job is to determine whether a strategy
+has positive expectancy after spread, fees, slippage, drawdown and execution
+failure modes.
 
-## Core architecture
+## Architecture
 
-The canonical architecture contains nine AI organs:
+The canonical architecture has nine AI organs:
 
 1. General Controller
 2. Market Intelligence
@@ -25,39 +26,132 @@ The canonical architecture contains nine AI organs:
 8. Learning Engine
 9. Security Guard
 
-The source of truth is `ai_architecture_registry.py`. New functions extend an
-existing owner instead of creating duplicate top-level agents.
+`ai_architecture_registry.py` is the ownership source of truth. Infrastructure
+such as storage, execution idempotency and backtesting does not become another AI.
 
 ## Safety invariants
 
-- Mainnet execution is hard-blocked in code.
+- `MAINNET_EXECUTION_COMPILED=False` cannot be overridden by environment variables.
 - `EXECUTION_KILL_SWITCH=1` is the safe default.
-- Testnet and Mainnet credentials are separated.
-- Exchange keys must never have withdrawal or transfer permissions.
-- Dashboard, Telegram, agents and LLM output cannot call order creation directly.
-- Exchange-bound writes use `exchange_connector.ApprovedExecutionRequest`.
-- Missing or stale required evidence means `BLOCK`.
-- Secrets, runtime databases, account snapshots and journals are ignored by Git.
-- Paper state uses atomic writes and a last-known-good backup.
+- Dashboard, Telegram, agents, strategies and LLM output cannot create orders.
+- The legacy `place_market_order()` entry point is removed.
+- Exchange writes use `BybitExecutionClient.execute(ApprovedExecutionRequest)`.
+- Every request has a deterministic `sai_...` `orderLinkId` and is reserved in
+  `ProjectDatabase` before the HTTP call.
+- Duplicate and unresolved intents are blocked; transport timeouts are reconciled,
+  never retried blindly.
+- Startup compares idempotency reservations, execution journal and private Bybit
+  order state before Testnet may continue.
+- Paper state is atomic, revisioned and recoverable.
+- Secrets, account snapshots, runtime databases and execution journals stay out of Git.
 
-See [`CONSTITUTION.md`](CONSTITUTION.md) for the binding rules.
+Binding policy: [`CONSTITUTION.md`](CONSTITUTION.md).
 
 ## Main components
 
 | Component | Responsibility |
 | --- | --- |
 | `dashboard/` | FastAPI dashboard, APIs and operational views |
-| `trading_candidate.py` | Fail-closed candidate evidence contract |
-| `exchange_connector/` | Read/preview clients and guarded testnet execution |
-| `market_paper_engine.py` | Market-backed virtual account execution |
-| `paper_activity_engine.py` | Durable atomic virtual-account state |
-| `capital_allocation.py` | Reserve, position and risk-based allocation |
-| `risk_engine/` | Deterministic vetoes and risk evaluation |
-| `portfolio_engine/` | Capital, exposure, fees and PnL ownership |
-| `learning/` | Controlled lessons and proposals; no self-deploy |
-| `storage/` | Canonical project database and Evidence ledger |
-| `news_monitor/` | Specialized real-news agent network |
-| `telegram_bot.py` | Telegram interface and owner controls |
+| `trading_candidate.py` | Fail-closed analytical candidate contract |
+| `exchange_connector/execution_contract.py` | Immutable approved execution envelope |
+| `exchange_connector/execution_idempotency.py` | Durable duplicate/unresolved protection |
+| `exchange_connector/bybit_order_identity.py` | Canonical deterministic order identity registry |
+| `exchange_connector/bybit_order_state.py` | Private order lifecycle and partial-fill state |
+| `autonomous_trading/startup_reconciliation.py` | Restart reconciliation and fail-closed gate |
+| `autonomous_trading/testnet_bridge.py` | Fresh paper-candidate to Testnet mirror |
+| `capital_allocation.py` | Reserve, risk, symbol and correlation exposure allocation |
+| `risk_engine/` | Hard limits, soft score and position-size multiplier |
+| `trading_core/` | Shared market, signal, fill, cost and event-driven backtest models |
+| `paper_activity_engine.py` | Durable virtual-account state |
+| `storage/` | Canonical shared database and Evidence ledger |
+
+## Canonical execution path
+
+```text
+Verified market evidence
+  -> Portfolio snapshot
+  -> Risk Engine hard limits
+  -> Capital allocation
+  -> Decision Quality
+  -> Security Guard
+  -> TradingCandidate validation
+  -> ApprovedExecutionRequest
+  -> Idempotency reservation
+  -> Bybit Testnet submission
+  -> Private order state
+  -> Reconciliation
+  -> Outcome/Learning Evidence
+```
+
+New execution code:
+
+```python
+validation = validate_trading_candidate(candidate, now_ms=now_ms)
+request = build_execution_request(
+    candidate,
+    validation,
+    quantity=quantity,
+    now_ms=now_ms,
+)
+result = BybitExecutionClient(database=database).execute(
+    request,
+    now_ms=now_ms,
+)
+```
+
+A timeout after submission leaves the request unresolved. The same request cannot
+be sent again until reconciliation resolves its state.
+
+## Risk and capital defaults
+
+| Rule | Default |
+| --- | ---: |
+| Reserve | 20% |
+| Maximum total exposure | 80% |
+| Maximum one position | 20% |
+| Maximum one symbol | 20% |
+| Maximum correlated group | 35% |
+| Maximum risk per trade | 1% |
+| Daily loss stop | 2% |
+| Portfolio drawdown stop | 10% |
+| Leverage | 1× |
+
+Hard blocks include stale data, active kill switch, invalid instruments,
+drawdown/loss limits, exposure limits, liquidity floor and maximum positions.
+Soft risk only scales size: `LOW=100%`, `MEDIUM=60%`, `HIGH=25%`,
+`CRITICAL=0%`.
+
+## Event-driven backtesting
+
+`trading_core.EventDrivenBacktester` provides a shared research foundation:
+
+- immutable chronological market events;
+- explicit bid and ask;
+- fees and slippage on every fill;
+- shared capital allocation and correlation caps;
+- mark-to-market equity and maximum drawdown;
+- no future lookup or synthetic fill generation.
+
+Example:
+
+```python
+from trading_core import EventDrivenBacktester, MarketEvent, Side, Signal
+
+class Strategy:
+    def on_market(self, event, portfolio):
+        if event.symbol not in portfolio.positions:
+            return Signal(Side.BUY, requested_risk_percent=1.0, reason="entry")
+        return None
+
+result = EventDrivenBacktester().run(
+    [MarketEvent(1, "BTCUSDT", bid=99.0, ask=100.0)],
+    Strategy(),
+)
+print(result.net_pnl, result.max_drawdown_percent)
+```
+
+Backtest evidence alone never enables Mainnet. Funding, latency, instrument steps
+and walk-forward/out-of-sample validation are required before promotion.
 
 ## Local setup
 
@@ -67,42 +161,32 @@ Python 3.12 is required.
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+python -m pip install -r requirements-dev.txt
 ```
 
-Create local configuration from examples only. Never commit a populated `.env`.
+Never commit a populated `.env`.
 
-## Run the safety checks
+## Safety and quality checks
 
 ```bash
+python -m pip check
+python -m pip_audit -r requirements.txt --progress-spinner off
 python -m compileall -q .
 
 python -m pytest \
   tests/test_execution_contract.py \
+  tests/test_execution_idempotency.py \
+  tests/test_startup_reconciliation.py \
+  tests/test_risk_hard_limits.py \
   tests/test_capital_allocation.py \
-  tests/test_market_paper_engine.py \
-  tests/test_paper_state_recovery.py \
-  tests/test_project_change_ledger.py \
+  tests/test_trading_core_backtest.py \
   -q --tb=short
 
 python -m pytest -q --tb=short
 ```
 
-A static audit percentage is not a substitute for a completed full test suite.
-
-## Run the dashboard
-
-```bash
-uvicorn dashboard:app --reload
-```
-
-Open `http://127.0.0.1:8000`.
-
-Production start command:
-
-```bash
-uvicorn dashboard:app --host 0.0.0.0 --port "$PORT"
-```
+CI additionally records critical-module coverage, JUnit output, full pytest logs
+and a compact failure report. A partial or skipped suite is not a green release.
 
 ## Safe environment defaults
 
@@ -111,61 +195,51 @@ EXCHANGE_MODE=sandbox
 EXCHANGE_BASE_URL=https://api-testnet.bybit.com
 EXCHANGE_LIVE_TRADING_ENABLED=0
 LIVE_EXECUTION_MANUAL_UNLOCK=0
+AUTONOMOUS_TESTNET_BRIDGE_ENABLED=0
+AUTONOMOUS_TESTNET_ENABLED=0
 TESTNET_EXECUTION_ENABLED=0
 EXECUTION_KILL_SWITCH=1
 EXECUTION_MAX_NOTIONAL_USDT=25
+TESTNET_MIRROR_MAX_TRADE_AGE_MS=5000
 
-VIRTUAL_ACCOUNT_AUTORUN_ENABLED=1
-VIRTUAL_ACCOUNT_TICK_SECONDS=60
-VIRTUAL_ACCOUNT_MAX_OPEN=8
 VIRTUAL_ACCOUNT_RESERVE_PERCENT=20
+VIRTUAL_ACCOUNT_MAX_TOTAL_EXPOSURE_PERCENT=80
 VIRTUAL_ACCOUNT_MAX_POSITION_PERCENT=20
+VIRTUAL_ACCOUNT_MAX_SYMBOL_EXPOSURE_PERCENT=20
+VIRTUAL_ACCOUNT_MAX_CORRELATED_EXPOSURE_PERCENT=35
 VIRTUAL_ACCOUNT_MAX_RISK_PER_TRADE_PERCENT=1
-VIRTUAL_ACCOUNT_MIN_NOTIONAL_USDT=25
+VIRTUAL_ACCOUNT_MAX_DAILY_LOSS_PERCENT=2
 ```
 
-These values do not enable exchange writes. Testnet still requires isolated
-credentials and all gates. Mainnet remains unavailable even when environment
-variables are changed.
+These settings do not enable exchange writes. Testnet additionally requires
+isolated Testnet credentials and completed safety/stage gates. Mainnet remains
+unavailable even if every environment flag is changed.
 
-## Execution path
+## Dashboard
 
-```text
-Market data
-  -> Portfolio snapshot
-  -> Risk decision
-  -> Decision Quality
-  -> Security Guard
-  -> TradingCandidate validation
-  -> ApprovedExecutionRequest
-  -> Bybit testnet executor
+```bash
+uvicorn dashboard:app --reload
 ```
 
-`BybitExecutionClient.place_market_order()` remains a temporary testnet-only
-compatibility method. New code must call `execute(ApprovedExecutionRequest)`.
-The compatibility path cannot execute in live mode.
+Open `http://127.0.0.1:8000`.
 
-## Paper-trading state
+Production:
 
-The virtual account uses real market evidence while balances and fills remain
-virtual. State files are written atomically, revisioned and backed up as
-`<state-file>.bak`. If the primary JSON is damaged, the engine loads the last
-valid backup and reports recovery in its state.
-
-Paper results must include fees and should be extended with measured spread,
-slippage and funding before strategy promotion.
+```bash
+uvicorn dashboard:app --host 0.0.0.0 --port "$PORT"
+```
 
 ## Development workflow
 
-1. Work in a branch.
-2. Keep Mainnet and Testnet disabled by default.
-3. Add tests with every risk, execution or persistence change.
-4. Run targeted safety tests.
-5. Run full pytest.
-6. Review the diff for secrets and safety-flag changes.
-7. Merge only after factual green checks.
+1. Work in a branch and keep PRs draft until factual checks pass.
+2. Keep Testnet/Mainnet disabled by default.
+3. Add tests for every execution, risk, persistence and strategy change.
+4. Run dependency audit, critical coverage and complete pytest.
+5. Review the diff for secrets and safety-flag changes.
+6. Resolve every ambiguous execution through reconciliation.
+7. Merge only after factual green checks and a documented rollback.
 
-Useful design documents:
+Design documents:
 
 - `CONSTITUTION.md`
 - `AGENTS.md`
@@ -175,8 +249,8 @@ Useful design documents:
 
 ## Security
 
-- Rotate any token or key ever exposed in chat, screenshots or logs.
-- Use separate read-only, Testnet and future Mainnet API keys.
-- Disable withdrawals and transfers for all automated keys.
-- Keep production secrets outside Git and outside Evidence payloads.
+- Rotate any token or key exposed in chat, screenshots or logs.
+- Separate read-only, Testnet and future Mainnet credentials.
+- Disable withdrawals and transfers for automated keys.
+- Keep production secrets outside Git and Evidence payloads.
 - Treat unexpected account, position or order state as a kill-switch event.
