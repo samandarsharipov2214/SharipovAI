@@ -2,24 +2,32 @@ name: Project Guardrails
 
 on:
   push:
-    branches: [main]
+    branches: [main, agent/maximum-velocity-phase1]
     paths:
       - 'dashboard/**'
       - 'exchange_connector/**'
+      - 'autonomous_trading/**'
+      - 'risk_engine/**'
+      - 'trading_core/**'
       - 'storage/**'
       - 'scripts/release_audit.py'
       - 'scripts/migrate_project_db.py'
       - 'requirements.txt'
+      - 'requirements-dev.txt'
       - '.github/workflows/project-guardrails.yml'
   pull_request:
     branches: [main]
     paths:
       - 'dashboard/**'
       - 'exchange_connector/**'
+      - 'autonomous_trading/**'
+      - 'risk_engine/**'
+      - 'trading_core/**'
       - 'storage/**'
       - 'scripts/release_audit.py'
       - 'scripts/migrate_project_db.py'
       - 'requirements.txt'
+      - 'requirements-dev.txt'
       - '.github/workflows/project-guardrails.yml'
   workflow_dispatch:
 
@@ -39,7 +47,7 @@ jobs:
          github.event.pull_request.head.repo.full_name == github.repository)
       }}
     runs-on: [self-hosted, linux, x64, sharipovai-ci]
-    timeout-minutes: 15
+    timeout-minutes: 25
     env:
       PYTHONUNBUFFERED: '1'
       PYTHONDONTWRITEBYTECODE: '1'
@@ -47,7 +55,7 @@ jobs:
       ADMIN_PASSWORD: ci-test-password
       AUTH_SECRET: ci-test-secret
       SHARIPOVAI_DISABLE_AUTH: '1'
-      DATABASE_URL: sqlite:////tmp/sharipovai-shared.db
+      DATABASE_URL: sqlite:////tmp/sharipovai-guardrails-${{ github.run_id }}.db
       SHARIPOVAI_DATABASE_REQUIRED: '1'
       MARKET_STREAM_ENABLED: '0'
       AUTONOMOUS_PAPER_ENABLED: '0'
@@ -62,22 +70,31 @@ jobs:
       EXECUTION_KILL_SWITCH: '1'
       AUTONOMOUS_TRADING_STAGE: '2'
       EXCHANGE_MODE: sandbox
+      EXCHANGE_BASE_URL: https://api-testnet.bybit.com
       BYBIT_ACCOUNT_SYNC_ENABLED: '0'
+      EXECUTION_JOURNAL_FILE: /tmp/sharipovai-guardrails-journal-${{ github.run_id }}.json
+      TESTNET_BRIDGE_STATE_FILE: /tmp/sharipovai-guardrails-bridge-${{ github.run_id }}.json
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
           cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip --quiet
-          python -m pip install -r requirements.txt --quiet
+          python -m pip install -r requirements-dev.txt --quiet
+          python -m pip check
 
       - name: Initialize canonical project database
         run: python scripts/migrate_project_db.py
@@ -87,18 +104,43 @@ jobs:
 
       - name: Import application safely
         run: |
-          python -c "import dashboard; assert dashboard.app is not None; print('dashboard import: ok')"
+          python - <<'PY'
+          import dashboard
+          from autonomous_trading import StartupExecutionReconciler
+          from exchange_connector import ApprovedExecutionRequest, ExecutionIdempotencyRepository
+          from trading_core import EventDrivenBacktester
+          assert dashboard.app is not None
+          assert StartupExecutionReconciler is not None
+          assert ApprovedExecutionRequest is not None
+          assert ExecutionIdempotencyRepository is not None
+          assert EventDrivenBacktester is not None
+          print('critical imports: ok')
+          PY
 
       - name: Verify execution remains locked
         run: |
           python - <<'PY'
           from exchange_connector.bybit_execution import BybitExecutionClient
+          from exchange_connector.execution_contract import MAINNET_EXECUTION_COMPILED
           status = BybitExecutionClient().status()
+          assert MAINNET_EXECUTION_COMPILED is False
           assert status['kill_switch'] is True
           assert status['testnet_execution_enabled'] is False
           assert status['live_execution_enabled'] is False
+          assert status['mainnet_hard_blocked'] is True
           print(status)
           PY
+
+      - name: Run regression tests
+        run: |
+          python -m pytest \
+            tests/test_execution_contract.py \
+            tests/test_execution_idempotency.py \
+            tests/test_startup_reconciliation.py \
+            tests/test_sensitive_api_admin_guard.py \
+            tests/test_risk_hard_limits.py \
+            tests/test_trading_core_backtest.py \
+            -q --tb=short
 
       - name: Run fail-closed release audit
         env:
