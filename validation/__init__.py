@@ -6,6 +6,7 @@ from .fill_divergence import (
     FillObservation,
     FillValidationRepository,
 )
+from .runtime_fill_harvester import RuntimeFillHarvester
 
 __all__ = [
     "DivergenceThresholds",
@@ -13,4 +14,5 @@ __all__ = [
     "FillDivergenceReport",
     "FillObservation",
     "FillValidationRepository",
+    "RuntimeFillHarvester",
 ]
