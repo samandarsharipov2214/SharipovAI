@@ -6,8 +6,10 @@ idempotent so Codex/tests may also import ``dashboard.app`` directly.
 from __future__ import annotations
 
 from .app import app, create_app
+from .admin_auth_compat import install_admin_auth_compat
 from .lifecycle_compat import ensure_event_handler_compat
 
+install_admin_auth_compat()
 ensure_event_handler_compat(app)
 
 from .ai_organ_state_safe_api import install_ai_organ_state_api
