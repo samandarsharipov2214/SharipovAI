@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
 
 from capital_allocation import CapitalAllocationPolicy
-from market_paper_engine import PaperActivityEngine
+from market_paper_engine import MarketPaperActivityEngine as PaperActivityEngine
 from observability.metrics import update_runtime_metrics
 
 from dashboard.auth import AdminPrincipal, admin_principal
