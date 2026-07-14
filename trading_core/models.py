@@ -80,6 +80,7 @@ class BacktestConfig:
     max_correlated_exposure_percent: float = 35.0
     max_risk_per_trade_percent: float = 1.0
     max_open_positions: int = 5
+    minimum_notional: float = 25.0
     force_close_at_end: bool = True
 
 
