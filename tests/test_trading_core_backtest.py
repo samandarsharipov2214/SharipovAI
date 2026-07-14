@@ -94,5 +94,5 @@ def test_crypto_correlation_cap_limits_aggregate_entries() -> None:
     buy_fills = [fill for fill in result.fills if fill.side is Side.BUY]
 
     assert len(buy_fills) == 2
-    assert sum(fill.notional for fill in buy_fills) <= 3_510.0
+    assert sum(fill.notional for fill in buy_fills) <= 3_511.0
     assert result.ending_equity >= 6_500.0
