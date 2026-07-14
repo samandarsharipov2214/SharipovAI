@@ -15,6 +15,8 @@ _PUBLIC_EXACT = {
     "/api/health",
     "/startup",
     "/api/security/status",
+    # The metrics route performs its own token/admin authentication.
+    "/metrics",
     # Telegram must reach this endpoint without a dashboard session.
     # The webhook handler performs its own secret-token validation.
     "/telegram/webhook",
@@ -29,12 +31,7 @@ def auth_disabled() -> bool:
 
 
 def install_global_auth_guard(app: FastAPI) -> None:
-    """Require a valid session for every non-public route.
-
-    The bypass defaults to disabled. Sensitive Bybit routes retain their own
-    administrator guard and therefore remain protected even when this global
-    middleware is explicitly bypassed for tests.
-    """
+    """Require a valid session for every non-public route."""
     if getattr(app.state, "global_auth_guard_installed", False):
         return
     app.state.global_auth_guard_installed = True
@@ -45,7 +42,9 @@ def install_global_auth_guard(app: FastAPI) -> None:
             return await call_next(request)
 
         path = request.url.path
-        if path in _PUBLIC_EXACT or any(path.startswith(prefix) for prefix in _PUBLIC_PREFIXES):
+        if path in _PUBLIC_EXACT or any(
+            path.startswith(prefix) for prefix in _PUBLIC_PREFIXES
+        ):
             return await call_next(request)
 
         from .app import _session_username
@@ -60,4 +59,7 @@ def install_global_auth_guard(app: FastAPI) -> None:
             )
 
         safe_next = path if path.startswith("/") and not path.startswith("//") else "/"
-        return RedirectResponse(url=f"/login?next={quote(safe_next, safe='/')}", status_code=303)
+        return RedirectResponse(
+            url=f"/login?next={quote(safe_next, safe='/')}",
+            status_code=303,
+        )
