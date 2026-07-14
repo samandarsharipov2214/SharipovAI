@@ -3,7 +3,6 @@
 Public market/account reads and previews are allowed. Exchange-bound writes must
 use the canonical execution contract, and mainnet execution is compiled out.
 """
-
 from __future__ import annotations
 
 from .bybit_costs import (
@@ -22,14 +21,20 @@ from .execution_contract import (
     build_execution_request,
     validate_execution_request,
 )
+from .execution_idempotency import (
+    DuplicateExecutionBlocked,
+    ExecutionIdempotencyRepository,
+)
 from .models import ExchangeConfig, ExchangeOrderPreview, ExchangeStatus
 from .safe_client import SafeExchangeConnector
 
 __all__ = (
     "ApprovedExecutionRequest",
+    "DuplicateExecutionBlocked",
     "ExchangeConfig",
     "ExchangeOrderPreview",
     "ExchangeStatus",
+    "ExecutionIdempotencyRepository",
     "MAINNET_EXECUTION_COMPILED",
     "SafeExchangeConnector",
     "ai_cost_report",
