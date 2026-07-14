@@ -137,6 +137,7 @@ jobs:
             tests/test_execution_contract.py \
             tests/test_execution_idempotency.py \
             tests/test_startup_reconciliation.py \
+            tests/test_testnet_bridge_canonical_candidate.py \
             tests/test_sensitive_api_admin_guard.py \
             tests/test_risk_hard_limits.py \
             tests/test_trading_core_backtest.py \
