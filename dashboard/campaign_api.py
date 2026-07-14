@@ -5,8 +5,14 @@ from typing import Any, Callable
 
 from fastapi import FastAPI, HTTPException, Request
 
-from campaigns import FinalPromotionReportEngine, ScheduledCampaignOrchestrator
+from autonomous_trading import ShadowModeTestnetBridge
+from campaigns import (
+    FinalPromotionReportEngine,
+    ScheduledCampaignOrchestrator,
+    TestnetShadowCampaign,
+)
 from storage import ProjectDatabase
+from validation import RuntimeFillHarvester
 
 from .admin_guard import install_sensitive_api_guard, require_admin
 
@@ -19,9 +25,17 @@ def install_campaign_api(app: FastAPI) -> None:
         raise RuntimeError("ProjectDatabase must be installed before campaign API")
     app.state.campaign_api_installed = True
     install_sensitive_api_guard(app)
-    orchestrator = ScheduledCampaignOrchestrator(database)
+    shared_bridge = getattr(app.state, "autonomous_testnet_bridge", None)
+    shared_harvester = getattr(app.state, "runtime_fill_harvester", None)
+    campaign = TestnetShadowCampaign(
+        database,
+        bridge=(shared_bridge if isinstance(shared_bridge, ShadowModeTestnetBridge) else None),
+        harvester=(shared_harvester if isinstance(shared_harvester, RuntimeFillHarvester) else None),
+    )
+    orchestrator = ScheduledCampaignOrchestrator(database, campaign=campaign)
     reports = FinalPromotionReportEngine(database)
     app.state.scheduled_campaign_orchestrator = orchestrator
+    app.state.testnet_shadow_campaign = campaign
     app.state.final_promotion_report_engine = reports
     _register_event(app, "startup", orchestrator.start)
     _register_event(app, "shutdown", orchestrator.stop)
@@ -75,17 +89,25 @@ def install_campaign_api(app: FastAPI) -> None:
     @app.get("/api/campaigns/{campaign_id}")
     def campaign_detail(request: Request, campaign_id: str) -> dict[str, Any]:
         require_admin(request)
-        campaign = orchestrator.campaign.get(campaign_id)
-        if campaign is None:
+        campaign_row = orchestrator.campaign.get(campaign_id)
+        if campaign_row is None:
             raise HTTPException(status_code=404, detail="campaign not found")
-        report = reports.get(str(campaign.get("final_report_id") or "")) if campaign.get("final_report_id") else None
-        return {"status": "ok", "campaign": campaign, "final_promotion_report": report or {}}
+        report = (
+            reports.get(str(campaign_row.get("final_report_id") or ""))
+            if campaign_row.get("final_report_id")
+            else None
+        )
+        return {
+            "status": "ok",
+            "campaign": campaign_row,
+            "final_promotion_report": report or {},
+        }
 
     @app.post("/api/campaigns/{campaign_id}/run")
     def run_campaign(request: Request, campaign_id: str) -> dict[str, Any]:
         principal = require_admin(request)
         try:
-            campaign = orchestrator.campaign.run_cycle(
+            campaign_row = orchestrator.campaign.run_cycle(
                 campaign_id,
                 actor=str(getattr(principal, "username", "admin")),
             )
@@ -93,7 +115,11 @@ def install_campaign_api(app: FastAPI) -> None:
             raise HTTPException(status_code=404, detail="campaign not found") from exc
         except Exception as exc:
             raise _service_error(exc) from exc
-        return {"status": "ok", "campaign": campaign, "runtime_flags_changed": False}
+        return {
+            "status": "ok",
+            "campaign": campaign_row,
+            "runtime_flags_changed": False,
+        }
 
     @app.get("/api/campaigns/promotion-reports")
     def promotion_reports(request: Request) -> dict[str, Any]:
