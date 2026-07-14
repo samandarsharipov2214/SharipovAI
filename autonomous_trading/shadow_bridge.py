@@ -20,6 +20,7 @@ _FINAL_RECORD_STATUSES = {
     "ignored_campaign",
 }
 _ACTIVE_NAMESPACE = "scheduled_campaign_active"
+_CAMPAIGN_NAMESPACE = "testnet_shadow_campaigns"
 
 
 class ShadowModeTestnetBridge(AutonomousTestnetBridge):
@@ -77,7 +78,7 @@ class ShadowModeTestnetBridge(AutonomousTestnetBridge):
             campaign = self._active_campaign(now_ms, required=False)
             if campaign is not None:
                 created_at_ms = int(trade.get("created_at_ms") or 0)
-                if created_at_ms < int(campaign["activated_at_ms"]):
+                if created_at_ms < self._campaign_started_at(campaign):
                     self._record(
                         trade_id,
                         "ignored_campaign",
@@ -246,6 +247,18 @@ class ShadowModeTestnetBridge(AutonomousTestnetBridge):
             if not str(value.get(name) or "").strip():
                 raise RuntimeError(f"scheduled campaign authorization missing {name}")
         return dict(value)
+
+    def _campaign_started_at(self, campaign: Mapping[str, Any]) -> int:
+        identifier = str(campaign.get("campaign_id") or "").strip()
+        current = self.database.get_json(_CAMPAIGN_NAMESPACE, identifier) if identifier else None
+        if current is not None and isinstance(current.get("value"), Mapping):
+            started = int(current["value"].get("started_at_ms") or 0)
+            if started > 0:
+                return started
+        activated = int(campaign.get("activated_at_ms") or 0)
+        if activated <= 0:
+            raise RuntimeError("scheduled campaign activation timestamp is invalid")
+        return activated
 
 
 def _campaign_context(campaign: Mapping[str, Any] | None) -> dict[str, Any]:
