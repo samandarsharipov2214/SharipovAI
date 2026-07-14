@@ -15,6 +15,12 @@ from .bybit_costs import (
     select_fee_rate,
     vip_progress,
 )
+from .bybit_reference_data import (
+    BybitTradingReferenceClient,
+    FeeSchedule,
+    InstrumentRules,
+    TradingReferenceSnapshot,
+)
 from .execution_contract import (
     ApprovedExecutionRequest,
     MAINNET_EXECUTION_COMPILED,
@@ -31,15 +37,19 @@ from .safe_client import SafeExchangeConnector
 
 __all__ = (
     "ApprovedExecutionRequest",
+    "BybitTradingReferenceClient",
     "DuplicateExecutionBlocked",
     "ExchangeConfig",
     "ExchangeOrderPreview",
     "ExchangeStatus",
     "ExecutionIdempotencyRepository",
+    "FeeSchedule",
+    "InstrumentRules",
     "MAINNET_EXECUTION_COMPILED",
     "PrivateStreamGateReport",
     "PrivateStreamHealthRepository",
     "SafeExchangeConnector",
+    "TradingReferenceSnapshot",
     "ai_cost_report",
     "best_trade_venue",
     "borrow_table",
