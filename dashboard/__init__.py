@@ -13,6 +13,7 @@ ensure_event_handler_compat(app)
 from .ai_organ_state_safe_api import install_ai_organ_state_api
 from .autonomous_trading_api import install_autonomous_trading_api
 from .bybit_account_api import install_bybit_account_api
+from .campaign_api import install_campaign_api
 from .control_plane_api import install_control_plane_api
 from .currency_api import install_currency_api
 from .dashboard2_api import install_dashboard2_api
@@ -42,6 +43,7 @@ install_control_plane_api(app)
 install_dashboard2_api(app)
 install_private_order_ws_api(app)
 install_fill_harvester_api(app)
+install_campaign_api(app)
 install_source_status_compat_api(app)
 install_operational_routers(app)
 install_web2_host(app)
