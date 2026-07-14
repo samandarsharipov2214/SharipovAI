@@ -70,7 +70,6 @@ def test_experiment_registry_persists_identity_results_and_manual_promotion(tmp_
         strategy_name="candidate_v1",
         strategy_config={"lookback": 20},
         backtest_config={"fee_rate": 0.001, "slippage_bps": 2.0},
-        actor="test" if False else None,
     )
 
     current = created
