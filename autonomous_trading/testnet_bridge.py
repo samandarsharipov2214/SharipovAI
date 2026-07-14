@@ -1,7 +1,8 @@
-"""Mirror new autonomous paper trades to Bybit testnet after all gates pass.
+"""Mirror canonical paper trades to Bybit testnet after every safety gate passes.
 
-The bridge is default-off, tracks immutable paper ``trade_id`` values in the
-canonical database, and never automatically retries an ambiguous execution.
+The bridge is default-off, consumes only embedded canonical
+``execution_candidate`` evidence, uses ``ApprovedExecutionRequest`` exclusively,
+and blocks startup whenever durable execution state cannot be reconciled.
 """
 from __future__ import annotations
 
@@ -11,17 +12,35 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from storage import ProjectDatabase, VersionConflict, list_json_items
 
 from exchange_connector.bybit_execution import BybitExecutionClient
+from exchange_connector.execution_contract import build_execution_request
+from trading_candidate import (
+    MarketRegime,
+    TradingCandidate,
+    TradingCategory,
+    TradingDecision,
+    TradingEnvironment,
+    TradingSide,
+    validate_trading_candidate,
+)
 
 from .execution_journal import ExecutionJournal
 from .stage_controller import StageController
+from .startup_reconciliation import StartupExecutionReconciler
 from .trade_identity import normalize_trade, scope_for_path
 
-_FINAL_RECORD_STATUSES = {"accepted", "unresolved", "invalid", "ignored_disabled", "ignored_stage", "ignored_non_trade"}
+_FINAL_RECORD_STATUSES = {
+    "accepted",
+    "unresolved",
+    "invalid",
+    "ignored_disabled",
+    "ignored_stage",
+    "ignored_non_trade",
+}
 
 
 class AutonomousTestnetBridge:
@@ -31,8 +50,12 @@ class AutonomousTestnetBridge:
         *,
         database: ProjectDatabase | None = None,
     ) -> None:
-        self.paper_file = Path(os.getenv("AUTONOMOUS_PAPER_STATE_FILE", "data/autonomous_paper.json"))
-        self.state_file = Path(os.getenv("TESTNET_BRIDGE_STATE_FILE", "data/testnet_bridge.json"))
+        self.paper_file = Path(
+            os.getenv("AUTONOMOUS_PAPER_STATE_FILE", "data/autonomous_paper.json")
+        )
+        self.state_file = Path(
+            os.getenv("TESTNET_BRIDGE_STATE_FILE", "data/testnet_bridge.json")
+        )
         self.paper_scope = scope_for_path(self.paper_file)
         self.bridge_scope = scope_for_path(self.state_file)
         self.paper_trade_namespace = f"paper_trades:{self.paper_scope}"
@@ -41,26 +64,45 @@ class AutonomousTestnetBridge:
         self.database = database or ProjectDatabase()
         self.database.initialize()
         self.interval = max(_finite_env("TESTNET_BRIDGE_TICK_SECONDS", 5.0), 1.0)
-        self.client = execution_client or BybitExecutionClient()
+        self.client = execution_client or BybitExecutionClient(database=self.database)
         self.journal = ExecutionJournal(database=self.database)
         self.stages = StageController(journal=self.journal)
+        self.reconciler = StartupExecutionReconciler(
+            database=self.database,
+            idempotency=getattr(self.client, "idempotency", None),
+            journal=self.journal,
+            environment="testnet",
+        )
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._state_version = 0
         self._last_backup_error = ""
         self._state = self._load_state()
+        self._reconciliation_report: dict[str, Any] = {
+            "status": "not_run",
+            "restart_safe": False,
+            "errors": [],
+        }
         self._migrate_legacy_paper_trades()
 
     def enabled(self) -> bool:
-        return _truthy("AUTONOMOUS_TESTNET_BRIDGE_ENABLED") and _truthy("AUTONOMOUS_TESTNET_ENABLED")
+        return _truthy("AUTONOMOUS_TESTNET_BRIDGE_ENABLED") and _truthy(
+            "AUTONOMOUS_TESTNET_ENABLED"
+        )
 
     def start(self) -> None:
         if not _truthy("AUTONOMOUS_TESTNET_BRIDGE_ENABLED"):
             return
         if self._thread and self._thread.is_alive():
             return
+        if not self._ensure_reconciled():
+            return
         self._stop.clear()
-        self._thread = threading.Thread(target=self._run, name="testnet-bridge", daemon=True)
+        self._thread = threading.Thread(
+            target=self._run,
+            name="testnet-bridge",
+            daemon=True,
+        )
         self._thread.start()
 
     def stop(self) -> None:
@@ -83,6 +125,7 @@ class AutonomousTestnetBridge:
             "backup_error": self._last_backup_error,
             "execution": self.client.status(),
             "stage_assessment": self.stages.assess().to_dict(),
+            "startup_reconciliation": dict(self._reconciliation_report),
             "journal": self.journal.summary(),
         }
 
@@ -90,6 +133,8 @@ class AutonomousTestnetBridge:
         trades = self._paper_trades()
         if not self.enabled():
             self._baseline(trades, "ignored_disabled", "disabled")
+            return
+        if not self._ensure_reconciled():
             return
 
         assessment = self.stages.assess()
@@ -105,88 +150,160 @@ class AutonomousTestnetBridge:
             if existing is not None:
                 status = str(existing["value"].get("status", ""))
                 if status not in _FINAL_RECORD_STATUSES:
-                    raise RuntimeError(f"unknown persisted bridge status for {trade_id}: {status}")
+                    raise RuntimeError(
+                        f"unknown persisted bridge status for {trade_id}: {status}"
+                    )
                 continue
 
             if trade.get("side") not in {"BUY", "SELL"}:
-                self._record(trade_id, "ignored_non_trade", trade, message="Paper record is not an executable BUY/SELL trade")
-                continue
-
-            price = _finite_number(trade.get("price"), "paper price")
-            paper_quantity = _finite_number(trade.get("quantity"), "paper quantity")
-            safe_quantity = min(paper_quantity, self.client.max_notional / price) if price > 0 else 0.0
-            if paper_quantity <= 0 or not math.isfinite(safe_quantity) or safe_quantity <= 0:
-                self.journal.append({
-                    "journal_event_id": f"paper_invalid_{trade_id}",
-                    "status": "blocked_or_error",
-                    "mode": self.client.mode,
-                    "environment": "testnet",
-                    "category": "spot",
-                    "symbol": trade.get("symbol"),
-                    "side": trade.get("side"),
-                    "quantity": safe_quantity,
-                    "paper_trade_id": trade_id,
-                    "message": "Invalid paper trade price or quantity",
-                    "origin": "autonomous_bridge",
-                })
-                self._record(trade_id, "invalid", trade, message="Invalid paper trade price or quantity")
-                self._set_state("skipped_invalid_trade", "Invalid paper trade price or quantity", trade_id=trade_id)
+                self._record(
+                    trade_id,
+                    "ignored_non_trade",
+                    trade,
+                    message="Paper record is not an executable BUY/SELL trade",
+                )
                 continue
 
             try:
-                result = self.client.place_market_order(
-                    symbol=str(trade.get("symbol", "")),
-                    side=str(trade.get("side", "")),
+                price = _positive_number(trade.get("price"), "paper price")
+                paper_quantity = _positive_number(
+                    trade.get("quantity"), "paper quantity"
+                )
+                safe_quantity = min(paper_quantity, self.client.max_notional / price)
+                now_ms = int(time.time() * 1000)
+                candidate = _candidate_from_trade(trade)
+                validation = validate_trading_candidate(candidate, now_ms=now_ms)
+                request = build_execution_request(
+                    candidate,
+                    validation,
                     quantity=safe_quantity,
-                    reference_price=price,
+                    now_ms=now_ms,
                 )
             except Exception as exc:
                 message = f"{type(exc).__name__}: {exc}"
-                self.journal.append({
-                    "journal_event_id": f"paper_unresolved_{trade_id}",
-                    "status": "unresolved",
-                    "mode": self.client.mode,
-                    "environment": "testnet",
-                    "category": "spot",
-                    "symbol": trade.get("symbol"),
-                    "side": trade.get("side"),
-                    "quantity": safe_quantity,
-                    "paper_trade_id": trade_id,
-                    "message": message,
-                    "origin": "autonomous_bridge",
-                    "requires_reconciliation": True,
-                })
-                self._record(trade_id, "unresolved", trade, message=message, mirrored_quantity=safe_quantity)
+                self.journal.append(
+                    {
+                        "journal_event_id": f"paper_invalid_{trade_id}",
+                        "status": "blocked_or_error",
+                        "mode": self.client.mode,
+                        "environment": "testnet",
+                        "category": "spot",
+                        "symbol": trade.get("symbol"),
+                        "side": trade.get("side"),
+                        "quantity": trade.get("quantity"),
+                        "paper_trade_id": trade_id,
+                        "message": message,
+                        "origin": "autonomous_bridge",
+                    }
+                )
+                self._record(trade_id, "invalid", trade, message=message)
+                self._set_state("skipped_invalid_trade", message, trade_id=trade_id)
+                continue
+
+            try:
+                result = self.client.execute(request, now_ms=now_ms)
+            except Exception as exc:
+                message = f"{type(exc).__name__}: {exc}"
+                self.journal.append(
+                    {
+                        "journal_event_id": f"paper_unresolved_{trade_id}",
+                        "status": "unresolved",
+                        "mode": self.client.mode,
+                        "environment": "testnet",
+                        "category": request.category.value,
+                        "symbol": request.symbol,
+                        "side": request.side.value,
+                        "quantity": request.quantity,
+                        "candidate_id": request.candidate_id,
+                        "order_link_id": request.order_link_id,
+                        "paper_trade_id": trade_id,
+                        "message": message,
+                        "origin": "autonomous_bridge",
+                        "requires_reconciliation": True,
+                    }
+                )
+                self._record(
+                    trade_id,
+                    "unresolved",
+                    trade,
+                    message=message,
+                    mirrored_quantity=request.quantity,
+                    candidate_id=request.candidate_id,
+                    order_link_id=request.order_link_id,
+                )
                 self._set_state("unresolved", message, trade_id=trade_id)
-                # Never attempt later trades after an unresolved financial action.
+                self._reconciliation_report = {
+                    "status": "blocked",
+                    "restart_safe": False,
+                    "errors": [message],
+                    "unresolved_order_link_ids": [request.order_link_id],
+                }
                 break
 
-            journal_item = self.journal.append({
-                **result.to_dict(),
-                "journal_event_id": f"paper_accepted_{trade_id}",
-                "paper_trade_id": trade_id,
-                "paper_quantity": paper_quantity,
-                "mirrored_quantity": safe_quantity,
-                "signal_reason": trade.get("reason"),
-                "origin": "autonomous_bridge",
-            })
+            journal_item = self.journal.append(
+                {
+                    **result.to_dict(),
+                    "journal_event_id": f"paper_accepted_{trade_id}",
+                    "environment": "testnet",
+                    "category": request.category.value,
+                    "candidate_hash": request.candidate_hash,
+                    "paper_trade_id": trade_id,
+                    "paper_quantity": paper_quantity,
+                    "mirrored_quantity": request.quantity,
+                    "signal_reason": trade.get("reason"),
+                    "origin": "autonomous_bridge",
+                }
+            )
             self._record(
                 trade_id,
                 "accepted",
                 trade,
                 message=str(result.message),
-                mirrored_quantity=safe_quantity,
+                mirrored_quantity=request.quantity,
                 order_id=result.order_id,
+                candidate_id=request.candidate_id,
+                order_link_id=request.order_link_id,
                 journal_event_id=journal_item["journal_event_id"],
             )
-            self._set_state("accepted", "", trade_id=trade_id, order_id=result.order_id)
+            self._set_state(
+                "accepted",
+                "",
+                trade_id=trade_id,
+                order_id=result.order_id,
+            )
 
-    def _baseline(self, trades: list[dict[str, Any]], record_status: str, state_status: str) -> None:
+    def _ensure_reconciled(self) -> bool:
+        if bool(self._reconciliation_report.get("restart_safe")):
+            return True
+        report = self.reconciler.reconcile()
+        self._reconciliation_report = report.to_dict()
+        if not report.restart_safe:
+            self._set_state(
+                "reconciliation_blocked",
+                "; ".join(report.errors) or "unresolved execution state",
+            )
+            return False
+        return True
+
+    def _baseline(
+        self,
+        trades: list[dict[str, Any]],
+        record_status: str,
+        state_status: str,
+    ) -> None:
         if not _truthy("TESTNET_REPLAY_HISTORICAL_TRADES"):
             for trade in trades:
                 trade_id = str(trade.get("trade_id", "")).strip()
-                if trade_id and self.database.get_json(self.record_namespace, trade_id) is None:
-                    self._record(trade_id, record_status, trade, message=state_status)
+                if (
+                    trade_id
+                    and self.database.get_json(self.record_namespace, trade_id) is None
+                ):
+                    self._record(
+                        trade_id,
+                        record_status,
+                        trade,
+                        message=state_status,
+                    )
         self._set_state(state_status, "")
 
     def _run(self) -> None:
@@ -197,12 +314,24 @@ class AutonomousTestnetBridge:
                 self._set_state("error", f"{type(exc).__name__}: {exc}")
 
     def _paper_trades(self) -> list[dict[str, Any]]:
-        return [item["value"] for item in list_json_items(self.database, self.paper_trade_namespace)]
+        return [
+            item["value"]
+            for item in list_json_items(self.database, self.paper_trade_namespace)
+        ]
 
     def _records(self) -> list[dict[str, Any]]:
-        return [item["value"] for item in list_json_items(self.database, self.record_namespace)]
+        return [
+            item["value"]
+            for item in list_json_items(self.database, self.record_namespace)
+        ]
 
-    def _record(self, trade_id: str, status: str, trade: dict[str, Any], **details: Any) -> None:
+    def _record(
+        self,
+        trade_id: str,
+        status: str,
+        trade: dict[str, Any],
+        **details: Any,
+    ) -> None:
         if status not in _FINAL_RECORD_STATUSES:
             raise ValueError("invalid bridge record status")
         record = {
@@ -214,7 +343,12 @@ class AutonomousTestnetBridge:
             **details,
         }
         try:
-            self.database.put_json(self.record_namespace, trade_id, record, expected_version=0)
+            self.database.put_json(
+                self.record_namespace,
+                trade_id,
+                record,
+                expected_version=0,
+            )
         except VersionConflict:
             existing = self.database.get_json(self.record_namespace, trade_id)
             if existing is None or existing["value"] != record:
@@ -250,13 +384,20 @@ class AutonomousTestnetBridge:
             "updated_at_ms": int(value.get("updated_at_ms", 0) or 0),
         }
 
-    def _set_state(self, status: str, error: str, *, trade_id: str = "", order_id: str = "") -> None:
+    def _set_state(
+        self,
+        status: str,
+        error: str,
+        *,
+        trade_id: str = "",
+        order_id: str | None = "",
+    ) -> None:
         self._state["last_status"] = str(status)
         self._state["last_error"] = str(error)
         if trade_id:
             self._state["last_trade_id"] = trade_id
         if order_id:
-            self._state["last_order_id"] = order_id
+            self._state["last_order_id"] = str(order_id)
         self._state["updated_at_ms"] = int(time.time() * 1000)
         self._persist_state()
 
@@ -264,9 +405,19 @@ class AutonomousTestnetBridge:
         self._save_database_state()
         try:
             self.state_file.parent.mkdir(parents=True, exist_ok=True)
-            temp = self.state_file.with_name(f".{self.state_file.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+            temp = self.state_file.with_name(
+                f".{self.state_file.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+            )
             try:
-                temp.write_text(json.dumps(self._state, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
+                temp.write_text(
+                    json.dumps(
+                        self._state,
+                        ensure_ascii=False,
+                        indent=2,
+                        allow_nan=False,
+                    ),
+                    encoding="utf-8",
+                )
                 os.replace(temp, self.state_file)
             finally:
                 temp.unlink(missing_ok=True)
@@ -284,7 +435,9 @@ class AutonomousTestnetBridge:
                 expected_version=self._state_version,
             )
         except VersionConflict as exc:
-            raise RuntimeError("testnet bridge state changed concurrently; update blocked") from exc
+            raise RuntimeError(
+                "testnet bridge state changed concurrently; update blocked"
+            ) from exc
 
     def _migrate_legacy_paper_trades(self) -> None:
         if list_json_items(self.database, self.paper_trade_namespace, limit=1):
@@ -303,11 +456,87 @@ class AutonomousTestnetBridge:
                 continue
             trade = normalize_trade(item, scope=self.paper_scope, index=index)
             try:
-                self.database.put_json(self.paper_trade_namespace, trade["trade_id"], trade, expected_version=0)
+                self.database.put_json(
+                    self.paper_trade_namespace,
+                    trade["trade_id"],
+                    trade,
+                    expected_version=0,
+                )
             except VersionConflict:
-                existing = self.database.get_json(self.paper_trade_namespace, trade["trade_id"])
+                existing = self.database.get_json(
+                    self.paper_trade_namespace,
+                    trade["trade_id"],
+                )
                 if existing is None or existing["value"] != trade:
-                    raise RuntimeError(f"legacy paper trade conflict: {trade['trade_id']}")
+                    raise RuntimeError(
+                        f"legacy paper trade conflict: {trade['trade_id']}"
+                    )
+
+
+def _candidate_from_trade(trade: Mapping[str, Any]) -> TradingCandidate:
+    raw = trade.get("execution_candidate")
+    if not isinstance(raw, Mapping):
+        raise ValueError("paper trade has no canonical execution_candidate")
+    symbol = _symbol(raw.get("symbol"))
+    trade_symbol = _symbol(trade.get("symbol"))
+    if symbol != trade_symbol:
+        raise ValueError("execution candidate symbol does not match paper trade")
+    side = TradingSide(str(raw.get("side", "")).title())
+    if side.value.upper() != str(trade.get("side", "")).upper():
+        raise ValueError("execution candidate side does not match paper trade")
+    candidate = TradingCandidate(
+        candidate_id=_text(raw.get("candidate_id"), "candidate_id"),
+        symbol=symbol,
+        category=TradingCategory(str(raw.get("category", "")).lower()),
+        side=side,
+        environment=TradingEnvironment(str(raw.get("environment", "")).lower()),
+        market_timestamp_ms=_positive_int(
+            raw.get("market_timestamp_ms"), "market_timestamp_ms"
+        ),
+        received_timestamp_ms=_positive_int(
+            raw.get("received_timestamp_ms"), "received_timestamp_ms"
+        ),
+        reference_price=_positive_number(
+            raw.get("reference_price"), "reference_price"
+        ),
+        data_sources=_string_tuple(raw.get("data_sources"), "data_sources"),
+        market_regime=MarketRegime(str(raw.get("market_regime", "")).lower()),
+        signal_evidence=_string_tuple(
+            raw.get("signal_evidence"), "signal_evidence"
+        ),
+        news_evidence=_string_tuple(
+            raw.get("news_evidence", ()), "news_evidence", allow_empty=True
+        ),
+        news_assessment_id=_text(
+            raw.get("news_assessment_id"), "news_assessment_id"
+        ),
+        portfolio_snapshot_id=_text(
+            raw.get("portfolio_snapshot_id"), "portfolio_snapshot_id"
+        ),
+        cost_snapshot_id=_text(raw.get("cost_snapshot_id"), "cost_snapshot_id"),
+        estimated_fees=_nonnegative_number(
+            raw.get("estimated_fees", 0.0), "estimated_fees"
+        ),
+        estimated_slippage=_nonnegative_number(
+            raw.get("estimated_slippage", 0.0), "estimated_slippage"
+        ),
+        risk_score=_range_number(raw.get("risk_score"), "risk_score"),
+        risk_blocks=_string_tuple(
+            raw.get("risk_blocks", ()), "risk_blocks", allow_empty=True
+        ),
+        confidence=_range_number(raw.get("confidence"), "confidence"),
+        consensus=_range_number(raw.get("consensus"), "consensus"),
+        decision=TradingDecision(str(raw.get("decision", "")).upper()),
+        expires_at_ms=_positive_int(raw.get("expires_at_ms"), "expires_at_ms"),
+        security_approval_id=str(raw.get("security_approval_id", "")),
+    )
+    if candidate.environment is not TradingEnvironment.TESTNET:
+        raise ValueError("paper trade execution candidate must target testnet")
+    paper_price = _positive_number(trade.get("price"), "paper price")
+    deviation = abs(candidate.reference_price - paper_price) / paper_price * 100.0
+    if deviation > 0.5:
+        raise ValueError("execution candidate price deviates from paper trade")
+    return candidate
 
 
 def _truthy(name: str) -> bool:
@@ -322,8 +551,62 @@ def _finite_env(name: str, default: float) -> float:
     return value if math.isfinite(value) else default
 
 
-def _finite_number(value: Any, name: str) -> float:
+def _positive_number(value: Any, name: str) -> float:
     parsed = float(value)
-    if not math.isfinite(parsed):
-        raise ValueError(f"{name} must be finite")
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise ValueError(f"{name} must be positive and finite")
     return parsed
+
+
+def _nonnegative_number(value: Any, name: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed < 0:
+        raise ValueError(f"{name} must be non-negative and finite")
+    return parsed
+
+
+def _range_number(value: Any, name: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed) or not 0.0 <= parsed <= 100.0:
+        raise ValueError(f"{name} must be between 0 and 100")
+    return parsed
+
+
+def _positive_int(value: Any, name: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise ValueError(f"{name} must be positive")
+    return parsed
+
+
+def _text(value: Any, name: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError(f"{name} is required")
+    return text
+
+
+def _symbol(value: Any) -> str:
+    clean = str(value or "").strip().upper().replace("/", "").replace("-", "")
+    if not clean or not clean.isalnum():
+        raise ValueError("invalid symbol")
+    return clean
+
+
+def _string_tuple(
+    value: Any,
+    name: str,
+    *,
+    allow_empty: bool = False,
+) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(f"{name} must be a list")
+    result = tuple(str(item).strip() for item in value if str(item).strip())
+    if not result and not allow_empty:
+        raise ValueError(f"{name} must contain at least one item")
+    if len(result) != len(set(result)):
+        raise ValueError(f"{name} contains duplicates")
+    return result
+
+
+__all__ = ["AutonomousTestnetBridge"]
