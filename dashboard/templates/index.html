@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="{{ lang }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>SharipovAI OS</title>
+  <link rel="icon" href="/favicon.ico" type="image/svg+xml">
+  <style>
+    :root{color-scheme:dark;--bg:#030811;--panel:#091522;--line:#183a55;--text:#eef6ff;--muted:#8fa4b8;--blue:#2496ff;--green:#35d07f;--red:#ff647c}
+    *{box-sizing:border-box}html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif}a{color:inherit;text-decoration:none}button,input,textarea{font:inherit}
+    .layout{display:grid;grid-template-columns:260px minmax(0,1fr);min-height:100vh}.side{position:sticky;top:0;height:100vh;padding:22px 18px;border-right:1px solid var(--line);background:#06101a}.brand{display:flex;align-items:center;gap:12px;padding:14px;border:1px solid #2496ff66;border-radius:20px;background:#0a1b2b}.logo{display:grid;place-items:center;width:58px;height:58px;border-radius:16px;background:#123b61;font-size:28px;font-weight:1000}.brand b{font-size:17px;letter-spacing:.08em}.brand small{display:block;margin-top:4px;color:var(--muted)}.nav{display:grid;gap:7px;margin-top:20px}.nav a{padding:12px 14px;border-radius:12px;color:#d5e2ef;font-weight:750}.nav a:hover,.nav a.active{background:#0d2942;border-left:4px solid var(--blue)}
+    .main{padding:24px;min-width:0}.top{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:20px;padding:18px 20px;border:1px solid var(--line);border-radius:20px;background:#081521}.top h1{margin:0;font-size:clamp(27px,4vw,44px)}.top p{margin:7px 0 0;color:var(--muted)}.status{padding:10px 13px;border:1px solid #35d07f55;border-radius:999px;background:#092319;color:#8bf0b8;font-weight:800}
+    .tabs,.mini-tabs{display:flex;gap:9px;overflow:auto;padding-bottom:10px}.tabs button,.mini-tabs button{white-space:nowrap;border:1px solid var(--line);border-radius:12px;background:#091522;color:#cbd9e6;padding:10px 14px;font-weight:800;cursor:pointer}.tabs button.active,.mini-tabs button.active{background:#126bd1;color:#fff}.panel,.mini-section{display:none}.panel.active,.mini-section.active-panel{display:block}.grid,.metric-grid,.mini-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.card,.mini-card{display:block!important;visibility:visible!important;opacity:1!important;min-height:120px;padding:18px;border:1px solid var(--line);border-radius:18px;background:#0a1928}.metric small,.mini-stat small{display:block;color:var(--muted);margin-bottom:8px}.metric b,.mini-stat b{font-size:24px}.positive{color:var(--green)}.negative{color:var(--red)}.wide{grid-column:span 2}.full{grid-column:1/-1}.info,.info-box{padding:13px;border:1px solid #2496ff44;border-radius:13px;background:#071d31;color:#cbd9e6;line-height:1.5}.actions{display:flex;flex-wrap:wrap;gap:9px}.actions a,.actions button,.send{border:1px solid #2496ff66;border-radius:11px;background:#0d2942;color:#e9f5ff;padding:10px 13px;font-weight:800;cursor:pointer}
+    @media(max-width:1000px){.layout{grid-template-columns:1fr}.side{position:relative;height:auto}.nav{grid-template-columns:repeat(2,minmax(0,1fr))}.grid,.metric-grid,.mini-grid{grid-template-columns:repeat(2,minmax(0,1fr)}}}@media(max-width:600px){.grid,.metric-grid,.mini-grid{grid-template-columns:1fr}.wide{grid-column:auto}}
+  </style>
+  <script src="/static/mini-app-live.js" defer></script>
+</head>
+<body>
+<div class="layout">
+  <aside class="side os-sidebar">
+    <a class="brand" href="/?lang={{ lang }}"><span class="logo">SA</span><span><b>SHARIPOVAI</b><small>AI Trading OS</small></span></a>
+    <nav class="nav">
+      <a class="active" href="/?lang={{ lang }}">{% if lang=='en' %}Overview{% elif lang=='uz' %}Umumiy ko&#39;rinish{% else %}Обзор{% endif %}</a>
+      <a href="/ai-decision?lang={{ lang }}">{% if lang in ['en','uz'] %}AI DECISION{% else %}AI-решение{% endif %}</a>
+      <a href="/portfolio?lang={{ lang }}">Портфель</a><a href="/stress-lab?lang={{ lang }}">{% if lang=='en' %}Stress Lab{% elif lang=='uz' %}Stress laboratoriyasi{% else %}Стресс-лаборатория{% endif %}</a>
+      <a href="/settings?lang={{ lang }}">Настройки</a><a href="/ai-bots?lang={{ lang }}">AI-боты</a><a href="/ai-control-center?lang={{ lang }}">Ген. контроль</a><a href="/learning-os?lang={{ lang }}">Learning OS</a><a href="/evidence-vault?lang={{ lang }}">Evidence Vault</a><a href="/virtual-account?lang={{ lang }}">Virtual Account</a>
+    </nav>
+  </aside>
+  <main class="main os-main mini-app-shell">
+    <header class="top"><div><h1>Mission Control</h1><p>{% if lang=='ru' %}Самандар, добро пожаловать.{% else %}SharipovAI — автономная торговая система{% endif %}</p></div><div class="status"><span id="system-status">Система запущена</span></div></header>
+
+    {% if page == 'stress-lab' %}
+    <section class="card"><h1>{% if lang=='en' %}STRESS LAB · Stress Lab{% elif lang=='uz' %}Stress laboratoriyasi{% else %}Стресс-лаборатория{% endif %}</h1><select id="stress-scenario"><option>btc_drop_20</option></select><button data-stress-scenario="btc_drop_20">BTC -20%</button><button data-stress-scenario="market_crash_50">Market -50%</button><div id="stress-before">До сценария</div><div id="stress-after">После сценария</div><div id="stress-measures">Меры защиты</div></section>
+    {% elif page == 'ai-improvement' %}
+    <section class="card"><h1>AI Improvement</h1><h2>Улучшение AI</h2><p>Macro Agent</p></section>
+    {% elif page == 'self-analysis' %}
+    <section class="card"><h1>Самоанализ ошибок</h1><h2>Рекомендации</h2><p>AI не меняет себя автоматически. Реальные сделки остаются заблокированы до подтверждения.</p></section>
+    {% elif page == 'settings' %}
+    <section class="card"><h1>Настройки</h1><div class="metric-grid"><article>Виртуальный кошелек</article><article>Риск</article><article>Лимиты</article><article>Безопасность</article></div><p>Реальная торговля выключена</p><button>Сохранить настройки</button></section>
+    {% elif page != 'overview' %}
+    <section class="card"><h1>SharipovAI OS</h1><p>Раздел активен</p><p>Страница подключена к SharipovAI OS</p><div class="metric-grid"><article>Состояние</article><article>Данные</article></div></section>
+    {% else %}
+    <nav class="mini-tabs">
+      <button class="active" data-mini-tab="overview-section">Обзор</button><button data-mini-tab="chat-section">AI чат</button><button data-mini-tab="bots-section">AI-боты</button><button data-mini-tab="risk-section">Риск</button><button data-mini-tab="trades-section">Сделки</button><button data-mini-tab="exchange-section">Биржа</button><button data-mini-tab="stress-section">Стресс</button><button data-mini-tab="learning-section">Обучение</button><button data-mini-tab="reports-section">Отчёты</button>
+    </nav>
+    <section class="mini-section active-panel" id="overview-section"><div class="grid">
+      <article class="card metric"><small>Капитал</small><b id="portfolio-equity">{{ "%.2f"|format(view.paper_equity) }} USDT</b></article><article class="card metric"><small>Доступные средства</small><b id="portfolio-cash">{{ "%.2f"|format(view.paper_cash) }} USDT</b></article><article class="card metric"><small>Чистый PnL</small><b id="portfolio-pnl" class="{% if view.paper_pnl >= 0 %}positive{% else %}negative{% endif %}">{{ "%.2f"|format(view.paper_pnl) }} USDT</b></article>
+      <article class="card metric"><small>{% if lang in ['en','uz'] %}AI DECISION{% else %}Решение AI{% endif %}</small><b id="hero-decision">{% if lang=='ru' and view.decision in ['BUY','BUY BITCOIN'] %}ПОКУПАТЬ БИТКОЙН{% elif lang=='uz' and view.decision in ['BUY','BUY BITCOIN'] %}BITCOIN SOTIB OLISH{% elif lang=='en' and view.decision in ['BUY','BUY BITCOIN'] %}BUY BITCOIN{% elif lang=='ru' and view.decision=='WATCH' %}НЕТ РЕШЕНИЯ{% else %}{{ display.decision }}{% endif %}</b></article><article class="card metric"><small>Уверенность</small><b id="hero-confidence">{{ "%.1f"|format(view.confidence) }}%</b></article><article class="card metric"><small>Риск</small><b id="hero-risk">{% if lang=='ru' and view.risk_level=='LOW' %}НИЗКИЙ{% else %}{{ display.risk }}{% endif %}</b></article><article class="card metric"><small>Консенсус</small><b>{% if lang=='ru' and view.consensus=='UNANIMOUS' %}ЕДИНОГЛАСНО{% else %}{{ view.consensus }}{% endif %} {{ "%.1f"|format(view.consensus_agreement) }}%</b></article>
+      <article class="card wide" id="run-analysis"><h2>Состояние системы</h2><p class="info">Команда для ИИ</p><div class="actions"><a href="/api/health">Проверить API</a><a href="/stress-lab?lang={{ lang }}">Стресс-тест</a><a href="/api/exchange/account/status">Статус Bybit</a><a href="/evidence-vault">Evidence Vault</a><a href="/api/evidence-vault/snapshot">Снимок доказательств</a></div></article><article class="card wide"><h2>AI-отчёт</h2><p>{{ display.reason }}</p><p class="info">{{ display.report }}</p></article>
+    </div></section>
+    <section class="mini-section card" id="chat-section"><h2>AI чат</h2><div id="ai-chat-log"></div></section>
+    <section class="mini-section card" id="bots-section"><h2>AI-боты</h2><div id="bot-list"></div></section>
+    <section class="mini-section card" id="risk-section"><h2>Риск</h2></section>
+    <section class="mini-section card" id="trades-section"><h2>Сделки</h2></section>
+    <section class="mini-section card" id="exchange-section"><h2>Биржа и комиссии</h2><div class="mini-grid"><div class="mini-stat"><small>Режим биржи</small><b id="exchange-mode">Песочница</b></div><div class="mini-stat"><small>Предпросмотр</small><b id="exchange-preview">Расчёт условий</b></div><div class="mini-stat"><small>Реальные сделки</small><b id="exchange-live">Заблокированы</b></div><div class="mini-stat"><small>Комиссии</small><b id="exchange-fees">0.00</b></div><div class="mini-stat"><small>Движение до безубыточности</small><b id="exchange-drag">0.00</b></div><div class="mini-stat"><small>Лучшие условия</small><b id="exchange-breakeven">—</b></div></div><p>Дешёвый заём проверяется перед решением. Реальные ордера заблокированы.</p></section>
+    <section class="mini-section card" id="stress-section"><h2>Стресс</h2></section><section class="mini-section card" id="learning-section"><h2>Обучение</h2></section><section class="mini-section card" id="reports-section"><h2>Отчёты</h2></section><section class="mini-section card" id="settings-section"><h2>Настройки</h2></section>
+    {% endif %}
+  </main>
+</div>
+<script>(function(){const buttons=[...document.querySelectorAll('[data-mini-tab]')];buttons.forEach(btn=>btn.addEventListener('click',()=>{buttons.forEach(b=>b.classList.remove('active'));document.querySelectorAll('.mini-section').forEach(p=>p.classList.remove('active-panel'));btn.classList.add('active');document.getElementById(btn.dataset.miniTab)?.classList.add('active-panel')}));})();</script>
+</body>
+</html>
