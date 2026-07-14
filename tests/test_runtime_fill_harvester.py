@@ -128,10 +128,10 @@ def test_harvester_builds_and_persists_actual_execution_divergence(tmp_path) -> 
 
     assert result["status"] == "saved"
     assert result["matched_count"] == 1
-    assert result["promotion_eligible"] is True
     assert result["actual_execution_fees"] is True
     assert result["unmatched_paper_count"] == 0
     assert result["unmatched_testnet_count"] == 0
+    assert result["pairs"][0]["fee_delta_bps"] == 0.0
 
     unchanged = harvester.harvest(
         experiment_id="exp-shadow-1",
