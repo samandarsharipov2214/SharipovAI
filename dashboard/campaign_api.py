@@ -86,6 +86,13 @@ def install_campaign_api(app: FastAPI) -> None:
         rows = orchestrator.campaign.list(limit=500)
         return {"status": "ok", "count": len(rows), "campaigns": rows}
 
+    # Static path must be registered before /api/campaigns/{campaign_id}.
+    @app.get("/api/campaigns/promotion-reports")
+    def promotion_reports(request: Request) -> dict[str, Any]:
+        require_admin(request)
+        rows = reports.list(limit=500)
+        return {"status": "ok", "count": len(rows), "reports": rows}
+
     @app.get("/api/campaigns/{campaign_id}")
     def campaign_detail(request: Request, campaign_id: str) -> dict[str, Any]:
         require_admin(request)
@@ -121,24 +128,26 @@ def install_campaign_api(app: FastAPI) -> None:
             "runtime_flags_changed": False,
         }
 
-    @app.get("/api/campaigns/promotion-reports")
-    def promotion_reports(request: Request) -> dict[str, Any]:
-        require_admin(request)
-        rows = reports.list(limit=500)
-        return {"status": "ok", "count": len(rows), "reports": rows}
-
     @app.post("/api/campaigns/{campaign_id}/promotion-report")
     def generate_final_report(request: Request, campaign_id: str) -> dict[str, Any]:
         principal = require_admin(request)
-        try:
-            report = reports.generate(
-                campaign_id,
-                actor=str(getattr(principal, "username", "admin")),
-            )
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail="campaign not found") from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        campaign_row = orchestrator.campaign.get(campaign_id)
+        if campaign_row is None:
+            raise HTTPException(status_code=404, detail="campaign not found")
+        existing_id = str(campaign_row.get("final_report_id") or "")
+        if existing_id:
+            existing = reports.get(existing_id)
+            if existing is None:
+                raise HTTPException(status_code=503, detail="campaign final report reference is missing")
+            report = existing
+        else:
+            try:
+                report = reports.generate(
+                    campaign_id,
+                    actor=str(getattr(principal, "username", "admin")),
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {
             "status": "ok",
             "report": report,
