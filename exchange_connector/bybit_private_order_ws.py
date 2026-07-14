@@ -1,8 +1,9 @@
 """Default-off read-only Bybit private order and execution WebSocket worker.
 
 The worker authenticates once, subscribes to ``order`` and ``execution`` and
-routes each topic into a separate fail-closed ProjectDatabase store. It has no
-create, amend or cancel capability.
+routes each topic into separate fail-closed stores. It has no create, amend or
+cancel capability. Injected test stores without a database remain supported;
+production stores are still required to share one canonical ProjectDatabase.
 """
 from __future__ import annotations
 
@@ -65,8 +66,8 @@ class BybitPrivateOrderWebSocket:
     def __init__(
         self,
         *,
-        store: BybitOrderStateStore | None = None,
-        execution_store: BybitExecutionStateStore | None = None,
+        store: BybitOrderStateStore | Any | None = None,
+        execution_store: BybitExecutionStateStore | Any | None = None,
         health_repository: PrivateStreamHealthRepository | None = None,
         connector: Callable[..., Any] | None = None,
         clock_ms: Callable[[], int] | None = None,
@@ -83,15 +84,18 @@ class BybitPrivateOrderWebSocket:
         self.api_secret = credentials.api_secret
         self.credential_profile = credentials.profile
         self.store = store or BybitOrderStateStore(environment=self.environment)
-        database = getattr(self.store, "database", None)
+        order_database = getattr(self.store, "database", None)
         self.execution_store = execution_store or BybitExecutionStateStore(
-            database=database,
+            database=order_database,
             environment=self.environment,
         )
-        if getattr(self.execution_store, "database", None).dsn != self.store.database.dsn:
+        execution_database = getattr(self.execution_store, "database", None)
+        order_dsn = getattr(order_database, "dsn", None)
+        execution_dsn = getattr(execution_database, "dsn", None)
+        if order_dsn is not None and execution_dsn is not None and execution_dsn != order_dsn:
             raise ValueError("order and execution private stores must use the same database")
         self.health_repository = health_repository or PrivateStreamHealthRepository(
-            database=database,
+            database=order_database,
             environment=self.environment,
         )
         self.receive_timeout = _bounded_float(
@@ -175,7 +179,6 @@ class BybitPrivateOrderWebSocket:
             }
 
     def snapshot(self) -> dict[str, Any]:
-        status = self.status()
         gate = self.health_repository.evaluate(
             required=self.enabled(),
             now_ms=self._clock_ms(),
@@ -186,7 +189,7 @@ class BybitPrivateOrderWebSocket:
         execution_reconciliation = self.execution_store.reconcile(orders)
         return {
             "status": "ok" if gate.ready and execution_reconciliation["restart_safe"] else "unverified",
-            "stream": status,
+            "stream": self.status(),
             "gate": gate.to_dict(),
             "order_state": orders,
             "execution_state": executions,
@@ -235,7 +238,7 @@ class BybitPrivateOrderWebSocket:
                     self._reconnect_attempt += 1
                     attempt = self._reconnect_attempt
                 self._publish_health()
-                if self._wait(float(min(2 ** min(attempt - 1, 5), 30))):
+                if self._wait(float(min(2 ** min(attempt - 1, 5), 30)):
                     break
 
     def _connect(self) -> Any:
