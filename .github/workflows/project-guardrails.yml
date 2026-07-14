@@ -62,7 +62,7 @@ jobs:
     timeout-minutes: 25
     env:
       PYTHONUNBUFFERED: '1'
-      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONDWRITEBYTECODE: '1'
       ADMIN_USERNAME: ci-admin
       ADMIN_PASSWORD: ci-test-password
       AUTH_SECRET: ci-test-secret
@@ -149,7 +149,12 @@ jobs:
           PY
 
       - name: Run regression tests
+        id: regression
+        continue-on-error: true
+        shell: bash
         run: |
+          mkdir -p artifacts
+          set -o pipefail
           python -m pytest \
             tests/test_execution_contract.py \
             tests/test_execution_idempotency.py \
@@ -163,15 +168,61 @@ jobs:
             tests/test_historical_data_layer.py \
             tests/test_observability.py \
             tests/test_execution_status_router.py \
-            -q --tb=short
+            -q --tb=short \
+            2>&1 | tee artifacts/guardrails-tests.log
 
       - name: Audit execution foundation
-        run: python scripts/execution_foundation_audit.py
+        id: execution_audit
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          set -o pipefail
+          python scripts/execution_foundation_audit.py \
+            2>&1 | tee artifacts/execution-audit.json
 
       - name: Audit research foundation
-        run: python scripts/research_foundation_audit.py --json
+        id: research_audit
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          set -o pipefail
+          python scripts/research_foundation_audit.py --json \
+            2>&1 | tee artifacts/research-audit.json
 
       - name: Run fail-closed release audit
+        id: release_audit
+        if: always()
+        continue-on-error: true
+        shell: bash
         env:
           SHARIPOVAI_DISABLE_AUTH: '0'
-        run: python scripts/release_audit.py --runtime --json
+        run: |
+          mkdir -p artifacts
+          set -o pipefail
+          python scripts/release_audit.py --runtime --json \
+            2>&1 | tee artifacts/release-audit.json
+
+      - name: Upload guardrail evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: phase2-guardrail-evidence-${{ github.run_id }}
+          path: |
+            artifacts/guardrails-tests.log
+            artifacts/execution-audit.json
+            artifacts/research-audit.json
+            artifacts/release-audit.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Preserve truthful guardrail status
+        if: steps.regression.outcome == 'failure' || steps.execution_audit.outcome == 'failure' || steps.research_audit.outcome == 'failure' || steps.release_audit.outcome == 'failure'
+        run: |
+          for file in artifacts/*.json artifacts/*.log; do
+            [ -f "$file" ] && { echo "===== $file ====="; cat "$file"; }
+          done
+          exit 1
