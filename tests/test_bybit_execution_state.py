@@ -23,7 +23,7 @@ def _message(*, exec_id: str, qty: str, value: str, fee: str, time_ms: int) -> d
                 "category": "spot",
                 "execId": exec_id,
                 "orderId": "order-1",
-                "orderLinkId": "sai-order-1",
+                "orderLinkId": "sai_order_1",
                 "symbol": "BTCUSDT",
                 "side": "Buy",
                 "execPrice": "50000",
@@ -55,7 +55,7 @@ def test_execution_store_aggregates_actual_fees_and_partial_fills(tmp_path) -> N
 
     assert first["accepted_exec_ids"] == ["exec-1"]
     assert second["accepted_exec_ids"] == ["exec-2"]
-    aggregate = store.aggregate("sai-order-1")
+    aggregate = store.aggregate("sai_order_1")
     assert aggregate is not None
     assert aggregate["execution_count"] == 2
     assert aggregate["filled_quantity"] == pytest.approx(0.0005)
@@ -97,7 +97,7 @@ def test_execution_reconciliation_detects_missing_and_orphan_fills(tmp_path) -> 
                 {
                     "category": "spot",
                     "orderId": "order-1",
-                    "orderLinkId": "sai-order-1",
+                    "orderLinkId": "sai_order_1",
                     "symbol": "BTCUSDT",
                     "side": "Buy",
                     "orderStatus": "Filled",
@@ -114,7 +114,7 @@ def test_execution_reconciliation_detects_missing_and_orphan_fills(tmp_path) -> 
     )
     missing = executions.reconcile(orders.snapshot())
     assert missing["restart_safe"] is False
-    assert missing["missing_execution_links"] == ["sai-order-1"]
+    assert missing["missing_execution_links"] == ["sai_order_1"]
 
     executions.ingest_message(
         _message(exec_id="exec-1", qty="0.0005", value="25", fee="0.015", time_ms=1_000_000),
