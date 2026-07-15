@@ -1,4 +1,4 @@
-"""Persistent paper-trading compatibility API shared by all interfaces."""
+"""Deprecated demo compatibility API backed by the canonical Virtual Account read model."""
 from __future__ import annotations
 
 import json
@@ -10,14 +10,23 @@ from fastapi import Body, FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from ai_chat_orchestrator import answer_chat
+from market_paper_engine import PaperActivityEngine
 
 from .dashboard_contracts_middleware import install_dashboard_contracts_middleware
 from .demo_state import run_ai_command
 from .stabilization_compat import install_stabilization_compat
+from .trade_explanations import enrich_virtual_state
 
 
 def _path() -> Path:
     return Path(os.getenv("DEMO_STATE_FILE", "data/demo_state.json"))
+
+
+def _virtual_path() -> Path:
+    configured = os.getenv("VIRTUAL_ACCOUNT_STATE_FILE", "").strip()
+    if configured:
+        return Path(configured)
+    return _path().with_name("virtual_account_activity_state.json")
 
 
 def _default_state() -> dict[str, Any]:
@@ -56,7 +65,64 @@ def _default_state() -> dict[str, Any]:
     }
 
 
+def _canonical_virtual_state() -> dict[str, Any]:
+    """Return a deprecated-shaped view over the one canonical Virtual Account state."""
+
+    raw = enrich_virtual_state(PaperActivityEngine(path=_virtual_path()).state(catch_up=False))
+    summary = raw.get("summary") if isinstance(raw.get("summary"), dict) else {}
+    trades = list(raw.get("trades") or [])
+    positions = list(raw.get("positions") or [])
+    open_positions = int(summary.get("open_positions", len(positions)) or 0)
+    net_pnl = float(summary.get("net_pnl", raw.get("net_pnl", 0.0)) or 0.0)
+    total_fees = float(summary.get("total_fees", raw.get("total_fees", 0.0)) or 0.0)
+    state = {
+        "mode": "VIRTUAL_ACCOUNT",
+        "equity": float(summary.get("equity", raw.get("equity", 10_000.0)) or 0.0),
+        "cash": float(summary.get("cash", raw.get("cash", 10_000.0)) or 0.0),
+        "pnl": net_pnl,
+        "net_pnl": net_pnl,
+        "total_fees": total_fees,
+        "commission_drag": total_fees,
+        "break_even_price": float(summary.get("break_even_price", 0.0) or 0.0),
+        "open_positions": open_positions,
+        "positions": positions,
+        "trades": trades,
+        "exchange_status": {
+            "mode": os.getenv("EXCHANGE_MODE", "sandbox"),
+            "connected": bool(raw.get("market_data_verified", False)),
+        },
+        "online_monitoring": {
+            "demo_account_online": True,
+            "exchange_connector_online": bool(raw.get("market_data_verified", False)),
+            "real_orders_blocked": True,
+            "live_execution_enabled": False,
+        },
+        "bybit_costs": {
+            "cheapest_product": "spot maker",
+            "cheapest_borrow": "USDT займ",
+        },
+        "integration": {
+            "website": True,
+            "mini_app": True,
+            "telegram": True,
+            "source": "market_paper_engine.PaperActivityEngine",
+        },
+    }
+    return state
+
+
+def _canonical_state_response() -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "deprecated": True,
+        "use": "/api/virtual-account/state",
+        "state": _canonical_virtual_state(),
+    }
+
+
 def _load() -> dict[str, Any]:
+    """Load only the isolated legacy command sandbox used by demo chat writes."""
+
     path = _path()
     if not path.exists():
         state = _default_state()
@@ -174,15 +240,10 @@ def _chat(message: str) -> dict[str, Any]:
             state = _load()
             source_ai = "Paper Trading Bot + Portfolio Engine"
         else:
-            # Call the compatibility engine first so any internal failure is
-            # caught by the fail-safe JSON response for every command class.
             result = run_ai_command(message)
             if not isinstance(result, dict):
                 raise TypeError("run_ai_command must return a mapping")
-            if any(
-                word in text
-                for word in ("выгод", "услов", "комисс", "дешев", "bybit")
-            ):
+            if any(word in text for word in ("выгод", "услов", "комисс", "дешев", "bybit")):
                 reply = (
                     "Bybit cost intelligence: Самый дешёвый вариант — spot maker; "
                     "USDT займ имеет минимальную ставку."
@@ -200,15 +261,14 @@ def _chat(message: str) -> dict[str, Any]:
                 if not reply:
                     orchestrated = answer_chat(message, state)
                     reply = str(orchestrated.get("reply", "Команда обработана."))
-                    source_ai = str(
-                        orchestrated.get("source_ai", "AI Chat Orchestrator")
-                    )
+                    source_ai = str(orchestrated.get("source_ai", "AI Chat Orchestrator"))
         return {
             "status": "ok",
             "reply": reply,
             "source_ai": source_ai,
             "state": state,
             "integration": state["integration"],
+            "legacy_command_sandbox": True,
         }
     except Exception as exc:
         fallback = _load()
@@ -222,6 +282,7 @@ def _chat(message: str) -> dict[str, Any]:
             "error": f"{type(exc).__name__}: {exc}",
             "state": fallback,
             "integration": fallback["integration"],
+            "legacy_command_sandbox": True,
         }
 
 
@@ -239,15 +300,13 @@ def install_demo_api(app: FastAPI) -> None:
     @app.middleware("http")
     async def shared_demo_contract(request: Request, call_next):
         if request.url.path == "/api/demo/state" and request.method == "GET":
-            return JSONResponse({"status": "ok", "state": _load()})
+            return JSONResponse(_canonical_state_response())
         if request.url.path == "/api/demo/chat" and request.method == "POST":
             try:
                 payload = await request.json()
             except Exception:
                 payload = {}
-            return JSONResponse(
-                _chat(str((payload or {}).get("message", "")).strip())
-            )
+            return JSONResponse(_chat(str((payload or {}).get("message", "")).strip()))
         return await call_next(request)
 
     @app.get("/login", response_class=HTMLResponse)
@@ -256,12 +315,10 @@ def install_demo_api(app: FastAPI) -> None:
 
     @app.get("/api/demo/state/shared")
     def demo_state_shared() -> dict[str, object]:
-        return {"status": "ok", "state": _load()}
+        return _canonical_state_response()
 
     @app.post("/api/demo/balance")
-    def demo_balance(
-        payload: dict[str, Any] | None = Body(default=None),
-    ) -> dict[str, object]:
+    def demo_balance(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, object]:
         balance = float((payload or {}).get("balance", 10000.0))
         state = _default_state()
         state["equity"] = balance
@@ -269,26 +326,24 @@ def install_demo_api(app: FastAPI) -> None:
         _save(state)
         return {
             "status": "ok",
-            "message": f"Виртуальный баланс установлен: {balance:.2f} USDT",
+            "deprecated": True,
+            "message": f"Виртуальный баланс legacy sandbox установлен: {balance:.2f} USDT",
             "state": state,
         }
 
     @app.post("/api/demo/chat/shared")
-    def demo_chat_shared(
-        payload: dict[str, Any] | None = Body(default=None),
-    ) -> dict[str, object]:
+    def demo_chat_shared(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, object]:
         return _chat(str((payload or {}).get("message", "")).strip())
 
     @app.post("/api/demo/reset")
-    def demo_reset(
-        payload: dict[str, Any] | None = Body(default=None),
-    ) -> dict[str, object]:
+    def demo_reset(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, object]:
         del payload
         state = _default_state()
         _save(state)
         return {
             "status": "ok",
-            "message": "Виртуальный счёт сброшен.",
+            "deprecated": True,
+            "message": "Legacy demo sandbox сброшен. Canonical Virtual Account не изменён.",
             "state": state,
         }
 
