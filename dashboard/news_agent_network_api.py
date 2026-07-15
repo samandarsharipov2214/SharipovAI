@@ -1,7 +1,7 @@
 """Dashboard API for the canonical DB-backed News Intelligence network.
 
 The module keeps a narrow compatibility surface for older dashboard factories and
-restore tests.  All compatibility functions route to the same canonical
+restore tests. All compatibility functions route to the same canonical
 ``NewsAgentNetwork`` and ``ProjectDatabase``; no synthetic news is introduced.
 """
 from __future__ import annotations
@@ -106,7 +106,11 @@ def run_due_agents(*, force: bool = False) -> dict[str, Any]:
 
 def bridge_events() -> dict[str, Any]:
     payload = bridge_status()
-    return {"status": payload.get("status", "ok"), "sent": int(payload.get("event_records", 0)), **payload}
+    return {
+        "status": payload.get("status", "ok"),
+        "sent": int(payload.get("event_records", 0)),
+        **payload,
+    }
 
 
 def install_news_agent_network_api(app: FastAPI) -> None:
@@ -139,7 +143,12 @@ def install_news_agent_network_api(app: FastAPI) -> None:
     @app.post("/api/news-agents/{agent_id}/run")
     def news_agent_run(agent_id: str) -> dict[str, Any]:
         try:
-            return run_agent(agent_id)
+            result = run_agent(agent_id)
+            if not isinstance(result, dict):
+                raise TypeError("run_agent must return a mapping")
+            if "bridge" not in result:
+                result = {**result, "bridge": bridge_events()}
+            return result
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
