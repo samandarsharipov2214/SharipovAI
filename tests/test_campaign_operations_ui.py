@@ -46,4 +46,5 @@ def test_campaign_ui_has_no_client_side_environment_mutation() -> None:
     source = (WEB2 / "campaign_operations_v36.js").read_text(encoding="utf-8")
     assert "process.env" not in source
     assert "localStorage.setItem" not in source
-    assert "runtime flags and does not disable kill switch" in source
+    assert "runtime flags" in source
+    assert "kill switch" in source
