@@ -185,8 +185,7 @@ jobs:
         run: |
           mkdir -p artifacts
           set -o pipefail
-          python scripts/research_foundation_audit.py --json \
-            2>&1 | tee artifacts/research-audit.json
+          python scripts/research_foundation_audit.py --json 2>&1 | tee artifacts/research-audit.json
 
       - name: Audit scheduled shadow campaign foundation
         id: campaign_audit
@@ -196,8 +195,7 @@ jobs:
         run: |
           mkdir -p artifacts
           set -o pipefail
-          python scripts/campaign_foundation_audit.py --json \
-            2>&1 | tee artifacts/campaign-audit.json
+          python scripts/campaign_foundation_audit.py --json 2>&1 | tee artifacts/campaign-audit.json
 
       - name: Run Phase 5 scheduled campaign regressions
         id: phase5_suite
@@ -216,8 +214,7 @@ jobs:
             tests/test_final_promotion_report.py \
             tests/test_leadership_dashboard.py \
             tests/test_shadow_mode.py \
-            -q --tb=short \
-            2>&1 | tee artifacts/phase5-suite.log
+            -q --tb=short 2>&1 | tee artifacts/phase5-suite.log
 
       - name: Run Phase 6 legacy and campaign operations regressions
         id: phase6_suite
@@ -237,8 +234,7 @@ jobs:
             tests/test_testnet_bridge.py \
             tests/test_campaign_operations.py \
             tests/test_campaign_operations_ui.py \
-            -q --tb=short \
-            2>&1 | tee artifacts/phase6-suite.log
+            -q --tb=short 2>&1 | tee artifacts/phase6-suite.log
 
       - name: Run critical safety and research suite with coverage
         id: critical_suite
@@ -248,7 +244,29 @@ jobs:
         run: |
           mkdir -p artifacts
           set -o pipefail
-          python -m pytest \
+          python scripts/run_critical_coverage.py \
+            --source exchange_connector.execution_contract \
+            --source exchange_connector.execution_idempotency \
+            --source exchange_connector.bybit_execution \
+            --source exchange_connector.bybit_execution_state \
+            --source exchange_connector.bybit_reference_data \
+            --source exchange_connector.private_ws_gate \
+            --source autonomous_trading.shadow_mode \
+            --source autonomous_trading.startup_reconciliation \
+            --source risk_engine \
+            --source capital_allocation \
+            --source trading_core \
+            --source historical_data \
+            --source experiments \
+            --source validation \
+            --source observability \
+            --source dashboard.routers.execution_status \
+            --source dashboard.routers.experiments \
+            --source dashboard.routers.leadership \
+            --xml artifacts/coverage.xml \
+            --data-file artifacts/.coverage \
+            --fail-under 65 \
+            -- \
             tests/test_historical_data_layer.py \
             tests/test_automatic_experiment_runner.py \
             tests/test_experiment_registry_promotion.py \
@@ -279,28 +297,7 @@ jobs:
             tests/test_paper_state_recovery.py \
             tests/test_project_change_ledger.py \
             risk_engine/tests/test_risk_engine.py \
-            --cov=exchange_connector.execution_contract \
-            --cov=exchange_connector.execution_idempotency \
-            --cov=exchange_connector.bybit_execution \
-            --cov=exchange_connector.bybit_execution_state \
-            --cov=exchange_connector.bybit_reference_data \
-            --cov=exchange_connector.private_ws_gate \
-            --cov=autonomous_trading.shadow_mode \
-            --cov=autonomous_trading.startup_reconciliation \
-            --cov=risk_engine \
-            --cov=capital_allocation \
-            --cov=trading_core \
-            --cov=historical_data \
-            --cov=experiments \
-            --cov=validation \
-            --cov=observability \
-            --cov=dashboard.routers.execution_status \
-            --cov=dashboard.routers.experiments \
-            --cov=dashboard.routers.leadership \
-            --cov-report=term-missing \
-            --cov-report=xml:artifacts/coverage.xml \
-            --cov-fail-under=65 \
-            -q --tb=short \
+            -p no:cov -q --tb=short \
             2>&1 | tee artifacts/critical-suite.log
 
       - name: Run complete pytest suite
@@ -374,7 +371,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: phase6-legacy-campaign-evidence-${{ github.run_id }}
+          name: final-ci-stabilization-evidence-${{ github.run_id }}
           path: |
             artifacts/research-audit.json
             artifacts/campaign-audit.json
