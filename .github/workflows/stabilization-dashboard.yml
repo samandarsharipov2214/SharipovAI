@@ -51,6 +51,7 @@ jobs:
     env:
       DATABASE_URL: sqlite:////tmp/sharipovai-dashboard-${{ github.run_id }}.db
       EXECUTION_JOURNAL_FILE: /tmp/sharipovai-dashboard-journal-${{ github.run_id }}.json
+      SHARIPOVAI_DISABLE_AUTH: '1'
       EXECUTION_KILL_SWITCH: '1'
       TESTNET_EXECUTION_ENABLED: '0'
       FEATURE_BYBIT_PRIVATE_ORDER_WS: '0'
