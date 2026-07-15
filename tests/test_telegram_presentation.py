@@ -29,23 +29,27 @@ def test_format_news_item_contains_source_link_and_time() -> None:
     assert "https://cointelegraph.com/rss" in text
 
 
-def test_news_text_lists_sources_links_and_timestamps() -> None:
+def test_news_text_lists_verified_summary_and_sources() -> None:
     text = news_text()
 
-    assert "Новости: источники, ссылки и время" in text
-    assert "Источник:" in text
-    assert "Время:" in text
-    assert "Открыть источник" in text
+    assert "Новости: источники и время" in text
+    assert "Проверено:" in text
     assert "Средняя достоверность" in text
+    assert "Нужно подтверждение" in text
+    assert "Правило: один источник не даёт разрешение на сделку" in text
+    assert "Источник:" in text or "Новостей пока нет" in text
 
 
-def test_now_text_explains_mixed_market_in_russian() -> None:
+def test_now_text_exposes_current_decision_regime_risk_and_next_step() -> None:
     text = now_text()
 
     assert "Текущее решение SharipovAI" in text
-    assert "смешанный рынок" in text
-    assert "Что это значит" in text
-    assert "нужен консенсус" in text
+    assert "Время проверки:" in text
+    assert "Решение:" in text
+    assert "Действие:" in text
+    assert "Режим рынка:" in text
+    assert "Риск:" in text
+    assert "Следующий шаг: /news или /why" in text
 
 
 def test_market_regime_helpers_explain_mixed() -> None:
@@ -55,6 +59,6 @@ def test_market_regime_helpers_explain_mixed() -> None:
 
 def test_main_keyboard_uses_clear_current_decision_label() -> None:
     keyboard = main_keyboard()
-    first_button = keyboard["inline_keyboard"][0][0]["text"]
+    first_button = keyboard["inline_keyboard"][0][0]
 
-    assert first_button == "🟢 Сейчас: решение"
+    assert first_button == {"text": "🟢 Сейчас: решение", "callback_data": "now"}
