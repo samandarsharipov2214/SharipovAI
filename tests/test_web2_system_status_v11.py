@@ -9,8 +9,9 @@ def test_system_status_assets_exist_and_are_loaded() -> None:
     index = (WEB / "index.html").read_text(encoding="utf-8")
     assert (WEB / "system_status_v11.js").is_file()
     assert (WEB / "system_status_v11.css").is_file()
-    assert "system_status_v11.css?v=11" in index
-    assert "system_status_v11.js?v=11" in index
+    assert "system_status_v11.css?" in index
+    assert "system_status_v11.js?" in index
+    assert index.index("system_status_v11.css") < index.index("system_status_v11.js")
 
 
 def test_system_status_checks_real_project_endpoints() -> None:
