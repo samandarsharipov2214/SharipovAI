@@ -12,6 +12,9 @@ from .telegram_restore_compat import install_telegram_restore_compat
 
 install_admin_auth_compat()
 install_telegram_restore_compat()
+# Rebind the package export after the compatibility installer wraps app.create_app.
+from .app import create_app as create_app
+
 ensure_event_handler_compat(app)
 
 from .ai_organ_state_safe_api import install_ai_organ_state_api
