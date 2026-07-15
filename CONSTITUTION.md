@@ -1,6 +1,6 @@
 # SharipovAI Constitution
 
-Version: `2026.07-scheduled-execution-evidence-v7`  
+Version: `2026.07-legacy-campaign-operations-v8`  
 Status: **Binding development and runtime policy**
 
 This document defines non-negotiable rules for code, AI organs, configuration,
@@ -374,14 +374,47 @@ metrics, experiments, reports and test artifacts.
 
 Merge requires dependency installation, `pip check`, `pip-audit`, compilation,
 critical imports, hard Mainnet lock, idempotency/reconciliation tests, private order
-and execution tests, campaign scheduler/policy tests, actual fee harvester tests,
-leadership dashboard tests, experiment/risk/research tests, foundation audits,
-critical coverage, complete pytest, retained artifacts and rollback instructions.
+and execution tests, campaign scheduler/policy tests, Campaign Operations tests,
+actual fee harvester tests, leadership dashboard tests, experiment/risk/research tests,
+foundation audits, critical coverage, complete pytest, retained artifacts and rollback
+instructions.
 
 A static score, partial suite, queued check or AI statement cannot override failed or
 skipped CI. Testnet and Mainnet remain disabled by default in CI.
 
-## 27. Profit and user claims
+Every full-suite failure must be assigned to exactly one diagnostic class:
+
+- `regression`;
+- `stale_test`;
+- `environment_contamination`.
+
+Unknown failures are regressions. Classification is evidence only and cannot convert a
+failed test, failed workflow or missing JUnit artifact into a green release.
+
+## 27. Legacy compatibility and Campaign Operations
+
+1. Compatibility adapters may preserve old callable names or test hooks only when they
+   route to the current canonical implementation.
+2. A compatibility adapter may not restore a removed raw-order entry point, old Mainnet
+   unlock behavior, synthetic news source or obsolete renderer ownership.
+3. Configured administrator authentication must not be shadowed by a pending user record
+   and must not depend on package import order.
+4. News restore aliases must remain `ProjectDatabase` backed and must not fabricate items.
+5. Telegram native-command restoration is separate from normal canonical Mini App setup.
+6. Campaign Operations may read schedules, campaign progress, identities, fees and report
+   state and may invoke only the existing campaign state machine.
+7. Campaign Operations cannot set environment variables, disable the kill switch, approve
+   an experiment, submit a raw order, promote a strategy or enable Mainnet.
+8. The first bounded Testnet campaign additionally requires
+   `PHASE6_TESTNET_RELEASE_GATE=green` and exact confirmation
+   `I_APPROVE_BOUNDED_TESTNET_SHADOW_CAMPAIGN`.
+9. Application code may verify but may not set the release-gate environment value.
+10. A campaign start record is not proof of real execution. Completion requires at least
+    20 actual matched private fills, actual fees and zero orphan, duplicate, unmatched or
+    unresolved evidence.
+11. Automatic final-report generation does not remove the separate manual promotion decision.
+
+## 28. Profit and user claims
 
 SharipovAI reports measured results after all modeled and actual available costs. It
 must not promise guaranteed income, fabricate performance or scale capital based only
@@ -391,6 +424,7 @@ on a backtest, confidence score or narrative.
 
 | Version | Date | Summary |
 | --- | --- | --- |
+| `2026.07-legacy-campaign-operations-v8` | 2026-07-15 | Truth-preserving legacy failure taxonomy, import-order-safe auth/session compatibility, canonical News/Telegram restore adapters, Campaign Operations UI/API and the gated first bounded Testnet campaign contract. |
 | `2026.07-scheduled-execution-evidence-v7` | 2026-07-14 | Scheduled Campaign Orchestrator, private execution topic with actual fees and partial fills, bounded 10–25 USDT/20-fill campaigns, final promotion reports and Champion / Challenger UI. |
 | `2026.07-automatic-shadow-campaign-v6` | 2026-07-14 | Automatic immutable experiments, actual Bybit fee/instrument rules, bounded shadow mode, runtime fill harvesting and evidence-gated leadership. |
 | `2026.07-experiment-promotion-v5` | 2026-07-14 | Persistent experiment identity, divergence metrics, private WebSocket startup evidence and manual staged promotion. |
