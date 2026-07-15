@@ -78,7 +78,7 @@ class _Campaign:
         ]
 
     def _campaign_records(self, campaign_id: str):
-        assert campaign_id == "campaign_phase6"
+        assert campaign_id
         return list(self.records)
 
     def start(self, **kwargs):
@@ -212,6 +212,7 @@ def test_start_uses_existing_campaign_state_machine_after_all_gates(monkeypatch,
         now_ms=1_800_000_000_000,
     )
     assert result["status"] == "started"
+    assert result["campaign"]["campaign_id"] == "campaign_started"
     assert result["automatic_final_report"] is True
     assert result["manual_promotion_required"] is True
     assert result["mainnet_enabled"] is False
