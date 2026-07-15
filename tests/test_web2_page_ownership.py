@@ -13,24 +13,31 @@ DECISION = WEB2 / "decision_runtime_v25.js"
 LEARNING = WEB2 / "learning_runtime_v25.js"
 EXECUTION_UI = WEB2 / "exchange_execution_settings_v18.js"
 SYSTEM_STATUS = WEB2 / "system_status_v11.js"
+CAMPAIGNS = WEB2 / "campaign_operations_v36.js"
 INTERFACE = WEB2 / "interface_v30.css"
 WEB2_HOST = ROOT / "dashboard" / "web2_host.py"
 
 
-def test_page_runtime_script_order_and_cache_version():
+def test_page_runtime_coordinator_precedes_every_current_renderer():
     html = INDEX.read_text(encoding="utf-8")
-    coordinator = html.index("navigation_coordinator_v23.js?v=32")
-    core = html.index("web2.js?v=29")
-    overview = html.index("overview_runtime_v25.js?v=31")
-    decision = html.index("decision_runtime_v25.js?v=25")
-    market = html.index("tradingview_market_v32.js?v=32")
-    learning = html.index("learning_runtime_v25.js?v=25")
-    exchange = html.index("exchange_execution_settings_v18.js?v=30")
-    assert coordinator < core < overview < decision < market < learning < exchange
+    coordinator = html.index("navigation_coordinator_v23.js?v=36")
+    for asset in (
+        "web2.js?v=29",
+        "overview_runtime_v25.js?v=31",
+        "decision_runtime_v25.js?v=25",
+        "system_status_v11.js?v=29",
+        "news_center_v12.js?v=25",
+        "tradingview_market_v32.js?v=32",
+        "market_intelligence_v33.js?v=33",
+        "learning_runtime_v25.js?v=25",
+        "exchange_execution_settings_v18.js?v=30",
+        "campaign_operations_v36.js?v=36",
+    ):
+        assert coordinator < html.index(asset)
     assert "runtime_render_guard_v24.js?v=31" in html
-    assert "system_status_v11.js?v=29" in html
     assert "interface_v30.css?v=30" in html
     assert "tradingview_market_v32.css?v=32" in html
+    assert "campaign_operations_v36.css?v=36" in html
 
 
 def test_obsolete_renderers_are_not_loaded():
@@ -41,15 +48,30 @@ def test_obsolete_renderers_are_not_loaded():
     assert "Фактическая сводка SharipovAI по всем рабочим контурам" not in html
 
 
-def test_one_explicit_owner_for_affected_pages():
+def test_one_explicit_owner_for_every_current_page():
     source = COORDINATOR.read_text(encoding="utf-8")
-    assert "['overview', 'overview_runtime_v25.js']" in source
-    assert "['market', 'tradingview_market_v32.js']" in source
-    assert "['decision', 'decision_runtime_v25.js']" in source
-    assert "['portfolio', 'portfolio_risk_v16.js']" in source
-    assert "['trades', 'exchange_execution_settings_v18.js']" in source
-    assert "['learning', 'learning_runtime_v25.js']" in source
-    assert "const VERSION = 32" in source
+    expected = {
+        "overview": "overview_runtime_v25.js",
+        "market": "tradingview_market_v32.js",
+        "decision": "decision_runtime_v25.js",
+        "portfolio": "portfolio_risk_v16.js",
+        "trades": "exchange_execution_settings_v18.js",
+        "bots": "ai_center_v14.js",
+        "chat": "web2.js",
+        "news": "news_center_v12.js",
+        "risk": "portfolio_risk_v16.js",
+        "bybit": "exchange_execution_settings_v18.js",
+        "learning": "learning_runtime_v25.js",
+        "control": "general_control_v15.js",
+        "evidence": "learning_evidence_reports_v17.js",
+        "virtual": "exchange_execution_settings_v18.js",
+        "campaigns": "campaign_operations_v36.js",
+        "reports": "learning_evidence_reports_v17.js",
+        "settings": "exchange_execution_settings_v18.js",
+    }
+    for page, owner in expected.items():
+        assert f"['{page}', '{owner}']" in source
+    assert "const VERSION = 36" in source
     assert "value.includes('sections_v10.js')" in source
     assert "value.includes('market_terminal_v13.js')" in source
 
@@ -230,3 +252,19 @@ def test_virtual_account_parses_nested_state_payload():
     assert "raw?.state" in source
     assert "state.summary" in source
     assert "state.trades" in source
+
+
+def test_campaign_operations_owner_exposes_evidence_not_raw_orders():
+    source = CAMPAIGNS.read_text(encoding="utf-8")
+    for marker in (
+        "/api/campaigns/operations",
+        "matched_fills",
+        "orphan_execution_count",
+        "duplicate_order_count",
+        "unresolved_order_count",
+        "actual_fee_total",
+        "final_report",
+    ):
+        assert marker in source
+    assert "process.env" not in source
+    assert "/v5/order/create" not in source
