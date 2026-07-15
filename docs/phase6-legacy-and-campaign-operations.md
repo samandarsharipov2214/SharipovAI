@@ -15,13 +15,14 @@ baseline as:
 
 | Class | Count | Required action |
 | --- | ---: | --- |
-| regression | 61 | Fix production/runtime behavior or prove the contract correct |
+| regression | 62 | Fix production/runtime behavior or prove the contract correct |
 | stale_test | 30 | Rewrite exact-version, removed API or obsolete-copy assertions semantically |
-| environment_contamination | 9 | Isolate runner package layout, state, credentials or network dependency |
+| environment_contamination | 8 | Isolate runner package layout, state, credentials or network dependency |
 
-Unknown failures always default to `regression`. Classification never changes the
-truthful CI outcome. A failed test remains failed until the underlying problem or
-stale test is corrected.
+The default-auth failure was classified as a regression and fixed by restoring
+fail-closed factory middleware semantics. Unknown failures always default to
+`regression`. Classification never changes the truthful CI outcome. A failed test
+remains failed until the underlying problem or stale test is corrected.
 
 ```bash
 python scripts/legacy_contract_classifier.py \
@@ -36,6 +37,7 @@ Phase 6 compatibility layers are narrow adapters, not rollback paths:
 
 - configured administrator credentials take precedence over pending persisted users;
 - session decoding and global middleware use one canonical resolver;
+- factory authentication is enabled by default and requires an explicit truthy bypass;
 - legacy app-local session hooks remain available to isolated tests;
 - News Intelligence restores historical callable aliases but routes every operation
   to the canonical `ProjectDatabase`-backed network;
