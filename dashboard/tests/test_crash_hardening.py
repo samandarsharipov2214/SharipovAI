@@ -14,7 +14,7 @@ import telegram_bot
 
 
 def test_private_api_requires_auth_when_auth_is_enabled(monkeypatch) -> None:
-    """Protected APIs should reject unauthenticated users in real dashboard mode."""
+    """Protected APIs reject anonymous users with the canonical JSON contract."""
 
     monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "0")
     client = TestClient(create_app())
@@ -22,11 +22,14 @@ def test_private_api_requires_auth_when_auth_is_enabled(monkeypatch) -> None:
     response = client.get("/api/run")
 
     assert response.status_code == 401
-    assert response.json() == {"error": "authentication_required"}
+    assert response.json() == {
+        "status": "unauthorized",
+        "detail": "authentication required",
+    }
 
 
 def test_access_request_is_recorded_without_creating_password_user(monkeypatch, tmp_path: Path) -> None:
-    """Registration should create a security access request instead of crashing."""
+    """Registration creates a security request instead of a password user."""
 
     requests_file = tmp_path / "access_requests.json"
     events_file = tmp_path / "security_events.json"
@@ -55,9 +58,10 @@ def test_access_request_is_recorded_without_creating_password_user(monkeypatch, 
     assert not users_file.exists()
 
 
-def test_stress_lab_handles_bad_numeric_inputs_safely() -> None:
-    """Malformed stress-lab numbers should fall back safely instead of crashing."""
+def test_stress_lab_handles_bad_numeric_inputs_safely(monkeypatch) -> None:
+    """Malformed stress-lab numbers fall back safely instead of crashing."""
 
+    monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "1")
     client = TestClient(create_app(runner_factory=_runner_factory))
     response = client.post(
         "/api/stress-lab/run",
@@ -78,9 +82,10 @@ def test_stress_lab_handles_bad_numeric_inputs_safely() -> None:
     assert "risk limit applied" in payload["protective_measures"]
 
 
-def test_chat_endpoint_handles_empty_payload() -> None:
-    """The chat endpoint should answer safely when message text is missing."""
+def test_chat_endpoint_handles_empty_payload(monkeypatch) -> None:
+    """The chat endpoint answers safely when message text is missing."""
 
+    monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "1")
     client = TestClient(create_app(runner_factory=_runner_factory))
     response = client.post("/api/chat/message", json={})
 
@@ -92,7 +97,7 @@ def test_chat_endpoint_handles_empty_payload() -> None:
 
 
 def test_telegram_ignores_message_without_chat(monkeypatch) -> None:
-    """Malformed Telegram updates without a chat id should not call the API."""
+    """Malformed Telegram updates without a chat id do not call the API."""
 
     called = False
 
@@ -111,8 +116,6 @@ class _FakeRunner:
     """Fake runner for crash-hardening tests."""
 
     def run(self) -> RunnerOutput:
-        """Return deterministic runner output."""
-
         return RunnerOutput(
             decision="BUY",
             confidence=88.0,
@@ -141,6 +144,4 @@ class _FakeRunner:
 
 
 def _runner_factory() -> _FakeRunner:
-    """Return a fake runner."""
-
     return _FakeRunner()
