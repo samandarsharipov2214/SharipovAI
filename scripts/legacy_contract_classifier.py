@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Classify full-suite failures without weakening the truthful CI gate.
 
-The classifier never converts a failure into success.  It separates failures into:
+The classifier never converts a failure into success. It separates failures into:
 
 * ``regression``: current production/runtime behavior is broken or unknown;
 * ``stale_test``: the test asserts a retired API, exact UI asset version or obsolete copy;
-* ``environment_contamination``: the test result is invalidated by runner state,
+* ``environment_contamination``: the result is invalidated by runner state,
   credentials, package layout, network access or non-isolated persistence.
 
 Unknown failures are deliberately classified as ``regression``.
@@ -64,11 +64,6 @@ RULES: tuple[Rule, ...] = (
         "environment_contamination",
         "persistent test state leaked across cases",
         text_patterns=(r"versionconflict", r"immutable paper record conflict", r"expected 0, current [1-9]"),
-    ),
-    Rule(
-        "environment_contamination",
-        "global CI authentication bypass changed the test premise",
-        node_patterns=(r"test_auth_guard_middleware.*auth_is_enabled_by_default",),
     ),
     Rule(
         "environment_contamination",
