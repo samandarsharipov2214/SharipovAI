@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
+from dashboard.lifecycle_compat import ensure_event_handler_compat
 from dashboard.system_watchdog import SystemWatchdogManager, install_system_watchdog
 
 
@@ -95,6 +96,7 @@ def test_reset_clears_component_circuit(monkeypatch) -> None:
 def test_installer_is_idempotent(monkeypatch) -> None:
     monkeypatch.delenv("SYSTEM_WATCHDOG_ENABLED", raising=False)
     app = FastAPI()
+    assert ensure_event_handler_compat(app) is True
     install_system_watchdog(app)
     install_system_watchdog(app)
     paths = [route.path for route in app.routes]
