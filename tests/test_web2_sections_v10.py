@@ -74,8 +74,10 @@ def test_specialized_current_owners_use_real_data_routes() -> None:
         assert route in sources
 
 
-def test_truthful_fallbacks_are_preserved_by_current_owners() -> None:
-    sources = "\n".join(
+def test_truthful_fallbacks_are_preserved_by_current_shell_and_guard() -> None:
+    html = INDEX.read_text(encoding="utf-8")
+    guard = (WEB2 / "truth_guard.js").read_text(encoding="utf-8")
+    current_sources = "\n".join(
         (WEB2 / filename).read_text(encoding="utf-8")
         for filename in (
             "overview_runtime_v25.js",
@@ -84,10 +86,11 @@ def test_truthful_fallbacks_are_preserved_by_current_owners() -> None:
             "learning_evidence_reports_v17.js",
         )
     )
-    assert "Math.random" not in sources
-    assert "Синтетические" in sources or "синтетические" in sources
-    assert "Доказательство" in sources
-    assert "Подтвержд" in sources
+    assert "Интерфейс не подменяет отсутствующие значения" in html
+    assert "SYNTHETIC_PHRASES" in guard
+    assert "НЕТ ПОДТВЕРЖДЁННОГО СОБЫТИЯ" in guard
+    assert "Evidence Vault" in guard
+    assert "Math.random" not in current_sources
 
 
 def test_news_ai_and_campaign_sections_have_specialized_renderers() -> None:
