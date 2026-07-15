@@ -4,7 +4,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from dashboard.app import create_app
+from dashboard import create_app
 from runner import RunnerOutput
 
 
@@ -26,7 +26,8 @@ class FakeRunner:
         )
 
 
-def test_login_page_points_to_access_request() -> None:
+def test_login_page_points_to_access_request(monkeypatch) -> None:
+    monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "1")
     app = create_app(runner_factory=FakeRunner)
     client = TestClient(app)
 
@@ -42,6 +43,11 @@ def test_login_page_points_to_access_request() -> None:
 def test_register_creates_security_access_request(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AUTH_ACCESS_REQUESTS_FILE", str(tmp_path / "access_requests.json"))
     monkeypatch.setenv("AUTH_SECURITY_EVENTS_FILE", str(tmp_path / "security_events.json"))
+    monkeypatch.setenv("AUTH_USERS_FILE", str(tmp_path / "users.json"))
+    monkeypatch.setenv("AUTH_ALLOW_REGISTRATION", "1")
+    monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "1")
+    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+    monkeypatch.delenv("AUTH_SECRET", raising=False)
     app = create_app(runner_factory=FakeRunner)
     client = TestClient(app)
 
