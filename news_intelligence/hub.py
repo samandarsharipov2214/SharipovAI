@@ -163,10 +163,10 @@ def _envelope_from_dict(value: Any) -> NewsEnvelope:
         category=str(fetched_raw.get("category", "")),
         requested_at_ms=_positive_int(fetched_raw.get("requested_at_ms"), "requested_at_ms"),
         received_at_ms=_positive_int(fetched_raw.get("received_at_ms"), "received_at_ms"),
-        status_code=int(fetched_raw.get("status_code", 0)),
+        status_code=_integer(fetched_raw.get("status_code", 0), "status_code"),
         verified=bool(fetched_raw.get("verified")),
         error=str(fetched_raw.get("error", "")),
-        item_count=max(int(fetched_raw.get("item_count", 0)), 0),
+        item_count=max(_integer(fetched_raw.get("item_count", 0), "item_count"), 0),
     )
     return NewsEnvelope(
         agent_id=str(value.get("agent_id", "")),
@@ -186,14 +186,24 @@ def _envelope_from_dict(value: Any) -> NewsEnvelope:
 
 
 def _finite(value: Any, name: str) -> float:
-    parsed = float(value)
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"persisted {name} must be numeric") from exc
     if not math.isfinite(parsed):
         raise RuntimeError(f"persisted {name} must be finite")
     return parsed
 
 
+def _integer(value: Any, name: str) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"persisted {name} must be an integer") from exc
+
+
 def _positive_int(value: Any, name: str) -> int:
-    parsed = int(value)
+    parsed = _integer(value, name)
     if parsed <= 0:
         raise RuntimeError(f"persisted {name} must be positive")
     return parsed
