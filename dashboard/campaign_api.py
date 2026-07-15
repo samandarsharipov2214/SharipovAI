@@ -13,6 +13,7 @@ from campaigns import (
     ScheduledCampaignOrchestrator,
     TestnetShadowCampaign,
 )
+from campaigns.decisions import CampaignPromotionDecisionEngine
 from storage import ProjectDatabase
 from validation import RuntimeFillHarvester
 
@@ -36,6 +37,11 @@ def install_campaign_api(app: FastAPI) -> None:
     )
     orchestrator = ScheduledCampaignOrchestrator(database, campaign=campaign)
     reports = FinalPromotionReportEngine(database)
+    decisions = CampaignPromotionDecisionEngine(
+        database,
+        campaigns=campaign,
+        reports=reports,
+    )
     operations = CampaignOperationsService(
         database,
         orchestrator=orchestrator,
@@ -45,6 +51,7 @@ def install_campaign_api(app: FastAPI) -> None:
     app.state.scheduled_campaign_orchestrator = orchestrator
     app.state.testnet_shadow_campaign = campaign
     app.state.final_promotion_report_engine = reports
+    app.state.campaign_promotion_decision_engine = decisions
     app.state.campaign_operations_service = operations
     _register_event(app, "startup", orchestrator.start)
     _register_event(app, "shutdown", orchestrator.stop)
@@ -152,10 +159,15 @@ def install_campaign_api(app: FastAPI) -> None:
             if campaign_row.get("final_report_id")
             else None
         )
+        try:
+            decision = decisions.snapshot(campaign_id)
+        except (KeyError, ValueError):
+            decision = {}
         return {
             "status": "ok",
             "campaign": campaign_row,
             "final_promotion_report": report or {},
+            "manual_promotion_decision": decision,
         }
 
     @app.post("/api/campaigns/{campaign_id}/run")
@@ -199,8 +211,49 @@ def install_campaign_api(app: FastAPI) -> None:
         return {
             "status": "ok",
             "report": report,
+            "manual_decision": decisions.snapshot(campaign_id),
             "manual_decision_required": True,
             "runtime_flags_changed": False,
+        }
+
+    @app.get("/api/campaigns/{campaign_id}/decision")
+    def campaign_decision(request: Request, campaign_id: str) -> dict[str, Any]:
+        require_admin(request)
+        try:
+            return decisions.snapshot(campaign_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="campaign not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/campaigns/{campaign_id}/decision")
+    async def decide_campaign(request: Request, campaign_id: str) -> dict[str, Any]:
+        principal = require_admin(request)
+        payload = await _json_body(request)
+        try:
+            decision = decisions.decide(
+                campaign_id,
+                approve=bool(payload.get("approve", False)),
+                actor=str(getattr(principal, "username", "admin")),
+                reason=str(payload.get("reason", "")),
+                approval_token=str(payload.get("approval_token", "")),
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="campaign not found") from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"status": "blocked", "message": str(exc)},
+            ) from exc
+        except RuntimeError as exc:
+            raise _service_error(exc) from exc
+        return {
+            "status": "ok",
+            "decision": decision,
+            "manual_decision_only": True,
+            "runtime_flags_changed": False,
+            "runtime_deployment_changed": False,
+            "mainnet_enabled": False,
         }
 
 
