@@ -5,6 +5,8 @@ on:
     branches: [main, agent/maximum-velocity-phase1]
     paths:
       - '**/*.py'
+      - 'dashboard/static/web2/**'
+      - 'docs/**'
       - 'requirements.txt'
       - 'requirements-dev.txt'
       - 'pyproject.toml'
@@ -15,6 +17,8 @@ on:
     branches: [main]
     paths:
       - '**/*.py'
+      - 'dashboard/static/web2/**'
+      - 'docs/**'
       - 'requirements.txt'
       - 'requirements-dev.txt'
       - 'pyproject.toml'
@@ -56,6 +60,7 @@ jobs:
       FEATURE_BYBIT_PRIVATE_ORDER_WS: '0'
       RUNTIME_FILL_HARVESTER_ENABLED: '0'
       SCHEDULED_CAMPAIGN_ORCHESTRATOR_ENABLED: '0'
+      PHASE6_TESTNET_RELEASE_GATE: 'blocked'
       EXCHANGE_LIVE_TRADING_ENABLED: '0'
       LIVE_EXECUTION_MANUAL_UNLOCK: '0'
       LIVE_EXECUTION_CONFIRMATION: ''
@@ -124,6 +129,7 @@ jobs:
           assert campaigns.ScheduledCampaignOrchestrator is not None
           assert campaigns.TestnetShadowCampaign is not None
           assert campaigns.FinalPromotionReportEngine is not None
+          assert campaigns.CampaignOperationsService is not None
           assert trading_core.EventDrivenBacktester is not None
           assert trading_core.WalkForwardBacktester is not None
           assert historical_data.HistoricalDataLoader is not None
@@ -213,6 +219,27 @@ jobs:
             -q --tb=short \
             2>&1 | tee artifacts/phase5-suite.log
 
+      - name: Run Phase 6 legacy and campaign operations regressions
+        id: phase6_suite
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          set -o pipefail
+          python -m pytest \
+            tests/test_legacy_contract_classifier.py \
+            tests/test_admin_auth_priority.py \
+            tests/test_auth_guard_middleware.py \
+            dashboard/tests/test_news_agent_network_api.py \
+            tests/test_telegram_menu_button.py \
+            tests/test_execution_stages.py \
+            tests/test_testnet_bridge.py \
+            tests/test_campaign_operations.py \
+            tests/test_campaign_operations_ui.py \
+            -q --tb=short \
+            2>&1 | tee artifacts/phase6-suite.log
+
       - name: Run critical safety and research suite with coverage
         id: critical_suite
         if: always()
@@ -287,6 +314,26 @@ jobs:
             --junitxml=artifacts/pytest.xml \
             > artifacts/pytest-full.log 2>&1
 
+      - name: Classify legacy contract failures
+        id: legacy_classifier
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          if [[ -f artifacts/pytest.xml ]]; then
+            python scripts/legacy_contract_classifier.py \
+              --junit artifacts/pytest.xml \
+              --json artifacts/legacy-contract-classification.json \
+              --markdown artifacts/legacy-contract-classification.md
+          else
+            printf '%s\n' '{"status":"missing_junit","truthful_gate_required":true}' \
+              > artifacts/legacy-contract-classification.json
+            printf '%s\n' '# Legacy Contract Classification' '' 'JUnit evidence is missing; gate remains red.' \
+              > artifacts/legacy-contract-classification.md
+            exit 1
+          fi
+
       - name: Build compact failure report
         if: always()
         run: |
@@ -297,14 +344,16 @@ jobs:
               Path('artifacts/research-audit.json'),
               Path('artifacts/campaign-audit.json'),
               Path('artifacts/phase5-suite.log'),
+              Path('artifacts/phase6-suite.log'),
               Path('artifacts/critical-suite.log'),
+              Path('artifacts/legacy-contract-classification.md'),
               Path('artifacts/pytest-full.log'),
           ]
           lines = []
           for source in sources:
               lines.append(f'===== {source.name} =====')
               lines.extend(source.read_text(encoding='utf-8', errors='replace').splitlines() if source.exists() else ['log missing'])
-          markers = ('"passed": false', '"status": "blocked"', 'ERROR collecting', 'FAILED ', 'E   ', 'short test summary', 'ModuleNotFoundError', 'ImportError', 'SyntaxError', 'TypeError', 'AssertionError', 'coverage failure')
+          markers = ('"passed": false', '"status": "blocked"', 'ERROR collecting', 'FAILED ', 'E   ', 'short test summary', 'ModuleNotFoundError', 'ImportError', 'SyntaxError', 'TypeError', 'AssertionError', 'coverage failure', 'regression', 'stale_test', 'environment_contamination')
           selected = []
           for index, line in enumerate(lines):
               if any(marker in line for marker in markers):
@@ -316,7 +365,7 @@ jobs:
               if line not in seen:
                   seen.add(line)
                   compact.append(line)
-          report = '\n'.join(compact[-500:])
+          report = '\n'.join(compact[-600:])
           Path('artifacts/pytest-summary.txt').write_text(report, encoding='utf-8')
           print(report)
           PY
@@ -325,21 +374,24 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: phase5-scheduled-campaign-evidence-${{ github.run_id }}
+          name: phase6-legacy-campaign-evidence-${{ github.run_id }}
           path: |
             artifacts/research-audit.json
             artifacts/campaign-audit.json
             artifacts/phase5-suite.log
+            artifacts/phase6-suite.log
             artifacts/critical-suite.log
             artifacts/pytest.xml
             artifacts/pytest-full.log
             artifacts/pytest-summary.txt
+            artifacts/legacy-contract-classification.json
+            artifacts/legacy-contract-classification.md
             artifacts/coverage.xml
           if-no-files-found: warn
           retention-days: 14
 
       - name: Preserve truthful failure status
-        if: steps.research_audit.outcome == 'failure' || steps.campaign_audit.outcome == 'failure' || steps.phase5_suite.outcome == 'failure' || steps.critical_suite.outcome == 'failure' || steps.full_suite.outcome == 'failure'
+        if: steps.research_audit.outcome == 'failure' || steps.campaign_audit.outcome == 'failure' || steps.phase5_suite.outcome == 'failure' || steps.phase6_suite.outcome == 'failure' || steps.critical_suite.outcome == 'failure' || steps.full_suite.outcome == 'failure' || steps.legacy_classifier.outcome == 'failure'
         run: |
           cat artifacts/pytest-summary.txt
           exit 1
