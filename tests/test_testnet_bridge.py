@@ -17,33 +17,55 @@ def test_execution_journal_counts_verified_modes(tmp_path) -> None:
     assert summary["accepted_orders"] == 2
 
 
-def test_bridge_does_nothing_when_autonomous_testnet_disabled(tmp_path, monkeypatch) -> None:
+def test_disabled_bridge_baselines_trade_without_execution(tmp_path, monkeypatch) -> None:
     paper = tmp_path / "paper.json"
-    paper.write_text(json.dumps({"trades": [{"side": "BUY", "symbol": "BTCUSDT", "quantity": 0.001, "price": 50000}]}))
+    paper.write_text(
+        json.dumps(
+            {
+                "trades": [
+                    {
+                        "trade_id": "paper-disabled-1",
+                        "side": "BUY",
+                        "symbol": "BTCUSDT",
+                        "quantity": 0.001,
+                        "price": 50000,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'bridge.db'}")
     monkeypatch.setenv("AUTONOMOUS_PAPER_STATE_FILE", str(paper))
     monkeypatch.setenv("TESTNET_BRIDGE_STATE_FILE", str(tmp_path / "bridge.json"))
     monkeypatch.setenv("EXECUTION_JOURNAL_FILE", str(tmp_path / "journal.json"))
+    monkeypatch.setenv("AUTONOMOUS_TESTNET_BRIDGE_ENABLED", "0")
     monkeypatch.setenv("AUTONOMOUS_TESTNET_ENABLED", "0")
     bridge = AutonomousTestnetBridge()
     bridge.tick()
     snapshot = bridge.snapshot()
     assert snapshot["last_status"] == "disabled"
-    assert snapshot["processed_trade_count"] == 0
+    assert snapshot["processed_trade_count"] == 1
+    assert snapshot["unresolved_trade_count"] == 0
     assert snapshot["journal"]["accepted_orders"] == 0
+    assert snapshot["execution"]["testnet_execution_enabled"] is False
 
 
-def test_stage_controller_uses_persisted_testnet_evidence(tmp_path, monkeypatch) -> None:
+def test_stage_controller_rejects_untrusted_paper_rows_even_with_testnet_history(tmp_path, monkeypatch) -> None:
     paper = tmp_path / "paper.json"
     trades = []
     for index in range(30):
         trades.append({"side": "SELL", "net_pnl": 2.0 if index < 20 else -1.0})
-    paper.write_text(json.dumps({"trades": trades, "equity": 10030}))
+    paper.write_text(json.dumps({"trades": trades, "equity": 10030}), encoding="utf-8")
     journal = ExecutionJournal(str(tmp_path / "journal.json"))
     for index in range(50):
         journal.append({"status": "accepted", "mode": "sandbox", "order_id": str(index)})
     monkeypatch.setenv("AUTONOMOUS_PAPER_STATE_FILE", str(paper))
     from autonomous_trading.stage_controller import StageController
+
     assessment = StageController(str(paper), journal=journal).assess()
     assert assessment.metrics["verified_testnet_orders"] == 50.0
-    assert assessment.eligible_stage == 3
-    assert any("владельца" in item for item in assessment.blockers)
+    assert assessment.metrics["raw_closed_trades"] == 30.0
+    assert assessment.metrics["closed_trades"] == 0.0
+    assert assessment.eligible_stage == 2
+    assert any("неподтвержд" in item.lower() or "paper" in item.lower() for item in assessment.blockers)
