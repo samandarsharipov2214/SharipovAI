@@ -5,7 +5,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from dashboard.app import create_app
+from dashboard import create_app
 
 
 def test_configured_admin_is_not_shadowed_by_pending_user(tmp_path: Path, monkeypatch) -> None:
@@ -28,6 +28,7 @@ def test_configured_admin_is_not_shadowed_by_pending_user(tmp_path: Path, monkey
     monkeypatch.setenv("ADMIN_USERNAME", "Samandar2212")
     monkeypatch.setenv("ADMIN_PASSWORD", "CorrectPassword2026!")
     monkeypatch.setenv("AUTH_SECRET", "admin-priority-test-secret")
+    monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "0")
 
     client = TestClient(create_app())
     response = client.post(
@@ -66,6 +67,7 @@ def test_pending_non_admin_user_remains_blocked(tmp_path: Path, monkeypatch) -> 
     monkeypatch.setenv("ADMIN_USERNAME", "Samandar2212")
     monkeypatch.setenv("ADMIN_PASSWORD", "CorrectPassword2026!")
     monkeypatch.setenv("AUTH_SECRET", "admin-priority-test-secret")
+    monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "0")
 
     client = TestClient(create_app())
     response = client.post(
