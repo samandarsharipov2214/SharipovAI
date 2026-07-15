@@ -8,8 +8,10 @@ from __future__ import annotations
 from .app import app, create_app
 from .admin_auth_compat import install_admin_auth_compat
 from .lifecycle_compat import ensure_event_handler_compat
+from .telegram_restore_compat import install_telegram_restore_compat
 
 install_admin_auth_compat()
+install_telegram_restore_compat()
 ensure_event_handler_compat(app)
 
 from .ai_organ_state_safe_api import install_ai_organ_state_api
