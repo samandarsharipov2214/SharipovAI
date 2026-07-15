@@ -8,6 +8,7 @@ import pytest
 from autonomous_trading.stage_controller import StageController
 from exchange_connector.bybit_execution import BybitExecutionClient
 from exchange_connector.execution_contract import build_execution_request
+from storage import ProjectDatabase
 from trading_candidate import (
     MarketRegime,
     TradingCandidate,
@@ -52,37 +53,44 @@ def _request(*, quantity: float, candidate_id: str = "candidate_phase6"):
     return build_execution_request(candidate, validation, quantity=quantity, now_ms=NOW_MS)
 
 
-def _sandbox(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'execution.db'}")
+def _sandbox(monkeypatch: pytest.MonkeyPatch, tmp_path) -> ProjectDatabase:
+    database = ProjectDatabase(f"sqlite:///{tmp_path / 'execution.db'}")
     monkeypatch.setenv("EXCHANGE_MODE", "sandbox")
     monkeypatch.setenv("EXCHANGE_BASE_URL", "https://api-testnet.bybit.com")
     monkeypatch.setenv("EXCHANGE_API_KEY", "key")
     monkeypatch.setenv("EXCHANGE_API_SECRET", "secret")
     monkeypatch.setenv("EXECUTION_KILL_SWITCH", "0")
+    return database
 
 
 def test_testnet_order_requires_explicit_unlock(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _sandbox(monkeypatch, tmp_path)
+    database = _sandbox(monkeypatch, tmp_path)
     monkeypatch.delenv("TESTNET_EXECUTION_ENABLED", raising=False)
-    client = BybitExecutionClient()
+    client = BybitExecutionClient(database=database)
     with pytest.raises(RuntimeError, match="Testnet execution is locked"):
         client.execute(_request(quantity=0.0002), now_ms=NOW_MS)
 
 
-def test_live_is_rejected_before_any_order_submission(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_live_status_is_hard_blocked_even_when_legacy_flags_are_set(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    database = ProjectDatabase(f"sqlite:///{tmp_path / 'live-status.db'}")
     monkeypatch.setenv("EXCHANGE_MODE", "live")
     monkeypatch.setenv("EXCHANGE_BASE_URL", "https://api.bybit.com")
     monkeypatch.setenv("EXCHANGE_API_KEY", "key")
     monkeypatch.setenv("EXCHANGE_API_SECRET", "secret")
-    with pytest.raises((ValueError, RuntimeError), match="live|Mainnet|approved"):
-        BybitExecutionClient()
+    monkeypatch.setenv("EXCHANGE_LIVE_TRADING_ENABLED", "1")
+    monkeypatch.setenv("LIVE_EXECUTION_MANUAL_UNLOCK", "1")
+    monkeypatch.setenv("EXECUTION_KILL_SWITCH", "0")
+    status = BybitExecutionClient(database=database).status()
+    assert status["live_execution_enabled"] is False
+    assert status["mainnet_execution_compiled"] is False
+    assert status["mainnet_hard_blocked"] is True
 
 
 def test_notional_cap_blocks_large_canonical_request(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _sandbox(monkeypatch, tmp_path)
+    database = _sandbox(monkeypatch, tmp_path)
     monkeypatch.setenv("TESTNET_EXECUTION_ENABLED", "1")
     monkeypatch.setenv("EXECUTION_MAX_NOTIONAL_USDT", "25")
-    client = BybitExecutionClient()
+    client = BybitExecutionClient(database=database)
     with pytest.raises(RuntimeError, match="exceeds safety cap"):
         client.execute(_request(quantity=0.01), now_ms=NOW_MS)
 
@@ -98,14 +106,17 @@ def test_stage_controller_requires_evidence(tmp_path, monkeypatch: pytest.Monkey
 
 
 def test_signed_testnet_request_returns_order_and_identity(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _sandbox(monkeypatch, tmp_path)
+    database = _sandbox(monkeypatch, tmp_path)
     monkeypatch.setenv("TESTNET_EXECUTION_ENABLED", "1")
     transport = httpx.MockTransport(
         lambda request: httpx.Response(200, json={"retCode": 0, "result": {"orderId": "abc"}})
     )
     canonical = _request(quantity=0.0002, candidate_id="candidate_phase6_accepted")
     with httpx.Client(transport=transport) as http_client:
-        result = BybitExecutionClient(client=http_client).execute(canonical, now_ms=NOW_MS)
+        result = BybitExecutionClient(client=http_client, database=database).execute(
+            canonical,
+            now_ms=NOW_MS,
+        )
     assert result.order_id == "abc"
     assert result.mode == "sandbox"
     assert result.candidate_id == canonical.candidate_id
