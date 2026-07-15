@@ -14,6 +14,7 @@ from trading_candidate import TradingDecision
 
 from .canonical_runtime import CanonicalPaperDecisionRuntime, PaperDecisionAuthorization
 from .loop import AutonomousPaperLoop
+from .trade_identity import new_trade_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +46,7 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         self.decision_runtime = decision_runtime
         self.proposal_provider = proposal_provider
         self._pending_authorization: PaperDecisionAuthorization | None = None
+        self._pending_exit_context: dict[str, str] | None = None
         self._state["peak_equity"] = max(
             float(self._state.get("peak_equity", 0.0) or 0.0),
             float(self._state.get("equity", 0.0) or 0.0),
@@ -160,34 +162,14 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
 
     def _close(self, symbol: str, price: float, reason: str) -> None:
         position = dict(self._state["positions"].get(symbol) or {})
-        decision_id = str(position.get("decision_id") or "").strip()
-        candidate_id = str(position.get("candidate_id") or "").strip()
-        super()._close(symbol, price, reason)
-        if not self._state["trades"]:
-            return
-        trade = self._state["trades"][-1]
-        if decision_id:
-            trade["decision_id"] = decision_id
-            trade["candidate_id"] = candidate_id or decision_id
-            trade["evidence_class"] = "verified_market"
-            trade["verified_market_data"] = True
-            trade["canonical_exit_protective"] = True
-            net = float(trade.get("net_pnl") or 0.0)
-            try:
-                settlement = self.decision_runtime.settle_exit(
-                    decision_id,
-                    net_pnl=net,
-                    drawdown_contribution=max(0.0, -net),
-                )
-                trade["decision_settlement"] = settlement
-                trade["reputation_recorded"] = bool(settlement.get("reputation_recorded"))
-            except Exception as exc:
-                trade["decision_settlement_error"] = f"{type(exc).__name__}: {exc}"
-                self._event(
-                    "ERROR",
-                    f"verified_settlement_error:{type(exc).__name__}: {exc}",
-                    symbol,
-                )
+        self._pending_exit_context = {
+            "decision_id": str(position.get("decision_id") or "").strip(),
+            "candidate_id": str(position.get("candidate_id") or "").strip(),
+        }
+        try:
+            super()._close(symbol, price, reason)
+        finally:
+            self._pending_exit_context = None
 
     def _trade(
         self,
@@ -199,25 +181,69 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         reason: str,
         net_pnl: float | None,
     ) -> None:
-        super()._trade(symbol, side, quantity, price, fee, reason, net_pnl)
-        if side != "BUY" or self._pending_authorization is None or not self._state["trades"]:
-            return
-        authorization = self._pending_authorization
-        trade = self._state["trades"][-1]
-        trade.update(
-            {
-                "decision_id": authorization.decision_id,
-                "candidate_id": authorization.candidate_result.candidate.candidate_id,
-                "evidence_class": "verified_market",
-                "verified_market_data": True,
-                "decision_quality_action": authorization.assessment.action,
-                "decision_quality_confidence": authorization.assessment.confidence,
-                "decision_quality_agreement": authorization.assessment.agreement,
-                "general_controller_decision": authorization.candidate_result.general_controller_decision.value,
-                "canonical_entry_authorized": True,
-                "authorization_single_use": True,
-            }
-        )
+        """Build the complete council trade before the base event persists it."""
+
+        now = self._now()
+        item: dict[str, Any] = {
+            "trade_id": new_trade_id(),
+            "created_at_ms": self._now_ms(),
+            "time": now,
+            "symbol": str(symbol).strip().upper(),
+            "side": side,
+            "quantity": float(quantity),
+            "price": float(price),
+            "fee": float(fee),
+            "net_pnl": None if net_pnl is None else float(net_pnl),
+            "reason": str(reason),
+            "source": "bybit_websocket",
+            "verified_market_data": True,
+        }
+
+        if side == "BUY" and self._pending_authorization is not None:
+            authorization = self._pending_authorization
+            item.update(
+                {
+                    "decision_id": authorization.decision_id,
+                    "candidate_id": authorization.candidate_result.candidate.candidate_id,
+                    "evidence_class": "verified_market",
+                    "verified_market_data": True,
+                    "decision_quality_action": authorization.assessment.action,
+                    "decision_quality_confidence": authorization.assessment.confidence,
+                    "decision_quality_agreement": authorization.assessment.agreement,
+                    "general_controller_decision": authorization.candidate_result.general_controller_decision.value,
+                    "canonical_entry_authorized": True,
+                    "authorization_single_use": True,
+                }
+            )
+
+        if side == "SELL" and self._pending_exit_context:
+            decision_id = self._pending_exit_context.get("decision_id", "")
+            candidate_id = self._pending_exit_context.get("candidate_id", "")
+            if decision_id:
+                item.update(
+                    {
+                        "decision_id": decision_id,
+                        "candidate_id": candidate_id or decision_id,
+                        "evidence_class": "verified_market",
+                        "verified_market_data": True,
+                        "canonical_exit_protective": True,
+                    }
+                )
+                net = float(net_pnl or 0.0)
+                try:
+                    settlement = self.decision_runtime.settle_exit(
+                        decision_id,
+                        net_pnl=net,
+                        drawdown_contribution=max(0.0, -net),
+                    )
+                    item["decision_settlement"] = settlement
+                    item["reputation_recorded"] = bool(settlement.get("reputation_recorded"))
+                except Exception as exc:
+                    item["decision_settlement_error"] = f"{type(exc).__name__}: {exc}"
+
+        self._state["trades"].append(item)
+        self._state["trades"] = self._state["trades"][-500:]
+        self._event(side, reason, symbol)
 
     def _proposal_state_snapshot(self) -> dict[str, Any]:
         return {
