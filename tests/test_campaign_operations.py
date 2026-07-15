@@ -4,10 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from campaigns.operations import (
-    CampaignOperationsService,
-    FIRST_TESTNET_CONFIRMATION,
-)
+from campaigns.operations import CampaignOperationsService, FIRST_TESTNET_CONFIRMATION
 from storage import ProjectDatabase
 
 
@@ -36,6 +33,7 @@ class _Executions:
         return {
             "managed_orders": [
                 {"order_link_id": "sai_fee", "actual_fee": 0.0125},
+                {"order_link_id": "sai_foreign", "actual_fee": 99.0},
             ]
         }
 
@@ -55,6 +53,7 @@ class _Campaign:
         self.private_stream = _PrivateStream()
         self.executions = _Executions()
         self.started = []
+        self.records = [{"order_link_id": "sai_fee"}]
 
     def list(self, *, limit: int):
         assert limit > 0
@@ -80,7 +79,7 @@ class _Campaign:
 
     def _campaign_records(self, campaign_id: str):
         assert campaign_id == "campaign_phase6"
-        return [{"order_link_id": "sai_fee"}]
+        return list(self.records)
 
     def start(self, **kwargs):
         self.started.append(kwargs)
@@ -161,6 +160,13 @@ def test_operations_snapshot_exposes_fill_identity_fee_and_report_state(tmp_path
     assert snapshot["runtime_flags_changed"] is False
 
 
+def test_fee_total_is_zero_without_campaign_bound_order_links(tmp_path) -> None:
+    service = _service(tmp_path)
+    service.campaign.records = []
+    snapshot = service.snapshot()
+    assert snapshot["active_campaign"]["fees"]["actual_fee_total"] == 0.0
+
+
 def test_first_campaign_plan_is_blocked_without_explicit_runtime_release(tmp_path, monkeypatch) -> None:
     for name in (
         "PHASE6_TESTNET_RELEASE_GATE",
@@ -197,11 +203,7 @@ def test_start_never_bypasses_failed_gates(tmp_path) -> None:
 
 def test_start_uses_existing_campaign_state_machine_after_all_gates(monkeypatch, tmp_path) -> None:
     service = _service(tmp_path)
-    monkeypatch.setattr(
-        service,
-        "first_testnet_plan",
-        lambda **_: {"can_start": True, "blockers": []},
-    )
+    monkeypatch.setattr(service, "first_testnet_plan", lambda **_: {"can_start": True, "blockers": []})
     result = service.start_first_testnet_campaign(
         experiment_id="experiment_phase6",
         scope="BTCUSDT",
