@@ -7,6 +7,8 @@ from fastapi import FastAPI, HTTPException, Request
 
 from autonomous_trading import ShadowModeTestnetBridge
 from campaigns import (
+    CampaignOperationsService,
+    FIRST_TESTNET_CONFIRMATION,
     FinalPromotionReportEngine,
     ScheduledCampaignOrchestrator,
     TestnetShadowCampaign,
@@ -34,9 +36,16 @@ def install_campaign_api(app: FastAPI) -> None:
     )
     orchestrator = ScheduledCampaignOrchestrator(database, campaign=campaign)
     reports = FinalPromotionReportEngine(database)
+    operations = CampaignOperationsService(
+        database,
+        orchestrator=orchestrator,
+        campaign=campaign,
+        reports=reports,
+    )
     app.state.scheduled_campaign_orchestrator = orchestrator
     app.state.testnet_shadow_campaign = campaign
     app.state.final_promotion_report_engine = reports
+    app.state.campaign_operations_service = operations
     _register_event(app, "startup", orchestrator.start)
     _register_event(app, "shutdown", orchestrator.stop)
 
@@ -52,6 +61,45 @@ def install_campaign_api(app: FastAPI) -> None:
             return orchestrator.tick()
         except Exception as exc:
             raise _service_error(exc) from exc
+
+    @app.get("/api/campaigns/operations")
+    def campaign_operations(request: Request) -> dict[str, Any]:
+        require_admin(request)
+        return operations.snapshot()
+
+    @app.get("/api/campaigns/first-testnet/plan")
+    def first_testnet_plan(request: Request, experiment_id: str = "") -> dict[str, Any]:
+        require_admin(request)
+        return operations.first_testnet_plan(experiment_id=experiment_id)
+
+    @app.post("/api/campaigns/first-testnet/start")
+    async def start_first_testnet(request: Request) -> dict[str, Any]:
+        principal = require_admin(request)
+        payload = await _json_body(request)
+        confirmation = str(payload.get("confirmation", ""))
+        if confirmation != FIRST_TESTNET_CONFIRMATION:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "status": "blocked",
+                    "message": "exact bounded Testnet confirmation is required",
+                    "required_confirmation": FIRST_TESTNET_CONFIRMATION,
+                },
+            )
+        try:
+            return operations.start_first_testnet_campaign(
+                experiment_id=str(payload.get("experiment_id", "")),
+                scope=str(payload.get("scope", "BTCUSDT")),
+                actor=str(getattr(principal, "username", "admin")),
+                confirmation=confirmation,
+            )
+        except (ValueError, KeyError, TypeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"status": "blocked", "message": str(exc)},
+            ) from exc
 
     @app.get("/api/campaigns/schedules")
     def schedules(request: Request) -> dict[str, Any]:
@@ -86,7 +134,7 @@ def install_campaign_api(app: FastAPI) -> None:
         rows = orchestrator.campaign.list(limit=500)
         return {"status": "ok", "count": len(rows), "campaigns": rows}
 
-    # Static path must be registered before /api/campaigns/{campaign_id}.
+    # Static paths must be registered before /api/campaigns/{campaign_id}.
     @app.get("/api/campaigns/promotion-reports")
     def promotion_reports(request: Request) -> dict[str, Any]:
         require_admin(request)
