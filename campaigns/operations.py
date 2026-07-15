@@ -1,7 +1,7 @@
 """Operational read model and gated launcher for the first bounded Testnet campaign.
 
 This service does not mutate environment variables, enable Mainnet, disable the
-kill switch or approve an experiment.  It may start a campaign only after every
+kill switch or approve an experiment. It may start a campaign only after every
 existing manual, CI, credential, private-stream and reconciliation gate is green.
 """
 from __future__ import annotations
@@ -245,12 +245,14 @@ class CampaignOperationsService:
             for item in self.campaign._campaign_records(campaign_id)
             if item.get("order_link_id")
         }
+        if not links:
+            return 0.0
         snapshot = self.campaign.executions.snapshot()
         total = 0.0
         for item in snapshot.get("managed_orders", []):
             if not isinstance(item, Mapping):
                 continue
-            if links and str(item.get("order_link_id") or "") not in links:
+            if str(item.get("order_link_id") or "") not in links:
                 continue
             try:
                 total += float(item.get("actual_fee") or 0.0)
