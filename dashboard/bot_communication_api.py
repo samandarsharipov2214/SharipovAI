@@ -93,16 +93,45 @@ def install_bot_communication_api(app: FastAPI) -> None:
         if not text:
             return {"status": "empty_message", "reply": "Напиши вопрос AI-боту."}
 
+        bus = network()
+        sender = "security_guard" if requested_bot == "general_controller" else "general_controller"
+        question = bus.send_message(
+            sender=sender,
+            recipient=requested_bot,
+            message_type="question",
+            topic="unified_chat",
+            payload={"message": text, "channel": "dashboard"},
+            priority="normal",
+        )
+        if question.get("status") != "ok":
+            return {"status": "persistence_error", "message": question, "reply": "Вопрос не сохранён."}
+
         # Prefixing guarantees the same agent routing in web, Mini App and Telegram.
         routed_text = f"{requested_bot}: {text}"
-        answer = answer_chat(routed_text, state)
+        generated = answer_chat(routed_text, state)
+        reply_text = str(generated.get("reply", "Ответ не сформирован."))
+        answer = bus.reply(
+            original_message_id=str(question["message_id"]),
+            sender=requested_bot,
+            message_type="answer",
+            payload={
+                "reply": reply_text,
+                "source_ai": generated.get("source_ai", requested_bot),
+                "intent": generated.get("intent", "agent_chat"),
+                "data": generated.get("data", {}),
+            },
+        )
+        status = "ok" if answer.get("status") == "ok" else "persistence_error"
         return {
-            "status": answer.get("status", "ok"),
+            "status": status,
             "bot": requested_bot,
-            "reply": answer.get("reply", "Ответ не сформирован."),
-            "source_ai": answer.get("source_ai", requested_bot),
-            "intent": answer.get("intent", "agent_chat"),
-            "data": answer.get("data", {}),
+            "reply": reply_text,
+            "source_ai": generated.get("source_ai", requested_bot),
+            "intent": generated.get("intent", "agent_chat"),
+            "data": generated.get("data", {}),
+            "message": question,
+            "answer": answer,
+            "thread_id": question.get("thread_id"),
         }
 
     @app.get("/api/bot-network/inbox/{bot_name}")
