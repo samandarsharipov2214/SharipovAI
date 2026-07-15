@@ -13,6 +13,7 @@ SharipovAI does not guarantee profit. It measures performance after spread, fees
 slippage, nonlinear market impact, funding, drawdown and execution failures.
 
 Binding policy: [`CONSTITUTION.md`](CONSTITUTION.md).
+Phase 6 runbook: [`docs/phase6-legacy-and-campaign-operations.md`](docs/phase6-legacy-and-campaign-operations.md).
 
 ## Canonical architecture
 
@@ -48,6 +49,9 @@ monitoring, transport, idempotency and backtesting are infrastructure, not extra
 - Experiment, final report and Champion / Challenger decisions never change runtime flags.
 - Backtests and manual approvals cannot enable Mainnet.
 - Secrets and runtime state stay outside Git, logs, metrics and experiment payloads.
+- Legacy failure classification never changes a failed CI result into success.
+- The first bounded Testnet campaign additionally requires the explicit Phase 6 release gate
+  and the exact campaign confirmation phrase.
 
 ## Main components
 
@@ -57,8 +61,9 @@ monitoring, transport, idempotency and backtesting are infrastructure, not extra
 | `dashboard/routers/execution_status.py` | Read-only execution, risk and Paper PnL status |
 | `dashboard/routers/experiments.py` | Backtest results and experiment comparison |
 | `dashboard/routers/leadership.py` | Champion / Challenger comparison and manual leadership UI |
-| `dashboard/campaign_api.py` | Scheduled campaign, cycle and final report control plane |
+| `dashboard/campaign_api.py` | Scheduled campaign, cycle, operations and final report control plane |
 | `dashboard/fill_harvester_api.py` | Runtime fill-validation status and manual trigger |
+| `dashboard/static/web2/campaign_operations_v36.js` | Schedules, active campaign, fill progress, identity and fee evidence UI |
 | `trading_candidate.py` | Fail-closed analytical candidate contract |
 | `exchange_connector/execution_contract.py` | Immutable approved execution envelope |
 | `exchange_connector/execution_idempotency.py` | Durable duplicate/unresolved protection |
@@ -70,7 +75,10 @@ monitoring, transport, idempotency and backtesting are infrastructure, not extra
 | `autonomous_trading/shadow_mode.py` | Bounded Paper/Testnet shadow planning |
 | `autonomous_trading/shadow_bridge.py` | Campaign-aware canonical Testnet bridge |
 | `autonomous_trading/startup_reconciliation.py` | Intent, journal, order and stream reconciliation |
-| `campaigns/core.py` | Scheduled Campaign Orchestrator, campaign policy and final reports |
+| `campaigns/core.py` | Campaign state machine, policy and immutable final reports |
+| `campaigns/orchestrator.py` | Non-overlapping approved campaign schedules |
+| `campaigns/operations.py` | Operational read model and gated first Testnet campaign launcher |
+| `scripts/legacy_contract_classifier.py` | Truth-preserving full-suite failure taxonomy |
 | `capital_allocation.py` | Reserve, risk, symbol and correlation allocation |
 | `risk_engine/` | Hard limits and bounded soft-risk scaling |
 | `trading_core/` | Event-driven backtest, funding, walk-forward and benchmarks |
@@ -265,6 +273,54 @@ Hard campaign policy:
 Trades created before campaign activation are not attached to a new campaign.
 An out-of-range order, orphan, duplicate or unresolved identity hard-blocks the campaign.
 
+## Phase 6 Legacy Contract Stabilization
+
+`scripts/legacy_contract_classifier.py` parses the full-suite JUnit artifact and assigns
+every failure to exactly one class:
+
+- `regression` — current behavior is broken or unresolved;
+- `stale_test` — a test targets a retired API, exact asset version or obsolete copy;
+- `environment_contamination` — runner package layout, shared state, credentials or an
+  external dependency invalidated the result.
+
+Unknown failures default to `regression`. The current 100-failure baseline classified as
+61 regressions, 30 stale tests and 9 environment-contamination failures. These counts are
+diagnostic evidence, not a release waiver.
+
+```bash
+python scripts/legacy_contract_classifier.py \
+  --junit artifacts/pytest.xml \
+  --json artifacts/legacy-contract-classification.json \
+  --markdown artifacts/legacy-contract-classification.md
+```
+
+Compatibility adapters preserve current production ownership:
+
+- configured administrator priority is independent of import order;
+- the global auth guard and legacy test hooks resolve the same signed session;
+- News restore aliases route to the canonical DB-backed network;
+- Telegram command-menu restore remains separate from canonical Mini App setup;
+- execution and Testnet bridge tests use current canonical evidence semantics.
+
+## Campaign Operations and first bounded Testnet run
+
+The `Кампании` Web2 page and `CampaignOperationsService` expose schedules, the single
+active authorization, fill progress, identity-integrity counters, actual execution fees
+and final-report readiness.
+
+The first bounded Testnet start endpoint requires every existing safety gate plus:
+
+```text
+PHASE6_TESTNET_RELEASE_GATE=green
+I_APPROVE_BOUNDED_TESTNET_SHADOW_CAMPAIGN
+```
+
+Application code does not set the release-gate environment value or enable execution
+flags. The first campaign is not considered executed until actual Bybit Testnet private
+execution evidence contains at least 20 matched fills with zero orphan, duplicate,
+unmatched and unresolved records. Completion generates the existing immutable final
+promotion report automatically. Promotion remains manual.
+
 ## Runtime fill validation
 
 `RuntimeFillHarvester` joins:
@@ -334,10 +390,14 @@ uvicorn dashboard:app --reload
 | `/backtest-results` | Persistent ExperimentRegistry results |
 | `/experiment-comparison?ids=exp-a,exp-b` | Side-by-side OOS comparison |
 | `/champion-challenger?scope=spot:testnet` | Champion / Challenger UI |
+| `/#campaigns` | Campaign Operations Web2 page |
 | `/api/experiments` | Experiment JSON |
 | `/api/strategy-leadership/{scope}` | Leadership snapshot and comparison |
 | `/api/campaigns/orchestrator/status` | Scheduler state |
 | `/api/campaigns/orchestrator/tick` | Admin scheduler cycle |
+| `/api/campaigns/operations` | Schedules, active campaign, fills, identity, fees and report readiness |
+| `/api/campaigns/first-testnet/plan` | Exact first-campaign release gates |
+| `/api/campaigns/first-testnet/start` | Gated bounded Testnet campaign start |
 | `/api/campaigns/schedules` | List/create approved schedules |
 | `/api/campaigns` | Campaign registry |
 | `/api/campaigns/{id}/run` | Admin campaign cycle |
@@ -362,6 +422,7 @@ AUTONOMOUS_TESTNET_BRIDGE_ENABLED=0
 FEATURE_BYBIT_PRIVATE_ORDER_WS=0
 RUNTIME_FILL_HARVESTER_ENABLED=0
 SCHEDULED_CAMPAIGN_ORCHESTRATOR_ENABLED=0
+PHASE6_TESTNET_RELEASE_GATE=blocked
 EXECUTION_KILL_SWITCH=1
 EXECUTION_MAX_NOTIONAL_USDT=25
 SHADOW_TESTNET_MAX_NOTIONAL_USDT=25
@@ -403,11 +464,24 @@ python -m pytest \
   tests/test_leadership_dashboard.py \
   -q --tb=short
 
+python -m pytest \
+  tests/test_legacy_contract_classifier.py \
+  tests/test_admin_auth_priority.py \
+  tests/test_auth_guard_middleware.py \
+  dashboard/tests/test_news_agent_network_api.py \
+  tests/test_telegram_menu_button.py \
+  tests/test_execution_stages.py \
+  tests/test_testnet_bridge.py \
+  tests/test_campaign_operations.py \
+  tests/test_campaign_operations_ui.py \
+  -q --tb=short
+
 python -m pytest -q --tb=short
 ```
 
-CI retains dependency audit, coverage, JUnit, full pytest logs and compact failure
-reports. A partial, queued or skipped suite is not a green release.
+CI retains dependency audit, coverage, JUnit, Phase 5/6 targeted logs, full pytest logs,
+legacy classification JSON/Markdown and compact failure reports. Classification cannot
+make a partial, failed, queued or skipped suite green.
 
 ## Development workflow
 
@@ -420,7 +494,8 @@ reports. A partial, queued or skipped suite is not a green release.
 7. Require 20+ matched fills and zero identity failures.
 8. Generate a final report for a separate manual decision.
 9. Resolve every ambiguous execution before retry.
-10. Merge only after complete green CI and documented rollback.
+10. Classify legacy failures but fix them before release.
+11. Merge only after complete green CI and documented rollback.
 
 ## Security
 
