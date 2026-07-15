@@ -1,14 +1,16 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-INDEX = ROOT / "dashboard" / "static" / "web2" / "index.html"
-SCRIPT = ROOT / "dashboard" / "static" / "web2" / "web2.js"
-STYLE = ROOT / "dashboard" / "static" / "web2" / "web2.css"
+WEB2 = ROOT / "dashboard" / "static" / "web2"
+INDEX = WEB2 / "index.html"
+SCRIPT = WEB2 / "web2.js"
+STYLE = WEB2 / "web2.css"
+TRUTH_GUARD = WEB2 / "truth_guard.js"
 HOST = ROOT / "dashboard" / "web2_host.py"
 
 
 def test_web2_files_exist_and_are_nonempty() -> None:
-    for path in (INDEX, SCRIPT, STYLE):
+    for path in (INDEX, SCRIPT, STYLE, TRUTH_GUARD):
         assert path.is_file(), path
         assert path.stat().st_size > 500, path
 
@@ -50,10 +52,13 @@ def test_brand_spelling_and_no_old_name() -> None:
 def test_ui_has_resilient_truthful_fallback_content() -> None:
     html = INDEX.read_text(encoding="utf-8")
     script = SCRIPT.read_text(encoding="utf-8")
+    truth = TRUTH_GUARD.read_text(encoding="utf-8")
     assert "Интерфейс не подменяет отсутствующие значения" in html
     assert "Promise.allSettled" in script
-    assert "Выдуманные сделки не отображаются" in script
-    assert "не подставляет выдуманные цены" in script
+    assert "SYNTHETIC_PHRASES" in truth
+    assert "НЕТ ПОДТВЕРЖДЁННОГО СОБЫТИЯ" in truth
+    assert "Доказательство не получено" in truth
+    assert "Math.random" not in script
 
 
 def test_single_service_asset_paths_and_no_cache_host() -> None:
@@ -62,4 +67,5 @@ def test_single_service_asset_paths_and_no_cache_host() -> None:
     assert "/static/web2/web2.css?" in html
     assert "/static/web2/web2.js?" in html
     assert "/static/web2/logo.svg?" in html
+    assert "/static/web2/truth_guard.js?" in html
     assert "no-store, no-cache, must-revalidate" in host
