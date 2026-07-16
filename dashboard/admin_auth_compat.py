@@ -1,10 +1,9 @@
-"""Import-order-safe compatibility for the configured administrator.
+"""Reload-safe compatibility for the configured administrator.
 
-A pending/inactive ``users.json`` record must never shadow the explicit
-``ADMIN_USERNAME``/``ADMIN_PASSWORD`` break-glass account.  The compatibility
-layer is deliberately installed both at package import and before every new
-``create_app()`` call so module reloads and legacy factories cannot silently
-restore the old ordering.
+The explicit ``ADMIN_USERNAME``/``ADMIN_PASSWORD`` account is the break-glass
+administrator. A pending or inactive persisted user with the same normalized name
+must never shadow it. The compatibility functions are reinstalled before every app
+factory call because legacy tests reload ``dashboard.app`` in-place.
 """
 from __future__ import annotations
 
@@ -21,12 +20,34 @@ _MAX_CLOCK_SKEW_SECONDS = 60
 
 
 def _configured_admin(app_module: Any) -> tuple[str, str]:
-    username = app_module._clean_username(os.getenv("ADMIN_USERNAME", "admin"))
-    password = os.getenv("ADMIN_PASSWORD", "")
-    return username, password
+    return (
+        app_module._clean_username(os.getenv("ADMIN_USERNAME", "admin")),
+        os.getenv("ADMIN_PASSWORD", ""),
+    )
 
 
-def _decode_admin_session(app_module: Any, request: Any) -> str | None:
+def _valid_credentials(app_module: Any, username: str, password: str) -> bool:
+    normalized = app_module._clean_username(username)
+    admin_username, admin_password = _configured_admin(app_module)
+    if admin_password and normalized == admin_username:
+        return hmac.compare_digest(str(password), admin_password)
+
+    user = app_module._user_record(app_module._load_users(), normalized)
+    if not user:
+        return False
+    if not bool(user.get("active", True)):
+        return False
+    if str(user.get("role", "user")).lower() not in {"admin", "user"}:
+        return False
+    return bool(
+        app_module.verify_password(
+            str(password),
+            str(user.get("password_hash", "")),
+        )
+    )
+
+
+def _session_username(app_module: Any, request: Any) -> str | None:
     raw = str(request.cookies.get(app_module.SESSION_COOKIE, "") or "")
     if not raw:
         return None
@@ -42,13 +63,21 @@ def _decode_admin_session(app_module: Any, request: Any) -> str | None:
         if not hmac.compare_digest(signature, expected):
             return None
         username, issued_raw, _nonce = payload.decode("utf-8").split(":", 2)
-        issued = int(issued_raw)
-        age = int(time.time()) - issued
+        age = int(time.time()) - int(issued_raw)
         if age < -_MAX_CLOCK_SKEW_SECONDS or age > int(app_module.SESSION_TTL_SECONDS):
             return None
+
         normalized = app_module._clean_username(username)
         admin_username, admin_password = _configured_admin(app_module)
-        if not admin_password or normalized != admin_username:
+        if admin_password and normalized == admin_username:
+            return normalized
+
+        user = app_module._user_record(app_module._load_users(), normalized)
+        if not user:
+            return normalized
+        if not bool(user.get("active", True)):
+            return None
+        if str(user.get("role", "")).lower() not in {"admin", "user"}:
             return None
         return normalized
     except (ValueError, TypeError, UnicodeError, base64.binascii.Error):
@@ -60,43 +89,30 @@ def _original(callable_obj: Callable[..., Any]) -> Callable[..., Any]:
 
 
 def _install_function_wrappers(app_module: Any) -> None:
-    current_credentials = app_module._valid_credentials
-    current_session = app_module._session_username
-    if getattr(current_credentials, _COMPAT_MARKER, False) and getattr(current_session, _COMPAT_MARKER, False):
-        return
-
-    original_valid_credentials = _original(current_credentials)
-    original_session_username = _original(current_session)
-
-    @wraps(original_valid_credentials)
     def valid_credentials(username: str, password: str) -> bool:
-        normalized = app_module._clean_username(username)
-        admin_username, admin_password = _configured_admin(app_module)
-        if admin_password and normalized == admin_username:
-            return hmac.compare_digest(str(password), admin_password)
-        return bool(original_valid_credentials(username, password))
+        current = importlib.import_module("dashboard.app")
+        return _valid_credentials(current, username, password)
 
-    @wraps(original_session_username)
     def session_username(request: Any) -> str | None:
-        resolved = original_session_username(request)
-        if resolved:
-            return resolved
-        return _decode_admin_session(app_module, request)
+        current = importlib.import_module("dashboard.app")
+        return _session_username(current, request)
 
     setattr(valid_credentials, _COMPAT_MARKER, True)
-    setattr(valid_credentials, "__sharipovai_original__", original_valid_credentials)
     setattr(session_username, _COMPAT_MARKER, True)
-    setattr(session_username, "__sharipovai_original__", original_session_username)
     app_module._valid_credentials = valid_credentials
     app_module._session_username = session_username
     app_module._admin_auth_compat_installed = True
 
 
-def install_admin_auth_compat() -> None:
-    """Install wrappers and make every future app factory call re-check them."""
+def install_admin_auth_compat(*, force: bool = False) -> None:
+    """Install authoritative auth functions and a reload-safe app factory wrapper."""
 
     app_module = importlib.import_module("dashboard.app")
-    _install_function_wrappers(app_module)
+    if force or not (
+        getattr(app_module._valid_credentials, _COMPAT_MARKER, False)
+        and getattr(app_module._session_username, _COMPAT_MARKER, False)
+    ):
+        _install_function_wrappers(app_module)
 
     current_create_app = app_module.create_app
     if getattr(current_create_app, _COMPAT_MARKER, False):
@@ -105,12 +121,10 @@ def install_admin_auth_compat() -> None:
 
     @wraps(original_create_app)
     def create_app(*args: Any, **kwargs: Any):
-        _install_function_wrappers(app_module)
+        current = importlib.import_module("dashboard.app")
+        _install_function_wrappers(current)
         instance = original_create_app(*args, **kwargs)
-        # Legacy middleware tests used an app-local session resolver.  Expose the
-        # canonical resolver without making it authoritative over the module.
-        if not hasattr(instance, "_session_username"):
-            instance._session_username = app_module._session_username
+        instance._session_username = current._session_username
         return instance
 
     setattr(create_app, _COMPAT_MARKER, True)
