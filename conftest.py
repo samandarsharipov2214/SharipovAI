@@ -20,7 +20,8 @@ _RESET_MARKER = "SHARIPOVAI_CI_STATE_RESET_COMPLETED"
 _LOG_MARKER = "SHARIPOVAI_CI_CLEANROOM_REPORT="
 
 
-def pytest_sessionstart(_session: pytest.Session) -> None:
+def pytest_sessionstart(session: pytest.Session) -> None:
+    del session
     if os.getenv("GITHUB_ACTIONS", "").strip().lower() not in _TRUE:
         return
     if os.getenv(_RESET_MARKER, "").strip().lower() in _TRUE:
