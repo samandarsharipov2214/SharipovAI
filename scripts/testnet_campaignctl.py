@@ -22,9 +22,13 @@ from campaigns import (
 )
 from storage import ProjectDatabase
 
+START_CONFIRMATION = "I_APPROVE_BOUNDED_TESTNET_SHADOW_CAMPAIGN"
 CYCLE_CONFIRMATION = "I_APPROVE_BOUNDED_TESTNET_CAMPAIGN_CYCLE"
 REPORT_CONFIRMATION = "I_APPROVE_IMMUTABLE_CAMPAIGN_REPORT"
 DECISION_CONFIRMATION = "I_APPROVE_MANUAL_CAMPAIGN_DECISION"
+
+if FIRST_TESTNET_CONFIRMATION != START_CONFIRMATION:
+    raise RuntimeError("campaign CLI start confirmation diverged from canonical policy")
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,7 +76,7 @@ def execute(args: argparse.Namespace, services: CampaignControlServices) -> dict
         )
 
     if command == "start":
-        _require_confirmation(args.confirmation, FIRST_TESTNET_CONFIRMATION, command)
+        _require_confirmation(args.confirmation, START_CONFIRMATION, command)
         return services.operations.start_first_testnet_campaign(
             experiment_id=str(args.experiment_id),
             scope=str(args.scope),
