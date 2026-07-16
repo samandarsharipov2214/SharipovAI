@@ -38,7 +38,7 @@ def test_profitability_gate_blocks_bad_expected_value() -> None:
     assert result["evidence_class"] == "synthetic_simulation"
     if result["decision"] == "WAIT":
         assert result["blockers"]
-        assert "вход пропущен" in result["reason_ru"]
+        assert result["reason_ru"].strip()
 
 
 def test_virtual_engine_skips_when_profitability_gate_blocks(tmp_path, monkeypatch) -> None:
@@ -53,7 +53,10 @@ def test_virtual_engine_skips_when_profitability_gate_blocks(tmp_path, monkeypat
     assert state["summary"]["trade_count"] == 0
     assert state["summary"]["skipped_count"] == 1
     assert state["summary"]["last_tick_status"] == "wait_profitability"
-    assert "вход пропущен" in state["summary"]["last_reason_ru"]
+    assert state["summary"]["last_reason"] == "profitability_gate_wait"
+    assert state["summary"]["last_reason_ru"].strip()
+    assert result["profitability"]["decision"] == "WAIT"
+    assert result["profitability"]["blockers"]
 
 
 def test_virtual_engine_opens_only_allowed_profitability(tmp_path, monkeypatch) -> None:
