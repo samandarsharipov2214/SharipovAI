@@ -34,7 +34,7 @@ concurrency:
   group: final-ci-verification-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
-x-safe-env: &safe-env
+env:
   PYTHONUNBUFFERED: '1'
   PYTHONDONTWRITEBYTECODE: '1'
   ADMIN_USERNAME: ci-admin
@@ -65,7 +65,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      <<: *safe-env
       DATABASE_URL: sqlite:////tmp/sharipovai-final-contracts-${{ github.run_id }}.db
       AUTONOMOUS_PAPER_STATE_FILE: /tmp/sharipovai-final-contracts-paper-${{ github.run_id }}.json
       VIRTUAL_ACCOUNT_STATE_FILE: /tmp/sharipovai-final-contracts-virtual-${{ github.run_id }}.json
@@ -118,7 +117,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      <<: *safe-env
       DATABASE_URL: sqlite:////tmp/sharipovai-final-guardrails-${{ github.run_id }}.db
       AUTONOMOUS_PAPER_STATE_FILE: /tmp/sharipovai-final-guardrails-paper-${{ github.run_id }}.json
       VIRTUAL_ACCOUNT_STATE_FILE: /tmp/sharipovai-final-guardrails-virtual-${{ github.run_id }}.json
@@ -162,7 +160,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
-      <<: *safe-env
       DATABASE_URL: sqlite:////tmp/sharipovai-final-full-${{ github.run_id }}.db
       AUTONOMOUS_PAPER_STATE_FILE: /tmp/sharipovai-final-full-paper-${{ github.run_id }}.json
       VIRTUAL_ACCOUNT_STATE_FILE: /tmp/sharipovai-final-full-virtual-${{ github.run_id }}.json
