@@ -26,8 +26,14 @@ def allow_all_profitability(monkeypatch) -> None:
     monkeypatch.setenv("VIRTUAL_MIN_EDGE_TO_FEE_RATIO", "0")
 
 
+def isolate_state(tmp_path, monkeypatch) -> None:
+    path = str(tmp_path / "virtual-activity.json")
+    monkeypatch.setenv("VIRTUAL_ACCOUNT_STATE_FILE", path)
+    monkeypatch.setenv("PAPER_ACTIVITY_STATE_FILE", path)
+
+
 def test_paper_activity_blocks_without_verified_market_evidence(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("PAPER_ACTIVITY_STATE_FILE", str(tmp_path / "paper.json"))
+    isolate_state(tmp_path, monkeypatch)
     engine = PaperActivityEngine()
 
     result = engine.tick(force=True, now=1000)
@@ -41,7 +47,7 @@ def test_paper_activity_blocks_without_verified_market_evidence(tmp_path, monkey
 
 
 def test_verified_paper_activity_opens_trades(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("PAPER_ACTIVITY_STATE_FILE", str(tmp_path / "paper.json"))
+    isolate_state(tmp_path, monkeypatch)
     monkeypatch.setenv("PAPER_ACTIVITY_TICK_SECONDS", "60")
     allow_all_profitability(monkeypatch)
     engine = PaperActivityEngine()
@@ -58,7 +64,7 @@ def test_verified_paper_activity_opens_trades(tmp_path, monkeypatch) -> None:
 
 
 def test_paper_activity_waits_for_interval_after_verified_tick(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("PAPER_ACTIVITY_STATE_FILE", str(tmp_path / "paper.json"))
+    isolate_state(tmp_path, monkeypatch)
     monkeypatch.setenv("PAPER_ACTIVITY_TICK_SECONDS", "60")
     allow_all_profitability(monkeypatch)
     engine = PaperActivityEngine()
@@ -72,8 +78,9 @@ def test_paper_activity_waits_for_interval_after_verified_tick(tmp_path, monkeyp
 
 
 def test_paper_activity_closes_oldest_when_max_open_reached(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("PAPER_ACTIVITY_STATE_FILE", str(tmp_path / "paper.json"))
+    isolate_state(tmp_path, monkeypatch)
     monkeypatch.setenv("PAPER_ACTIVITY_MAX_OPEN", "2")
+    monkeypatch.setenv("VIRTUAL_ACCOUNT_MAX_OPEN", "2")
     allow_all_profitability(monkeypatch)
     engine = PaperActivityEngine()
 
@@ -89,7 +96,7 @@ def test_paper_activity_closes_oldest_when_max_open_reached(tmp_path, monkeypatc
 
 
 def test_catch_up_never_fabricates_missing_market_evidence(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("PAPER_ACTIVITY_STATE_FILE", str(tmp_path / "paper.json"))
+    isolate_state(tmp_path, monkeypatch)
     monkeypatch.setenv("PAPER_ACTIVITY_TICK_SECONDS", "60")
     monkeypatch.setenv("PAPER_ACTIVITY_MAX_OPEN", "20")
     engine = PaperActivityEngine()
@@ -106,8 +113,9 @@ def test_catch_up_never_fabricates_missing_market_evidence(tmp_path, monkeypatch
 
 
 def test_state_bootstrap_is_truthful_without_verified_market(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("PAPER_ACTIVITY_STATE_FILE", str(tmp_path / "paper.json"))
+    isolate_state(tmp_path, monkeypatch)
     monkeypatch.setenv("PAPER_ACTIVITY_BOOTSTRAP_TICKS", "3")
+    monkeypatch.setenv("VIRTUAL_ACCOUNT_BOOTSTRAP_TICKS", "3")
     engine = PaperActivityEngine()
 
     state = engine.state(catch_up=True)
@@ -119,7 +127,7 @@ def test_state_bootstrap_is_truthful_without_verified_market(tmp_path, monkeypat
 
 
 def test_paper_activity_reset(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("PAPER_ACTIVITY_STATE_FILE", str(tmp_path / "paper.json"))
+    isolate_state(tmp_path, monkeypatch)
     engine = PaperActivityEngine()
     engine.tick(force=True, now=1000)
 
