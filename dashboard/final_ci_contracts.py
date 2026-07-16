@@ -5,6 +5,8 @@ This module fixes route-precedence problems without weakening authentication:
 * the configured administrator is authoritative over a persisted pending record;
 * every newly created dashboard receives the contract middleware last, so stale
   compatibility middleware cannot fabricate Paper trades or shadow canonical APIs;
+* secure/admin factories may promote the same contract to the outermost layer
+  after adding their own middleware;
 * legacy virtual trades without verified price/source evidence are quarantined,
   never upgraded with invented values;
 * catch-up explicitly reports that historical prices were not fabricated.
@@ -22,17 +24,26 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
 _FACTORY_MARKER = "_sharipovai_final_ci_factory"
-_APP_MARKER = "final_ci_contracts_installed"
+_APP_LAYER_COUNTER = "final_ci_contract_layers"
 
 
-def install_final_ci_contracts(app: FastAPI | None = None) -> None:
-    """Patch reload-sensitive auth globals and finalize an application instance."""
+def install_final_ci_contracts(
+    app: FastAPI | None = None,
+    *,
+    force_outer: bool = False,
+) -> None:
+    """Patch reload-sensitive auth globals and finalize an application instance.
+
+    ``force_outer`` is used only by a factory that adds security middleware after
+    the canonical app factory. It installs one final outer layer so those
+    middleware consume the same authoritative session contract.
+    """
 
     app_module = importlib.import_module("dashboard.app")
     _install_authoritative_auth(app_module)
     _wrap_app_factory(app_module)
     if app is not None:
-        _install_app_middleware(app)
+        _install_app_middleware(app, force_outer=force_outer)
 
 
 def _install_authoritative_auth(app_module: Any) -> None:
@@ -59,6 +70,7 @@ def _install_authoritative_auth(app_module: Any) -> None:
     if secure_module is not None:
         secure_module._valid_credentials = valid_credentials
         secure_module._record_security_event = app_module._record_security_event
+        secure_module.create_app = app_module.create_app
 
     admin_module = _loaded_module("dashboard.admin_secure_app")
     if admin_module is not None:
@@ -124,10 +136,13 @@ def _install_admin_login_override(stabilization: Any, app_module: Any) -> None:
     stabilization._login = login
 
 
-def _install_app_middleware(app: FastAPI) -> None:
-    if getattr(app.state, _APP_MARKER, False):
+def _install_app_middleware(app: FastAPI, *, force_outer: bool = False) -> None:
+    layers = int(getattr(app.state, _APP_LAYER_COUNTER, 0) or 0)
+    if layers and not force_outer:
         return
-    setattr(app.state, _APP_MARKER, True)
+    if force_outer and layers >= 2:
+        return
+    setattr(app.state, _APP_LAYER_COUNTER, layers + 1)
 
     @app.middleware("http")
     async def final_ci_contracts(request: Request, call_next: Callable[..., Any]):
@@ -138,6 +153,9 @@ def _install_app_middleware(app: FastAPI) -> None:
             admin_response = await _configured_admin_login(request)
             if admin_response is not None:
                 return admin_response
+
+        if method == "GET" and path == "/api/auth/me":
+            return JSONResponse(_me_payload(request))
 
         if method == "GET" and path == "/api/auth/role":
             return JSONResponse(_role_payload(request))
@@ -159,58 +177,78 @@ def _install_app_middleware(app: FastAPI) -> None:
         return await call_next(request)
 
 
-def _configured_admin_login(request: Request):
-    async def resolve():
-        app_module = importlib.import_module("dashboard.app")
-        form = parse_qs((await request.body()).decode("utf-8"))
-        username = app_module._clean_username((form.get("username") or [""])[0])
-        password = (form.get("password") or [""])[0]
-        admin_username = app_module._clean_username(os.getenv("ADMIN_USERNAME", "admin"))
-        admin_password = os.getenv("ADMIN_PASSWORD", "")
-        if not (
-            admin_password
-            and username == admin_username
-            and hmac.compare_digest(str(password), admin_password)
-        ):
-            return None
-        next_url = app_module._safe_next_url((form.get("next") or ["/"])[0])
-        response = RedirectResponse(next_url, status_code=303)
-        response.set_cookie(
-            app_module.SESSION_COOKIE,
-            app_module._make_session(username),
-            max_age=app_module.SESSION_TTL_SECONDS,
-            httponly=True,
-            secure=app_module._is_production(),
-            samesite="lax",
-            path="/",
-        )
-        app_module._record_security_event("login", username, request)
-        return response
-
-    return resolve()
+async def _configured_admin_login(request: Request):
+    app_module = importlib.import_module("dashboard.app")
+    form = parse_qs((await request.body()).decode("utf-8"))
+    username = app_module._clean_username((form.get("username") or [""])[0])
+    password = (form.get("password") or [""])[0]
+    admin_username = app_module._clean_username(os.getenv("ADMIN_USERNAME", "admin"))
+    admin_password = os.getenv("ADMIN_PASSWORD", "")
+    if not (
+        admin_password
+        and username == admin_username
+        and hmac.compare_digest(str(password), admin_password)
+    ):
+        return None
+    next_url = app_module._safe_next_url((form.get("next") or ["/"])[0])
+    response = RedirectResponse(next_url, status_code=303)
+    response.set_cookie(
+        app_module.SESSION_COOKIE,
+        app_module._make_session(username),
+        max_age=app_module.SESSION_TTL_SECONDS,
+        httponly=True,
+        secure=app_module._is_production(),
+        samesite="lax",
+        path="/",
+    )
+    app_module._record_security_event("login", username, request)
+    return response
 
 
-def _role_payload(request: Request) -> dict[str, Any]:
+def _identity(request: Request) -> tuple[str | None, str | None]:
     app_module = importlib.import_module("dashboard.app")
     username = app_module._session_username(request)
     if not username:
-        return {"authenticated": False, "user": None, "role": None, "admin": False}
+        return None, None
 
     admin_username = app_module._clean_username(os.getenv("ADMIN_USERNAME", "admin"))
     if username == admin_username and os.getenv("ADMIN_PASSWORD", ""):
-        role = "admin"
-    else:
-        users = dict(app_module._load_users())
-        try:
-            stabilization = importlib.import_module("dashboard.stabilization_compat")
-            users.update(stabilization._load_users())
-        except Exception:
-            pass
-        record = users.get(app_module._clean_username(username))
-        role = str(record.get("role", "user")) if isinstance(record, dict) else "user"
+        return username, "admin"
 
+    users = dict(app_module._load_users())
+    try:
+        stabilization = importlib.import_module("dashboard.stabilization_compat")
+        users.update(stabilization._load_users())
+    except Exception:
+        pass
+    record = users.get(app_module._clean_username(username))
+    role = str(record.get("role", "user")) if isinstance(record, dict) else "user"
+    return username, role
+
+
+def _me_payload(request: Request) -> dict[str, Any]:
+    username, role = _identity(request)
+    if not username:
+        return {
+            "status": "anonymous",
+            "authenticated": False,
+            "username": None,
+            "role": None,
+            "admin": False,
+        }
     return {
+        "status": "ok",
         "authenticated": True,
+        "username": username,
+        "role": role,
+        "admin": role == "admin",
+    }
+
+
+def _role_payload(request: Request) -> dict[str, Any]:
+    username, role = _identity(request)
+    return {
+        "authenticated": bool(username),
         "user": username,
         "role": role,
         "admin": role == "admin",
