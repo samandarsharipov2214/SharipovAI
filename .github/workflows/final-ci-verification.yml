@@ -101,7 +101,11 @@ jobs:
             dashboard/tests/test_ai_bots_and_chat.py
 
       - name: Run regression contracts
+        id: regression
+        shell: bash
         run: |
+          mkdir -p artifacts
+          set +e
           python -m pytest \
             tests/test_admin_auth_priority.py \
             dashboard/tests/test_admin_secure_app_roles.py \
@@ -110,7 +114,26 @@ jobs:
             tests/test_ci_runtime_state.py \
             tests/test_campaign_operations.py \
             tests/test_campaign_operations_ui.py \
-            -q --tb=short
+            -q --tb=short \
+            --junitxml=artifacts/regression-contracts.xml \
+            2>&1 | tee artifacts/regression-contracts.log
+          status=${PIPESTATUS[0]}
+          echo "exit_code=${status}" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload regression evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: final-ci-regression-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Preserve regression status
+        if: always()
+        run: |
+          test "${{ steps.regression.outputs.exit_code }}" = "0"
 
   foundation-guardrails:
     name: foundation-guardrails
@@ -188,4 +211,28 @@ jobs:
           python -m pip check
 
       - name: Run complete pytest
-        run: python -m pytest -q --tb=short
+        id: full
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          set +e
+          python -m pytest -q --tb=short \
+            --junitxml=artifacts/full-suite.xml \
+            2>&1 | tee artifacts/full-suite.log
+          status=${PIPESTATUS[0]}
+          echo "exit_code=${status}" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload full-suite evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: final-ci-full-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Preserve full-suite status
+        if: always()
+        run: |
+          test "${{ steps.full.outputs.exit_code }}" = "0"
