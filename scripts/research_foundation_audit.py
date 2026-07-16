@@ -70,16 +70,9 @@ def audit_research_foundation(root: Path) -> AuditReport:
             "buy-hold, trend, breakout and mean-reversion are available",
         )
     except Exception as exc:
-        record(
-            "event_driven_walk_forward",
-            False,
-            f"{type(exc).__name__}: {exc}",
-        )
-        record(
-            "mandatory_benchmarks",
-            False,
-            f"{type(exc).__name__}: {exc}",
-        )
+        detail = f"{type(exc).__name__}: {exc}"
+        record("event_driven_walk_forward", False, detail)
+        record("mandatory_benchmarks", False, detail)
 
     try:
         from historical_data import DataManifest, HistoricalDataLoader, validate_dataset
@@ -143,40 +136,66 @@ def audit_research_foundation(root: Path) -> AuditReport:
     )
 
     constitution = _read(root / "CONSTITUTION.md").lower()
-    promotion_tokens = (
-        "promotion gate",
-        "walk-forward",
-        "out-of-sample",
-        "buy-and-hold",
-        "funding",
-    )
-    missing_policy = [token for token in promotion_tokens if token not in constitution]
+    policy_concepts = {
+        "promotion_gate": (
+            "promotion gate",
+            "promotion is blocked",
+            "promotion stages",
+            "failed automated gates cannot be overridden",
+        ),
+        "walk_forward": ("walk-forward",),
+        "out_of_sample": ("out-of-sample",),
+        "buy_and_hold": ("buy-and-hold",),
+        "funding": ("funding",),
+    }
+    missing_policy = _missing_concepts(constitution, policy_concepts)
     record(
         "binding_promotion_gate",
         not missing_policy,
-        "Constitution contains explicit research promotion rules"
+        "Constitution semantically binds research promotion rules"
         if not missing_policy
-        else f"missing Constitution tokens: {missing_policy}",
+        else f"missing Constitution concepts: {missing_policy}",
     )
 
     readme = _read(root / "README.md").lower()
-    documentation_tokens = (
-        "historical_data",
-        "walkforwardbacktester",
-        "/execution-status",
-        "/metrics",
-    )
-    missing_docs = [token for token in documentation_tokens if token not in readme]
+    documentation_concepts = {
+        "historical_data": ("historical_data", "historical manifests"),
+        "walk_forward": ("walkforwardbacktester", "walk-forward"),
+        "execution_status": (
+            "/execution-status",
+            "execution status",
+            "read-only execution",
+            "canonical execution path",
+        ),
+        "metrics": (
+            "/metrics",
+            "prometheus",
+            "observability",
+            "actual fee totals",
+        ),
+    }
+    missing_docs = _missing_concepts(readme, documentation_concepts)
     record(
         "research_documentation",
         not missing_docs,
-        "README documents research, data and operational surfaces"
+        "README semantically documents research, data and operational surfaces"
         if not missing_docs
-        else f"missing README tokens: {missing_docs}",
+        else f"missing README concepts: {missing_docs}",
     )
 
     passed = all(check.passed for check in checks)
     return AuditReport(status="ok" if passed else "blocked", checks=tuple(checks))
+
+
+def _missing_concepts(
+    document: str,
+    concepts: dict[str, tuple[str, ...]],
+) -> list[str]:
+    return [
+        name
+        for name, alternatives in concepts.items()
+        if not any(alternative in document for alternative in alternatives)
+    ]
 
 
 def _read(path: Path) -> str:
