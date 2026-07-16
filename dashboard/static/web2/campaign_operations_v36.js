@@ -4,11 +4,19 @@
   const VERSION = 36;
   const PAGE = 'campaigns';
   const CONFIRMATION = 'I_APPROVE_BOUNDED_TESTNET_SHADOW_CAMPAIGN';
+  const REFRESH_MS = 10000;
   const $ = (id) => document.getElementById(id);
   const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   }[ch]));
-  const state = { payload: null, error: '', busy: false, result: '' };
+  const state = {
+    payload: null,
+    error: '',
+    busy: false,
+    result: '',
+    loadedAt: 0,
+    timer: null,
+  };
 
   function active() {
     return (window.SharipovAIPageCoordinator?.activePage?.()
@@ -44,12 +52,18 @@
 
   function badge(status) {
     const clean = String(status || 'unknown').toLowerCase();
-    const cls = ['completed', 'ready', 'ok', 'eligible_for_manual_decision'].includes(clean)
+    const cls = ['completed', 'ready', 'ok', 'eligible_for_manual_decision', 'approved'].includes(clean)
       ? 'ok'
-      : ['running', 'scheduled', 'active', 'waiting_for_shadow_fills'].includes(clean)
+      : ['running', 'scheduled', 'active', 'waiting_for_shadow_fills', 'deferred'].includes(clean)
         ? 'running'
         : 'blocked';
     return `<span class="campaign36-badge ${cls}">${esc(clean.toUpperCase())}</span>`;
+  }
+
+  function selectedCampaign(payload) {
+    return payload?.active_campaign?.campaign_id
+      ? payload.active_campaign
+      : payload?.latest_campaign || {};
   }
 
   function campaignPanel(campaign) {
@@ -63,7 +77,7 @@
     const failed = Array.isArray(campaign.failed_gates) ? campaign.failed_gates : [];
     return `<section class="campaign36-shell">
       <article class="campaign36-hero">
-        <div><div class="campaign36-kicker">ACTIVE TESTNET SHADOW CAMPAIGN</div><h2>${esc(campaign.campaign_id)}</h2><p>${esc(campaign.experiment_id || '—')} · ${esc(campaign.scope || '—')} · цикл ${Number(campaign.cycle_count || 0)}</p></div>
+        <div><div class="campaign36-kicker">SELECTED TESTNET SHADOW CAMPAIGN</div><h2>${esc(campaign.campaign_id)}</h2><p>${esc(campaign.experiment_id || '—')} · ${esc(campaign.scope || '—')} · цикл ${Number(campaign.cycle_count || 0)}</p></div>
         ${badge(campaign.status)}
       </article>
       <section class="campaign36-grid">
@@ -115,12 +129,37 @@
         <label>Promoted experiment ID<input id="campaign36Experiment" name="experiment_id" autocomplete="off" required placeholder="experiment_..."></label>
         <label>Scope<input id="campaign36Scope" name="scope" value="BTCUSDT" required></label>
         <label class="full">Точное подтверждение<input id="campaign36Confirmation" name="confirmation" autocomplete="off" required placeholder="${CONFIRMATION}"></label>
-        <button id="campaign36Start" class="full" type="submit" ${state.busy ? 'disabled' : ''}>${state.busy ? 'Проверяю gates…' : 'Запустить bounded Testnet campaign'}</button>
+        <button id="campaign36Start" class="full" type="submit" ${state.busy ? 'disabled' : ''}>${state.busy ? 'Выполняю…' : 'Запустить bounded Testnet campaign'}</button>
       </form>
       <small>Required phrase: <code>${CONFIRMATION}</code></small>
+      <p class="campaign36-muted">Текущий plan status: ${esc(plan?.status || 'unknown')}. Нужны green CI release gate, Testnet credentials, private order+execution stream, fill harvester, scheduler, kill switch off и отдельное promoted experiment approval.</p>
+    </article>`;
+  }
+
+  function operationsPanel(payload, campaign) {
+    const terminal = ['completed', 'blocked', 'cancelled'].includes(String(campaign?.status || ''));
+    const canCycle = Boolean(campaign?.campaign_id) && !terminal;
+    const report = campaign?.final_report || {};
+    const canReport = String(campaign?.status || '') === 'completed' && !report.generated;
+    return `<article class="campaign36-launch">
+      <div class="campaign36-kicker">OPERATOR CONTROLS</div>
+      <h3>Schedule, cycle и report operations</h3>
+      <p>Все действия идут только через admin API и текущие canonical state machines. Raw order endpoint отсутствует.</p>
+      <form id="campaign36ScheduleForm" class="campaign36-form">
+        <label>Approved experiment ID<input id="campaign36ScheduleExperiment" required autocomplete="off" placeholder="experiment_..."></label>
+        <label>Scope<input id="campaign36ScheduleScope" value="BTCUSDT" required></label>
+        <label>Interval, seconds<input id="campaign36ScheduleInterval" type="number" min="60" max="86400" value="300" required></label>
+        <button type="submit" ${state.busy ? 'disabled' : ''}>Создать schedule</button>
+      </form>
+      <div class="campaign37-actions">
+        <button id="campaign36Tick" type="button" ${state.busy ? 'disabled' : ''}>Orchestrator tick</button>
+        <button id="campaign36Cycle" type="button" ${state.busy || !canCycle ? 'disabled' : ''}>Run campaign cycle</button>
+        <button id="campaign36Report" type="button" ${state.busy || !canReport ? 'disabled' : ''}>Generate final report</button>
+        <button id="campaign36Refresh" type="button" ${state.busy ? 'disabled' : ''}>Refresh snapshot</button>
+      </div>
+      <small>Selected campaign: <code>${esc(campaign?.campaign_id || 'none')}</code> · auto-refresh ${REFRESH_MS / 1000}s · last update ${fmtTime(state.loadedAt)}</small>
       ${state.result ? `<div class="campaign36-success">${esc(state.result)}</div>` : ''}
       ${state.error ? `<div class="campaign36-alert">${esc(state.error)}</div>` : ''}
-      <p class="campaign36-muted">Текущий plan status: ${esc(plan?.status || 'unknown')}. Для запуска нужны green CI release gate, Testnet credentials, private order+execution stream, fill harvester, scheduler, kill switch off и отдельное promoted experiment approval.</p>
     </article>`;
   }
 
@@ -129,12 +168,10 @@
     const out = $('content');
     if (!out) return;
     const payload = state.payload || {};
-    const activeCampaign = payload.active_campaign?.campaign_id
-      ? payload.active_campaign
-      : payload.latest_campaign;
+    const campaign = selectedCampaign(payload);
     out.innerHTML = `<div class="title"><h1>Campaign Operations</h1><p>Расписания, Testnet execution evidence, fill integrity и final promotion readiness</p></div>
       <section class="campaign36-shell">
-        <article class="campaign36-hero"><div><div class="campaign36-kicker">PHASE 6 CONTROL PLANE</div><h2>Bounded Testnet Evidence</h2><p>Single global authorization · actual private execution fees · automatic immutable report</p></div>${badge(payload.status || 'loading')}</article>
+        <article class="campaign36-hero"><div><div class="campaign36-kicker">PHASE 7 CONTROL PLANE</div><h2>Bounded Testnet Evidence</h2><p>Single global authorization · actual private execution fees · automatic immutable report</p></div>${badge(payload.status || 'loading')}</article>
         <section class="campaign36-grid">
           <article class="campaign36-card"><span>Schedules</span><strong>${Number(payload.schedule_count || 0)}</strong><small>Enabled and deferred schedules</small></article>
           <article class="campaign36-card"><span>Campaigns</span><strong>${Number(payload.campaign_count || 0)}</strong><small>Immutable campaign records</small></article>
@@ -142,47 +179,116 @@
           <article class="campaign36-card"><span>Reports</span><strong>${Number(payload.report_count || 0)}</strong><small>Final promotion evidence</small></article>
           ${gatesPanel(payload.plan)}
         </section>
-        ${campaignPanel(activeCampaign)}
+        ${campaignPanel(campaign)}
         ${schedulesTable(payload.schedules)}
+        ${operationsPanel(payload, campaign)}
         ${launchPanel(payload.plan)}
       </section>`;
-    $('campaign36LaunchForm')?.addEventListener('submit', startCampaign);
+    bindControls(campaign);
   }
 
-  async function load() {
-    if (!active()) return;
-    state.error = '';
+  function bindControls(campaign) {
+    $('campaign36LaunchForm')?.addEventListener('submit', startCampaign);
+    $('campaign36ScheduleForm')?.addEventListener('submit', createSchedule);
+    $('campaign36Tick')?.addEventListener('click', tickOrchestrator);
+    $('campaign36Cycle')?.addEventListener('click', () => runCampaignCycle(campaign?.campaign_id));
+    $('campaign36Report')?.addEventListener('click', () => generateReport(campaign?.campaign_id));
+    $('campaign36Refresh')?.addEventListener('click', () => load({ announce: true }));
+  }
+
+  async function load({ announce = false, quiet = false } = {}) {
+    if (!active() || state.busy && quiet) return;
+    if (!quiet) state.error = '';
     try {
       state.payload = await api('/api/campaigns/operations');
+      state.loadedAt = Date.now();
+      if (announce) state.result = 'Campaign Operations snapshot обновлён.';
     } catch (error) {
       state.error = `Campaign Operations API: ${error?.message || 'unknown error'}`;
     }
     render();
   }
 
-  async function startCampaign(event) {
-    event.preventDefault();
+  async function mutate(action) {
     if (state.busy) return;
-    const experiment = $('campaign36Experiment')?.value?.trim() || '';
-    const scope = $('campaign36Scope')?.value?.trim() || 'BTCUSDT';
-    const confirmation = $('campaign36Confirmation')?.value || '';
     state.busy = true;
     state.error = '';
     state.result = '';
     render();
     try {
-      const result = await api('/api/campaigns/first-testnet/start', {
-        method: 'POST',
-        body: JSON.stringify({ experiment_id: experiment, scope, confirmation }),
-      });
-      state.result = `Campaign started: ${result?.campaign?.campaign_id || 'created'}`;
-      state.payload = await api('/api/campaigns/operations');
+      state.result = await action();
+      await load({ quiet: true });
     } catch (error) {
-      state.error = error?.message || 'Запуск заблокирован';
+      state.error = error?.message || 'Операция заблокирована';
     } finally {
       state.busy = false;
       render();
     }
+  }
+
+  async function startCampaign(event) {
+    event.preventDefault();
+    const experiment = $('campaign36Experiment')?.value?.trim() || '';
+    const scope = $('campaign36Scope')?.value?.trim() || 'BTCUSDT';
+    const confirmation = $('campaign36Confirmation')?.value || '';
+    await mutate(async () => {
+      const result = await api('/api/campaigns/first-testnet/start', {
+        method: 'POST',
+        body: JSON.stringify({ experiment_id: experiment, scope, confirmation }),
+      });
+      return `Campaign started: ${result?.campaign?.campaign_id || 'created'}`;
+    });
+  }
+
+  async function createSchedule(event) {
+    event.preventDefault();
+    const experimentId = $('campaign36ScheduleExperiment')?.value?.trim() || '';
+    const scope = $('campaign36ScheduleScope')?.value?.trim() || 'BTCUSDT';
+    const intervalSeconds = Number($('campaign36ScheduleInterval')?.value || 300);
+    await mutate(async () => {
+      const result = await api('/api/campaigns/schedules', {
+        method: 'POST',
+        body: JSON.stringify({
+          experiment_id: experimentId,
+          scope,
+          interval_seconds: intervalSeconds,
+          enabled: true,
+        }),
+      });
+      return `Schedule created: ${result?.schedule?.schedule_id || 'created'}`;
+    });
+  }
+
+  async function tickOrchestrator() {
+    await mutate(async () => {
+      const result = await api('/api/campaigns/orchestrator/tick', { method: 'POST' });
+      const launched = Array.isArray(result?.launched_campaign_ids) ? result.launched_campaign_ids.length : 0;
+      const updated = Array.isArray(result?.updated_campaign_ids) ? result.updated_campaign_ids.length : 0;
+      return `Orchestrator tick: launched ${launched}, updated ${updated}.`;
+    });
+  }
+
+  async function runCampaignCycle(campaignId) {
+    if (!campaignId) return;
+    await mutate(async () => {
+      const result = await api(`/api/campaigns/${encodeURIComponent(campaignId)}/run`, { method: 'POST' });
+      return `Campaign cycle complete: ${result?.campaign?.status || 'updated'}`;
+    });
+  }
+
+  async function generateReport(campaignId) {
+    if (!campaignId) return;
+    await mutate(async () => {
+      const result = await api(`/api/campaigns/${encodeURIComponent(campaignId)}/promotion-report`, { method: 'POST' });
+      return `Final report: ${result?.report?.report_id || result?.report?.status || 'generated'}`;
+    });
+  }
+
+  function startAutoRefresh() {
+    if (state.timer) return;
+    state.timer = window.setInterval(() => {
+      if (active() && !state.busy) load({ quiet: true });
+    }, REFRESH_MS);
   }
 
   function install() {
@@ -205,6 +311,7 @@
       history.replaceState(null, '', '#campaigns');
       render();
       load();
+      startAutoRefresh();
     });
     if (location.hash === '#campaigns') button.click();
   }
