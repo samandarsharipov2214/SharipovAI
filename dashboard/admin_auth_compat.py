@@ -47,8 +47,27 @@ def _valid_credentials(app_module: Any, username: str, password: str) -> bool:
     )
 
 
+def _session_cookie_value(value: Any) -> str:
+    """Return only the cookie token while preserving cryptographic validation.
+
+    Some Starlette/httpx combinations expose a quoted Set-Cookie value together
+    with its attributes through the request cookie mapping. We accept only the
+    first cookie value segment, strip RFC quoting and still require a valid HMAC,
+    timestamp and nonce below.
+    """
+
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith('"'):
+        closing = raw.find('"', 1)
+        if closing > 1:
+            return raw[1:closing]
+    return raw.split(";", 1)[0].strip().strip('"')
+
+
 def _session_username(app_module: Any, request: Any) -> str | None:
-    raw = str(request.cookies.get(app_module.SESSION_COOKIE, "") or "")
+    raw = _session_cookie_value(request.cookies.get(app_module.SESSION_COOKIE, ""))
     if not raw:
         return None
     try:
