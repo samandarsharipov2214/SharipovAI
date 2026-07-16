@@ -1,5 +1,4 @@
 """Semantic contracts for the canonical SharipovAI Web2 Mini App shell."""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -45,13 +44,7 @@ def test_exchange_and_campaign_monitors_are_current_specialized_owners() -> None
 
     assert "exchange_execution_settings_v18.js?v=30" in index
     assert "campaign_operations_v36.js?v=36" in index
-    for marker in (
-        "Реальные исполнения",
-        "Виртуальные операции",
-        "Комиссии",
-        "Цена выхода",
-        "Реальные ордера",
-    ):
+    for marker in ("Реальные исполнения", "Виртуальные операции", "Комиссии", "Цена выхода", "Реальные ордера"):
         assert marker in execution
     for marker in (
         "10–25 USDT",
@@ -78,7 +71,9 @@ def test_current_shell_switches_existing_renderer_owners_without_legacy_rebuild(
     assert "market_terminal_v13.js" in coordinator
     assert "installMiniStyles" not in coordinator
     assert "makePanel" not in coordinator
-    assert "LEGACY_SIGNATURES" in guard
+    assert "Object.defineProperty(content, 'innerHTML'" in guard
+    assert "runtimeRenderGuard" in guard
+    assert "descriptor.set.call" in guard
 
 
 def test_current_mini_app_loads_verified_project_apis_without_raw_orders() -> None:
