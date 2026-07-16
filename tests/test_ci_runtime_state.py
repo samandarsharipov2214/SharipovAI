@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
+import conftest
 from scripts.ci_runtime_state import (
     collect_runtime_state_targets,
     execution_safety_violations,
@@ -32,6 +34,12 @@ def _safe_environment(tmp_path: Path) -> dict[str, str]:
         "EXCHANGE_BASE_URL": "https://api-testnet.bybit.com",
         "PHASE6_TESTNET_RELEASE_GATE": "blocked",
     }
+
+
+def test_pytest_sessionstart_matches_pluggy_hookspec() -> None:
+    parameters = tuple(inspect.signature(conftest.pytest_sessionstart).parameters)
+
+    assert parameters == ("session",)
 
 
 def test_collect_targets_includes_sqlite_sidecars_without_discovery(tmp_path: Path) -> None:
