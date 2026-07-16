@@ -10,18 +10,21 @@ from typing import Any
 
 from .app import app
 from .admin_auth_compat import install_admin_auth_compat
+from .final_ci_contracts import install_final_ci_contracts
 from .lifecycle_compat import ensure_event_handler_compat
 from .telegram_restore_compat import install_telegram_restore_compat
 
 install_admin_auth_compat(force=True)
+install_final_ci_contracts(app)
 install_telegram_restore_compat()
 ensure_event_handler_compat(app)
 
 
 def create_app(*args: Any, **kwargs: Any):
-    """Resolve the current app module and reinstall auth after every module reload."""
+    """Resolve the current module and apply canonical contracts after every reload."""
 
     install_admin_auth_compat(force=True)
+    install_final_ci_contracts()
     app_module = importlib.import_module("dashboard.app")
     return app_module.create_app(*args, **kwargs)
 
