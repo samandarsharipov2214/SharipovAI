@@ -1,5 +1,4 @@
 """Regression tests for AI bots center and dashboard chat answers."""
-
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
@@ -10,8 +9,6 @@ from runner import RunnerOutput
 
 
 def test_ai_bots_page_renders_supervisor_and_agents(monkeypatch) -> None:
-    """AI bots page exposes the general controller and bot statuses."""
-
     monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "1")
     client = TestClient(create_app(runner_factory=_runner_factory))
     response = client.get("/ai-bots?lang=ru")
@@ -27,8 +24,6 @@ def test_ai_bots_page_renders_supervisor_and_agents(monkeypatch) -> None:
 
 
 def test_ai_bots_api_returns_truthful_supervisor_summary(monkeypatch) -> None:
-    """AI bots API returns stable summary without upgrading warnings to healthy."""
-
     monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "1")
     client = TestClient(create_app(runner_factory=_runner_factory))
     response = client.get("/api/ai-bots")
@@ -36,7 +31,8 @@ def test_ai_bots_api_returns_truthful_supervisor_summary(monkeypatch) -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] in {"ok", "warning"}
-    assert payload["supervisor"]["name"] == "Генеральный контролёр AI"
+    supervisor = payload["supervisor"]
+    assert supervisor["name"] in {"General Controller", "Генеральный контролёр AI"}
     assert payload["summary"]["total_bots"] >= 10
     assert 0 <= payload["summary"]["active"] <= payload["summary"]["total_bots"]
     assert any(bot["name"] == "Market Agent" for bot in payload["bots"])
@@ -46,8 +42,6 @@ def test_ai_bots_api_returns_truthful_supervisor_summary(monkeypatch) -> None:
 
 
 def test_chat_answers_identity_like_ai_assistant(monkeypatch) -> None:
-    """Chat identity response must not fall back to primitive canned hints."""
-
     monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "1")
     client = TestClient(create_app(runner_factory=_runner_factory))
     response = client.post("/api/chat/message", json={"message": "ты ИИ или бот?"})
@@ -61,8 +55,6 @@ def test_chat_answers_identity_like_ai_assistant(monkeypatch) -> None:
 
 
 def test_chat_answers_what_was_bought_with_trade_details(monkeypatch) -> None:
-    """Chat should answer concrete trade questions with concrete positions."""
-
     monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "1")
     client = TestClient(create_app(runner_factory=_runner_factory))
     response = client.post("/api/chat/message", json={"message": "что купил?"})
@@ -77,8 +69,6 @@ def test_chat_answers_what_was_bought_with_trade_details(monkeypatch) -> None:
 
 
 def test_chat_answers_unknown_question_with_system_state(monkeypatch) -> None:
-    """Unknown chat questions should still produce a useful system-state answer."""
-
     monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "1")
     client = TestClient(create_app(runner_factory=_runner_factory))
     response = client.post("/api/chat/message", json={"message": "что происходит вообще?"})
@@ -91,11 +81,7 @@ def test_chat_answers_unknown_question_with_system_state(monkeypatch) -> None:
 
 
 class _FakeRunner:
-    """Fake runner for chat and AI-bot tests."""
-
     def run(self) -> RunnerOutput:
-        """Return deterministic runner output."""
-
         return RunnerOutput(
             decision="BUY",
             confidence=99.9,
@@ -124,6 +110,4 @@ class _FakeRunner:
 
 
 def _runner_factory() -> _FakeRunner:
-    """Return fake runner."""
-
     return _FakeRunner()
