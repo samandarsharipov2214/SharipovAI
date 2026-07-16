@@ -6,6 +6,20 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from dashboard import create_app
+from dashboard.admin_auth_compat import _split_signed_session
+
+
+def test_session_signature_split_is_binary_safe() -> None:
+    payload = b"pilot03:1784239000:nonce"
+    signature = b"." + bytes(range(1, 31)) + b"."
+
+    decoded_payload, decoded_signature = _split_signed_session(
+        payload + b"." + signature
+    )
+
+    assert decoded_payload == payload
+    assert decoded_signature == signature
+    assert len(decoded_signature) == 32
 
 
 def test_configured_admin_is_not_shadowed_by_pending_user(tmp_path: Path, monkeypatch) -> None:
