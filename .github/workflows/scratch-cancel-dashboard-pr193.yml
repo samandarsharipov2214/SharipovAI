@@ -1,0 +1,18 @@
+name: Scratch Cancel Dashboard PR193
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dashboard-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cancel-obsolete-run:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Obsolete PR193 dashboard run cancelled by concurrency replacement."
