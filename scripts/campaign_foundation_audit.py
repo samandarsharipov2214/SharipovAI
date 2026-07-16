@@ -203,7 +203,7 @@ def audit(root: Path) -> Report:
         "operator_control_plane",
         all(token in operator_source for token in operator_tokens)
         and "20+" in runbook
-        and "actual authenticated private fills" in runbook.lower()
+        and "actual private execution ids and fees" in runbook.lower()
         and "Synthetic fills are not evidence" in runbook,
         "operator CLI uses canonical services and runbook forbids synthetic evidence",
     )
