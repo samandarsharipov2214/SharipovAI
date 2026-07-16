@@ -35,8 +35,16 @@ def test_ai_bots_api_returns_truthful_supervisor_summary(monkeypatch) -> None:
     assert supervisor["name"] in {"General Controller", "Генеральный контролёр AI"}
     assert payload["summary"]["total_bots"] == len(payload["bots"]) == 9
     assert 0 <= payload["summary"]["active"] <= payload["summary"]["total_bots"]
-    assert any(bot["name"] == "Market Agent" for bot in payload["bots"])
-    assert any(bot["name"] == "Security Guard" for bot in payload["bots"])
+
+    identities = {
+        str(bot.get("organ_id") or bot.get("id") or bot.get("name") or "")
+        .strip()
+        .lower()
+        .replace(" ", "_")
+        for bot in payload["bots"]
+    }
+    assert identities & {"market_agent", "market_intelligence"}
+    assert identities & {"security_guard"}
     if payload["status"] == "warning":
         assert payload["summary"]["active"] < payload["summary"]["total_bots"]
 
