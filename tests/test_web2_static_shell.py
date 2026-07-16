@@ -57,7 +57,8 @@ def test_ui_has_resilient_truthful_fallback_content() -> None:
     assert "Promise.allSettled" in script
     assert "SYNTHETIC_PHRASES" in truth
     assert "НЕТ ПОДТВЕРЖДЁННОГО СОБЫТИЯ" in truth
-    assert "Доказательство не получено" in truth
+    assert "Evidence Vault" in truth
+    assert "sanitizeBotCards" in truth
     assert "Math.random" not in script
 
 
