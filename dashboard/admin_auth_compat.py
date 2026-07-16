@@ -17,6 +17,8 @@ from typing import Any, Callable
 
 _COMPAT_MARKER = "_sharipovai_admin_auth_compat"
 _MAX_CLOCK_SKEW_SECONDS = 60
+_SHA256_DIGEST_BYTES = 32
+_SESSION_SEPARATOR = b"."
 
 
 def _configured_admin(app_module: Any) -> tuple[str, str]:
@@ -48,13 +50,7 @@ def _valid_credentials(app_module: Any, username: str, password: str) -> bool:
 
 
 def _session_cookie_value(value: Any) -> str:
-    """Return only the cookie token while preserving cryptographic validation.
-
-    Some Starlette/httpx combinations expose a quoted Set-Cookie value together
-    with its attributes through the request cookie mapping. We accept only the
-    first cookie value segment, strip RFC quoting and still require a valid HMAC,
-    timestamp and nonce below.
-    """
+    """Return only the cookie token while preserving cryptographic validation."""
 
     raw = str(value or "").strip()
     if not raw:
@@ -66,6 +62,23 @@ def _session_cookie_value(value: Any) -> str:
     return raw.split(";", 1)[0].strip().strip('"')
 
 
+def _split_signed_session(decoded: bytes) -> tuple[bytes, bytes]:
+    """Split ``payload + '.' + sha256_digest`` without scanning digest bytes.
+
+    A raw SHA-256 digest is arbitrary binary and may contain ``b'.'``. Delimiter
+    search therefore makes valid sessions fail nondeterministically. The digest
+    length is fixed, so the only valid separator position is 33 bytes from the end.
+    """
+
+    minimum = _SHA256_DIGEST_BYTES + len(_SESSION_SEPARATOR) + 1
+    if len(decoded) < minimum:
+        raise ValueError("session payload is too short")
+    separator_index = len(decoded) - _SHA256_DIGEST_BYTES - len(_SESSION_SEPARATOR)
+    if decoded[separator_index:separator_index + 1] != _SESSION_SEPARATOR:
+        raise ValueError("session separator is invalid")
+    return decoded[:separator_index], decoded[-_SHA256_DIGEST_BYTES:]
+
+
 def _session_username(app_module: Any, request: Any) -> str | None:
     raw = _session_cookie_value(request.cookies.get(app_module.SESSION_COOKIE, ""))
     if not raw:
@@ -73,7 +86,7 @@ def _session_username(app_module: Any, request: Any) -> str | None:
     try:
         padding = "=" * (-len(raw) % 4)
         decoded = base64.urlsafe_b64decode((raw + padding).encode("ascii"))
-        payload, signature = decoded.rsplit(b".", 1)
+        payload, signature = _split_signed_session(decoded)
         expected = hmac.new(
             app_module._auth_secret().encode("utf-8"),
             payload,
