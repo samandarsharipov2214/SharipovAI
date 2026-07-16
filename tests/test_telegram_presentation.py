@@ -57,8 +57,15 @@ def test_market_regime_helpers_explain_mixed() -> None:
     assert "Сигналы противоречат" in market_regime_explanation("mixed")
 
 
-def test_main_keyboard_uses_clear_current_decision_label() -> None:
+def test_main_keyboard_exposes_current_navigation_without_raw_order_actions() -> None:
     keyboard = main_keyboard()
-    first_button = keyboard["inline_keyboard"][0][0]
+    rows = keyboard["inline_keyboard"]
+    buttons = [button for row in rows for button in row]
+    callbacks = {button.get("callback_data") for button in buttons if button.get("callback_data")}
+    labels = {button.get("text") for button in buttons}
 
-    assert first_button == {"text": "🟢 Сейчас: решение", "callback_data": "now"}
+    assert callbacks & {"now", "overview"}
+    assert any(label and ("Сейчас" in label or "Обзор" in label) for label in labels)
+    assert "buy" not in callbacks
+    assert "sell" not in callbacks
+    assert "place_order" not in callbacks
