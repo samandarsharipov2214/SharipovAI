@@ -3,13 +3,15 @@ name: PR192 Clean Head Verification
 on:
   push:
     branches: [ci/verify-pr192-bfc39534]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: pr192-clean-head-verification
+  group: pr192-clean-head-verification-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
