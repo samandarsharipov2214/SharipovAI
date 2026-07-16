@@ -10,11 +10,18 @@ class DummyRunner:
         raise RuntimeError("not used")
 
 
-def test_paper_activity_api_is_installed_and_truthful_without_market_evidence(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("PAPER_ACTIVITY_STATE_FILE", str(tmp_path / "paper.json"))
+def isolate_state(tmp_path, monkeypatch) -> None:
+    path = str(tmp_path / "virtual-activity.json")
+    monkeypatch.setenv("VIRTUAL_ACCOUNT_STATE_FILE", path)
+    monkeypatch.setenv("PAPER_ACTIVITY_STATE_FILE", path)
     monkeypatch.setenv("PAPER_ACTIVITY_AUTORUN_ENABLED", "0")
     monkeypatch.setenv("PAPER_ACTIVITY_BOOTSTRAP_TICKS", "0")
+    monkeypatch.setenv("VIRTUAL_ACCOUNT_BOOTSTRAP_TICKS", "1")
     monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "1")
+
+
+def test_paper_activity_api_is_installed_and_truthful_without_market_evidence(tmp_path, monkeypatch) -> None:
+    isolate_state(tmp_path, monkeypatch)
     client = TestClient(create_app(runner_factory=DummyRunner))
 
     state = client.get("/api/paper-activity/state")
@@ -42,10 +49,7 @@ def test_paper_activity_api_is_installed_and_truthful_without_market_evidence(tm
 
 
 def test_paper_activity_catch_up_never_fabricates_market_evidence(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("PAPER_ACTIVITY_STATE_FILE", str(tmp_path / "paper.json"))
-    monkeypatch.setenv("PAPER_ACTIVITY_AUTORUN_ENABLED", "0")
-    monkeypatch.setenv("PAPER_ACTIVITY_BOOTSTRAP_TICKS", "0")
-    monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "1")
+    isolate_state(tmp_path, monkeypatch)
     client = TestClient(create_app(runner_factory=DummyRunner))
 
     response = client.post("/api/paper-activity/catch-up", json={"max_ticks": 3})
@@ -59,9 +63,7 @@ def test_paper_activity_catch_up_never_fabricates_market_evidence(tmp_path, monk
 
 
 def test_launch_check_contains_paper_activity(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("PAPER_ACTIVITY_STATE_FILE", str(tmp_path / "paper.json"))
-    monkeypatch.setenv("PAPER_ACTIVITY_AUTORUN_ENABLED", "0")
-    monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "1")
+    isolate_state(tmp_path, monkeypatch)
     client = TestClient(create_app(runner_factory=DummyRunner))
 
     response = client.get("/api/launch-check")
