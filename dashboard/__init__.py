@@ -1,7 +1,7 @@
 """Dashboard package entrypoint for SharipovAI OS.
 
 Render starts ``uvicorn dashboard:app``. Feature installers placed here must be
-idempotent so Codex/tests may also import ``dashboard.app`` directly.
+idempotent so tests and recovery tools may also reload ``dashboard.app`` directly.
 """
 from __future__ import annotations
 
@@ -13,22 +13,17 @@ from .admin_auth_compat import install_admin_auth_compat
 from .lifecycle_compat import ensure_event_handler_compat
 from .telegram_restore_compat import install_telegram_restore_compat
 
-install_admin_auth_compat()
+install_admin_auth_compat(force=True)
 install_telegram_restore_compat()
 ensure_event_handler_compat(app)
 
 
 def create_app(*args: Any, **kwargs: Any):
-    """Resolve the current app module on every call and reinstall auth compatibility.
+    """Resolve the current app module and reinstall auth after every module reload."""
 
-    Some legacy tests reload ``dashboard.app``. A package-level function imported
-    before that reload must not keep a stale factory or stale credential resolver.
-    """
-
-    install_admin_auth_compat()
+    install_admin_auth_compat(force=True)
     app_module = importlib.import_module("dashboard.app")
-    factory = app_module.create_app
-    return factory(*args, **kwargs)
+    return app_module.create_app(*args, **kwargs)
 
 
 from .ai_organ_state_safe_api import install_ai_organ_state_api
