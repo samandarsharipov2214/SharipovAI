@@ -197,7 +197,7 @@
   }
 
   async function load({ announce = false, quiet = false } = {}) {
-    if (!active() || state.busy && quiet) return;
+    if (!active()) return;
     if (!quiet) state.error = '';
     try {
       state.payload = await api('/api/campaigns/operations');
