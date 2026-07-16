@@ -23,7 +23,9 @@ ensure_event_handler_compat(app)
 def create_app(*args: Any, **kwargs: Any):
     """Resolve the current module and apply canonical contracts after every reload."""
 
-    install_admin_auth_compat(force=True)
+    # final_ci_contracts installs administrator-first auth itself and wraps only a
+    # newly reloaded factory. Calling the older wrapper installer here as well
+    # would stack two wrappers on every factory invocation.
     install_final_ci_contracts()
     app_module = importlib.import_module("dashboard.app")
     return app_module.create_app(*args, **kwargs)
