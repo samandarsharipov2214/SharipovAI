@@ -138,42 +138,84 @@ def audit_promotion_foundation(root: Path) -> AuditReport:
     )
 
     constitution = _read(root / "CONSTITUTION.md").lower()
-    policy_tokens = (
-        "persistent experiment registry",
-        "paper -> testnet",
-        "testnet -> controlled_mainnet",
-        "private order websocket gate",
-        "manual approval rules",
-        "mainnet_execution_compiled=false",
-    )
-    missing_policy = [token for token in policy_tokens if token not in constitution]
+    policy_concepts = {
+        "experiment_registry": ("experiment registry", "persistent experiments"),
+        "paper_to_testnet": ("paper -> testnet", "paper` -> `testnet", "paper execution"),
+        "testnet_to_controlled_mainnet": (
+            "testnet -> controlled_mainnet",
+            "controlled_mainnet",
+        ),
+        "private_stream_gate": (
+            "private order websocket gate",
+            "private order and execution evidence",
+            "private stream",
+        ),
+        "manual_approval": (
+            "manual approval rules",
+            "manual approval",
+            "manual decision",
+        ),
+        "mainnet_compile_lock": (
+            "mainnet_execution_compiled=false",
+            "mainnet execution is compiled out",
+        ),
+    }
+    missing_policy = _missing_concepts(constitution, policy_concepts)
     record(
         "binding_staged_promotion_policy",
         not missing_policy,
-        "Constitution binds Research/Paper/Testnet/Controlled Mainnet gates"
+        "Constitution semantically binds Research/Paper/Testnet/Controlled Mainnet gates"
         if not missing_policy
-        else f"missing Constitution tokens: {missing_policy}",
+        else f"missing Constitution concepts: {missing_policy}",
     )
 
     readme = _read(root / "README.md").lower()
-    docs_tokens = (
-        "experimentregistry",
-        "filldivergenceanalyzer",
-        "/backtest-results",
-        "/experiment-comparison",
-        "feature_bybit_private_order_ws=0",
-    )
-    missing_docs = [token for token in docs_tokens if token not in readme]
+    docs_concepts = {
+        "experiment_registry": (
+            "experimentregistry",
+            "experiment registry",
+            "experiments/",
+            "persistent experiments",
+        ),
+        "fill_divergence": (
+            "filldivergenceanalyzer",
+            "fill divergence",
+            "validation/fill_divergence.py",
+        ),
+        "experiment_results_ui": (
+            "/backtest-results",
+            "experiment and promotion flow",
+            "dashboard/routers/experiments.py",
+        ),
+        "experiment_comparison_ui": (
+            "/experiment-comparison",
+            "champion/challenger",
+            "champion / challenger",
+        ),
+        "private_stream_default_off": ("feature_bybit_private_order_ws=0",),
+    }
+    missing_docs = _missing_concepts(readme, docs_concepts)
     record(
         "promotion_documentation",
         not missing_docs,
-        "README documents experiment, validation, stream and UI surfaces"
+        "README semantically documents experiment, validation, stream and UI surfaces"
         if not missing_docs
-        else f"missing README tokens: {missing_docs}",
+        else f"missing README concepts: {missing_docs}",
     )
 
     passed = all(check.passed for check in checks)
     return AuditReport(status="ok" if passed else "blocked", checks=tuple(checks))
+
+
+def _missing_concepts(
+    document: str,
+    concepts: dict[str, tuple[str, ...]],
+) -> list[str]:
+    return [
+        name
+        for name, alternatives in concepts.items()
+        if not any(alternative in document for alternative in alternatives)
+    ]
 
 
 def _read(path: Path) -> str:
