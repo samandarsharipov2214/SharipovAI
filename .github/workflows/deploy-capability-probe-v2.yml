@@ -1,0 +1,68 @@
+name: Production deploy capability probe v2
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/deploy-capability-probe-v2.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    if: >-
+      ${{
+        vars.SHARIPOVAI_SELF_HOSTED_CI == '1' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.head_ref == 'ops/deploy-main-4c219369'
+      }}
+    runs-on: [self-hosted, linux, x64, sharipovai-ci]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: 4c219369166c7707cdadeb79d476cb9200fedf46
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Collect deploy capability evidence
+        shell: bash
+        run: |
+          set +e
+          mkdir -p artifacts
+          target='4c219369166c7707cdadeb79d476cb9200fedf46'
+          checked="$(git rev-parse HEAD 2>&1)"
+          remote="$(git ls-remote origin refs/heads/main 2>&1 | awk '{print $1}')"
+          code="$(curl --silent --show-error --max-time 20 --output /tmp/probe-health --write-out '%{http_code}' https://85-137-88-17.sslip.io/health 2>/tmp/probe-curl-error)"
+          curl_rc=$?
+          watcher="$(systemctl is-active sharipovai-deploy-watcher.service 2>&1)"
+          watcher_rc=$?
+          if docker container inspect sharipovai >/dev/null 2>&1; then
+            authority='direct'
+          elif sudo -n docker container inspect sharipovai >/dev/null 2>&1; then
+            authority='passwordless-sudo'
+          else
+            authority='none'
+          fi
+          {
+            echo "TARGET_SHA=$target"
+            echo "CHECKED_SHA=$checked"
+            echo "REMOTE_MAIN_SHA=$remote"
+            echo "HEALTH_HTTP=${code:-none}"
+            echo "CURL_RC=$curl_rc"
+            echo "HEALTH_BODY=$(tr '\n' ' ' </tmp/probe-health 2>/dev/null)"
+            echo "CURL_ERROR=$(tr '\n' ' ' </tmp/probe-curl-error 2>/dev/null)"
+            echo "WATCHER_STATE=$watcher"
+            echo "WATCHER_RC=$watcher_rc"
+            echo "DOCKER_AUTHORITY=$authority"
+            echo "RUNNER_UID=$(id -u)"
+            echo "RUNNER_GID=$(id -g)"
+          } > artifacts/deploy-capability.txt
+      - name: Upload deploy capability evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: deploy-capability-${{ github.run_id }}
+          path: artifacts/deploy-capability.txt
+          if-no-files-found: error
+          retention-days: 1
