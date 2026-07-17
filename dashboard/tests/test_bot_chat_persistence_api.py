@@ -6,6 +6,7 @@ from dashboard.app import create_app
 
 
 def test_bot_chat_api_persists_question_and_answer(tmp_path, monkeypatch):
+    monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "1")
     monkeypatch.setenv("BOT_COMMUNICATION_DB", str(tmp_path / "bot.sqlite3"))
     client = TestClient(create_app())
     response = client.post("/api/bot-network/chat", json={"bot": "learning_engine", "message": "что с ошибками?"})
@@ -20,6 +21,7 @@ def test_bot_chat_api_persists_question_and_answer(tmp_path, monkeypatch):
 
 
 def test_bot_chat_api_persists_general_controller_without_self_message(tmp_path, monkeypatch):
+    monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "1")
     monkeypatch.setenv("BOT_COMMUNICATION_DB", str(tmp_path / "bot.sqlite3"))
     client = TestClient(create_app())
 
