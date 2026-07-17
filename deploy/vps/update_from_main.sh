@@ -33,10 +33,11 @@ previous_sha="$(git -C "${APP_DIR}" rev-parse HEAD)"
 compose_dir="${APP_DIR}/deploy/vps"
 rollback_started=0
 backup_exporter_tmp=""
+preflight_tmp=""
 rendered_config=""
 
 cleanup() {
-  rm -f "${backup_exporter_tmp:-}" "${rendered_config:-}"
+  rm -f "${backup_exporter_tmp:-}" "${preflight_tmp:-}" "${rendered_config:-}"
 }
 trap cleanup EXIT
 
@@ -104,8 +105,6 @@ rollback() {
   fail "new deployment was rolled back safely: ${reason}"
 }
 
-# Fetch objects without mutating the checked-out production tree. The autonomous
-# agent uses a direct HTTPS URL so it never depends on root SSH credentials.
 if [[ "${FETCH_REMOTE}" == https://github.com/* ]]; then
   log "fetching ${BRANCH} directly over HTTPS"
   git -C "${APP_DIR}" fetch --no-tags "${FETCH_REMOTE}" "${BRANCH}"
@@ -123,11 +122,22 @@ if [[ "${target_sha}" == "${previous_sha}" ]]; then
   exit 0
 fi
 
+log 'running target Phase 7 deployment preflight'
+preflight="${APP_DIR}/deploy/vps/phase7_preflight.sh"
+if git -C "${APP_DIR}" cat-file -e "${target_sha}:deploy/vps/phase7_preflight.sh" 2>/dev/null; then
+  preflight_tmp="$(mktemp)"
+  git -C "${APP_DIR}" show "${target_sha}:deploy/vps/phase7_preflight.sh" >"${preflight_tmp}"
+  chmod 0700 "${preflight_tmp}"
+  APP_DIR="${APP_DIR}" COMPOSE_DIR="${compose_dir}" bash "${preflight_tmp}"
+elif [[ -f "${preflight}" ]]; then
+  APP_DIR="${APP_DIR}" COMPOSE_DIR="${compose_dir}" bash "${preflight}"
+else
+  fail 'target deployment preflight is missing'
+fi
+
 log "creating verified backup before code update"
 backup_exporter="${APP_DIR}/deploy/vps/export_backup.sh"
 if [[ ! -f "${backup_exporter}" ]]; then
-  # Old installations may predate the exporter. Read it from the fetched target
-  # commit without resetting the production checkout.
   backup_exporter_tmp="$(mktemp)"
   git -C "${APP_DIR}" show "${target_sha}:deploy/vps/export_backup.sh" >"${backup_exporter_tmp}"
   backup_exporter="${backup_exporter_tmp}"
