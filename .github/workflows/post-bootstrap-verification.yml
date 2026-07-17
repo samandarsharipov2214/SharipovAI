@@ -1,0 +1,66 @@
+name: Post-bootstrap verification
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/post-bootstrap-verification.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: >-
+      ${{
+        vars.SHARIPOVAI_SELF_HOSTED_CI == '1' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.head_ref == 'ops/post-bootstrap-verification'
+      }}
+    runs-on: [self-hosted, linux, x64, sharipovai-ci]
+    timeout-minutes: 10
+    steps:
+      - name: Collect final VPS verification
+        shell: bash
+        run: |
+          set +e
+          mkdir -p artifacts
+          {
+            echo '=== health ==='
+            curl -sS --max-time 10 -o /tmp/local-health -w 'LOCAL_HTTP=%{http_code}\n' http://127.0.0.1:8000/health
+            cat /tmp/local-health 2>/dev/null || true
+            echo
+            curl -k -sS --max-time 15 -o /tmp/public-health -w 'PUBLIC_HTTP=%{http_code}\n' https://85-137-88-17.sslip.io/health
+            cat /tmp/public-health 2>/dev/null || true
+            echo
+            echo '=== timer ==='
+            systemctl is-active sharipovai-agent.timer 2>&1
+            systemctl is-enabled sharipovai-agent.timer 2>&1
+            systemctl show sharipovai-agent.timer -p ActiveState -p SubState -p NextElapseUSecRealtime -p LastTriggerUSec --no-pager 2>&1
+            echo '=== agent service ==='
+            systemctl show sharipovai-agent.service -p ActiveState -p SubState -p Result -p ExecMainStatus -p ExecMainCode --no-pager 2>&1
+            systemctl status sharipovai-agent.service --no-pager -l 2>&1
+            echo '=== agent status json ==='
+            cat /var/lib/sharipovai-agent/status.json 2>&1
+            echo
+            echo '=== watcher ==='
+            systemctl is-active sharipovai-deploy-watcher.service 2>&1
+            systemctl is-enabled sharipovai-deploy-watcher.service 2>&1
+            systemctl show sharipovai-deploy-watcher.service -p ActiveState -p SubState -p Result -p ExecMainStatus -p ExecMainCode --no-pager 2>&1
+            systemctl status sharipovai-deploy-watcher.service --no-pager -l 2>&1
+            echo '=== repository ==='
+            git -C /opt/sharipovai-repo rev-parse HEAD 2>&1
+            git -C /opt/sharipovai-repo status --short 2>&1
+            echo '=== recent agent logs ==='
+            journalctl -u sharipovai-agent.service -n 80 --no-pager -o short-iso 2>&1
+            echo '=== recent watcher logs ==='
+            journalctl -u sharipovai-deploy-watcher.service -n 40 --no-pager -o short-iso 2>&1
+          } > artifacts/post-bootstrap-verification.txt
+      - name: Upload verification
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: post-bootstrap-${{ github.run_id }}
+          path: artifacts/post-bootstrap-verification.txt
+          if-no-files-found: error
+          retention-days: 1
