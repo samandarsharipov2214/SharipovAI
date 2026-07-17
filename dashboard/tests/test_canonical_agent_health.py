@@ -62,7 +62,21 @@ def test_agent_health_marks_proven_check_working(monkeypatch):
     assert bot["last_action"] == "verified"
 
 
-def test_agent_health_api_is_exposed():
+def test_agent_health_api_requires_auth_by_default(monkeypatch):
+    monkeypatch.delenv("SHARIPOVAI_DISABLE_AUTH", raising=False)
+    client = TestClient(create_app())
+
+    response = client.get("/api/agent-health")
+
+    assert response.status_code == 401
+    assert response.json() == {
+        "status": "unauthorized",
+        "detail": "authentication required",
+    }
+
+
+def test_agent_health_api_is_exposed_in_explicit_test_mode(monkeypatch):
+    monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "1")
     client = TestClient(create_app())
 
     response = client.get("/api/agent-health")
