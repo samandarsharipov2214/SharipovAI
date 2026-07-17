@@ -1,0 +1,202 @@
+name: One-time protected production deploy
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-time-production-deploy.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: one-time-production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      ${{
+        vars.SHARIPOVAI_SELF_HOSTED_CI == '1' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.head_ref == 'ops/deploy-main-4c219369'
+      }}
+    runs-on: [self-hosted, linux, x64, sharipovai-ci]
+    timeout-minutes: 35
+    env:
+      TARGET_SHA: 4c219369166c7707cdadeb79d476cb9200fedf46
+      PUBLIC_URL: https://85-137-88-17.sslip.io
+      SERVICE: sharipovai
+    steps:
+      - name: Checkout exact production target
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: 4c219369166c7707cdadeb79d476cb9200fedf46
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify immutable target and public preflight
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          remote_sha="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+          test "$remote_sha" = "$TARGET_SHA"
+          curl --fail --silent --show-error --max-time 20 "$PUBLIC_URL/health" >/dev/null
+          echo "TARGET_AND_PUBLIC_PREFLIGHT_OK"
+
+      - name: Queue protected host-watcher deployment
+        id: queue
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          if docker container inspect "$SERVICE" >/dev/null 2>&1; then
+            DOCKER=(docker)
+          elif sudo -n docker container inspect "$SERVICE" >/dev/null 2>&1; then
+            DOCKER=(sudo -n docker)
+          else
+            echo "No authorized Docker path for the isolated runner." >&2
+            exit 77
+          fi
+
+          systemctl is-active --quiet sharipovai-deploy-watcher.service
+          request_id="gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          "${DOCKER[@]}" exec \
+            -e DEPLOY_REQUEST_ID="$request_id" \
+            -e DEPLOY_TARGET_SHA="$TARGET_SHA" \
+            "$SERVICE" python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          import time
+          from pathlib import Path
+
+          root = Path('/var/lib/sharipovai/deployment_control')
+          owner_path = root / 'owner.json'
+          pending_path = root / 'pending.json'
+          status_path = root / 'status.json'
+
+          owner: dict[str, object] = {}
+          try:
+              loaded = json.loads(owner_path.read_text(encoding='utf-8'))
+              if isinstance(loaded, dict):
+                  owner = loaded
+          except (OSError, json.JSONDecodeError):
+              pass
+
+          actor_id = int(owner.get('user_id') or os.getenv('TELEGRAM_ADMIN_USER_ID') or 0)
+          chat_id = int(owner.get('chat_id') or os.getenv('TELEGRAM_ADMIN_CHAT_ID') or actor_id or 0)
+          if actor_id <= 0 or chat_id <= 0:
+              raise SystemExit('Telegram deployment owner is not configured')
+
+          if pending_path.exists():
+              raise SystemExit('A deployment request already exists')
+          try:
+              current = json.loads(status_path.read_text(encoding='utf-8'))
+          except (OSError, json.JSONDecodeError):
+              current = {}
+          if isinstance(current, dict) and current.get('state') in {'queued', 'running'}:
+              raise SystemExit('A deployment is already queued or running')
+
+          request_id = os.environ['DEPLOY_REQUEST_ID']
+          now = int(time.time())
+          root.mkdir(parents=True, exist_ok=True)
+
+          def atomic(path: Path, payload: dict[str, object]) -> None:
+              temporary = path.with_name(f'{path.name}.tmp-{os.getpid()}')
+              temporary.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True), encoding='utf-8')
+              os.replace(temporary, path)
+
+          atomic(pending_path, {
+              'version': 1,
+              'request_id': request_id,
+              'action': 'deploy_main',
+              'actor_id': actor_id,
+              'chat_id': chat_id,
+              'created_at': now,
+              'target_sha': os.environ['DEPLOY_TARGET_SHA'],
+              'source': 'github_actions_owner_approved',
+          })
+          atomic(status_path, {
+              'state': 'queued',
+              'stage': 'ожидание host watcher',
+              'request_id': request_id,
+              'chat_id': chat_id,
+              'updated_at': now,
+          })
+          print('DEPLOY_REQUEST_QUEUED')
+          PY
+
+          echo "request_id=$request_id" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "${DOCKER[*]}" > /tmp/sharipovai-docker-command-${GITHUB_RUN_ID}
+
+      - name: Wait for protected deploy and verify safety
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          request_id='${{ steps.queue.outputs.request_id }}'
+          read -r -a DOCKER < /tmp/sharipovai-docker-command-${GITHUB_RUN_ID}
+          target_short="${TARGET_SHA:0:8}"
+          last_state='unknown'
+
+          for _ in $(seq 1 300); do
+            status_json="$("${DOCKER[@]}" exec "$SERVICE" python - <<'PY' 2>/dev/null || true
+          import json
+          from pathlib import Path
+          path = Path('/var/lib/sharipovai/deployment_control/status.json')
+          try:
+              value = json.loads(path.read_text(encoding='utf-8'))
+          except Exception:
+              value = {}
+          print(json.dumps(value if isinstance(value, dict) else {}, separators=(',', ':')))
+          PY
+          )"
+            if [[ -z "$status_json" ]]; then
+              sleep 5
+              continue
+            fi
+
+            state="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("state", "unknown"))' <<<"$status_json")"
+            stage="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("stage", "unknown"))' <<<"$status_json")"
+            status_request="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("request_id", ""))' <<<"$status_json")"
+            commit="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("commit", ""))' <<<"$status_json")"
+
+            if [[ "$status_request" != "$request_id" ]]; then
+              sleep 5
+              continue
+            fi
+            if [[ "$state" != "$last_state" ]]; then
+              echo "DEPLOY_STATE=$state STAGE=$stage"
+              last_state="$state"
+            fi
+            if [[ "$state" == 'success' ]]; then
+              [[ "$commit" == "$target_short" || "$TARGET_SHA" == "$commit"* || "$commit" == "${TARGET_SHA:0:${#commit}}" ]]
+              break
+            fi
+            if [[ "$state" == 'failed' ]]; then
+              echo "Protected deployment reported failure at stage: $stage" >&2
+              exit 1
+            fi
+            sleep 5
+          done
+
+          [[ "$last_state" == 'success' ]]
+          curl --fail --silent --show-error --max-time 30 "$PUBLIC_URL/health"
+          echo
+
+          "${DOCKER[@]}" exec \
+            -e EXPECTED_TARGET_SHA="$TARGET_SHA" \
+            "$SERVICE" python - <<'PY'
+          import os
+          from exchange_connector.execution_contract import MAINNET_EXECUTION_COMPILED
+
+          assert MAINNET_EXECUTION_COMPILED is False
+          assert os.getenv('EXCHANGE_LIVE_TRADING_ENABLED', '0').strip().lower() in {'', '0', 'false', 'no', 'off'}
+          assert os.getenv('TESTNET_EXECUTION_ENABLED', '0').strip().lower() in {'', '0', 'false', 'no', 'off'}
+          assert os.getenv('EXECUTION_KILL_SWITCH', '1').strip().lower() in {'1', 'true', 'yes', 'on'}
+          print('POST_DEPLOY_EXECUTION_SAFETY_OK')
+          PY
+
+          echo "PRODUCTION_DEPLOYMENT_VERIFIED=$TARGET_SHA"
