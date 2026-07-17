@@ -23,7 +23,7 @@ def test_phase7_monitor_api_is_admin_protected() -> None:
     assert '"mainnet_enabled": False' in source
 
 
-def test_phase7_ui_polls_live_private_evidence() -> None:
+def test_phase7_ui_polls_live_private_evidence_additively() -> None:
     source = JS.read_text(encoding="utf-8")
     index = INDEX.read_text(encoding="utf-8")
 
@@ -33,7 +33,10 @@ def test_phase7_ui_polls_live_private_evidence() -> None:
     assert "actual_fills" in source
     assert "actual_fee_total" in source
     assert "heartbeat_stale" in source
-    assert "Campaign Operations API/CLI" in source
+    assert "#content .campaign36-shell" in source
+    assert "phase7MonitorPanel" in source
+    assert "campaign_operations_v36.js?v=36" in index
+    assert "campaign_decision_v37.js?v=37" in index
     assert "campaign_monitor_v38.css?v=38" in index
     assert "campaign_monitor_v38.js?v=38" in index
     assert CSS.exists()
