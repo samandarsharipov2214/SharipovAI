@@ -51,6 +51,7 @@ class Phase7CampaignMonitor:
         )
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._lock = threading.RLock()
         self._state = self._load()
 
     def enabled(self) -> bool:
@@ -70,78 +71,84 @@ class Phase7CampaignMonitor:
 
     def refresh(self, *, now_ms: int | None = None) -> dict[str, Any]:
         timestamp = int(time.time() * 1000) if now_ms is None else int(now_ms)
-        operations = self.operations.snapshot()
-        selected = operations.get("active_campaign") or operations.get("latest_campaign") or {}
-        campaign_id = str(selected.get("campaign_id") or "")
-        canonical = self.campaign.get(campaign_id) if campaign_id else None
-        campaign = dict(canonical or selected or {})
-        fills = self.actual_fills(campaign_id)
-        metrics = campaign.get("metrics") if isinstance(campaign.get("metrics"), Mapping) else {}
-        target = max(
-            int((campaign.get("policy") or {}).get("minimum_matched_fills", 20))
-            if isinstance(campaign.get("policy"), Mapping)
-            else 20,
-            20,
-        )
-        matched = int(metrics.get("matched_fill_count", 0) or 0)
-        report_id = str(campaign.get("final_report_id") or "")
-        report = self.reports.get(report_id) if report_id else None
-        alerts = self._alerts(campaign, operations=operations, fills=fills, matched=matched)
-        export_path = str(self._state.get("final_report_path") or "")
-        if report and campaign_id:
-            export_path = self._export(campaign, report, fills, timestamp) or export_path
-        self._state = {
-            "status": str(campaign.get("status") or "idle"),
-            "campaign_id": campaign_id,
-            "experiment_id": str(campaign.get("experiment_id") or ""),
-            "scope": str(campaign.get("scope") or ""),
-            "checked_at_ms": timestamp,
-            "last_heartbeat_ms": timestamp,
-            "cycle_count": int(campaign.get("cycle_count", 0) or 0),
-            "progress": {
-                "matched_fills": matched,
-                "target_fills": target,
-                "remaining_fills": max(target - matched, 0),
-                "percent": round(min(matched / target * 100.0, 100.0), 2),
-            },
-            "actual_fill_count": len(fills),
-            "actual_fills": fills[-200:],
-            "actual_fee_total": round(sum(float(item["actual_fee"]) for item in fills), 12),
-            "alerts": alerts,
-            "private_stream": ((campaign.get("last_evidence") or {}).get("private_stream") or {}),
-            "final_report_id": report_id,
-            "final_report_ready": bool(report),
-            "final_report_path": export_path,
-            "runtime_flags_changed": False,
-            "mainnet_enabled": False,
-        }
-        self._save()
-        return self.snapshot(now_ms=timestamp)
+        with self._lock:
+            operations = self.operations.snapshot()
+            selected = operations.get("active_campaign") or operations.get("latest_campaign") or {}
+            campaign_id = str(selected.get("campaign_id") or "")
+            canonical = self.campaign.get(campaign_id) if campaign_id else None
+            campaign = dict(canonical or selected or {})
+            fills = self.actual_fills(campaign_id)
+            metrics = campaign.get("metrics") if isinstance(campaign.get("metrics"), Mapping) else {}
+            target = max(
+                int((campaign.get("policy") or {}).get("minimum_matched_fills", 20))
+                if isinstance(campaign.get("policy"), Mapping)
+                else 20,
+                20,
+            )
+            matched = int(metrics.get("matched_fill_count", 0) or 0)
+            report_id = str(campaign.get("final_report_id") or "")
+            report = self.reports.get(report_id) if report_id else None
+            alerts = self._alerts(campaign, operations=operations, fills=fills, matched=matched)
+            export_path = str(self._state.get("final_report_path") or "")
+            if report and campaign_id:
+                export_path = self._export(campaign, report, fills, timestamp) or export_path
+            evidence = campaign.get("last_evidence")
+            evidence = evidence if isinstance(evidence, Mapping) else {}
+            private_stream = evidence.get("private_stream")
+            private_stream = dict(private_stream) if isinstance(private_stream, Mapping) else {}
+            self._state = {
+                "status": str(campaign.get("status") or "idle"),
+                "campaign_id": campaign_id,
+                "experiment_id": str(campaign.get("experiment_id") or ""),
+                "scope": str(campaign.get("scope") or ""),
+                "checked_at_ms": timestamp,
+                "last_heartbeat_ms": timestamp,
+                "cycle_count": int(campaign.get("cycle_count", 0) or 0),
+                "progress": {
+                    "matched_fills": matched,
+                    "target_fills": target,
+                    "remaining_fills": max(target - matched, 0),
+                    "percent": round(min(matched / target * 100.0, 100.0), 2),
+                },
+                "actual_fill_count": len(fills),
+                "actual_fills": fills[-200:],
+                "actual_fee_total": round(sum(float(item["actual_fee"]) for item in fills), 12),
+                "alerts": alerts,
+                "private_stream": private_stream,
+                "final_report_id": report_id,
+                "final_report_ready": bool(report),
+                "final_report_path": export_path,
+                "runtime_flags_changed": False,
+                "mainnet_enabled": False,
+            }
+            self._save()
+            return self.snapshot(now_ms=timestamp)
 
     def snapshot(self, *, now_ms: int | None = None) -> dict[str, Any]:
         timestamp = int(time.time() * 1000) if now_ms is None else int(now_ms)
-        state = dict(self._state)
-        heartbeat = int(state.get("last_heartbeat_ms", 0) or 0)
-        age = max((timestamp - heartbeat) / 1000.0, 0.0) if heartbeat else None
-        stale = bool(
-            state.get("campaign_id")
-            and state.get("status") not in _TERMINAL
-            and (age is None or age > self.stale_after)
-        )
-        alerts = list(state.get("alerts") or [])
-        if stale:
-            alerts.append("monitor_heartbeat_stale")
-        return {
-            **state,
-            "enabled": self.enabled(),
-            "worker_running": bool(self._thread and self._thread.is_alive()),
-            "heartbeat_age_seconds": round(age, 3) if age is not None else None,
-            "heartbeat_stale": stale,
-            "alerts": sorted(set(alerts)),
-            "private_fill_source": "Bybit private execution evidence",
-            "runtime_flags_changed": False,
-            "mainnet_enabled": False,
-        }
+        with self._lock:
+            state = dict(self._state)
+            heartbeat = int(state.get("last_heartbeat_ms", 0) or 0)
+            age = max((timestamp - heartbeat) / 1000.0, 0.0) if heartbeat else None
+            stale = bool(
+                state.get("campaign_id")
+                and state.get("status") not in _TERMINAL
+                and (age is None or age > self.stale_after)
+            )
+            alerts = list(state.get("alerts") or [])
+            if stale:
+                alerts.append("monitor_heartbeat_stale")
+            return {
+                **state,
+                "enabled": self.enabled(),
+                "worker_running": bool(self._thread and self._thread.is_alive()),
+                "heartbeat_age_seconds": round(age, 3) if age is not None else None,
+                "heartbeat_stale": stale,
+                "alerts": sorted(set(alerts)),
+                "private_fill_source": "Bybit private execution evidence",
+                "runtime_flags_changed": False,
+                "mainnet_enabled": False,
+            }
 
     def actual_fills(self, campaign_id: str) -> list[dict[str, Any]]:
         if not campaign_id:
@@ -200,7 +207,9 @@ class Phase7CampaignMonitor:
             alerts.append("multiple_active_campaigns")
         if matched > len(fills):
             alerts.append("private_fill_projection_lags_matched_count")
-        private_stream = (campaign.get("last_evidence") or {}).get("private_stream") or {}
+        evidence = campaign.get("last_evidence")
+        evidence = evidence if isinstance(evidence, Mapping) else {}
+        private_stream = evidence.get("private_stream")
         if isinstance(private_stream, Mapping) and private_stream and not private_stream.get("ready"):
             alerts.append("private_stream_not_ready")
         return sorted(set(alerts))
@@ -238,14 +247,17 @@ class Phase7CampaignMonitor:
             try:
                 self.refresh()
             except Exception as exc:
-                self._state = {
-                    **self._state,
-                    "status": "degraded",
-                    "last_heartbeat_ms": int(time.time() * 1000),
-                    "alerts": sorted(set([*self._state.get("alerts", []), "monitor_refresh_error"])),
-                    "last_error": f"{type(exc).__name__}: {exc}",
-                }
-                self._save()
+                with self._lock:
+                    self._state = {
+                        **self._state,
+                        "status": "degraded",
+                        "last_heartbeat_ms": int(time.time() * 1000),
+                        "alerts": sorted(
+                            set([*self._state.get("alerts", []), "monitor_refresh_error"])
+                        ),
+                        "last_error": f"{type(exc).__name__}: {exc}",
+                    }
+                    self._save()
 
     def _load(self) -> dict[str, Any]:
         current = self.database.get_json(_STATE_NAMESPACE, "current")
