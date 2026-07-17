@@ -1,4 +1,4 @@
-"""Admin-only lifecycle and API for scheduled Testnet shadow campaigns."""
+"""Admin-only lifecycle and API for bounded Testnet campaign operations."""
 from __future__ import annotations
 
 from typing import Any, Callable
@@ -14,6 +14,7 @@ from campaigns import (
     TestnetShadowCampaign,
 )
 from campaigns.decisions import CampaignPromotionDecisionEngine
+from observability import CampaignCriticalAlertMonitor, CampaignCriticalAlertService
 from storage import ProjectDatabase
 from validation import RuntimeFillHarvester
 
@@ -48,12 +49,19 @@ def install_campaign_api(app: FastAPI) -> None:
         campaign=campaign,
         reports=reports,
     )
+    alerts = CampaignCriticalAlertService(database)
+    alert_monitor = CampaignCriticalAlertMonitor(operations.snapshot, alerts)
+
     app.state.scheduled_campaign_orchestrator = orchestrator
     app.state.testnet_shadow_campaign = campaign
     app.state.final_promotion_report_engine = reports
     app.state.campaign_promotion_decision_engine = decisions
     app.state.campaign_operations_service = operations
+    app.state.campaign_critical_alert_service = alerts
+    app.state.campaign_critical_alert_monitor = alert_monitor
     _register_event(app, "startup", orchestrator.start)
+    _register_event(app, "startup", alert_monitor.start)
+    _register_event(app, "shutdown", alert_monitor.stop)
     _register_event(app, "shutdown", orchestrator.stop)
 
     @app.get("/api/campaigns/orchestrator/status")
@@ -65,14 +73,26 @@ def install_campaign_api(app: FastAPI) -> None:
     def orchestrator_tick(request: Request) -> dict[str, Any]:
         require_admin(request)
         try:
-            return orchestrator.tick()
+            result = orchestrator.tick()
+            return {**result, "alerts": _alert_tick(alert_monitor)}
         except Exception as exc:
             raise _service_error(exc) from exc
 
     @app.get("/api/campaigns/operations")
     def campaign_operations(request: Request) -> dict[str, Any]:
         require_admin(request)
-        return operations.snapshot()
+        snapshot = operations.snapshot()
+        return {**snapshot, "alerts": _alert_tick(alert_monitor)}
+
+    @app.get("/api/campaigns/alerts")
+    def campaign_alerts(request: Request) -> dict[str, Any]:
+        require_admin(request)
+        return alert_monitor.status()
+
+    @app.post("/api/campaigns/alerts/tick")
+    def campaign_alerts_tick(request: Request) -> dict[str, Any]:
+        require_admin(request)
+        return _alert_tick(alert_monitor)
 
     @app.get("/api/campaigns/first-testnet/plan")
     def first_testnet_plan(request: Request, experiment_id: str = "") -> dict[str, Any]:
@@ -94,15 +114,17 @@ def install_campaign_api(app: FastAPI) -> None:
                 },
             )
         try:
-            return operations.start_first_testnet_campaign(
+            result = operations.start_first_testnet_campaign(
                 experiment_id=str(payload.get("experiment_id", "")),
                 scope=str(payload.get("scope", "BTCUSDT")),
                 actor=str(getattr(principal, "username", "admin")),
                 confirmation=confirmation,
             )
+            return {**result, "alerts": _alert_tick(alert_monitor)}
         except (ValueError, KeyError, TypeError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except RuntimeError as exc:
+            _alert_tick(alert_monitor)
             raise HTTPException(
                 status_code=409,
                 detail={"status": "blocked", "message": str(exc)},
@@ -133,7 +155,12 @@ def install_campaign_api(app: FastAPI) -> None:
             )
         except (ValueError, KeyError, TypeError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"status": "created", "schedule": schedule, "runtime_flags_changed": False}
+        return {
+            "status": "created",
+            "schedule": schedule,
+            "runtime_flags_changed": False,
+            "alerts": _alert_tick(alert_monitor),
+        }
 
     @app.get("/api/campaigns")
     def campaigns(request: Request) -> dict[str, Any]:
@@ -141,7 +168,6 @@ def install_campaign_api(app: FastAPI) -> None:
         rows = orchestrator.campaign.list(limit=500)
         return {"status": "ok", "count": len(rows), "campaigns": rows}
 
-    # Static paths must be registered before /api/campaigns/{campaign_id}.
     @app.get("/api/campaigns/promotion-reports")
     def promotion_reports(request: Request) -> dict[str, Any]:
         require_admin(request)
@@ -168,6 +194,7 @@ def install_campaign_api(app: FastAPI) -> None:
             "campaign": campaign_row,
             "final_promotion_report": report or {},
             "manual_promotion_decision": decision,
+            "alerts": alert_monitor.status(),
         }
 
     @app.post("/api/campaigns/{campaign_id}/run")
@@ -181,11 +208,13 @@ def install_campaign_api(app: FastAPI) -> None:
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="campaign not found") from exc
         except Exception as exc:
+            _alert_tick(alert_monitor)
             raise _service_error(exc) from exc
         return {
             "status": "ok",
             "campaign": campaign_row,
             "runtime_flags_changed": False,
+            "alerts": _alert_tick(alert_monitor),
         }
 
     @app.post("/api/campaigns/{campaign_id}/promotion-report")
@@ -214,6 +243,7 @@ def install_campaign_api(app: FastAPI) -> None:
             "manual_decision": decisions.snapshot(campaign_id),
             "manual_decision_required": True,
             "runtime_flags_changed": False,
+            "alerts": _alert_tick(alert_monitor),
         }
 
     @app.get("/api/campaigns/{campaign_id}/decision")
@@ -254,6 +284,7 @@ def install_campaign_api(app: FastAPI) -> None:
             "runtime_flags_changed": False,
             "runtime_deployment_changed": False,
             "mainnet_enabled": False,
+            "alerts": _alert_tick(alert_monitor),
         }
 
 
@@ -277,6 +308,17 @@ async def _json_body(request: Request) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="request body must be an object")
     return payload
+
+
+def _alert_tick(monitor: CampaignCriticalAlertMonitor) -> dict[str, Any]:
+    try:
+        return monitor.tick()
+    except Exception as exc:
+        return {
+            **monitor.status(),
+            "status": "error",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
 
 
 def _service_error(exc: Exception) -> HTTPException:
