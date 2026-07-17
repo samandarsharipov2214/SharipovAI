@@ -1,6 +1,6 @@
 # SharipovAI Constitution
 
-Version: `2026.07-ci-cleanroom-testnet-operations-v9`  
+Version: `2026.07-phase7-production-campaign-v10`  
 Status: **Binding development and runtime policy**
 
 This document defines non-negotiable rules for code, AI organs, configuration,
@@ -333,10 +333,36 @@ SharipovAI reports measured results after all modeled and actual available costs
 not promise guaranteed income, fabricate performance or scale capital based only on a
 backtest, confidence score or narrative.
 
+## 19. Phase 7 production supervision and deployment
+
+1. Phase 7 may add deployment preflight, recovery, monitoring, alerts and evidence export,
+   but it may not create a second exchange-write or campaign-launch path.
+2. Campaign launch remains exclusively in the canonical Campaign Operations service and
+   action-bound operator control plane.
+3. The Phase 7 Dashboard monitor is read-only. It may refresh canonical state and display
+   private fills, but it cannot change credentials, execution flags, the kill switch,
+   capital, promotion state or Mainnet availability.
+4. A displayed fill must be bound to the active campaign by canonical `orderLinkId` and
+   backed by authenticated private execution evidence. Unknown or foreign fills are excluded.
+5. Heartbeat, stream readiness, orphan, duplicate, unresolved, unmatched and report-export
+   failures must remain visible as alerts; the UI may not convert degraded evidence to green.
+6. Final report export is an atomic operational copy of canonical evidence, not a new report
+   authority. The canonical report ID and database record remain authoritative.
+7. VPS deployment must run the target commit's preflight before backup and before replacing
+   the production checkout. Preflight includes disk, Compose, safety-lock, secret-permission,
+   Docker and SQLite integrity checks.
+8. Every deployment creates a verified backup before mutation and must roll back when build,
+   health or container-state verification fails.
+9. Docker services require bounded logs, init handling, graceful shutdown, persistent data
+   volumes and explicit health checks.
+10. A campaign is never described as completed until 20+ campaign-bound private fills,
+    actual fees, clean reconciliation and the canonical final report are present.
+
 ## Change history
 
 | Version | Date | Summary |
 | --- | --- | --- |
+| `2026.07-phase7-production-campaign-v10` | 2026-07-18 | Target-commit VPS preflight, deployment hardening, read-only live campaign monitor, actual private-fill timeline, alerts and atomic final-report export. |
 | `2026.07-ci-cleanroom-testnet-operations-v9` | 2026-07-16 | Repository-wide fail-closed pytest cleanroom, bounded campaign operator CLI, first-real-Testnet runbook and action-bound manual operations. |
 | `2026.07-legacy-campaign-operations-v8` | 2026-07-15 | Truth-preserving legacy taxonomy, import-order-safe auth compatibility, Campaign Operations UI/API and gated first-campaign contract. |
 | `2026.07-scheduled-execution-evidence-v7` | 2026-07-14 | Scheduled orchestrator, private execution evidence, bounded 10–25 USDT/20-fill campaigns and final reports. |
