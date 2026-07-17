@@ -34,10 +34,15 @@ compose_dir="${APP_DIR}/deploy/vps"
 rollback_started=0
 backup_exporter_tmp=""
 preflight_tmp=""
+target_compose_tmp=""
 rendered_config=""
 
 cleanup() {
-  rm -f "${backup_exporter_tmp:-}" "${preflight_tmp:-}" "${rendered_config:-}"
+  rm -f \
+    "${backup_exporter_tmp:-}" \
+    "${preflight_tmp:-}" \
+    "${target_compose_tmp:-}" \
+    "${rendered_config:-}"
 }
 trap cleanup EXIT
 
@@ -122,27 +127,33 @@ if [[ "${target_sha}" == "${previous_sha}" ]]; then
   exit 0
 fi
 
-log 'running target Phase 7 deployment preflight'
-preflight="${APP_DIR}/deploy/vps/phase7_preflight.sh"
-if git -C "${APP_DIR}" cat-file -e "${target_sha}:deploy/vps/phase7_preflight.sh" 2>/dev/null; then
-  preflight_tmp="$(mktemp)"
-  git -C "${APP_DIR}" show "${target_sha}:deploy/vps/phase7_preflight.sh" >"${preflight_tmp}"
-  chmod 0700 "${preflight_tmp}"
-  APP_DIR="${APP_DIR}" COMPOSE_DIR="${compose_dir}" bash "${preflight_tmp}"
-elif [[ -f "${preflight}" ]]; then
-  APP_DIR="${APP_DIR}" COMPOSE_DIR="${compose_dir}" bash "${preflight}"
-else
-  fail 'target deployment preflight is missing'
-fi
+for target_path in \
+  deploy/vps/phase7_preflight.sh \
+  deploy/vps/docker-compose.yml \
+  deploy/vps/export_backup.sh; do
+  git -C "${APP_DIR}" cat-file -e "${target_sha}:${target_path}" 2>/dev/null \
+    || fail "target artifact is missing: ${target_path}"
+done
+
+log 'materializing immutable target deployment artifacts'
+preflight_tmp="$(mktemp)"
+target_compose_tmp="$(mktemp "${compose_dir}/.phase7-target-compose-XXXXXX.yml")"
+backup_exporter_tmp="$(mktemp)"
+git -C "${APP_DIR}" show "${target_sha}:deploy/vps/phase7_preflight.sh" >"${preflight_tmp}"
+git -C "${APP_DIR}" show "${target_sha}:deploy/vps/docker-compose.yml" >"${target_compose_tmp}"
+git -C "${APP_DIR}" show "${target_sha}:deploy/vps/export_backup.sh" >"${backup_exporter_tmp}"
+chmod 0700 "${preflight_tmp}" "${backup_exporter_tmp}"
+bash -n "${preflight_tmp}"
+bash -n "${backup_exporter_tmp}"
+
+log 'running immutable target Phase 7 deployment preflight'
+APP_DIR="${APP_DIR}" \
+COMPOSE_DIR="${compose_dir}" \
+PHASE7_COMPOSE_FILE="${target_compose_tmp}" \
+bash "${preflight_tmp}"
 
 log "creating verified backup before code update"
-backup_exporter="${APP_DIR}/deploy/vps/export_backup.sh"
-if [[ ! -f "${backup_exporter}" ]]; then
-  backup_exporter_tmp="$(mktemp)"
-  git -C "${APP_DIR}" show "${target_sha}:deploy/vps/export_backup.sh" >"${backup_exporter_tmp}"
-  backup_exporter="${backup_exporter_tmp}"
-fi
-APP_DIR="${APP_DIR}" COMPOSE_DIR="${compose_dir}" bash "${backup_exporter}"
+APP_DIR="${APP_DIR}" COMPOSE_DIR="${compose_dir}" bash "${backup_exporter_tmp}"
 
 trap 'rollback "unexpected error at line ${LINENO}"' ERR
 log "updating ${previous_sha} -> ${target_sha}"
