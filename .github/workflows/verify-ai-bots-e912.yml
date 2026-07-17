@@ -1,4 +1,4 @@
-name: Verify AI Bots E912
+name: Verify AI Bots 4FE
 
 on:
   pull_request:
@@ -27,11 +27,11 @@ jobs:
       - name: Checkout exact fixed commit
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          ref: e91228dd1b6079073afc007250b89eedfb25a6f5
+          ref: 4fe779a2ed86f3fd926dc924cbb3b648ecd48704
           persist-credentials: false
 
       - name: Verify exact SHA
-        run: test "$(git rev-parse HEAD)" = "e91228dd1b6079073afc007250b89eedfb25a6f5"
+        run: test "$(git rev-parse HEAD)" = "4fe779a2ed86f3fd926dc924cbb3b648ecd48704"
 
       - name: Set up Python 3.12
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
