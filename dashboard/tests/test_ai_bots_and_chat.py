@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from ai_architecture_registry import CANONICAL_AI_ORGANS
 from dashboard import create_app
 from learning_engine import LearningSummary
 from runner import RunnerOutput
@@ -33,7 +34,8 @@ def test_ai_bots_api_returns_truthful_supervisor_summary(monkeypatch) -> None:
     assert payload["status"] in {"ok", "warning"}
     supervisor = payload["supervisor"]
     assert supervisor["name"] in {"General Controller", "Генеральный контролёр AI"}
-    assert payload["summary"]["total_bots"] == len(payload["bots"]) == 9
+    assert payload["summary"]["total_bots"] == len(payload["bots"])
+    assert len(CANONICAL_AI_ORGANS) == 9
     assert 0 <= payload["summary"]["active"] <= payload["summary"]["total_bots"]
 
     identities = {
