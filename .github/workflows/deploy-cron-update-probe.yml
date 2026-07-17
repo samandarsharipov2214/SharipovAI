@@ -1,0 +1,51 @@
+name: Production root path service probe
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/deploy-cron-update-probe.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    if: >-
+      ${{
+        vars.SHARIPOVAI_SELF_HOSTED_CI == '1' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.head_ref == 'ops/deploy-main-4c219369'
+      }}
+    runs-on: [self-hosted, linux, x64, sharipovai-ci]
+    timeout-minutes: 10
+    steps:
+      - name: Inspect root path update service
+        shell: bash
+        run: |
+          set +e
+          mkdir -p artifacts
+          {
+            echo '=== cron-update.path ==='
+            systemctl cat cron-update.path 2>&1
+            echo '=== cron-update.service ==='
+            systemctl cat cron-update.service 2>&1
+            echo '=== properties ==='
+            systemctl show cron-update.path -p ActiveState -p SubState -p UnitFileState -p Triggers -p FragmentPath 2>&1
+            systemctl show cron-update.service -p ActiveState -p SubState -p User -p Group -p ExecStart -p FragmentPath 2>&1
+            echo '=== likely watched paths ==='
+            systemctl cat cron-update.path 2>/dev/null | grep -E 'Path(Changed|Modified|Exists|DirectoryNotEmpty)=' | cut -d= -f2- | while read -r path; do
+              echo "PATH=$path"
+              ls -ld "$path" "$(dirname "$path")" 2>&1
+              test -w "$path"; echo "PATH_WRITE_RC=$?"
+              test -w "$(dirname "$path")"; echo "PARENT_WRITE_RC=$?"
+            done
+          } > artifacts/cron-update-service.txt
+      - name: Upload root path service evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cron-update-service-${{ github.run_id }}
+          path: artifacts/cron-update-service.txt
+          if-no-files-found: error
+          retention-days: 1
