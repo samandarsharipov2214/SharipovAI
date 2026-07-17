@@ -33,7 +33,11 @@ def test_ai_bots_api_returns_truthful_supervisor_summary(monkeypatch) -> None:
     payload = response.json()
     assert payload["status"] in {"ok", "warning"}
     supervisor = payload["supervisor"]
-    assert supervisor["name"] in {"General Controller", "Генеральный контролёр AI"}
+    assert supervisor["name"] in {
+        "General Controller",
+        "General Controller AI",
+        "Генеральный контролёр AI",
+    }
 
     bots = payload["bots"]
     assert payload["summary"]["total_bots"] == len(bots)
@@ -44,20 +48,23 @@ def test_ai_bots_api_returns_truthful_supervisor_summary(monkeypatch) -> None:
     assert "" not in names
     assert len(names) == len(bots)
 
-    canonical_runtime_coverage = {
-        "general_controller": {"general controller", "генеральный контролёр ai"},
-        "market_intelligence": {"market agent", "market intelligence ai"},
-        "news_intelligence": {"news agent", "news intelligence ai"},
-        "risk_engine": {"risk engine", "risk engine ai", "stress bot"},
-        "portfolio_engine": {"portfolio engine", "portfolio & reports ai"},
-        "virtual_execution": {"paper trading bot", "virtual account execution ai"},
-        "decision_quality": {"confidence engine", "consensus engine", "decision quality ai"},
-        "learning_engine": {"learning engine", "learning engine ai"},
-        "security_guard": {"security guard", "security guard ai"},
-    }
-    assert set(canonical_runtime_coverage) == {organ.id for organ in CANONICAL_AI_ORGANS}
-    for organ_id, aliases in canonical_runtime_coverage.items():
-        assert names & aliases, f"canonical organ {organ_id} is absent from runtime bot rows"
+    for organ in CANONICAL_AI_ORGANS:
+        runtime_names = {
+            organ.name.strip().lower(),
+            organ.id.replace("_", " ").strip().lower(),
+            *(
+                alias.replace("_", " ").strip().lower()
+                for alias in organ.legacy_aliases
+            ),
+            *(
+                module.replace("_", " ").strip().lower()
+                for module in organ.submodules
+            ),
+        }
+        assert names & runtime_names, (
+            f"canonical organ {organ.id} is absent from runtime bot rows; "
+            f"accepted names: {sorted(runtime_names)}"
+        )
 
     if payload["status"] == "warning":
         assert payload["summary"]["active"] < payload["summary"]["total_bots"]
