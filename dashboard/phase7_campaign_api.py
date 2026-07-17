@@ -1,11 +1,12 @@
-"""Admin-only Phase 7 campaign monitoring API."""
+"""Admin-only Phase 7 campaign monitoring and critical-alert API."""
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from fastapi import FastAPI, HTTPException, Request
 
 from campaigns.phase7_monitor import Phase7CampaignMonitor
+from observability import CampaignCriticalAlertMonitor, CampaignCriticalAlertService
 from storage import ProjectDatabase
 
 from .admin_guard import install_sensitive_api_guard, require_admin
@@ -30,16 +31,31 @@ def install_phase7_campaign_api(app: FastAPI) -> None:
         operations=operations,
         reports=reports,
     )
+    alert_service = CampaignCriticalAlertService(database)
+
+    def critical_snapshot() -> Mapping[str, Any]:
+        return {
+            **operations.snapshot(),
+            "phase7_monitor": monitor.snapshot(),
+        }
+
+    alert_monitor = CampaignCriticalAlertMonitor(critical_snapshot, alert_service)
     app.state.phase7_campaign_monitor = monitor
+    app.state.campaign_critical_alert_service = alert_service
+    app.state.campaign_critical_alert_monitor = alert_monitor
     app.state.phase7_campaign_api_installed = True
     _register_event(app, "startup", monitor.start)
+    _register_event(app, "startup", alert_monitor.start)
+    _register_event(app, "shutdown", alert_monitor.stop)
     _register_event(app, "shutdown", monitor.stop)
 
     @app.get("/api/campaigns/phase7/monitor")
     def phase7_monitor(request: Request, refresh: bool = False) -> dict[str, Any]:
         require_admin(request)
         try:
-            return monitor.refresh() if refresh else monitor.snapshot()
+            snapshot = monitor.refresh() if refresh else monitor.snapshot()
+            alerts = _alert_tick(alert_monitor) if refresh else alert_monitor.status()
+            return {**snapshot, "critical_alerts": alerts}
         except Exception as exc:
             raise _service_error(exc) from exc
 
@@ -47,9 +63,20 @@ def install_phase7_campaign_api(app: FastAPI) -> None:
     def phase7_refresh(request: Request) -> dict[str, Any]:
         require_admin(request)
         try:
-            return monitor.refresh()
+            snapshot = monitor.refresh()
+            return {**snapshot, "critical_alerts": _alert_tick(alert_monitor)}
         except Exception as exc:
             raise _service_error(exc) from exc
+
+    @app.get("/api/campaigns/phase7/alerts")
+    def phase7_alerts(request: Request) -> dict[str, Any]:
+        require_admin(request)
+        return alert_monitor.status()
+
+    @app.post("/api/campaigns/phase7/alerts/refresh")
+    def phase7_alerts_refresh(request: Request) -> dict[str, Any]:
+        require_admin(request)
+        return _alert_tick(alert_monitor)
 
     @app.get("/api/campaigns/phase7/fills")
     def phase7_fills(request: Request, campaign_id: str = "") -> dict[str, Any]:
@@ -78,8 +105,20 @@ def install_phase7_campaign_api(app: FastAPI) -> None:
             "report": report or {},
             "export_path": str(snapshot.get("final_report_path") or ""),
             "actual_fills": monitor.actual_fills(str(snapshot.get("campaign_id") or "")),
+            "critical_alerts": alert_monitor.status(),
             "runtime_flags_changed": False,
             "mainnet_enabled": False,
+        }
+
+
+def _alert_tick(monitor: CampaignCriticalAlertMonitor) -> dict[str, Any]:
+    try:
+        return monitor.tick()
+    except Exception as exc:
+        return {
+            **monitor.status(),
+            "status": "error",
+            "error": f"{type(exc).__name__}: {exc}",
         }
 
 

@@ -3,6 +3,10 @@ services:
     build:
       context: ../..
       dockerfile: Dockerfile
+      args:
+        VCS_REF: ${SHARIPOVAI_RELEASE_SHA:-unknown}
+        BUILD_DATE: ${SHARIPOVAI_BUILD_DATE:-unknown}
+    image: sharipovai:${SHARIPOVAI_RELEASE_TAG:-local}
     container_name: sharipovai
     restart: unless-stopped
     init: true
@@ -21,25 +25,46 @@ services:
       PHASE7_MONITOR_INTERVAL_SECONDS: "3"
       PHASE7_MONITOR_STALE_SECONDS: "20"
       PHASE7_CAMPAIGN_REPORT_DIR: /var/lib/sharipovai/campaign_reports
+      CRITICAL_ALERT_MONITOR_ENABLED: "1"
+      EXCHANGE_MODE: sandbox
+      EXCHANGE_BASE_URL: https://api-testnet.bybit.com
       EXCHANGE_LIVE_TRADING_ENABLED: "0"
+      FEATURE_BYBIT_LIVE_EXECUTION: "0"
       EXECUTION_KILL_SWITCH: "1"
+      TESTNET_EXECUTION_ENABLED: "0"
+      AUTONOMOUS_TESTNET_ENABLED: "0"
+      AUTONOMOUS_TESTNET_BRIDGE_ENABLED: "0"
+      FEATURE_BYBIT_TESTNET: "0"
+      FEATURE_BYBIT_PRIVATE_ORDER_WS: "0"
+      RUNTIME_FILL_HARVESTER_ENABLED: "0"
+      SCHEDULED_CAMPAIGN_ORCHESTRATOR_ENABLED: "0"
+      PHASE6_TESTNET_RELEASE_GATE: blocked
     volumes:
       - sharipovai_data:/var/lib/sharipovai
     tmpfs:
-      - /tmp:size=256m,mode=1777
+      - /tmp:size=128m,mode=1777
     ports:
       - "127.0.0.1:8000:8000"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 512
     logging:
       driver: json-file
       options:
-        max-size: "10m"
+        max-size: "20m"
         max-file: "5"
     healthcheck:
-      test: ["CMD", "curl", "--fail", "--silent", "--max-time", "5", "http://127.0.0.1:8000/health"]
-      interval: 10s
-      timeout: 6s
-      retries: 6
-      start_period: 60s
+      test: ["CMD-SHELL", "curl --fail --silent --show-error --max-time 4 http://127.0.0.1:8000/health >/dev/null || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+    labels:
+      ai.sharipov.service: dashboard
+      ai.sharipov.runtime-mode: production-safe
+      ai.sharipov.mainnet-enabled: "false"
 
   caddy:
     image: caddy:2-alpine
@@ -62,7 +87,7 @@ services:
     logging:
       driver: json-file
       options:
-        max-size: "10m"
+        max-size: "20m"
         max-file: "5"
 
 volumes:

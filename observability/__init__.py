@@ -1,4 +1,5 @@
-"""Structured logs and Prometheus-ready metrics."""
+"""Structured logs, metrics and persistent critical operational alerts."""
+from .critical_alerts import CampaignCriticalAlertMonitor, CampaignCriticalAlertService
 from .metrics import (
     observe_http,
     record_backtest_failure,
@@ -15,6 +16,8 @@ from .structured_logging import (
 )
 
 __all__ = [
+    "CampaignCriticalAlertMonitor",
+    "CampaignCriticalAlertService",
     "ContextLoggerAdapter",
     "JsonFormatter",
     "configure_structured_logging",

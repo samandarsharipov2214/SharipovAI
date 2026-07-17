@@ -1,215 +1,193 @@
 # First Real Testnet Shadow Campaign Runbook
 
-Status: **not authorized until complete CI and deployed private readiness are green**.
+Status: **not completed until authenticated private execution evidence is captured.**
 
-This runbook launches one bounded Bybit Testnet shadow campaign with 10–25 USDT
-per accepted Testnet order and at least 20 matched Paper/Testnet fills. It does
-not enable Mainnet and it does not install credentials or change runtime flags.
+This runbook executes one bounded Bybit Testnet campaign. It cannot enable Mainnet, install credentials from application code, bypass reconciliation or treat synthetic fixtures as evidence.
 
-## 1. Non-negotiable prerequisites
-
-All of the following must be true on the deployed Testnet runtime:
-
-- current PR head has complete green `Tests`, `Project Guardrails` and dashboard checks;
-- `MAINNET_EXECUTION_COMPILED=False`;
-- `EXCHANGE_MODE=sandbox`;
-- `EXCHANGE_BASE_URL=https://api-testnet.bybit.com`;
-- isolated Bybit Testnet credentials are present outside Git and logs;
-- credential permissions exclude withdrawal and transfer;
-- `order` and `execution` private topics are authenticated, subscribed and fresh;
-- startup reconciliation reports `restart_safe=true`;
-- execution reconciliation has zero orphan, duplicate and unresolved identities;
-- the candidate experiment is promoted and manually approved for `testnet`;
-- no non-terminal campaign exists;
-- kill switch and execution flags are changed only by the operator deployment procedure;
-- `PHASE6_TESTNET_RELEASE_GATE=green` is set externally after CI review.
-
-A queued, skipped or partial CI run is not approval. Synthetic fills are not evidence.
-
-## 2. CI cleanroom verification
-
-Each pytest process on GitHub Actions now executes the repository-wide
-`conftest.py` cleanroom before application imports. It:
-
-1. audits that execution remains disabled and the kill switch remains enabled;
-2. rejects the production Bybit base URL;
-3. removes only explicitly configured SQLite, WAL, journal and runtime-state paths;
-4. refuses paths outside the GitHub workspace or `/tmp`;
-5. writes `artifacts/runtime-state-<pid>.json`.
-
-Manual audit without deletion:
-
-```bash
-python scripts/ci_runtime_state.py
-```
-
-Authorized CI reset:
-
-```bash
-GITHUB_ACTIONS=true python scripts/ci_runtime_state.py \
-  --apply \
-  --report artifacts/runtime-reset.json
-```
-
-Never run `--apply` with production paths.
-
-## 3. Read-only deployed snapshot
-
-```bash
-python scripts/testnet_campaignctl.py snapshot
-```
-
-Expected invariants:
-
-- `active_campaign_count` is `0` before launch;
-- `single_global_campaign_authorization` is `true`;
-- `mainnet_enabled` is `false`;
-- `runtime_flags_changed` is `false`.
-
-## 4. Evaluate the exact launch plan
-
-```bash
-python scripts/testnet_campaignctl.py plan \
-  --experiment-id '<promoted-experiment-id>' \
-  --confirmation I_APPROVE_BOUNDED_TESTNET_SHADOW_CAMPAIGN
-```
-
-Proceed only when:
-
-```json
-{
-  "status": "ready",
-  "can_start": true,
-  "blockers": []
-}
-```
-
-The command exits with status `2` while any gate is blocked.
-
-## 5. Start one bounded campaign
-
-```bash
-python scripts/testnet_campaignctl.py start \
-  --experiment-id '<promoted-experiment-id>' \
-  --scope BTCUSDT \
-  --actor '<authenticated-operator>' \
-  --confirmation I_APPROVE_BOUNDED_TESTNET_SHADOW_CAMPAIGN
-```
-
-Immediately record the returned `campaign_id`. The start record is not proof of
-execution and is not a promotion decision.
-
-## 6. Run and observe cycles
-
-The scheduled orchestrator may advance the campaign when enabled. A manual cycle
-uses the same canonical state machine:
-
-```bash
-python scripts/testnet_campaignctl.py cycle \
-  --campaign-id '<campaign-id>' \
-  --actor '<authenticated-operator>' \
-  --confirmation I_APPROVE_BOUNDED_TESTNET_CAMPAIGN_CYCLE
-```
-
-After each cycle, inspect Campaign Operations:
-
-```bash
-python scripts/testnet_campaignctl.py snapshot
-```
-
-Required completion evidence:
+## Completion contract
 
 | Evidence | Requirement |
 | --- | ---: |
 | Accepted Testnet notional | 10–25 USDT per order |
-| Matched private fills | 20+ |
+| Matched Paper/Testnet fills | 20+ |
 | Unmatched Paper fills | 0 |
 | Unmatched Testnet fills | 0 |
 | Orphan executions | 0 |
-| Duplicate order identities | 0 |
-| Conflicting execution identities | 0 |
+| Duplicate/conflicting identities | 0 |
 | Unresolved intents | 0 |
 | Actual private execution fees | Present |
-| Private `order` + `execution` health | Fresh |
+| Private `order` + `execution` stream | Authenticated and fresh |
 | Startup/execution reconciliation | Restart-safe |
+| Final report | Eligible for manual decision |
+| Mainnet | Compiled out and disabled |
 
-Any orphan, duplicate, unresolved identity or out-of-range notional hard-blocks
-the campaign. Do not repair evidence manually and do not fabricate catch-up fills.
+A campaign row, REST acceptance, screenshot, Paper-only fill or copied JSON is not proof.
 
-## 7. Divergence evidence
+## 1. Verify reviewed deployment
 
-The `RuntimeFillHarvester` joins the campaign-bound Paper trade, bridge record,
-`orderLinkId`, private order lifecycle and private execution rows. The immutable
-validation report must contain actual private execution IDs and fees.
-
-Review at minimum:
-
-- first-fill latency;
-- signed slippage;
-- requested versus filled quantity;
-- fill ratio and partial-fill rate;
-- actual fee amount, currency and divergence;
-- unmatched Paper/Testnet rows;
-- report evidence SHA-256.
-
-## 8. Final report
-
-A completed campaign generates the final promotion report automatically. The
-manual command is idempotent for the same immutable evidence:
+The deployed commit must have complete green required CI. A queued, skipped, partial or failed workflow is not approval.
 
 ```bash
-python scripts/testnet_campaignctl.py report \
+cd /opt/sharipovai-repo
+sudo APP_DIR=/opt/sharipovai-repo bash deploy/vps/update_from_main.sh
+sudo bash deploy/vps/smoke_check.sh production
+```
+
+## 2. Prepare isolated authorization
+
+```bash
+cd /opt/sharipovai-repo/deploy/vps
+cp .env.testnet-campaign.example .env.testnet-campaign
+chmod 600 .env.testnet-campaign
+```
+
+Populate only the current release gate and isolated Bybit Testnet key/secret. The key must not allow withdrawal or transfer.
+
+```bash
+python3 validate_runtime_env.py \
+  --env-file .env.vps \
+  --env-file .env.testnet-campaign \
+  --mode testnet-campaign
+```
+
+## 3. Enter bounded Testnet mode
+
+```bash
+cd /opt/sharipovai-repo
+sudo bash deploy/vps/testnet_campaign_deploy.sh \
+  I_APPROVE_BOUNDED_TESTNET_RUNTIME_DEPLOYMENT
+```
+
+The script runs target preflight, creates a verified backup, validates rendered Compose, starts the explicit Testnet override, checks health/database state and restores production-safe mode on failure.
+
+## 4. Inspect readiness
+
+```bash
+docker exec sharipovai python scripts/testnet_campaignctl.py snapshot
+```
+
+```bash
+docker exec sharipovai python scripts/testnet_campaignctl.py plan \
+  --experiment-id '<promoted-experiment-id>' \
+  --confirmation I_APPROVE_BOUNDED_TESTNET_SHADOW_CAMPAIGN
+```
+
+Proceed only when `status=ready`, `can_start=true` and `blockers=[]`.
+
+## 5. Run finite evidence collection
+
+```bash
+docker exec sharipovai python scripts/first_testnet_campaign.py \
+  --experiment-id '<promoted-experiment-id>' \
+  --scope BTCUSDT \
+  --actor '<authenticated-operator>' \
+  --max-cycles 240 \
+  --interval-seconds 15 \
+  --timeout-seconds 14400 \
+  --output-dir /var/lib/sharipovai/evidence/testnet-campaigns \
+  --start-confirmation I_APPROVE_BOUNDED_TESTNET_SHADOW_CAMPAIGN \
+  --cycle-confirmation I_APPROVE_BOUNDED_TESTNET_CAMPAIGN_CYCLE \
+  --report-confirmation I_APPROVE_IMMUTABLE_CAMPAIGN_REPORT
+```
+
+The process is finite. It returns exit code `0` only with `real_fill_evidence_confirmed=true`; otherwise it returns `2` and preserves the partial evidence bundle.
+
+## 6. Observe campaign operations
+
+Open the authenticated **Кампании** page or inspect:
+
+```text
+GET /api/campaigns/operations
+GET /api/campaigns/phase7/monitor?refresh=true
+GET /api/campaigns/phase7/fills
+GET /api/campaigns/phase7/alerts
+```
+
+Watch:
+
+- matched fills and remaining target;
+- actual private execution count and fee total;
+- unmatched Paper/Testnet counts;
+- orphan, duplicate and unresolved counters;
+- private stream freshness;
+- startup/execution reconciliation;
+- persistent critical alerts;
+- final report status and export path.
+
+## 7. Resume after operator-process interruption
+
+Do not start a second campaign. Resume the same campaign ID:
+
+```bash
+docker exec sharipovai python scripts/first_testnet_campaign.py \
+  --experiment-id '<promoted-experiment-id>' \
+  --resume-campaign-id '<campaign-id>' \
+  --scope BTCUSDT \
+  --actor '<authenticated-operator>' \
+  --output-dir /var/lib/sharipovai/evidence/testnet-campaigns \
+  --start-confirmation I_APPROVE_BOUNDED_TESTNET_SHADOW_CAMPAIGN \
+  --cycle-confirmation I_APPROVE_BOUNDED_TESTNET_CAMPAIGN_CYCLE \
+  --report-confirmation I_APPROVE_IMMUTABLE_CAMPAIGN_REPORT
+```
+
+Resume is blocked if any readiness failure exists beyond the expected `no_active_campaign` gate caused by that same running campaign.
+
+## 8. Review immutable report
+
+The completed campaign creates a canonical report automatically. Idempotent manual retrieval:
+
+```bash
+docker exec sharipovai python scripts/testnet_campaignctl.py report \
   --campaign-id '<campaign-id>' \
   --actor '<authenticated-operator>' \
   --confirmation I_APPROVE_IMMUTABLE_CAMPAIGN_REPORT
 ```
 
-The report must be `eligible_for_manual_decision`, have no failed campaign gates
-and retain `mainnet_enabled=false`.
+The report must be eligible for manual decision, contain no failed gates, retain its evidence SHA-256 and keep `mainnet_enabled=false`.
 
-## 9. Manual promotion decision
+## 9. Separate manual decision
 
-Read the campaign decision snapshot through the dashboard/API and copy the exact
-action-bound approval or rejection token. Approval cannot override a blocked report.
+Only after reviewing the final report:
 
 ```bash
-python scripts/testnet_campaignctl.py decision \
+docker exec sharipovai python scripts/testnet_campaignctl.py decision \
   --campaign-id '<campaign-id>' \
   --action approve \
-  --reason '20+ actual matched fills; zero identity failures; divergence within policy' \
+  --reason '20+ authenticated matched fills, actual fees, zero identity failures' \
   --approval-token 'CAMPAIGN_DECISION:<campaign-id>:<report-id>:APPROVE' \
   --actor '<authenticated-operator>' \
   --confirmation I_APPROVE_MANUAL_CAMPAIGN_DECISION
 ```
 
-A rejection uses the `REJECT` token. Decisions are immutable evidence only. They
-do not deploy code, change flags, allocate capital or enable Mainnet.
+Approval is evidence only. It does not deploy code, change flags, allocate capital or enable Mainnet.
 
-## 10. Abort conditions
+## 10. Close the execution window
 
-Stop advancing the campaign and restore the kill switch immediately when any of
-the following appears:
+Always restore locks after completion, failure, timeout or abort:
 
-- stale or disconnected private stream;
+```bash
+sudo bash deploy/vps/testnet_campaign_stop.sh \
+  I_APPROVE_RESTORE_PRODUCTION_KILL_SWITCH
+```
+
+Verify:
+
+```bash
+sudo bash deploy/vps/smoke_check.sh production
+```
+
+## Immediate abort conditions
+
+- stale/disconnected private stream or monitor heartbeat;
 - orphan execution or missing private order;
-- duplicate/conflicting execution identity;
+- duplicate/conflicting `execId` or order identity;
 - unresolved submission outcome;
-- quantity or order-link mismatch;
+- quantity/order-link mismatch;
 - notional outside 10–25 USDT;
 - missing actual fee evidence;
-- unexpected environment or production URL;
+- unexpected environment or production exchange URL;
 - more than one non-terminal campaign;
-- CI status no longer green for the deployed head.
+- required CI no longer green;
+- persistent unexplained critical alert.
 
-Persist the evidence and investigate. Never blind-retry an ambiguous order.
-
-## 11. What is not yet evidence
-
-The following do not prove that the real campaign ran:
-
-- a campaign row with status `scheduled` or `running`;
-- REST order acceptance without private execution evidence;
-- Paper fills without matching Testnet executions;
-- synthetic fixtures, screenshots or copied JSON;
-- a final report built from fewer than 20 actual matched fills;
-- a manual approval record without green automated gates.
+Persist evidence, restore production locks and investigate. Never blind-retry an ambiguous order.
