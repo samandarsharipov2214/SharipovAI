@@ -50,10 +50,8 @@ User=root
 Group=root
 Environment=APP_DIR=${APP_DIR}
 Environment=BRANCH=main
+Environment=FETCH_REMOTE=${agent_fetch_url}
 Environment=HEALTH_URL=http://127.0.0.1:8000/health
-Environment=GIT_CONFIG_COUNT=1
-Environment=GIT_CONFIG_KEY_0=remote.origin.url
-Environment=GIT_CONFIG_VALUE_0=${agent_fetch_url}
 ExecStart=${AGENT_SCRIPT}
 TimeoutStartSec=1800
 Nice=10
