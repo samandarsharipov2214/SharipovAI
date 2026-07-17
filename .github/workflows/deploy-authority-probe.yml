@@ -1,0 +1,56 @@
+name: Production deploy authority probe
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/deploy-authority-probe.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    if: >-
+      ${{
+        vars.SHARIPOVAI_SELF_HOSTED_CI == '1' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.head_ref == 'ops/deploy-main-4c219369'
+      }}
+    runs-on: [self-hosted, linux, x64, sharipovai-ci]
+    timeout-minutes: 10
+    steps:
+      - name: Collect restricted authority evidence
+        shell: bash
+        run: |
+          set +e
+          mkdir -p artifacts
+          {
+            echo '=== identity ==='
+            id
+            echo '=== sudo list ==='
+            sudo -n -l 2>&1
+            echo "SUDO_LIST_RC=$?"
+            echo '=== watcher unit ==='
+            systemctl status sharipovai-deploy-watcher.service --no-pager 2>&1
+            echo "WATCHER_STATUS_RC=$?"
+            echo '=== fixed commands ==='
+            ls -l /usr/local/sbin/sharipovai-deploy-watcher 2>&1
+            ls -l /opt/sharipovai-repo/scripts/deploy_web2_refresh_fix.sh 2>&1
+            ls -ld /opt/sharipovai-repo /opt/sharipovai-repo/deploy/vps 2>&1
+            echo '=== exact sudo checks ==='
+            sudo -n systemctl is-active sharipovai-deploy-watcher.service 2>&1
+            echo "SUDO_SYSTEMCTL_RC=$?"
+            sudo -n test -r /opt/sharipovai-repo/deploy/vps/.env.vps 2>&1
+            echo "SUDO_ENV_READ_RC=$?"
+            sudo -n docker container inspect sharipovai >/dev/null 2>&1
+            echo "SUDO_DOCKER_RC=$?"
+          } > artifacts/deploy-authority.txt
+      - name: Upload restricted authority evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: deploy-authority-${{ github.run_id }}
+          path: artifacts/deploy-authority.txt
+          if-no-files-found: error
+          retention-days: 1
