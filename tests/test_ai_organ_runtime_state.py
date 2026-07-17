@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from dashboard.ai_organ_state_api import AIOrganRuntimeMonitor, install_ai_organ_state_api
+from dashboard.ai_organ_state_safe_api import (
+    SafeAIOrganRuntimeMonitor,
+    install_ai_organ_state_api,
+)
 from storage import ProjectDatabase
 
 
@@ -61,13 +63,19 @@ def prepared_app(db: ProjectDatabase) -> FastAPI:
 def test_monitor_persists_exactly_nine_canonical_organs(tmp_path, monkeypatch) -> None:
     configure_safe(monkeypatch)
     db = database(tmp_path)
-    monitor = AIOrganRuntimeMonitor(prepared_app(db), db, clock_ms=lambda: 1_000)
+    monitor = SafeAIOrganRuntimeMonitor(prepared_app(db), db, clock_ms=lambda: 1_000)
     result = monitor.refresh()
     assert result["organ_count"] == 9
     assert {item["organ_id"] for item in result["organs"]} == {
-        "general_controller", "market_intelligence", "news_intelligence",
-        "risk_engine", "portfolio_engine", "virtual_execution",
-        "decision_quality", "learning_engine", "security_guard",
+        "general_controller",
+        "market_intelligence",
+        "news_intelligence",
+        "risk_engine",
+        "portfolio_engine",
+        "virtual_execution",
+        "decision_quality",
+        "learning_engine",
+        "security_guard",
     }
     assert result["database_backed"] is True
     for organ_id in {item["organ_id"] for item in result["organs"]}:
@@ -81,7 +89,7 @@ def test_monitor_reports_degraded_instead_of_inventing_health(tmp_path, monkeypa
     db = database(tmp_path)
     app = prepared_app(db)
     del app.state.news_agent_network
-    result = AIOrganRuntimeMonitor(app, db, clock_ms=lambda: 2_000).refresh()
+    result = SafeAIOrganRuntimeMonitor(app, db, clock_ms=lambda: 2_000).refresh()
     news = next(item for item in result["organs"] if item["organ_id"] == "news_intelligence")
     assert news["status"] == "blocked"
     assert any("absent" in item for item in news["blockers"])
@@ -94,7 +102,7 @@ def test_security_guard_blocks_unsafe_execution_runtime(tmp_path, monkeypatch) -
     monkeypatch.setenv("EXCHANGE_LIVE_TRADING_ENABLED", "1")
     monkeypatch.setenv("BYBIT_ALLOW_LEGACY_EXCHANGE_CREDENTIALS", "1")
     db = database(tmp_path)
-    result = AIOrganRuntimeMonitor(prepared_app(db), db, clock_ms=lambda: 3_000).refresh()
+    result = SafeAIOrganRuntimeMonitor(prepared_app(db), db, clock_ms=lambda: 3_000).refresh()
     security = next(item for item in result["organs"] if item["organ_id"] == "security_guard")
     assert security["status"] == "blocked"
     assert len(security["blockers"]) >= 3
@@ -104,8 +112,8 @@ def test_snapshot_recovers_persisted_organ_state_after_restart(tmp_path, monkeyp
     configure_safe(monkeypatch)
     db = database(tmp_path)
     app = prepared_app(db)
-    AIOrganRuntimeMonitor(app, db, clock_ms=lambda: 4_000).refresh()
-    restored = AIOrganRuntimeMonitor(app, db, clock_ms=lambda: 5_000).snapshot()
+    SafeAIOrganRuntimeMonitor(app, db, clock_ms=lambda: 4_000).refresh()
+    restored = SafeAIOrganRuntimeMonitor(app, db, clock_ms=lambda: 5_000).snapshot()
     assert restored["organ_count"] == 9
     assert all(item["checked_at_ms"] == 4_000 for item in restored["organs"])
 

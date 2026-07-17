@@ -4,7 +4,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from dashboard.app import create_app
+from dashboard import create_app
 from runner import RunnerOutput
 
 
@@ -30,14 +30,21 @@ def test_user_can_change_temporary_password(tmp_path: Path, monkeypatch) -> None
     monkeypatch.setenv("AUTH_USERS_FILE", str(tmp_path / "users.json"))
     monkeypatch.setenv("AUTH_ACCESS_REQUESTS_FILE", str(tmp_path / "access_requests.json"))
     monkeypatch.setenv("AUTH_SECURITY_EVENTS_FILE", str(tmp_path / "security_events.json"))
+    monkeypatch.setenv("AUTH_ALLOW_REGISTRATION", "1")
+    monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "1")
+    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+    monkeypatch.delenv("AUTH_SECRET", raising=False)
     app = create_app(runner_factory=FakeRunner)
     client = TestClient(app)
 
-    client.post(
+    registered = client.post(
         "/register",
         data={"username": "pilot02", "contact": "@pilot02", "reason": "Need access"},
     )
-    request_id = client.get("/api/security/access-requests").json()["requests"][0]["id"]
+    assert registered.status_code == 202
+    requests = client.get("/api/security/access-requests").json()["requests"]
+    assert len(requests) == 1
+    request_id = requests[0]["id"]
     approved = client.post(f"/api/security/access-requests/{request_id}/approve").json()
     temporary_password = approved["temporary_password"]
 

@@ -1,27 +1,92 @@
-# Local secrets
+# Secrets and local configuration
 .env
 .env.*
 !.env.example
 !.env.local.example
+!.env.*.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.jks
+*.keystore
+secrets/
+credentials/
+**/service-account*.json
+**/*credentials*.json
+**/*secret*.json
 
-# Runtime data
-data/*.json
-data/*.db
-data/*.sqlite
+# Runtime state and databases
+data/
 runtime/
+artifacts/
+reports/
+logs/
+*.log
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.pid
+*.sock
+*.lock
+
+# Trading/account snapshots and journals
+*account*.json
+*wallet*.json
+*position*.json
+*execution*journ*.json
+*order*journ*.json
+*paper*state*.json
+*virtual*account*.json
+*market*stream*.json
 
 # Python
 __pycache__/
 *.py[cod]
+*.pyd
 .pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+junit.xml
 .ruff_cache/
 .mypy_cache/
+.pyright/
+.hypothesis/
 
-# Virtual environments
+# Virtual environments and package caches
 .venv/
 venv/
+env/
+.uv-cache/
+.pip-cache/
 
-# OS / IDE
+# Node / frontend
+node_modules/
+web2/node_modules/
+dist/
+build/
+.next/
+.vite/
+*.tsbuildinfo
+
+# IDE / OS
 .DS_Store
+Thumbs.db
 .idea/
 .vscode/
+*.swp
+*.swo
+
+# Temporary and backup files
+*.tmp
+*.temp
+*.bak
+*.backup
+*.orig
+*~

@@ -18,11 +18,17 @@ def test_dotted_probe_on_file_module_is_non_fatal() -> None:
 
 
 def test_monitor_startup_error_does_not_kill_application() -> None:
-    events: list[tuple[str, dict[str, object]]] = []
+    events: list[tuple[str, str, str, dict[str, object]]] = []
 
     class Database:
-        def append_event(self, event: str, payload: dict[str, object]) -> None:
-            events.append((event, payload))
+        def append_event(
+            self,
+            namespace: str,
+            entity_type: str,
+            entity_id: str,
+            payload: dict[str, object],
+        ) -> None:
+            events.append((namespace, entity_type, entity_id, payload))
 
     monitor = object.__new__(SafeAIOrganRuntimeMonitor)
     monitor._lock = threading.RLock()
@@ -41,4 +47,5 @@ def test_monitor_startup_error_does_not_kill_application() -> None:
     monitor._thread.join(timeout=1)
 
     assert "RuntimeError: probe failed" in monitor._last_error
-    assert events[0][0] == "ai_organ_monitor_startup_error"
+    assert events[0][:3] == ("system_runtime", "ai_organ_monitor", "startup_error")
+    assert events[0][3]["checked_at_ms"] == 123

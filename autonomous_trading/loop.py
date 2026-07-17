@@ -328,11 +328,12 @@ class AutonomousPaperLoop:
             self._put_immutable(self.event_namespace, str(event["event_id"]), event)
 
     def _put_immutable(self, namespace: str, key: str, value: dict[str, Any]) -> None:
+        canonical = json.loads(json.dumps(value, ensure_ascii=False, allow_nan=False))
         try:
-            self.database.put_json(namespace, key, value, expected_version=0)
+            self.database.put_json(namespace, key, canonical, expected_version=0)
         except VersionConflict:
             existing = self.database.get_json(namespace, key)
-            if existing is None or existing["value"] != value:
+            if existing is None or existing["value"] != canonical:
                 raise RuntimeError(f"immutable paper record conflict: {namespace}/{key}")
 
     def _write_json_backup(self) -> None:

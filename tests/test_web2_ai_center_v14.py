@@ -6,8 +6,9 @@ WEB = ROOT / "dashboard" / "static" / "web2"
 
 def test_ai_center_assets_are_connected() -> None:
     index = (WEB / "index.html").read_text(encoding="utf-8")
-    assert "/static/web2/ai_center_v14.js?v=14" in index
-    assert "/static/web2/ai_center_v14.css?v=14" in index
+    assert "/static/web2/ai_center_v14.js?" in index
+    assert "/static/web2/ai_center_v14.css?" in index
+    assert index.index("ai_center_v14.css") < index.index("ai_center_v14.js")
 
 
 def test_ai_center_uses_real_project_apis() -> None:
@@ -16,7 +17,6 @@ def test_ai_center_uses_real_project_apis() -> None:
         assert route in js
     assert "Math.random" not in js
     assert "Подтверждённое последнее действие не получено" in js
-    assert "Доказательство отсутствует" not in js or "Доказательство" in js
 
 
 def test_ai_center_contains_required_views() -> None:

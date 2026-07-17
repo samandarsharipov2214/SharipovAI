@@ -39,7 +39,9 @@ def verified_market_payload(symbol: str = "BTCUSDT") -> dict[str, Any]:
 def _resolved_payload(payload: dict[str, Any] | None) -> tuple[dict[str, Any], str | None]:
     if payload is not None:
         result = dict(payload)
-        result.setdefault("market_data_verified", bool(result.get("exchange_ok", False)))
+        # Exchange availability is not proof that the exact market observation is
+        # verified. Explicit evidence is required for every virtual or Testnet entry.
+        result.setdefault("market_data_verified", False)
         return result, None
     try:
         return verified_market_payload(), None

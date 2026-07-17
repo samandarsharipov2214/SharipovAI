@@ -20,7 +20,11 @@ _LAST_STATUS: dict[str, Any] = {"status": "not_started"}
 
 
 def autorun_enabled() -> bool:
-    return os.getenv("PAPER_ACTIVITY_AUTORUN_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
+    raw = os.getenv(
+        "VIRTUAL_ACCOUNT_AUTORUN_ENABLED",
+        os.getenv("PAPER_ACTIVITY_AUTORUN_ENABLED", "1"),
+    )
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
 
 
 def start_paper_activity_autorun() -> dict[str, Any]:
@@ -28,7 +32,7 @@ def start_paper_activity_autorun() -> dict[str, Any]:
 
     global _THREAD, _LAST_STATUS
     if not autorun_enabled():
-        _LAST_STATUS = {"status": "disabled", "reason": "PAPER_ACTIVITY_AUTORUN_ENABLED=0"}
+        _LAST_STATUS = {"status": "disabled", "reason": "VIRTUAL_ACCOUNT_AUTORUN_ENABLED=0"}
         return dict(_LAST_STATUS)
     if _THREAD and _THREAD.is_alive():
         return {"status": "already_running", "thread_alive": True, **_LAST_STATUS}
@@ -64,5 +68,9 @@ def _loop() -> None:
                 "tick_seconds": paper_tick_seconds(),
             }
         except Exception as exc:  # pragma: no cover - production safety
-            _LAST_STATUS = {"status": "error", "error": f"{type(exc).__name__}: {exc}", "last_loop_at": int(time.time())}
+            _LAST_STATUS = {
+                "status": "error",
+                "error": f"{type(exc).__name__}: {exc}",
+                "last_loop_at": int(time.time()),
+            }
         _STOP.wait(paper_tick_seconds())

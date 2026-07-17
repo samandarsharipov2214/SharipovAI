@@ -146,7 +146,8 @@ def test_verified_settlement_updates_reputation_once(tmp_path) -> None:
 
 
 def test_synthetic_settlement_cannot_train_reputation(tmp_path) -> None:
-    service = DecisionQualityService(_database(tmp_path))
+    database = _database(tmp_path)
+    service = DecisionQualityService(database)
     service.evaluate("decision-no-train", _payloads(), regime="bull", min_agreement=0.5)
 
     with pytest.raises(MetaAIPersistenceError, match="verified market evidence"):
@@ -158,4 +159,15 @@ def test_synthetic_settlement_cannot_train_reputation(tmp_path) -> None:
             evidence_class="synthetic_simulation",
             verified_market_data=False,
         )
-    assert service.meta.reputations_snapshot() == {}
+
+    snapshot = service.meta.reputations_snapshot()
+    assert set(snapshot) == {"Market AI", "News AI"}
+    assert all(item["total_predictions"] == 0 for item in snapshot.values())
+    assert all(item["pnl_contribution"] == 0.0 for item in snapshot.values())
+    assert all(item["drawdown_contribution"] == 0.0 for item in snapshot.values())
+    assert database.list_events(
+        "decision_quality",
+        entity_type="meta_outcome",
+        entity_id="decision-no-train",
+        limit=1,
+    ) == []

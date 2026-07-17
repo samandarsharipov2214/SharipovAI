@@ -9,9 +9,14 @@ import argparse
 import json
 import os
 import re
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 EXPECTED_ORGANS = (
     "general_controller",
@@ -141,7 +146,8 @@ def _audit_blueprint(root: Path, record: Any) -> None:
 
 def _audit_workflows(root: Path, record: Any) -> None:
     guardrails = _read(root / ".github/workflows/project-guardrails.yml")
-    full = _read(root / ".github/workflows/full-stabilization.yml")
+    legacy_full = _read(root / ".github/workflows/full-stabilization.yml")
+    tests = _read(root / ".github/workflows/tests.yml")
     windows = _read(root / ".github/workflows/windows-agent-package.yml")
     record("ci_project_guardrails", all(token in guardrails for token in (
         "python scripts/migrate_project_db.py",
@@ -149,9 +155,36 @@ def _audit_workflows(root: Path, record: Any) -> None:
         "Run regression tests",
         "Verify execution remains locked",
         "Run fail-closed release audit",
-    )), "migration, compile, execution lock, release audit and pytest gates")
-    record("ci_full_suite", "python -m pytest" in full and "Fail when full suite failed" in full, "full pytest gate")
-    record("ci_windows_agent", "runs-on: windows-latest" in windows and "pytest" in windows.lower(), "Windows agent verification gate")
+        "Preserve truthful guardrail status",
+    )), "migration, compile, execution lock, release audit and aggregated truthful gate")
+    legacy_full_gate = (
+        "python -m pytest" in legacy_full
+        and "Fail when full suite failed" in legacy_full
+    )
+    current_full_gate = all(token in tests for token in (
+        "Run complete pytest suite",
+        "python -m pytest -q --tb=short",
+        "Preserve truthful failure status",
+        "steps.full_suite.outcome == 'failure'",
+    ))
+    record(
+        "ci_full_suite",
+        legacy_full_gate or current_full_gate,
+        "complete pytest runs independently and preserves truthful failure status",
+    )
+    windows_hosted = "runs-on: windows-latest" in windows
+    windows_hardened = all(
+        token in windows
+        for token in (
+            "runs-on: [self-hosted, Windows, X64, sharipovai-windows-ci]",
+            "SHARIPOVAI_WINDOWS_SELF_HOSTED_CI",
+        )
+    )
+    record(
+        "ci_windows_agent",
+        (windows_hosted or windows_hardened) and "pytest" in windows.lower(),
+        "Windows hosted or isolated self-hosted verification gate",
+    )
 
 
 def _audit_runtime_code(record: Any) -> None:

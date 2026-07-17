@@ -1,10 +1,8 @@
 """Safe exchange connector layer for SharipovAI.
 
-The connector is intentionally safety-first: it can read configuration and build
-order previews, but real execution is blocked unless explicit guard flags are
-configured in the environment.
+Public market/account reads and previews are allowed. Exchange-bound writes must
+use the canonical execution contract, and mainnet execution is compiled out.
 """
-
 from __future__ import annotations
 
 from .bybit_costs import (
@@ -17,20 +15,52 @@ from .bybit_costs import (
     select_fee_rate,
     vip_progress,
 )
+from .bybit_execution_state import BybitExecutionStateStore, ExecutionFill
+from .bybit_reference_data import (
+    BybitTradingReferenceClient,
+    FeeSchedule,
+    InstrumentRules,
+    TradingReferenceSnapshot,
+)
+from .execution_contract import (
+    ApprovedExecutionRequest,
+    MAINNET_EXECUTION_COMPILED,
+    build_execution_request,
+    validate_execution_request,
+)
+from .execution_idempotency import (
+    DuplicateExecutionBlocked,
+    ExecutionIdempotencyRepository,
+)
 from .models import ExchangeConfig, ExchangeOrderPreview, ExchangeStatus
+from .private_ws_gate import PrivateStreamGateReport, PrivateStreamHealthRepository
 from .safe_client import SafeExchangeConnector
 
 __all__ = (
+    "ApprovedExecutionRequest",
+    "BybitExecutionStateStore",
+    "BybitTradingReferenceClient",
+    "DuplicateExecutionBlocked",
     "ExchangeConfig",
     "ExchangeOrderPreview",
     "ExchangeStatus",
+    "ExecutionFill",
+    "ExecutionIdempotencyRepository",
+    "FeeSchedule",
+    "InstrumentRules",
+    "MAINNET_EXECUTION_COMPILED",
+    "PrivateStreamGateReport",
+    "PrivateStreamHealthRepository",
     "SafeExchangeConnector",
+    "TradingReferenceSnapshot",
     "ai_cost_report",
     "best_trade_venue",
     "borrow_table",
+    "build_execution_request",
     "estimate_borrow_cost",
     "estimate_trade_cost",
     "fee_table",
     "select_fee_rate",
+    "validate_execution_request",
     "vip_progress",
 )

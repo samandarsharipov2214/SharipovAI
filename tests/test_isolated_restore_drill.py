@@ -82,33 +82,39 @@ def test_restore_drill_rejects_destination_inside_source(tmp_path: Path) -> None
         run_restore_drill(source, source / "restore-drills")
 
 
-def test_windows_restore_wrapper_stays_passive_and_retains_reports() -> None:
+def test_windows_restore_wrapper_is_passive_retained_and_network_free() -> None:
     script = (ROOT / "scripts/windows/test_isolated_restore.ps1").read_text(encoding="utf-8-sig")
-    assert "-m tools.isolated_restore_drill" in script
-    assert "runtime\remote_backups\current" in script
-    assert "runtime\restore_drills" in script
-    assert "runtime\restore_drill_status.json" in script
-    assert "RetainRuns = 12" in script
-    assert "Select-Object -Skip $RetainRuns" in script
-    assert "activation_performed" in script
-    assert "network_services_started" in script
-    assert "bootstrap_pc_node" not in script
+    for marker in (
+        "-m tools.isolated_restore_drill",
+        r"runtime\remote_backups\current",
+        r"runtime\restore_drills",
+        r"runtime\restore_drill_status.json",
+        "[int]$RetainRuns = 12",
+        "Select-Object -Skip $RetainRuns",
+        "$report.activation_performed -ne $false",
+        "$report.network_services_started -ne $false",
+    ):
+        assert marker in script
+    for forbidden in ("bootstrap_pc_node", "Start-Process"):
+        assert forbidden not in script
     assert "docker" not in script.lower()
-    assert "Start-Process" not in script
 
 
 def test_weekly_restore_installer_is_passive_and_start_when_available() -> None:
     script = (ROOT / "scripts/windows/install_weekly_restore_drill.ps1").read_text(encoding="utf-8-sig")
-    assert '"SharipovAI Weekly Restore Drill"' in script
-    assert "New-ScheduledTaskTrigger -Weekly" in script
-    assert "-DaysOfWeek $scheduledDay" in script
-    assert "-StartWhenAvailable" in script
-    assert "-MultipleInstances IgnoreNew" in script
-    assert "-RetainRuns $RetainRuns" in script
-    assert 'DayOfWeek = "Sunday"' in script
-    assert 'Time = "04:00"' in script
-    assert "runtime\restore_drill_status.json" in script
-    assert "activation_performed" in script
-    assert "network_services_started" in script
+    for marker in (
+        '$taskName = "SharipovAI Weekly Restore Drill"',
+        "New-ScheduledTaskTrigger -Weekly",
+        "-DaysOfWeek $scheduledDay",
+        "-StartWhenAvailable",
+        "-MultipleInstances IgnoreNew",
+        "-RetainRuns $RetainRuns",
+        '[string]$DayOfWeek = "Sunday"',
+        '[string]$Time = "04:00"',
+        r"runtime\restore_drill_status.json",
+        "$status.activation_performed -ne $false",
+        "$status.network_services_started -ne $false",
+    ):
+        assert marker in script
     assert "bootstrap_pc_node" not in script
     assert "docker" not in script.lower()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -8,6 +9,14 @@ from autonomous_trading.loop import AutonomousPaperLoop
 from autonomous_trading.testnet_bridge import AutonomousTestnetBridge
 from autonomous_trading.trade_identity import normalize_trade, scope_for_path
 from storage import ProjectDatabase, list_json_items
+from trading_candidate import (
+    MarketRegime,
+    TradingCandidate,
+    TradingCategory,
+    TradingDecision,
+    TradingEnvironment,
+    TradingSide,
+)
 
 
 class Stream:
@@ -29,26 +38,39 @@ class Client:
     def __init__(self, *, fail: bool = False):
         self.fail = fail
         self.calls: list[dict] = []
+        self.idempotency = None
 
     def status(self):
-        return {"mode": self.mode, "kill_switch": True}
+        return {
+            "mode": self.mode,
+            "kill_switch": False,
+            "testnet_execution_enabled": True,
+            "mainnet_execution_compiled": False,
+            "mainnet_hard_blocked": True,
+        }
 
-    def place_market_order(self, **kwargs):
-        self.calls.append(kwargs)
+    def execute(self, request, *, now_ms: int | None = None):
+        self.calls.append({"request": request, "now_ms": now_ms})
         if self.fail:
             raise TimeoutError("ambiguous timeout")
         return SimpleNamespace(
             order_id="order-1",
             message="accepted",
+            mode="sandbox",
+            candidate_id=request.candidate_id,
+            order_link_id=request.order_link_id,
             to_dict=lambda: {
                 "status": "accepted",
                 "mode": "sandbox",
                 "environment": "testnet",
-                "category": "spot",
-                "symbol": kwargs["symbol"],
-                "side": kwargs["side"],
-                "quantity": kwargs["quantity"],
+                "category": request.category.value,
+                "symbol": request.symbol,
+                "side": request.side.value,
+                "quantity": request.quantity,
+                "candidate_id": request.candidate_id,
+                "order_link_id": request.order_link_id,
                 "order_id": "order-1",
+                "message": "accepted",
             },
         )
 
@@ -65,46 +87,106 @@ def set_paths(monkeypatch, tmp_path: Path) -> tuple[Path, Path]:
     monkeypatch.setenv("AUTONOMOUS_PAPER_STATE_FILE", str(paper))
     monkeypatch.setenv("TESTNET_BRIDGE_STATE_FILE", str(bridge))
     monkeypatch.setenv("EXECUTION_JOURNAL_FILE", str(tmp_path / "journal.json"))
+    monkeypatch.setenv("AUTONOMOUS_TESTNET_BRIDGE_ENABLED", "0")
+    monkeypatch.setenv("AUTONOMOUS_TESTNET_ENABLED", "0")
     return paper, bridge
 
 
+def _candidate(candidate_id: str, *, now_ms: int) -> TradingCandidate:
+    return TradingCandidate(
+        candidate_id=candidate_id,
+        symbol="BTCUSDT",
+        category=TradingCategory.SPOT,
+        side=TradingSide.BUY,
+        environment=TradingEnvironment.PAPER,
+        market_timestamp_ms=now_ms - 500,
+        received_timestamp_ms=now_ms - 400,
+        reference_price=100.0,
+        data_sources=("bybit_ws", "bybit_rest", "cross_exchange"),
+        market_regime=MarketRegime.TREND,
+        signal_evidence=("paper-database-test",),
+        news_evidence=(),
+        news_assessment_id="news-paper-database",
+        portfolio_snapshot_id="portfolio-paper-database",
+        cost_snapshot_id="cost-paper-database",
+        estimated_fees=0.01,
+        estimated_slippage=0.01,
+        risk_score=10.0,
+        risk_blocks=(),
+        confidence=90.0,
+        consensus=90.0,
+        decision=TradingDecision.ALLOW,
+        expires_at_ms=now_ms + 10_000,
+    )
+
+
 def seed_trade(database: ProjectDatabase, paper_file: Path, trade_id: str) -> dict:
+    now_ms = int(time.time() * 1000)
+    candidate_id = f"candidate_{trade_id}"
+    source = _candidate(candidate_id, now_ms=now_ms)
+    database.put_json("trading_candidates", candidate_id, source.to_dict(), expected_version=0)
     scope = scope_for_path(paper_file)
-    trade = normalize_trade({
-        "trade_id": trade_id,
-        "created_at_ms": 1_000,
-        "time": "2026-01-01T00:00:01+00:00",
-        "symbol": "BTCUSDT",
-        "side": "BUY",
-        "quantity": 0.1,
-        "price": 100.0,
-        "fee": 0.01,
-        "net_pnl": None,
-        "reason": "test",
-        "source": "bybit_websocket",
-        "verified_market_data": True,
-    }, scope=scope, index=0)
+    trade = normalize_trade(
+        {
+            "trade_id": trade_id,
+            "candidate_id": candidate_id,
+            "created_at_ms": now_ms - 300,
+            "time": "2026-01-01T00:00:01+00:00",
+            "symbol": "BTCUSDT",
+            "side": "BUY",
+            "quantity": 0.1,
+            "price": 100.0,
+            "fee": 0.01,
+            "net_pnl": None,
+            "reason": "test",
+            "source": "bybit_websocket",
+            "verified_market_data": True,
+        },
+        scope=scope,
+        index=0,
+    )
     database.put_json(f"paper_trades:{scope}", trade_id, trade, expected_version=0)
     return trade
 
 
 def test_legacy_json_migrates_and_database_survives_missing_backup(tmp_path, monkeypatch) -> None:
     paper, _ = set_paths(monkeypatch, tmp_path)
-    paper.write_text(json.dumps({
-        "mode": "autonomous_paper",
-        "cash": 9000.0,
-        "equity": 9100.0,
-        "realized_pnl": 10.0,
-        "unrealized_pnl": 0.0,
-        "total_fees": 1.0,
-        "positions": {},
-        "trades": [{
-            "time": "2026-01-01T00:00:00+00:00", "symbol": "BTCUSDT", "side": "BUY",
-            "quantity": 1, "price": 100, "fee": 0.1, "net_pnl": None, "reason": "legacy",
-            "source": "bybit_websocket", "verified_market_data": True,
-        }],
-        "events": [{"time": "2026-01-01T00:00:00+00:00", "action": "BUY", "symbol": "BTCUSDT", "reason": "legacy"}],
-    }), encoding="utf-8")
+    paper.write_text(
+        json.dumps(
+            {
+                "mode": "autonomous_paper",
+                "cash": 9000.0,
+                "equity": 9100.0,
+                "realized_pnl": 10.0,
+                "unrealized_pnl": 0.0,
+                "total_fees": 1.0,
+                "positions": {},
+                "trades": [
+                    {
+                        "time": "2026-01-01T00:00:00+00:00",
+                        "symbol": "BTCUSDT",
+                        "side": "BUY",
+                        "quantity": 1,
+                        "price": 100,
+                        "fee": 0.1,
+                        "net_pnl": None,
+                        "reason": "legacy",
+                        "source": "bybit_websocket",
+                        "verified_market_data": True,
+                    }
+                ],
+                "events": [
+                    {
+                        "time": "2026-01-01T00:00:00+00:00",
+                        "action": "BUY",
+                        "symbol": "BTCUSDT",
+                        "reason": "legacy",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
     database = db(tmp_path)
     first = AutonomousPaperLoop(Stream(), database=database)  # type: ignore[arg-type]
     snapshot = first.snapshot()
@@ -142,7 +224,7 @@ def test_full_trade_history_is_immutable_while_ui_cache_is_bounded(tmp_path, mon
     assert len(loop.trade_history()) == 505
 
 
-def test_bridge_requires_both_flags_and_never_uses_list_index(tmp_path, monkeypatch) -> None:
+def test_bridge_requires_both_flags_and_canonical_candidate(tmp_path, monkeypatch) -> None:
     paper, _ = set_paths(monkeypatch, tmp_path)
     database = db(tmp_path)
     seed_trade(database, paper, "paper_first")
@@ -151,6 +233,7 @@ def test_bridge_requires_both_flags_and_never_uses_list_index(tmp_path, monkeypa
     monkeypatch.setenv("AUTONOMOUS_TESTNET_ENABLED", "0")
     bridge = AutonomousTestnetBridge(client, database=database)
     bridge.stages = Stage()
+    monkeypatch.setattr(bridge, "_ensure_reconciled", lambda: True)
     bridge.tick()
     assert client.calls == []
     assert bridge.snapshot()["processed_trade_count"] == 1
@@ -159,6 +242,9 @@ def test_bridge_requires_both_flags_and_never_uses_list_index(tmp_path, monkeypa
     monkeypatch.setenv("AUTONOMOUS_TESTNET_ENABLED", "1")
     bridge.tick()
     assert len(client.calls) == 1
+    request = client.calls[0]["request"]
+    assert request.candidate_id.startswith("testnet_")
+    assert request.order_link_id.startswith("sai_")
     assert bridge.snapshot()["last_trade_id"] == "paper_second"
     records = [item["value"] for item in list_json_items(database, bridge.record_namespace)]
     assert {item["paper_trade_id"] for item in records} == {"paper_first", "paper_second"}
@@ -173,6 +259,7 @@ def test_ambiguous_bridge_error_is_unresolved_and_never_retried(tmp_path, monkey
     client = Client(fail=True)
     bridge = AutonomousTestnetBridge(client, database=database)
     bridge.stages = Stage()
+    monkeypatch.setattr(bridge, "_ensure_reconciled", lambda: True)
     bridge.tick()
     bridge.tick()
     assert len(client.calls) == 1
@@ -182,6 +269,7 @@ def test_ambiguous_bridge_error_is_unresolved_and_never_retried(tmp_path, monkey
     assert len(journal) == 1
     assert journal[0]["status"] == "unresolved"
     assert journal[0]["requires_reconciliation"] is True
+    assert journal[0]["order_link_id"].startswith("sai_")
 
 
 def test_corrupt_json_does_not_override_valid_database_state(tmp_path, monkeypatch) -> None:

@@ -10,6 +10,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from capital_allocation import CapitalAllocationPolicy, build_capital_allocation, capital_snapshot
 from paper_activity_engine import (
     PaperActivityEngine as LegacyPaperActivityEngine,
     max_open_positions,
@@ -22,7 +23,7 @@ from trading_intelligence import trade_gate, verified_market_payload
 SYMBOLS = ("BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "ADA/USDT")
 FEE_RATE = 0.001
 STARTING_CASH = 10_000.0
-DEFAULT_NOTIONAL = 100.0
+LEGACY_DEFAULT_NOTIONAL = 100.0
 MIN_ABS_CHANGE_PERCENT = 0.35
 TAKE_PROFIT_PERCENT = 1.2
 STOP_LOSS_PERCENT = 0.8
@@ -39,9 +40,11 @@ class MarketPaperActivityEngine(LegacyPaperActivityEngine):
         path: str | Path | None = None,
         *,
         market_payload_factory: MarketPayloadFactory | None = None,
+        allocation_policy: CapitalAllocationPolicy | None = None,
     ) -> None:
         super().__init__(path=path)
         self._market_payload_factory = market_payload_factory or verified_market_payload
+        self._allocation_policy = allocation_policy or CapitalAllocationPolicy.from_environment()
 
     def state(self, *, catch_up: bool = False) -> dict[str, Any]:
         if catch_up:
@@ -54,12 +57,13 @@ class MarketPaperActivityEngine(LegacyPaperActivityEngine):
             "tick_seconds": paper_tick_seconds(),
             "max_open_positions": max_open_positions(),
             "mode": EXECUTION_MODE,
-            "strategy": "verified_market_trend_baseline_v1",
+            "strategy": "verified_market_trend_capital_scaled_v2",
             "market_prices": "verified_public_exchange_quotes",
             "historical_backfill": "disabled_no_fake_prices",
             "take_profit_percent": TAKE_PROFIT_PERCENT,
             "stop_loss_percent": STOP_LOSS_PERCENT,
             "max_hold_seconds": MAX_HOLD_SECONDS,
+            "capital_allocation": self._allocation_policy.snapshot(),
         }
         return virtual_account_state(state)
 
@@ -132,15 +136,45 @@ class MarketPaperActivityEngine(LegacyPaperActivityEngine):
             self._save(state)
             return {"status": "closed_position", "closed_trade": closed, "state": self.state()}
 
+        equity = float(state.get("equity", state.get("cash", STARTING_CASH)) or STARTING_CASH)
+        allocation = build_capital_allocation(
+            equity=equity,
+            open_trades=open_trades,
+            max_open_positions=max_open_positions(),
+            stop_loss_percent=STOP_LOSS_PERCENT,
+            fee_rate=FEE_RATE,
+            requested_risk_percent=float(market.get("risk_per_trade_percent", 1.0) or 0.0),
+            policy=self._allocation_policy,
+        )
+        state["last_allocation"] = allocation
+        if not allocation["allowed"]:
+            return self._capital_wait(state, allocation)
+
         side = "BUY" if change > 0 else "SELL"
-        trade = self._open_trade(state, now, symbol=symbol, side=side, market=market, gate=gate)
+        trade = self._open_trade(
+            state,
+            now,
+            symbol=symbol,
+            side=side,
+            market=market,
+            gate=gate,
+            allocation=allocation,
+        )
         state["last_reason"] = "opened_market_backed_virtual_trade"
         state["last_reason_ru"] = (
-            f"открыта виртуальная {side} {symbol} по подтверждённой цене {trade['entry_price']}"
+            f"открыта виртуальная {side} {symbol} на {trade['notional']:.2f} USDT "
+            f"по подтверждённой цене {trade['entry_price']}"
         )
         state["last_tick_status"] = "ok"
         self._save(state)
-        return {"status": "ok", "action": "opened_virtual_trade", "trade": trade, "gate": gate, "state": self.state()}
+        return {
+            "status": "ok",
+            "action": "opened_virtual_trade",
+            "trade": trade,
+            "allocation": allocation,
+            "gate": gate,
+            "state": self.state(),
+        }
 
     def catch_up(self, *, now: int | None = None, max_ticks: int | None = None) -> dict[str, Any]:
         """Run one current tick after downtime; never fabricate past prices."""
@@ -205,9 +239,10 @@ class MarketPaperActivityEngine(LegacyPaperActivityEngine):
         side: str,
         market: dict[str, Any],
         gate: dict[str, Any],
+        allocation: dict[str, Any],
     ) -> dict[str, Any]:
         price = _price(market)
-        notional = DEFAULT_NOTIONAL
+        notional = float(allocation["notional"])
         quantity = round(notional / price, 12)
         entry_fee = round(notional * FEE_RATE, 4)
         estimated_exit_fee = entry_fee
@@ -235,11 +270,13 @@ class MarketPaperActivityEngine(LegacyPaperActivityEngine):
             "closed_at": 0,
             "signal_change_24h_percent": float(market.get("price_change_24h_percent", 0.0) or 0.0),
             "market_regime": gate.get("market_regime", {}),
+            "capital_allocation": allocation,
             "quote_source": _quote_field(market, "source"),
             "quote_received_at": _quote_field(market, "received_at"),
             "source": "market_backed_virtual_account_engine",
             "source_ru": "виртуальный счёт с реальными рыночными котировками",
             "execution_mode": EXECUTION_MODE,
+            "leverage": 1.0,
             "real_order_placed": False,
         }
         state.setdefault("trades", []).append(trade)
@@ -257,7 +294,7 @@ class MarketPaperActivityEngine(LegacyPaperActivityEngine):
             current_price = _price(market)
             gross = _gross_pnl(trade, current_price)
             entry_fee = float(trade.get("entry_fee", trade.get("fee", 0.0)) or 0.0)
-            exit_fee = round(float(trade.get("notional", DEFAULT_NOTIONAL)) * FEE_RATE, 4)
+            exit_fee = round(float(trade.get("notional", LEGACY_DEFAULT_NOTIONAL)) * FEE_RATE, 4)
             trade["current_price"] = current_price
             trade["gross_pnl"] = gross
             trade["pnl_usdt"] = gross
@@ -304,7 +341,7 @@ class MarketPaperActivityEngine(LegacyPaperActivityEngine):
         exit_price = _price(market)
         gross = _gross_pnl(trade, exit_price)
         entry_fee = float(trade.get("entry_fee", trade.get("fee", 0.0)) or 0.0)
-        exit_fee = round(float(trade.get("notional", DEFAULT_NOTIONAL)) * FEE_RATE, 4)
+        exit_fee = round(float(trade.get("notional", LEGACY_DEFAULT_NOTIONAL)) * FEE_RATE, 4)
         net = round(gross - entry_fee - exit_fee, 4)
         trade.update(
             {
@@ -338,6 +375,19 @@ class MarketPaperActivityEngine(LegacyPaperActivityEngine):
         self._save(state)
         return {"status": "blocked", "reason": reason, "gate": gate, "state": self.state()}
 
+    def _capital_wait(self, state: dict[str, Any], allocation: dict[str, Any]) -> dict[str, Any]:
+        state["skipped_count"] = int(state.get("skipped_count", 0) or 0) + 1
+        state["last_reason"] = str(allocation.get("reason", "capital_allocation_blocked"))
+        state["last_reason_ru"] = _allocation_reason_ru(state["last_reason"])
+        state["last_tick_status"] = "wait_capital"
+        self._save(state)
+        return {
+            "status": "wait",
+            "reason": state["last_reason"],
+            "allocation": allocation,
+            "state": self.state(),
+        }
+
     def _summary(self, state: dict[str, Any]) -> dict[str, Any]:
         trades = [trade for trade in state.get("trades", []) if isinstance(trade, dict)]
         open_trades = [trade for trade in trades if trade.get("status") == "OPEN"]
@@ -346,6 +396,7 @@ class MarketPaperActivityEngine(LegacyPaperActivityEngine):
         losing = [trade for trade in closed if float(trade.get("net_pnl", 0.0) or 0.0) < 0]
         cash = round(float(state.get("cash", STARTING_CASH) or STARTING_CASH), 4)
         equity = round(float(state.get("equity", cash) or cash), 4)
+        capital = capital_snapshot(equity=equity, open_trades=open_trades, policy=self._allocation_policy)
         last_tick = int(state.get("last_tick_at", 0) or 0)
         return {
             "trade_count": len(trades),
@@ -359,11 +410,16 @@ class MarketPaperActivityEngine(LegacyPaperActivityEngine):
             "skipped_count": int(state.get("skipped_count", 0) or 0),
             "net_pnl": round(sum(float(t.get("net_pnl", 0.0) or 0.0) for t in trades), 4),
             "closed_net_pnl": round(sum(float(t.get("net_pnl", 0.0) or 0.0) for t in closed), 4),
-            "unrealized_net_pnl": round(sum(float(t.get("unrealized_net_pnl", 0.0) or 0.0) for t in open_trades), 4),
+            "unrealized_net_pnl": round(
+                sum(float(t.get("unrealized_net_pnl", 0.0) or 0.0) for t in open_trades),
+                4,
+            ),
             "cash": cash,
             "equity": equity,
             "return_percent": round((equity - STARTING_CASH) / STARTING_CASH * 100.0, 4),
             "total_fees": round(sum(float(t.get("fee", 0.0) or 0.0) for t in trades), 4),
+            **capital,
+            "last_allocation": state.get("last_allocation", {}),
             "last_reason": str(state.get("last_reason", "not_started")),
             "last_reason_ru": str(state.get("last_reason_ru", "")),
             "last_tick_at": last_tick,
@@ -395,7 +451,7 @@ def _gross_pnl(trade: dict[str, Any], current_price: float) -> float:
     entry = float(trade.get("entry_price", current_price) or current_price)
     quantity = float(trade.get("quantity", 0.0) or 0.0)
     if quantity <= 0:
-        quantity = float(trade.get("notional", DEFAULT_NOTIONAL) or DEFAULT_NOTIONAL) / entry
+        quantity = float(trade.get("notional", LEGACY_DEFAULT_NOTIONAL) or LEGACY_DEFAULT_NOTIONAL) / entry
     gross = (current_price - entry) * quantity
     if str(trade.get("side", "BUY")).upper() == "SELL":
         gross = -gross
@@ -436,6 +492,16 @@ def _close_reason_ru(reason: str) -> str:
         "stop_loss": "ограничение виртуального убытка по stop-loss",
         "max_hold_time": "закрытие по максимальному времени удержания",
         "max_open_position_rotation": "ротация при лимите открытых позиций",
+    }.get(reason, reason)
+
+
+def _allocation_reason_ru(reason: str) -> str:
+    return {
+        "equity_unavailable": "капитал виртуального счёта недоступен",
+        "position_limit_reached": "достигнут лимит открытых виртуальных позиций",
+        "reserve_protected": "доступный капитал распределён; защитный резерв сохранён",
+        "risk_budget_unavailable": "лимит риска не разрешает новую виртуальную позицию",
+        "allocation_below_minimum": "безопасный размер позиции ниже минимального",
     }.get(reason, reason)
 
 

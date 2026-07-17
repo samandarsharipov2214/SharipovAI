@@ -4,12 +4,10 @@ This module plans and evaluates legal/regulatory intelligence for crypto,
 stocks, exchanges and financial activity. It is not legal advice. It produces
 risk alerts and recommendations for the General Controller.
 """
-
 from __future__ import annotations
 
 import time
 from typing import Any
-
 
 LEGAL_TOPICS = {
     "crypto_regulation": "Криптоактивы, токены, стейблкоины, биржи, custody, DeFi.",
@@ -21,14 +19,12 @@ LEGAL_TOPICS = {
     "data_privacy": "Персональные данные, хранение логов, безопасность аккаунтов.",
 }
 
-
 REGULATORY_SOURCES = {
     "us": ["sec.gov", "cftc.gov", "finra.org", "federalreserve.gov", "irs.gov", "treasury.gov", "fincen.gov"],
     "eu": ["esma.europa.eu", "eba.europa.eu", "ecb.europa.eu", "eur-lex.europa.eu"],
     "uk": ["fca.org.uk", "bankofengland.co.uk", "legislation.gov.uk"],
     "global": ["bis.org", "imf.org", "worldbank.org", "fatf-gafi.org", "iosco.org"],
 }
-
 
 SEVERITY_ORDER = {"info": 1, "watch": 2, "caution": 3, "high": 4, "critical": 5}
 
@@ -52,7 +48,14 @@ def legal_monitor_plan(region: str = "global") -> dict[str, Any]:
                 "output": "legal_change_summary_risk_alert_controller_advice",
             }
         )
-    return {"status": "ok", "created_at": int(time.time()), "region": selected_region, "sources": sources, "tasks": tasks, "policy": legal_monitor_policy()}
+    return {
+        "status": "ok",
+        "created_at": int(time.time()),
+        "region": selected_region,
+        "sources": sources,
+        "tasks": tasks,
+        "policy": legal_monitor_policy(),
+    }
 
 
 def legal_monitor_policy() -> dict[str, Any]:
@@ -109,14 +112,26 @@ def evaluate_legal_change(change: dict[str, Any]) -> dict[str, Any]:
 
 
 def legal_alert_summary(changes: list[dict[str, Any]]) -> dict[str, Any]:
-    """Summarize multiple legal changes for General Controller."""
+    """Summarize raw legal changes or already evaluated alerts idempotently."""
 
-    evaluated = [evaluate_legal_change(change) for change in changes]
+    evaluated: list[dict[str, Any]] = []
+    for change in changes:
+        advice = change.get("general_controller_advice")
+        severity = str(change.get("severity", ""))
+        already_evaluated = (
+            change.get("status") == "ok"
+            and severity in SEVERITY_ORDER
+            and isinstance(advice, dict)
+            and str(advice.get("action", "")) in legal_monitor_policy()["controller_actions"]
+        )
+        evaluated.append(dict(change) if already_evaluated else evaluate_legal_change(change))
+
     valid = [item for item in evaluated if item.get("status") == "ok"]
     highest = "info"
     for item in valid:
-        if SEVERITY_ORDER[item["severity"]] > SEVERITY_ORDER[highest]:
-            highest = item["severity"]
+        severity = str(item.get("severity", "info"))
+        if severity in SEVERITY_ORDER and SEVERITY_ORDER[severity] > SEVERITY_ORDER[highest]:
+            highest = severity
     action = "continue"
     if any(item.get("general_controller_advice", {}).get("action") == "block_action" for item in valid):
         action = "block_action"
@@ -126,7 +141,13 @@ def legal_alert_summary(changes: list[dict[str, Any]]) -> dict[str, Any]:
         action = "caution"
     elif any(item.get("general_controller_advice", {}).get("action") == "watch" for item in valid):
         action = "watch"
-    return {"status": "ok", "count": len(valid), "highest_severity": highest, "controller_action": action, "alerts": valid}
+    return {
+        "status": "ok",
+        "count": len(valid),
+        "highest_severity": highest,
+        "controller_action": action,
+        "alerts": valid,
+    }
 
 
 def _topic_queries(topic: str, region: str) -> list[str]:
@@ -167,6 +188,7 @@ def _severity_from_text(text: str, official: bool) -> str:
 
 
 def _controller_action(severity: str, topic: str, text: str) -> str:
+    del topic, text
     if severity == "critical":
         return "block_action"
     if severity == "high":

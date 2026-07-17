@@ -175,16 +175,19 @@ class BybitOrderStateStore:
             if not isinstance(raw, Mapping):
                 errors.append(f"journal row {index} is not an object")
                 continue
-            link = str(raw.get("order_link_id") or raw.get("orderLinkId") or "").strip()
-            order_id = str(raw.get("order_id") or raw.get("orderId") or "").strip()
+            normalized = dict(raw)
+            link = str(normalized.get("order_link_id") or normalized.get("orderLinkId") or "").strip()
+            order_id = str(normalized.get("order_id") or normalized.get("orderId") or "").strip()
             if link:
-                if link in journal_by_link and journal_by_link[link] != dict(raw):
+                if link in journal_by_link and journal_by_link[link] != normalized:
                     errors.append(f"duplicate journal orderLinkId {link}")
-                journal_by_link[link] = dict(raw)
+                else:
+                    journal_by_link[link] = normalized
             if order_id:
-                if order_id in journal_by_order and journal_by_order[order_id] != dict(raw):
+                if order_id in journal_by_order and journal_by_order[order_id] != normalized:
                     errors.append(f"duplicate journal orderId {order_id}")
-                journal_by_order[order_id] = dict(raw)
+                else:
+                    journal_by_order[order_id] = normalized
 
         matched: list[str] = []
         for order in managed:
@@ -197,7 +200,7 @@ class BybitOrderStateStore:
             journal_order_id = str(row.get("order_id") or row.get("orderId") or "").strip()
             if order_id and journal_order_id != order_id:
                 errors.append(f"orderId mismatch for {link}")
-            if journal_order_id and journal_by_order.get(journal_order_id) is not row:
+            if journal_order_id and journal_by_order.get(journal_order_id) != row:
                 errors.append(f"journal identifiers resolve inconsistently for {link}")
             expected_environment = _journal_environment(row.get("environment") or row.get("mode"))
             if expected_environment and expected_environment != order["environment"]:
@@ -277,8 +280,6 @@ def _merge(existing: OrderState | None, new: OrderState) -> tuple[str, OrderStat
         raise ValueError("orderLinkId changed")
     if new.updated_time_ms < existing.updated_time_ms:
         raise ValueError("out-of-order updatedTime")
-    if new.cum_exec_qty < existing.cum_exec_qty - _TOLERANCE:
-        raise ValueError("cumExecQty regression")
     merged = replace(new, order_id=new.order_id or existing.order_id, order_link_id=new.order_link_id or existing.order_link_id)
     same_execution = (
         merged.status == existing.status
@@ -292,6 +293,8 @@ def _merge(existing: OrderState | None, new: OrderState) -> tuple[str, OrderStat
         if not same_execution:
             raise ValueError("terminal order cannot change")
         return ("accepted", merged) if identity_enriched else ("duplicate", existing)
+    if new.cum_exec_qty < existing.cum_exec_qty - _TOLERANCE:
+        raise ValueError("cumExecQty regression")
     if new.updated_time_ms == existing.updated_time_ms:
         if same_execution and identity_enriched:
             return "accepted", merged

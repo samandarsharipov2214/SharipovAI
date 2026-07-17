@@ -8,9 +8,10 @@ CSS = ROOT / "dashboard/static/web2/news_center_v12.css"
 
 def test_news_center_assets_are_connected():
     html = INDEX.read_text(encoding="utf-8")
-    assert "news_center_v12.js?v=12" in html
-    assert "news_center_v12.css?v=12" in html
+    assert "news_center_v12.js?" in html
+    assert "news_center_v12.css?" in html
     assert 'data-page="news"' in html
+    assert html.index("news_center_v12.css") < html.index("news_center_v12.js")
 
 
 def test_news_center_uses_real_api_and_source_fields():

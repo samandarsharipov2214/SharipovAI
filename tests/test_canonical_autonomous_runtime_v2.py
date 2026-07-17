@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 
 import pytest
@@ -130,6 +131,10 @@ def _state() -> dict[str, object]:
     }
 
 
+def _canonical(value: object) -> object:
+    return json.loads(json.dumps(value, ensure_ascii=False, allow_nan=False))
+
+
 def test_verified_council_authorization_is_single_use_and_settles_reputation(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("COUNCIL_PROPOSAL_INTERVAL_SECONDS", "10")
     database = _database(tmp_path)
@@ -172,9 +177,11 @@ def test_verified_council_authorization_is_single_use_and_settles_reputation(tmp
         net_pnl=25.0,
         drawdown_contribution=0.0,
     )
-    assert settlement == duplicate
+    assert _canonical(settlement) == _canonical(duplicate)
     assert settlement["verified_market_data"] is True
-    assert database.get_json("paper_decision_settlements", proposal.decision_id) is not None
+    persisted = database.get_json("paper_decision_settlements", proposal.decision_id)
+    assert persisted is not None
+    assert persisted["value"] == _canonical(settlement)
 
 
 def test_missing_news_confirmation_cannot_be_upgraded_to_entry(tmp_path) -> None:

@@ -38,6 +38,7 @@ def _account_app(monkeypatch, *, username: str | None, is_admin: bool, configure
 def _execution_app(monkeypatch, tmp_path, *, username: str | None, is_admin: bool) -> FastAPI:
     _patch_identity(monkeypatch, username=username, is_admin=is_admin)
     _configure_auth(monkeypatch)
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'project.db'}")
     monkeypatch.setenv("EXECUTION_JOURNAL_FILE", str(tmp_path / "execution-journal.json"))
     monkeypatch.setenv("EXECUTION_KILL_SWITCH", "1")
     monkeypatch.setenv("TESTNET_EXECUTION_ENABLED", "0")
@@ -112,3 +113,21 @@ def test_admin_can_read_execution_status(monkeypatch, tmp_path) -> None:
     assert payload["execution"]["live_execution_enabled"] is False
     assert payload["execution"]["testnet_execution_enabled"] is False
     assert payload["execution"]["kill_switch"] is True
+    assert payload["raw_manual_order_api"] == "removed"
+    assert payload["canonical_write_path"] == "ApprovedExecutionRequest"
+
+
+def test_admin_raw_order_endpoint_is_an_authenticated_tombstone(monkeypatch, tmp_path) -> None:
+    with TestClient(_execution_app(monkeypatch, tmp_path, username="admin", is_admin=True)) as client:
+        response = client.post(
+            "/api/execution/testnet-order",
+            json={
+                "symbol": "BTCUSDT",
+                "side": "Buy",
+                "quantity": 1,
+                "reference_price": 1,
+            },
+        )
+
+    assert response.status_code == 410
+    assert "ApprovedExecutionRequest" in response.json()["detail"]

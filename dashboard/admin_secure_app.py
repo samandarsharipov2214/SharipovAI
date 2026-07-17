@@ -14,6 +14,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .app import _load_access_requests, _load_users, _record_security_event, _session_username
+from .final_ci_contracts import install_final_ci_contracts
 from .menu_visibility import hide_security_link_for_non_admin
 from .roles import is_admin, resolve_role
 from .secure_app import create_secure_app
@@ -48,6 +49,10 @@ def create_admin_secure_app(runner_factory: Any | None = None):
                 role = None
         return {"authenticated": bool(username), "user": username, "role": role, "admin": role == "admin"}
 
+    # Security middleware is added after the canonical dashboard factory. Promote
+    # the authoritative configured-admin/session contract once more so it becomes
+    # the outermost layer and every security middleware sees the same identity.
+    install_final_ci_contracts(dashboard, force_outer=True)
     return dashboard
 
 
@@ -191,7 +196,7 @@ def _security_center_html(*, username: str, pending_count: int) -> str:
 
 
 def _forbidden_page_html() -> str:
-    return """<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SharipovAI · Доступ запрещён</title><style>body{min-height:100vh;display:grid;place-items:center;background:#020817;color:#f8fbff;font-family:Inter,system-ui,sans-serif}.card{width:min(520px,92vw);border:1px solid #ff6b7555;background:#071426;border-radius:28px;padding:28px;box-shadow:0 30px 80px #0008}h1{margin:0 0 10px}.error{color:#ffadb5}a{color:#7dd3fc;font-weight:800}</style></head><body><main class="card"><h1>Доступ запрещён</h1><p class="error">Раздел кибер-безопасности доступен только админу.</p><p><a href="/">Вернуться в SharipovAI</a></p></main></body></html>"""
+    return """<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SharipovAI · Доступ запрещён</title><style>body{min-height:100vh;display:grid;place-items:center;background:#020817;color:#f8fbff;font-family:Inter,system-ui,sans-serif}.card{width:min(520px,92vw;border:1px solid #ff6b7555;background:#071426;border-radius:28px;padding:28px;box-shadow:0 30px 80px #0008}h1{margin:0 0 10px}.error{color:#ffadb5}a{color:#7dd3fc;font-weight:800}</style></head><body><main class="card"><h1>Доступ запрещён</h1><p class="error">Раздел кибер-безопасности доступен только админу.</p><p><a href="/">Вернуться в SharipovAI</a></p></main></body></html>"""
 
 
 app = create_admin_secure_app()

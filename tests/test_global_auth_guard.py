@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import importlib
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -7,14 +9,17 @@ from dashboard.global_auth_guard import auth_disabled, install_global_auth_guard
 
 
 def _app(monkeypatch, *, username: str | None = None) -> FastAPI:
-    import dashboard.app as dashboard_app
-
+    dashboard_app = importlib.import_module("dashboard.app")
     monkeypatch.setattr(dashboard_app, "_session_username", lambda request: username)
     app = FastAPI()
 
     @app.get("/")
     def root() -> dict[str, str]:
-        return {"status": "public"}
+        return {"status": "private"}
+
+    @app.get("/health")
+    def health() -> dict[str, str]:
+        return {"status": "ok"}
 
     @app.get("/api/private")
     def private_api() -> dict[str, str]:
@@ -40,19 +45,23 @@ def test_bypass_requires_explicit_true_value(monkeypatch) -> None:
     assert auth_disabled() is True
 
 
-def test_public_route_remains_available(monkeypatch) -> None:
+def test_public_health_route_remains_available(monkeypatch) -> None:
     monkeypatch.delenv("SHARIPOVAI_DISABLE_AUTH", raising=False)
     with TestClient(_app(monkeypatch)) as client:
-        response = client.get("/")
+        response = client.get("/health")
     assert response.status_code == 200
+    assert response.json()["status"] == "ok"
 
 
-def test_private_api_rejects_anonymous(monkeypatch) -> None:
+def test_root_and_private_api_reject_anonymous(monkeypatch) -> None:
     monkeypatch.delenv("SHARIPOVAI_DISABLE_AUTH", raising=False)
-    with TestClient(_app(monkeypatch)) as client:
-        response = client.get("/api/private")
-    assert response.status_code == 401
-    assert response.json()["status"] == "unauthorized"
+    with TestClient(_app(monkeypatch), follow_redirects=False) as client:
+        root = client.get("/")
+        api = client.get("/api/private")
+    assert root.status_code == 303
+    assert root.headers["location"] == "/login?next=/"
+    assert api.status_code == 401
+    assert api.json()["status"] == "unauthorized"
 
 
 def test_private_page_redirects_anonymous_to_login(monkeypatch) -> None:

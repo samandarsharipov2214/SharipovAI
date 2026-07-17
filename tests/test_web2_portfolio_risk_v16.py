@@ -6,8 +6,9 @@ WEB = ROOT / "dashboard" / "static" / "web2"
 
 def test_portfolio_risk_assets_connected():
     index = (WEB / "index.html").read_text(encoding="utf-8")
-    assert "portfolio_risk_v16.css" in index
-    assert "portfolio_risk_v16.js" in index
+    assert "portfolio_risk_v16.css?" in index
+    assert "portfolio_risk_v16.js?" in index
+    assert index.index("portfolio_risk_v16.css") < index.index("portfolio_risk_v16.js")
 
 
 def test_portfolio_risk_uses_real_endpoints_only():
@@ -19,8 +20,11 @@ def test_portfolio_risk_uses_real_endpoints_only():
         "/api/ai-control-center/daily-report",
     ):
         assert route in js
+    assert "Promise.allSettled" in js
     assert "Math.random" not in js
-    assert "Синтетические значения','запрещены" in js
+    assert "Синтетические котировки" in js
+    assert "запрещены" in js
+    assert "Реальные ордера" in js
 
 
 def test_portfolio_and_risk_views_are_substantive():
@@ -33,8 +37,11 @@ def test_portfolio_and_risk_views_are_substantive():
         "Максимальный риск сделки",
         "Максимальная просадка",
         "Лимит дневного убытка",
-        "Торговля",
+        "Реальная торговля",
+        "Защитные проверки",
         "Предупреждения",
     )
     for text in required:
         assert text in js
+    assert "ЗАБЛОКИРОВАНА" in js
+    assert "Активные подтверждённые предупреждения не получены" in js

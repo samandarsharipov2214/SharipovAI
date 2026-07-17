@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from capital_allocation import CapitalAllocationPolicy
 from dashboard.trade_explanations import enrich_virtual_state, explain_trade
 from market_paper_engine import MarketPaperActivityEngine
 
@@ -31,30 +32,54 @@ def _payload(symbol: str, *, price: float = 100.0, change: float = 3.0, shock: f
     }
 
 
-def test_market_engine_opens_and_persists_real_price_trade(tmp_path) -> None:
+def _policy() -> CapitalAllocationPolicy:
+    return CapitalAllocationPolicy(
+        reserve_percent=20.0,
+        max_position_percent=20.0,
+        max_risk_per_trade_percent=1.0,
+        minimum_notional=25.0,
+        leverage=1.0,
+    )
+
+
+def test_market_engine_opens_and_persists_real_price_trade(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("VIRTUAL_ACCOUNT_MAX_OPEN", "8")
     path = tmp_path / "virtual_account.json"
     factory = lambda symbol: _payload(symbol)
-    engine = MarketPaperActivityEngine(path=path, market_payload_factory=factory)
+    engine = MarketPaperActivityEngine(
+        path=path,
+        market_payload_factory=factory,
+        allocation_policy=_policy(),
+    )
 
     result = engine.tick(force=True, now=1_000)
 
     assert result["status"] == "ok"
     trade = result["trade"]
     assert trade["entry_price"] == 100.0
-    assert trade["quantity"] == 1.0
+    assert trade["notional"] == 2000.0
+    assert trade["quantity"] == 20.0
+    assert trade["capital_allocation"]["reserve_percent"] == 20.0
+    assert trade["leverage"] == 1.0
     assert trade["quote_source"] == "test-exchange"
     assert trade["real_order_placed"] is False
 
-    reloaded = MarketPaperActivityEngine(path=path, market_payload_factory=factory).state()
+    reloaded = MarketPaperActivityEngine(
+        path=path,
+        market_payload_factory=factory,
+        allocation_policy=_policy(),
+    ).state()
     assert reloaded["summary"]["trade_count"] == 1
     assert reloaded["summary"]["open_positions"] == 1
+    assert reloaded["summary"]["deployed_notional"] == 2000.0
+    assert reloaded["summary"]["reserve_percent"] == 20.0
     assert reloaded["summary"]["market_price_accounting"] is True
 
 
 def test_news_wait_does_not_prevent_virtual_evidence_collection(tmp_path) -> None:
     path = tmp_path / "virtual_account.json"
     factory = lambda symbol: _payload(symbol, shock=100.0)
-    engine = MarketPaperActivityEngine(path=path, market_payload_factory=factory)
+    engine = MarketPaperActivityEngine(path=path, market_payload_factory=factory, allocation_policy=_policy())
 
     result = engine.tick(force=True, now=1_000)
 
@@ -71,6 +96,7 @@ def test_unverified_market_data_blocks_virtual_entry(tmp_path) -> None:
     engine = MarketPaperActivityEngine(
         path=tmp_path / "virtual_account.json",
         market_payload_factory=unavailable,
+        allocation_policy=_policy(),
     )
 
     result = engine.tick(force=True, now=1_000)
@@ -83,7 +109,7 @@ def test_unverified_market_data_blocks_virtual_entry(tmp_path) -> None:
 def test_catch_up_never_fabricates_historical_trades(tmp_path) -> None:
     path = tmp_path / "virtual_account.json"
     factory = lambda symbol: _payload(symbol)
-    engine = MarketPaperActivityEngine(path=path, market_payload_factory=factory)
+    engine = MarketPaperActivityEngine(path=path, market_payload_factory=factory, allocation_policy=_policy())
 
     result = engine.catch_up(now=10_000, max_ticks=24)
 

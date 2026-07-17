@@ -94,6 +94,39 @@ Trading invariants:
 One failed AI must not crash the whole audit, Telegram webhook, dashboard startup,
 or other agents. Report the failed module with its exact error and continue.
 
+## Fact-forcing before changes
+Before editing a critical file or creating a new subsystem, gather concrete facts
+instead of relying on self-evaluation:
+
+1. list the importers, callers, routes and state files affected by the change;
+2. identify public functions/classes and data-schema fields that can change;
+3. check whether an existing canonical owner or implementation already serves the purpose;
+4. define the rollback path before any destructive or production-facing action;
+5. name the exact tests/audits that will verify the change.
+
+Do not quote or expose raw production secrets while inspecting schemas. Use field
+names and redacted/synthetic examples only.
+
+## Project change ledger
+Significant repository, deployment, configuration and runtime changes must be
+recordable through `storage.ProjectChangeLedger` using the canonical
+`ProjectDatabase`.
+
+Required lifecycle:
+- `planned` before mutation;
+- `applied` after the intended change exists;
+- `verified` only after factual checks pass;
+- `failed` or `rolled_back` when verification does not pass.
+
+Ledger operations must use repository-relative traversal-free paths, declare
+`managed` or `shared` ownership, and never contain tokens, passwords, API keys,
+credentials or private keys. Confidence, a static audit percentage or an LLM
+statement is not verification evidence.
+
+The selective ECC adaptation rules and rollout order are fixed in
+`docs/ecc-adoption-plan.md`. Do not install or copy the full ECC agent/skill/hook
+surface into SharipovAI.
+
 ## Verification after changes
 Run at minimum:
 

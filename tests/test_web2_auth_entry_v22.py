@@ -17,10 +17,14 @@ def test_root_dashboard_is_not_public_when_auth_is_enabled() -> None:
 def test_anonymous_ui_requests_redirect_to_login() -> None:
     source = AUTH_GUARD.read_text(encoding="utf-8")
     assert 'if path.startswith("/api/")' in source
-    assert 'RedirectResponse(url=f"/login?next=' in source
+    assert "RedirectResponse(" in source
+    assert 'url=f"/login?next={quote(safe_next' in source
+    assert "status_code=303" in source
+    assert '"status": "unauthorized"' in source
 
 
 def test_web2_still_serves_root_after_authentication() -> None:
     source = WEB2_HOST.read_text(encoding="utf-8")
     assert '"/", "/market"' in source
     assert "FileResponse(WEB2_INDEX" in source
+    assert "no-store, no-cache, must-revalidate" in source

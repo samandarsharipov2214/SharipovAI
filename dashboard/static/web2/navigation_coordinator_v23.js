@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = 32;
+  const VERSION = 36;
   const PAGE_OWNERS = new Map([
     ['overview', 'overview_runtime_v25.js'],
     ['market', 'tradingview_market_v32.js'],
@@ -17,6 +17,7 @@
     ['control', 'general_control_v15.js'],
     ['evidence', 'learning_evidence_reports_v17.js'],
     ['virtual', 'exchange_execution_settings_v18.js'],
+    ['campaigns', 'campaign_operations_v36.js'],
     ['reports', 'learning_evidence_reports_v17.js'],
     ['settings', 'exchange_execution_settings_v18.js'],
     ['system-status', 'system_status_v11.js'],
@@ -29,7 +30,7 @@
       overview: 'Обзор', market: 'Рынок', decision: 'Решение ИИ', portfolio: 'Портфель',
       trades: 'Сделки', bots: 'Центр ИИ', chat: 'ИИ-чат', news: 'Новости', risk: 'Центр рисков',
       bybit: 'Bybit', learning: 'Центр обучения', control: 'Главное управление',
-      evidence: 'Хранилище доказательств', virtual: 'Виртуальный счёт', reports: 'Отчёты',
+      evidence: 'Хранилище доказательств', virtual: 'Виртуальный счёт', campaigns: 'Кампании', reports: 'Отчёты',
       settings: 'Настройки', 'system-status': 'Состояние системы', operations: 'Эксплуатация',
       incidents: 'Центр ошибок',
     },
@@ -37,14 +38,14 @@
       overview: 'Overview', market: 'Market', decision: 'AI decision', portfolio: 'Portfolio',
       trades: 'Trades', bots: 'AI center', chat: 'AI chat', news: 'News', risk: 'Risk center',
       bybit: 'Bybit', learning: 'Learning center', control: 'Main control', evidence: 'Evidence vault',
-      virtual: 'Virtual account', reports: 'Reports', settings: 'Settings',
+      virtual: 'Virtual account', campaigns: 'Campaigns', reports: 'Reports', settings: 'Settings',
       'system-status': 'System status', operations: 'Operations', incidents: 'Incident center',
     },
     uz: {
       overview: 'Umumiy ko‘rinish', market: 'Bozor', decision: 'AI qarori', portfolio: 'Portfel',
       trades: 'Bitimlar', bots: 'AI markazi', chat: 'AI chat', news: 'Yangiliklar', risk: 'Xavf markazi',
       bybit: 'Bybit', learning: 'O‘qitish markazi', control: 'Bosh boshqaruv',
-      evidence: 'Dalillar ombori', virtual: 'Virtual hisob', reports: 'Hisobotlar', settings: 'Sozlamalar',
+      evidence: 'Dalillar ombori', virtual: 'Virtual hisob', campaigns: 'Kampaniyalar', reports: 'Hisobotlar', settings: 'Sozlamalar',
       'system-status': 'Tizim holati', operations: 'Ekspluatatsiya', incidents: 'Xatolar markazi',
     },
   };
