@@ -4,6 +4,7 @@ umask 077
 
 APP_DIR="${APP_DIR:-/opt/sharipovai-repo}"
 COMPOSE_DIR="${COMPOSE_DIR:-${APP_DIR}/deploy/vps}"
+COMPOSE_FILE="${PHASE7_COMPOSE_FILE:-${COMPOSE_DIR}/docker-compose.yml}"
 SERVICE="${SERVICE:-sharipovai}"
 MIN_FREE_MIB="${PHASE7_MIN_FREE_MIB:-1536}"
 REPORT_FILE="${PHASE7_PREFLIGHT_REPORT:-/tmp/sharipovai-phase7-preflight.json}"
@@ -13,7 +14,7 @@ log() { printf '[phase7-preflight] %s\n' "$*"; }
 
 [[ ${EUID} -eq 0 ]] || fail 'run as root'
 [[ -d "${APP_DIR}/.git" ]] || fail "repository missing: ${APP_DIR}"
-[[ -f "${COMPOSE_DIR}/docker-compose.yml" ]] || fail 'docker-compose.yml is missing'
+[[ -f "${COMPOSE_FILE}" ]] || fail "Compose file is missing: ${COMPOSE_FILE}"
 [[ -f "${COMPOSE_DIR}/.env.vps" ]] || fail '.env.vps is missing'
 for command in docker python3 curl df stat; do
   command -v "${command}" >/dev/null || fail "required command is missing: ${command}"
@@ -31,10 +32,11 @@ free_mib="$(df -Pm "${COMPOSE_DIR}" | awk 'NR==2 {print $4}')"
 docker info >/dev/null
 rendered="$(mktemp)"
 trap 'rm -f "${rendered}"' EXIT
-(
-  cd "${COMPOSE_DIR}"
-  docker compose config --format json >"${rendered}"
-)
+docker compose \
+  --project-directory "${COMPOSE_DIR}" \
+  --env-file "${COMPOSE_DIR}/.env.vps" \
+  -f "${COMPOSE_FILE}" \
+  config --format json >"${rendered}"
 
 python3 - "${rendered}" <<'PY'
 import json
@@ -98,7 +100,7 @@ fi
 mkdir -p "${COMPOSE_DIR}/backups" "${COMPOSE_DIR}/emergency-recovery"
 test -w "${COMPOSE_DIR}/backups" || fail 'backup directory is not writable'
 
-python3 - "${REPORT_FILE}" "${free_mib}" "${container_state}" "${database_state}" "${data_source}" <<'PY'
+python3 - "${REPORT_FILE}" "${free_mib}" "${container_state}" "${database_state}" "${data_source}" "${COMPOSE_FILE}" <<'PY'
 import json
 import os
 import sys
@@ -113,6 +115,7 @@ payload = {
     "container_state": sys.argv[3],
     "database_state": sys.argv[4],
     "data_source_present": bool(sys.argv[5]),
+    "compose_file": sys.argv[6],
     "mainnet_enabled": False,
 }
 tmp = path.with_name(f"{path.name}.tmp-{os.getpid()}")
@@ -121,4 +124,4 @@ os.replace(tmp, path)
 print(json.dumps(payload, sort_keys=True))
 PY
 
-log "PREFLIGHT_OK report=${REPORT_FILE}"
+log "PREFLIGHT_OK compose=${COMPOSE_FILE} report=${REPORT_FILE}"
