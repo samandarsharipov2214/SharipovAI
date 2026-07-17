@@ -30,9 +30,22 @@
     return values.slice().reverse().map((row) => `<tr><td><code>${esc(row.order_link_id || '—')}</code><small>${esc((row.exec_ids || []).join(', ') || '—')}</small></td><td>${esc(row.symbol || '—')}</td><td>${esc(row.side || '—')}</td><td>${fmt(row.filled_quantity, 10)}</td><td>${fmt(row.average_fill_price, 8)}</td><td>${fmt(row.actual_fee, 10)} ${esc(row.fee_currency || '')}</td><td>${when(row.last_exec_time_ms)}</td></tr>`).join('');
   }
 
+  function host() {
+    const shell = document.querySelector('#content .campaign36-shell');
+    if (!shell) return null;
+    let panel = document.getElementById('phase7MonitorPanel');
+    if (!panel) {
+      panel = document.createElement('section');
+      panel.id = 'phase7MonitorPanel';
+      panel.className = 'p7-shell';
+      shell.append(panel);
+    }
+    return panel;
+  }
+
   function render() {
     if (!active()) return;
-    const root = document.getElementById('content');
+    const root = host();
     if (!root) return;
     const operations = state.operations || {};
     const monitor = state.monitor || {};
@@ -41,7 +54,7 @@
     const percent = Math.max(0, Math.min(100, Number(progress.percent || 0)));
     const alerts = Array.isArray(monitor.alerts) ? monitor.alerts : [];
     const rows = Array.isArray(monitor.actual_fills) ? monitor.actual_fills : [];
-    root.innerHTML = `<div class="title"><h1>Phase 7 Campaign Monitor</h1><p>Live progress, actual private fills, alerts и final report</p></div><section class="p7-shell"><article class="p7-hero"><div><small>PRODUCTION CONTROL PLANE</small><h2>${esc(monitor.campaign_id || 'Кампания не запущена')}</h2><p>${esc(monitor.experiment_id || 'approved experiment required')} · ${esc(monitor.scope || 'BTCUSDT')}</p></div>${badge(monitor.status || operations.status)}</article><section class="p7-metrics"><article><span>Matched</span><b>${Number(progress.matched_fills || 0)} / ${Number(progress.target_fills || 20)}</b><div class="p7-progress"><i style="width:${percent}%"></i></div><small>Осталось ${Number(progress.remaining_fills || 20)}</small></article><article><span>Private fills</span><b>${Number(monitor.actual_fill_count || 0)}</b><small>Authenticated evidence</small></article><article><span>Actual fees</span><b>${fmt(monitor.actual_fee_total, 10)}</b><small>Private execution fees</small></article><article><span>Heartbeat</span><b>${monitor.heartbeat_stale ? 'STALE' : 'LIVE'}</b><small>${fmt(monitor.heartbeat_age_seconds, 2)} сек.</small></article><article><span>Private stream</span><b>${monitor.private_stream?.ready ? 'READY' : 'BLOCKED'}</b><small>${esc(monitor.private_stream?.status || 'no evidence')}</small></article><article><span>Report</span><b>${monitor.final_report_ready ? 'READY' : 'PENDING'}</b><small>${esc(monitor.final_report_id || '20+ clean fills')}</small></article></section><section class="p7-grid"><article class="p7-card"><h3>Release gates</h3><div class="p7-gates">${gates(plan)}</div><p class="p7-muted">${esc((plan.blockers || []).join(', ') || 'Все gates зелёные.')}</p></article><article class="p7-card"><h3>Alerts</h3>${alerts.length ? `<div class="p7-alerts">${alerts.map((item) => `<div>⚠ ${esc(item)}</div>`).join('')}</div>` : '<div class="p7-good">Нет активных alerts.</div>'}</article></section><section class="p7-table-card"><h3>Actual private executions · ${rows.length}</h3><div class="p7-table-scroll"><table><thead><tr><th>Order / execId</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Avg price</th><th>Fee</th><th>Time</th></tr></thead><tbody>${fills(rows) || '<tr><td colspan="7">Private execution evidence пока отсутствует.</td></tr>'}</tbody></table></div></section><section class="p7-grid"><article class="p7-card"><h3>Canonical control</h3><p>Запуск и cycle остаются в существующем Campaign Operations API/CLI. Monitor не меняет credentials, flags, kill switch или Mainnet lock.</p></article><article class="p7-card"><h3>Report export</h3><p>${esc(monitor.final_report_path || 'Atomic JSON будет создан после final report.')}</p><small>Heartbeat: ${when(monitor.last_heartbeat_ms)} · cycle ${Number(monitor.cycle_count || 0)}</small>${state.error ? `<div class="p7-alerts"><div>${esc(state.error)}</div></div>` : ''}</article></section></section>`;
+    root.innerHTML = `<article class="p7-hero"><div><small>PHASE 7 LIVE EVIDENCE</small><h2>${esc(monitor.campaign_id || 'Кампания не запущена')}</h2><p>${esc(monitor.experiment_id || 'approved experiment required')} · ${esc(monitor.scope || 'BTCUSDT')}</p></div>${badge(monitor.status || operations.status)}</article><section class="p7-metrics"><article><span>Matched</span><b>${Number(progress.matched_fills || 0)} / ${Number(progress.target_fills || 20)}</b><div class="p7-progress"><i style="width:${percent}%"></i></div><small>Осталось ${Number(progress.remaining_fills || 20)}</small></article><article><span>Private fills</span><b>${Number(monitor.actual_fill_count || 0)}</b><small>Authenticated evidence</small></article><article><span>Actual fees</span><b>${fmt(monitor.actual_fee_total, 10)}</b><small>Private execution fees</small></article><article><span>Heartbeat</span><b>${monitor.heartbeat_stale ? 'STALE' : 'LIVE'}</b><small>${fmt(monitor.heartbeat_age_seconds, 2)} сек.</small></article><article><span>Private stream</span><b>${monitor.private_stream?.ready ? 'READY' : 'BLOCKED'}</b><small>${esc(monitor.private_stream?.status || 'no evidence')}</small></article><article><span>Report</span><b>${monitor.final_report_ready ? 'READY' : 'PENDING'}</b><small>${esc(monitor.final_report_id || '20+ clean fills')}</small></article></section><section class="p7-grid"><article class="p7-card"><h3>Release gates</h3><div class="p7-gates">${gates(plan)}</div><p class="p7-muted">${esc((plan.blockers || []).join(', ') || 'Все gates зелёные.')}</p></article><article class="p7-card"><h3>Alerts</h3>${alerts.length ? `<div class="p7-alerts">${alerts.map((item) => `<div>⚠ ${esc(item)}</div>`).join('')}</div>` : '<div class="p7-good">Нет активных alerts.</div>'}</article></section><section class="p7-table-card"><h3>Actual private executions · ${rows.length}</h3><div class="p7-table-scroll"><table><thead><tr><th>Order / execId</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Avg price</th><th>Fee</th><th>Time</th></tr></thead><tbody>${fills(rows) || '<tr><td colspan="7">Private execution evidence пока отсутствует.</td></tr>'}</tbody></table></div></section><section class="p7-grid"><article class="p7-card"><h3>Authority boundary</h3><p>Launch, schedules, cycles and decisions remain in the existing Campaign Operations panels above. Monitor is read-only.</p></article><article class="p7-card"><h3>Report export</h3><p>${esc(monitor.final_report_path || 'Atomic JSON будет создан после final report.')}</p><small>Heartbeat: ${when(monitor.last_heartbeat_ms)} · cycle ${Number(monitor.cycle_count || 0)}</small>${state.error ? `<div class="p7-alerts"><div>${esc(state.error)}</div></div>` : ''}</article></section>`;
   }
 
   async function load(refresh = false) {
@@ -56,7 +69,12 @@
   }
 
   setInterval(() => { if (active() && document.visibilityState === 'visible') load(false); }, POLL_MS);
-  document.addEventListener('click', (event) => { if (event.target?.closest?.('#nav button[data-page="campaigns"]')) setTimeout(() => load(true), 0); });
-  window.addEventListener('DOMContentLoaded', () => { if (active()) load(true); }, {once: true});
+  document.addEventListener('click', (event) => { if (event.target?.closest?.('#nav button[data-page="campaigns"]')) setTimeout(() => load(true), 100); });
+  const observer = new MutationObserver(() => { if (active() && !document.getElementById('phase7MonitorPanel')) render(); });
+  window.addEventListener('DOMContentLoaded', () => {
+    const content = document.getElementById('content');
+    if (content) observer.observe(content, {childList: true, subtree: true});
+    if (active()) setTimeout(() => load(true), 100);
+  }, {once: true});
   window.SharipovAIPhase7CampaignMonitor = {version: 38, load};
 })();
