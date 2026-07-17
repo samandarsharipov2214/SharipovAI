@@ -1,0 +1,53 @@
+name: Production deploy capability probe
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/deploy-capability-probe.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    if: >-
+      ${{
+        vars.SHARIPOVAI_SELF_HOSTED_CI == '1' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.head_ref == 'ops/deploy-main-4c219369'
+      }}
+    runs-on: [self-hosted, linux, x64, sharipovai-ci]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: 4c219369166c7707cdadeb79d476cb9200fedf46
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Probe immutable target, health, watcher and authority
+        shell: bash
+        run: |
+          set -u
+          target='4c219369166c7707cdadeb79d476cb9200fedf46'
+          checked="$(git rev-parse HEAD 2>&1)"
+          remote="$(git ls-remote origin refs/heads/main 2>&1 | awk '{print $1}')"
+          echo "CHECKED_SHA=$checked"
+          echo "REMOTE_MAIN_SHA=$remote"
+          if [[ "$checked" == "$target" ]]; then echo 'CHECKOUT_OK=1'; else echo 'CHECKOUT_OK=0'; fi
+          if [[ "$remote" == "$target" ]]; then echo 'REMOTE_MAIN_OK=1'; else echo 'REMOTE_MAIN_OK=0'; fi
+          code="$(curl --silent --show-error --max-time 20 --output /tmp/probe-health --write-out '%{http_code}' https://85-137-88-17.sslip.io/health 2>/tmp/probe-curl-error || true)"
+          echo "HEALTH_HTTP=${code:-none}"
+          cat /tmp/probe-health 2>/dev/null || true
+          cat /tmp/probe-curl-error 2>/dev/null || true
+          echo
+          echo "RUNNER_ID=$(id -u):$(id -g)"
+          systemctl is-active sharipovai-deploy-watcher.service 2>&1 || true
+          if docker container inspect sharipovai >/dev/null 2>&1; then
+            echo 'DOCKER_AUTHORITY=direct'
+          elif sudo -n docker container inspect sharipovai >/dev/null 2>&1; then
+            echo 'DOCKER_AUTHORITY=passwordless-sudo'
+          else
+            echo 'DOCKER_AUTHORITY=none'
+          fi
+          [[ "$checked" == "$target" && "$remote" == "$target" && "$code" == '200' ]]
