@@ -1,0 +1,59 @@
+name: Agent failure diagnostics
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/agent-failure-diagnostics.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    if: >-
+      ${{
+        vars.SHARIPOVAI_SELF_HOSTED_CI == '1' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.head_ref == 'ops/agent-failure-diagnostics'
+      }}
+    runs-on: [self-hosted, linux, x64, sharipovai-ci]
+    timeout-minutes: 10
+    steps:
+      - name: Collect service evidence
+        shell: bash
+        run: |
+          set +e
+          mkdir -p artifacts
+          {
+            echo '=== public/local health ==='
+            curl -k -sS -o /tmp/public-health -w 'PUBLIC_HTTP=%{http_code}\n' --max-time 15 https://85-137-88-17.sslip.io/health
+            cat /tmp/public-health 2>/dev/null || true
+            echo
+            curl -sS -o /tmp/local-health -w 'LOCAL_HTTP=%{http_code}\n' --max-time 10 http://127.0.0.1:8000/health
+            cat /tmp/local-health 2>/dev/null || true
+            echo
+            echo '=== git/container ==='
+            git -C /opt/sharipovai-repo rev-parse HEAD 2>&1
+            systemctl is-active docker 2>&1
+            docker ps --filter name=^/sharipovai$ --format '{{.Names}} {{.Status}} {{.Image}}' 2>&1
+            echo '=== agent unit ==='
+            systemctl cat sharipovai-agent.service 2>&1
+            systemctl cat sharipovai-agent.timer 2>&1
+            systemctl status sharipovai-agent.service --no-pager -l 2>&1
+            echo '=== agent journal ==='
+            journalctl -u sharipovai-agent.service -n 200 --no-pager -o short-iso 2>&1
+            echo '=== timer ==='
+            systemctl status sharipovai-agent.timer --no-pager -l 2>&1
+            systemctl list-timers sharipovai-agent.timer --all --no-pager 2>&1
+            echo '=== paths ==='
+            ls -ld /opt/sharipovai-repo /var/lib/sharipovai-agent /run/lock /var/lib/docker 2>&1
+          } > artifacts/agent-failure-diagnostics.txt
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: agent-failure-${{ github.run_id }}
+          path: artifacts/agent-failure-diagnostics.txt
+          if-no-files-found: error
+          retention-days: 1
