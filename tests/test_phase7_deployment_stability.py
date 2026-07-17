@@ -18,10 +18,14 @@ def test_preflight_runs_before_backup_and_code_replacement() -> None:
     updater = UPDATER.read_text(encoding="utf-8")
     preflight = PREFLIGHT.read_text(encoding="utf-8")
 
-    assert updater.index("running target Phase 7 deployment preflight") < updater.index(
+    assert updater.index("running immutable target Phase 7 deployment preflight") < updater.index(
         "creating verified backup before code update"
     ) < updater.index("updating ${previous_sha} -> ${target_sha}")
+    assert "PHASE7_COMPOSE_FILE" in updater
+    assert 'show "${target_sha}:deploy/vps/docker-compose.yml"' in updater
+    assert 'show "${target_sha}:deploy/vps/export_backup.sh"' in updater
     assert "PRAGMA quick_check" in preflight
+    assert "COMPOSE_FILE" in preflight
     assert "MIN_FREE_MIB" in preflight
     assert "PREFLIGHT_OK" in preflight
     assert "PHASE7_PREFLIGHT_REPORT" in preflight
