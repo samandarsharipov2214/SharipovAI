@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 APP_DIR="${APP_DIR:-/opt/sharipovai-repo}"
 BRANCH="${BRANCH:-main}"
+FETCH_REMOTE="${FETCH_REMOTE:-origin}"
 LOCK_FILE="${LOCK_FILE:-/run/lock/sharipovai-deploy.lock}"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:8000/health}"
 HEALTH_ATTEMPTS="${HEALTH_ATTEMPTS:-30}"
@@ -16,6 +17,13 @@ fail() { printf '[sharipovai-update] ERROR: %s\n' "$*" >&2; exit 1; }
 [[ "${BRANCH}" =~ ^[A-Za-z0-9._/-]+$ ]] || fail 'BRANCH contains unsafe characters'
 [[ -d "${APP_DIR}/.git" ]] || fail "git repository not found at ${APP_DIR}"
 [[ -f "${APP_DIR}/deploy/vps/.env.vps" ]] || fail 'deploy/vps/.env.vps is missing'
+
+if [[ "${FETCH_REMOTE}" == https://github.com/* ]]; then
+  [[ "${FETCH_REMOTE}" =~ ^https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+(\.git)?$ ]] \
+    || fail 'FETCH_REMOTE must be a plain HTTPS GitHub repository URL'
+else
+  [[ "${FETCH_REMOTE}" =~ ^[A-Za-z0-9._-]+$ ]] || fail 'FETCH_REMOTE contains unsafe characters'
+fi
 
 install -d -m 0755 "$(dirname "${LOCK_FILE}")"
 exec 9>"${LOCK_FILE}"
@@ -96,10 +104,17 @@ rollback() {
   fail "new deployment was rolled back safely: ${reason}"
 }
 
-# Fetching objects does not mutate the checked-out production tree.
-log "fetching origin/${BRANCH}"
-git -C "${APP_DIR}" fetch --prune origin "${BRANCH}"
-target_sha="$(git -C "${APP_DIR}" rev-parse "origin/${BRANCH}")"
+# Fetch objects without mutating the checked-out production tree. The autonomous
+# agent uses a direct HTTPS URL so it never depends on root SSH credentials.
+if [[ "${FETCH_REMOTE}" == https://github.com/* ]]; then
+  log "fetching ${BRANCH} directly over HTTPS"
+  git -C "${APP_DIR}" fetch --no-tags "${FETCH_REMOTE}" "${BRANCH}"
+  target_sha="$(git -C "${APP_DIR}" rev-parse FETCH_HEAD)"
+else
+  log "fetching ${FETCH_REMOTE}/${BRANCH}"
+  git -C "${APP_DIR}" fetch --prune "${FETCH_REMOTE}" "${BRANCH}"
+  target_sha="$(git -C "${APP_DIR}" rev-parse "${FETCH_REMOTE}/${BRANCH}")"
+fi
 [[ -n "${target_sha}" ]] || fail 'target commit could not be resolved'
 
 if [[ "${target_sha}" == "${previous_sha}" ]]; then
@@ -114,7 +129,7 @@ if [[ ! -f "${backup_exporter}" ]]; then
   # Old installations may predate the exporter. Read it from the fetched target
   # commit without resetting the production checkout.
   backup_exporter_tmp="$(mktemp)"
-  git -C "${APP_DIR}" show "origin/${BRANCH}:deploy/vps/export_backup.sh" >"${backup_exporter_tmp}"
+  git -C "${APP_DIR}" show "${target_sha}:deploy/vps/export_backup.sh" >"${backup_exporter_tmp}"
   backup_exporter="${backup_exporter_tmp}"
 fi
 APP_DIR="${APP_DIR}" COMPOSE_DIR="${compose_dir}" bash "${backup_exporter}"
