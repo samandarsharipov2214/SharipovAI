@@ -23,9 +23,6 @@ ensure_event_handler_compat(app)
 def create_app(*args: Any, **kwargs: Any):
     """Resolve the current module and apply canonical contracts after every reload."""
 
-    # final_ci_contracts installs administrator-first auth itself and wraps only a
-    # newly reloaded factory. Calling the older wrapper installer here as well
-    # would stack two wrappers on every factory invocation.
     install_final_ci_contracts()
     app_module = importlib.import_module("dashboard.app")
     return app_module.create_app(*args, **kwargs)
@@ -46,6 +43,7 @@ from .global_auth_guard import install_global_auth_guard
 from .market_data_api import install_market_data_api
 from .news_agent_network_api import install_news_agent_network_api
 from .observability import install_observability
+from .phase7_campaign_api import install_phase7_campaign_api
 from .private_order_ws_api import install_private_order_ws_api
 from .routers import install_operational_routers
 from .source_status_compat_api import install_source_status_compat_api
@@ -65,6 +63,7 @@ install_dashboard2_api(app)
 install_private_order_ws_api(app)
 install_fill_harvester_api(app)
 install_campaign_api(app)
+install_phase7_campaign_api(app)
 install_source_status_compat_api(app)
 install_operational_routers(app)
 install_web2_host(app)
