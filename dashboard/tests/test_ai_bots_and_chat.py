@@ -34,19 +34,31 @@ def test_ai_bots_api_returns_truthful_supervisor_summary(monkeypatch) -> None:
     assert payload["status"] in {"ok", "warning"}
     supervisor = payload["supervisor"]
     assert supervisor["name"] in {"General Controller", "Генеральный контролёр AI"}
-    assert payload["summary"]["total_bots"] == len(payload["bots"])
+
+    bots = payload["bots"]
+    assert payload["summary"]["total_bots"] == len(bots)
     assert len(CANONICAL_AI_ORGANS) == 9
     assert 0 <= payload["summary"]["active"] <= payload["summary"]["total_bots"]
 
-    identities = {
-        str(bot.get("organ_id") or bot.get("id") or bot.get("name") or "")
-        .strip()
-        .lower()
-        .replace(" ", "_")
-        for bot in payload["bots"]
+    names = {str(bot.get("name") or "").strip().lower() for bot in bots}
+    assert "" not in names
+    assert len(names) == len(bots)
+
+    canonical_runtime_coverage = {
+        "general_controller": {"general controller", "генеральный контролёр ai"},
+        "market_intelligence": {"market agent", "market intelligence ai"},
+        "news_intelligence": {"news agent", "news intelligence ai"},
+        "risk_engine": {"risk engine", "risk engine ai", "stress bot"},
+        "portfolio_engine": {"portfolio engine", "portfolio & reports ai"},
+        "virtual_execution": {"paper trading bot", "virtual account execution ai"},
+        "decision_quality": {"confidence engine", "consensus engine", "decision quality ai"},
+        "learning_engine": {"learning engine", "learning engine ai"},
+        "security_guard": {"security guard", "security guard ai"},
     }
-    assert identities & {"market_agent", "market_intelligence"}
-    assert identities & {"security_guard"}
+    assert set(canonical_runtime_coverage) == {organ.id for organ in CANONICAL_AI_ORGANS}
+    for organ_id, aliases in canonical_runtime_coverage.items():
+        assert names & aliases, f"canonical organ {organ_id} is absent from runtime bot rows"
+
     if payload["status"] == "warning":
         assert payload["summary"]["active"] < payload["summary"]["total_bots"]
 
