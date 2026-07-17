@@ -6,8 +6,21 @@ SERVICE="sharipovai"
 ENV_FILE="$ROOT/deploy/vps/.env.vps"
 LOCK_FILE="/run/sharipovai-telegram-deploy.lock"
 POLL_SECONDS="5"
+FETCH_REMOTE="${FETCH_REMOTE:-origin}"
 
 log() { printf '%s %s\n' "$(date -Is)" "$*"; }
+
+if [[ "${FETCH_REMOTE}" == https://github.com/* ]]; then
+  [[ "${FETCH_REMOTE}" =~ ^https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+(\.git)?$ ]] || {
+    echo 'FETCH_REMOTE must be a plain HTTPS GitHub repository URL' >&2
+    exit 1
+  }
+else
+  [[ "${FETCH_REMOTE}" =~ ^[A-Za-z0-9._-]+$ ]] || {
+    echo 'FETCH_REMOTE contains unsafe characters' >&2
+    exit 1
+  }
+fi
 
 read_request() {
   docker exec "$SERVICE" python - <<'PY'
@@ -97,6 +110,20 @@ PY
 )" >/dev/null || true
 }
 
+fetch_main() {
+  local target_sha
+  cd "$ROOT"
+  if [[ "${FETCH_REMOTE}" == https://github.com/* ]]; then
+    git fetch --no-tags "${FETCH_REMOTE}" main
+    target_sha="$(git rev-parse FETCH_HEAD)"
+    git checkout -q main
+    git reset --hard "${target_sha}"
+  else
+    git fetch --prune "${FETCH_REMOTE}" main
+    git merge --ff-only "${FETCH_REMOTE}/main"
+  fi
+}
+
 process_request() {
   local request_json="$1"
   local request_id action actor_id chat_id created_at now commit output_file
@@ -125,20 +152,18 @@ process_request() {
 
   output_file="/tmp/${request_id}.log"
   if (
-    cd "$ROOT"
-    git fetch origin main
-    git merge --ff-only origin/main
-    commit="$(git rev-parse --short HEAD)"
+    fetch_main
+    commit="$(git -C "$ROOT" rev-parse --short HEAD)"
     write_status running "защищённые тесты и deploy" "$request_id" "$chat_id" "Кандидат проверяется" "$commit"
-    SHARIPOVAI_DEPLOY_WATCHER_ACTIVE=1 bash scripts/deploy_web2_refresh_fix.sh
+    SHARIPOVAI_DEPLOY_WATCHER_ACTIVE=1 bash "$ROOT/scripts/deploy_web2_refresh_fix.sh"
   ) >"$output_file" 2>&1; then
-    commit="$(cd "$ROOT" && git rev-parse --short HEAD)"
+    commit="$(git -C "$ROOT" rev-parse --short HEAD)"
     write_status success completed "$request_id" "$chat_id" "Production проверен; реальные ордера заблокированы" "$commit"
     remove_request
     notify "$chat_id" "✅ <b>SharipovAI обновлён и проверен</b>\n\nКоммит: <code>${commit}</code>\nProduction healthy. Реальные ордера заблокированы."
     log "Deployment $request_id succeeded at $commit"
   else
-    commit="$(cd "$ROOT" && git rev-parse --short HEAD 2>/dev/null || true)"
+    commit="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || true)"
     local tail_text
     tail_text="$(tail -n 12 "$output_file" 2>/dev/null | sed 's/[<>]/ /g' | tail -c 2500)"
     write_status failed failed "$request_id" "$chat_id" "Deploy завершился ошибкой; production защищён откатом" "$commit"
