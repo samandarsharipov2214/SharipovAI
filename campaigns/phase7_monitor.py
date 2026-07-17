@@ -160,29 +160,40 @@ class Phase7CampaignMonitor:
         }
         if not links:
             return []
+        snapshot = self.campaign.executions.snapshot()
+        source = snapshot.get("managed_fills")
+        if not isinstance(source, list):
+            source = []
         rows: list[dict[str, Any]] = []
-        for item in self.campaign.executions.snapshot().get("managed_orders", []):
+        for item in source:
             if not isinstance(item, Mapping):
                 continue
             link = str(item.get("order_link_id") or "")
             if link not in links:
                 continue
+            exec_id = str(item.get("exec_id") or "")
+            if not exec_id:
+                continue
             rows.append(
                 {
                     "order_link_id": link,
+                    "order_id": str(item.get("order_id") or ""),
+                    "exec_id": exec_id,
                     "symbol": str(item.get("symbol") or ""),
                     "side": str(item.get("side") or ""),
-                    "filled_quantity": _finite(item.get("filled_quantity")),
-                    "average_fill_price": _finite(item.get("average_fill_price")),
-                    "actual_fee": _finite(item.get("actual_fee")),
+                    "filled_quantity": _finite(item.get("exec_quantity")),
+                    "average_fill_price": _finite(item.get("exec_price")),
+                    "executed_value": _finite(item.get("exec_value")),
+                    "actual_fee": _finite(item.get("exec_fee")),
                     "fee_currency": str(item.get("fee_currency") or ""),
-                    "first_exec_time_ms": int(item.get("first_exec_time_ms", 0) or 0),
-                    "last_exec_time_ms": int(item.get("last_exec_time_ms", 0) or 0),
-                    "exec_ids": [str(value) for value in item.get("exec_ids", [])],
+                    "is_maker": bool(item.get("is_maker")),
+                    "first_exec_time_ms": int(item.get("exec_time_ms", 0) or 0),
+                    "last_exec_time_ms": int(item.get("exec_time_ms", 0) or 0),
+                    "exec_ids": [exec_id],
                     "private_evidence": True,
                 }
             )
-        return sorted(rows, key=lambda item: (item["last_exec_time_ms"], item["order_link_id"]))
+        return sorted(rows, key=lambda item: (item["last_exec_time_ms"], item["exec_id"]))
 
     def _alerts(
         self,
