@@ -1,0 +1,63 @@
+name: Production host deployment surface probe
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/deploy-host-surface-probe.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    if: >-
+      ${{
+        vars.SHARIPOVAI_SELF_HOSTED_CI == '1' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.head_ref == 'ops/deploy-main-4c219369'
+      }}
+    runs-on: [self-hosted, linux, x64, sharipovai-ci]
+    timeout-minutes: 10
+    steps:
+      - name: Collect host deployment surface evidence
+        shell: bash
+        run: |
+          set +e
+          mkdir -p artifacts
+          {
+            echo '=== sharipov units ==='
+            systemctl list-unit-files --no-pager 2>&1 | grep -Ei 'sharipov|deploy|update' || true
+            echo '=== active services ==='
+            systemctl list-units --type=service --all --no-pager 2>&1 | grep -Ei 'sharipov|docker|caddy' || true
+            echo '=== timers ==='
+            systemctl list-timers --all --no-pager 2>&1 | grep -Ei 'sharipov|deploy|update' || true
+            echo '=== docker socket ==='
+            ls -l /var/run/docker.sock 2>&1
+            test -r /var/run/docker.sock; echo "DOCKER_SOCKET_READ_RC=$?"
+            test -w /var/run/docker.sock; echo "DOCKER_SOCKET_WRITE_RC=$?"
+            echo '=== docker tcp ==='
+            for port in 2375 2376; do
+              timeout 2 bash -lc "cat </dev/null >/dev/tcp/127.0.0.1/$port" >/dev/null 2>&1
+              echo "DOCKER_TCP_${port}_RC=$?"
+            done
+            echo '=== production files ==='
+            test -r /opt/sharipovai-repo/deploy/vps/.env.vps; echo "ENV_DIRECT_READ_RC=$?"
+            test -w /opt/sharipovai-repo; echo "PROD_REPO_WRITE_RC=$?"
+            test -x /opt/sharipovai-repo/scripts/deploy_web2_refresh_fix.sh; echo "DEPLOY_SCRIPT_EXEC_RC=$?"
+            echo '=== listeners ==='
+            ss -ltn 2>&1 | grep -E ':(80|443|8000|2375|2376)\b' || true
+            echo '=== localhost health ==='
+            for url in http://127.0.0.1:8000/health http://127.0.0.1/health https://127.0.0.1/health; do
+              code="$(curl -k --silent --max-time 5 --output /dev/null --write-out '%{http_code}' "$url" || true)"
+              echo "$url $code"
+            done
+          } > artifacts/deploy-host-surfaces.txt
+      - name: Upload host surface evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: deploy-host-surfaces-${{ github.run_id }}
+          path: artifacts/deploy-host-surfaces.txt
+          if-no-files-found: error
+          retention-days: 1
