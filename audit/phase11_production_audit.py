@@ -1,7 +1,7 @@
 """Deterministic fail-closed production readiness audit.
 
-The audit is read-only. It never changes flags, credentials, database state,
-campaign state, scaling authority, or execution state.
+The audit never changes execution flags, credentials, campaign state, scaling
+authority, or order state. Database health may initialize the canonical schema.
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ class AuditCheck:
 
 
 class ProductionAudit:
-    """Runs secret-free checks and emits deterministic evidence."""
+    """Run secret-free checks and emit deterministic evidence."""
 
     def __init__(
         self,
@@ -40,32 +40,31 @@ class ProductionAudit:
 
     def run(self) -> dict[str, Any]:
         checks = [
-            self._check_compile_and_runtime_execution_lock(),
-            self._check_safe_runtime_configuration(),
-            self._check_database_health(),
-            self._check_secret_hygiene(),
-            self._check_required_assets(),
-            self._check_deployment_contracts(),
-            self._check_dashboard_contracts(),
-            self._check_ci_crash_contracts(),
-            self._check_runtime_limits(),
+            self._execution_lock(),
+            self._runtime_configuration(),
+            self._database_health(),
+            self._secret_hygiene(),
+            self._required_assets(),
+            self._deployment_contracts(),
+            self._dashboard_contracts(),
+            self._ci_crash_contracts(),
+            self._runtime_limits(),
         ]
         blockers = sorted(
-            check.name for check in checks if not check.passed and check.severity == "critical"
+            item.name for item in checks if not item.passed and item.severity == "critical"
         )
         warnings = sorted(
-            check.name for check in checks if not check.passed and check.severity != "critical"
+            item.name for item in checks if not item.passed and item.severity != "critical"
         )
         deterministic = {
-            "schema_version": 2,
+            "schema_version": 3,
             "status": "ready_for_bounded_testnet_preflight" if not blockers else "blocked",
             "blockers": blockers,
             "warnings": warnings,
-            "checks": [asdict(check) for check in checks],
+            "checks": [asdict(item) for item in checks],
             "mainnet_enabled": False,
             "automatic_campaign_launch": False,
         }
-        evidence_hash = hashlib.sha256(_canonical_json(deterministic)).hexdigest()
         return {
             **deterministic,
             "created_at_ms": int(time.time() * 1000),
@@ -73,12 +72,11 @@ class ProductionAudit:
                 "python": platform.python_version(),
                 "platform": platform.system(),
             },
-            "audit_sha256": evidence_hash,
+            "audit_sha256": hashlib.sha256(_canonical_json(deterministic)).hexdigest(),
         }
 
-    def _check_compile_and_runtime_execution_lock(self) -> AuditCheck:
-        evidence: dict[str, Any] = {}
-        passed = False
+    def _execution_lock(self) -> AuditCheck:
+        evidence: dict[str, Any]
         try:
             from exchange_connector.bybit_execution import BybitExecutionClient
             from exchange_connector.execution_contract import MAINNET_EXECUTION_COMPILED
@@ -100,6 +98,7 @@ class ProductionAudit:
             )
         except Exception as exc:
             evidence = {"error_type": type(exc).__name__}
+            passed = False
         return AuditCheck(
             "compile_and_runtime_execution_lock",
             "critical",
@@ -108,8 +107,8 @@ class ProductionAudit:
             "Restore the compile lock, kill switch and disabled execution state.",
         )
 
-    def _check_safe_runtime_configuration(self) -> AuditCheck:
-        required_disabled = (
+    def _runtime_configuration(self) -> AuditCheck:
+        disabled = (
             "EXCHANGE_LIVE_TRADING_ENABLED",
             "FEATURE_BYBIT_LIVE_EXECUTION",
             "FEATURE_BYBIT_TESTNET_EXECUTION",
@@ -119,27 +118,25 @@ class ProductionAudit:
             "FEATURE_BYBIT_PRIVATE_ORDER_WS",
             "BYBIT_ALLOW_LEGACY_EXCHANGE_CREDENTIALS",
         )
-        unsafe = sorted(name for name in required_disabled if _truthy(self.environ.get(name, "0")))
-        kill_switch = _truthy(self.environ.get("EXECUTION_KILL_SWITCH", "1"))
-        auth_enabled = not _truthy(self.environ.get("SHARIPOVAI_DISABLE_AUTH", "0"))
-        database_required = _truthy(self.environ.get("SHARIPOVAI_DATABASE_REQUIRED", "1"))
-        exchange_mode = str(self.environ.get("EXCHANGE_MODE", "sandbox")).strip().lower()
-        passed = not unsafe and kill_switch and auth_enabled and database_required and exchange_mode == "sandbox"
+        unsafe = sorted(name for name in disabled if _truthy(self.environ.get(name, "0")))
+        evidence = {
+            "unsafe_enabled_flags": unsafe,
+            "kill_switch_engaged": _truthy(self.environ.get("EXECUTION_KILL_SWITCH", "1")),
+            "authentication_enabled": not _truthy(self.environ.get("SHARIPOVAI_DISABLE_AUTH", "0")),
+            "database_required": _truthy(self.environ.get("SHARIPOVAI_DATABASE_REQUIRED", "1")),
+            "database_url_configured": bool(str(self.environ.get("DATABASE_URL", "")).strip()),
+            "exchange_mode_is_sandbox": str(self.environ.get("EXCHANGE_MODE", "sandbox")).strip().lower() == "sandbox",
+        }
+        passed = not unsafe and all(value is True for key, value in evidence.items() if key != "unsafe_enabled_flags")
         return AuditCheck(
             "safe_runtime_configuration",
             "critical",
             passed,
-            {
-                "unsafe_enabled_flags": unsafe,
-                "kill_switch_engaged": kill_switch,
-                "authentication_enabled": auth_enabled,
-                "database_required": database_required,
-                "exchange_mode_is_sandbox": exchange_mode == "sandbox",
-            },
+            evidence,
             "Disable execution flags, enable auth/database requirements and keep sandbox mode.",
         )
 
-    def _check_database_health(self) -> AuditCheck:
+    def _database_health(self) -> AuditCheck:
         try:
             from storage import ProjectDatabase
 
@@ -163,8 +160,8 @@ class ProductionAudit:
             "Restore the canonical database and verify schema migrations.",
         )
 
-    def _check_secret_hygiene(self) -> AuditCheck:
-        forbidden_names = {
+    def _secret_hygiene(self) -> AuditCheck:
+        forbidden = {
             ".env",
             ".env.testnet-campaign",
             "secrets.json",
@@ -172,7 +169,7 @@ class ProductionAudit:
             "id_rsa",
             "id_ed25519",
         }
-        present = sorted(name for name in forbidden_names if (self.root / name).exists())
+        present = sorted(name for name in forbidden if (self.root / name).exists())
         tracked: list[str] = []
         git_verified = False
         try:
@@ -184,30 +181,36 @@ class ProductionAudit:
                 timeout=5,
             )
             git_verified = True
-            paths = [item.decode("utf-8", errors="replace") for item in result.stdout.split(b"\0") if item]
-            for path in paths:
-                candidate = Path(path)
-                if candidate.name in forbidden_names or candidate.suffix.lower() in {".pem", ".key", ".p12", ".pfx"}:
-                    tracked.append(path)
+            paths = [
+                item.decode("utf-8", errors="replace")
+                for item in result.stdout.split(b"\0")
+                if item
+            ]
+            tracked = sorted(
+                path
+                for path in paths
+                if Path(path).name in forbidden
+                or Path(path).suffix.lower() in {".pem", ".key", ".p12", ".pfx"}
+            )
         except (OSError, subprocess.SubprocessError):
             git_verified = False
-        passed = not present and not tracked and git_verified
         return AuditCheck(
             "secret_file_hygiene",
             "critical",
-            passed,
+            not present and not tracked and git_verified,
             {
                 "forbidden_root_files": present,
-                "forbidden_tracked_files": sorted(tracked),
+                "forbidden_tracked_files": tracked,
                 "git_inventory_verified": git_verified,
             },
             "Remove tracked secret material, rotate credentials and restore Git inventory verification.",
         )
 
-    def _check_required_assets(self) -> AuditCheck:
+    def _required_assets(self) -> AuditCheck:
         required = (
             "CONSTITUTION.md",
             "README.md",
+            ".github/workflows/phase11-hardening.yml",
             "dashboard/static/web2/index.html",
             "dashboard/phase10_scaling_api.py",
             "dashboard/phase11_production_api.py",
@@ -215,6 +218,9 @@ class ProductionAudit:
             "risk/phase10_capital_engine.py",
             "deploy/vps/phase11_release_preflight.sh",
             "deploy/vps/phase11_post_deploy_verify.sh",
+            "deploy/vps/install_phase10_monthly_monitor.sh",
+            "deploy/vps/systemd/sharipovai-monthly-performance.service",
+            "deploy/vps/systemd/sharipovai-monthly-performance.timer",
             "tests/test_phase11_crash_resilience.py",
         )
         missing: list[str] = []
@@ -236,72 +242,91 @@ class ProductionAudit:
             "Restore required assets and remove symlinks escaping the repository root.",
         )
 
-    def _check_deployment_contracts(self) -> AuditCheck:
+    def _deployment_contracts(self) -> AuditCheck:
         preflight = self._read("deploy/vps/phase11_release_preflight.sh")
         verifier = self._read("deploy/vps/phase11_post_deploy_verify.sh")
-        required_preflight = (
-            "git diff --quiet",
-            "SHARIPOVAI_EXPECTED_SHA",
-            "SHARIPOVAI_DATABASE_REQUIRED",
-            "tests/test_phase11_crash_resilience.py",
-            "ProductionAudit",
+        installer = self._read("deploy/vps/install_phase10_monthly_monitor.sh")
+        service = self._read("deploy/vps/systemd/sharipovai-monthly-performance.service")
+        timer = self._read("deploy/vps/systemd/sharipovai-monthly-performance.timer")
+        expected = {
+            "preflight": (
+                "git diff --quiet",
+                "SHARIPOVAI_EXPECTED_SHA",
+                "SHARIPOVAI_DATABASE_REQUIRED",
+                "tests/test_phase11_crash_resilience.py",
+                "ProductionAudit",
+            ),
+            "post_deploy": (
+                "mktemp",
+                "ProjectDatabase",
+                "os.replace",
+                "audit_sha256",
+                "http_health",
+            ),
+            "installer": ("systemd-analyze verify", "systemctl enable --now"),
+            "service": ("NoNewPrivileges=true", "ProtectSystem=strict", "SuccessExitStatus=3"),
+            "timer": ("OnCalendar=monthly", "Persistent=true", "RandomizedDelaySec=900"),
+        }
+        sources = {
+            "preflight": preflight,
+            "post_deploy": verifier,
+            "installer": installer,
+            "service": service,
+            "timer": timer,
+        }
+        missing = [
+            f"{name}:{token}"
+            for name, tokens in expected.items()
+            for token in tokens
+            if token not in sources[name]
+        ]
+        executables = (
+            "deploy/vps/phase11_release_preflight.sh",
+            "deploy/vps/phase11_post_deploy_verify.sh",
+            "deploy/vps/install_phase10_monthly_monitor.sh",
+            "scripts/phase10_monthly_report.py",
         )
-        required_verifier = (
-            "mktemp",
-            "ProjectDatabase",
-            "os.replace",
-            "audit_sha256",
-            "http_health",
-        )
-        missing = [f"preflight:{token}" for token in required_preflight if token not in preflight]
-        missing.extend(f"post_deploy:{token}" for token in required_verifier if token not in verifier)
-        executable = all(
-            os.access(self.root / path, os.X_OK)
-            for path in (
-                "deploy/vps/phase11_release_preflight.sh",
-                "deploy/vps/phase11_post_deploy_verify.sh",
-            )
-            if (self.root / path).exists()
-        )
-        if not executable:
-            missing.append("deployment_scripts_not_executable")
+        non_executable = [
+            path for path in executables if not (self.root / path).exists() or not os.access(self.root / path, os.X_OK)
+        ]
+        missing.extend(f"not_executable:{path}" for path in non_executable)
         return AuditCheck(
             "deployment_preflight_and_verification",
             "critical",
             not missing,
             {"missing_contracts": missing},
-            "Restore immutable-SHA, clean-tree, database, atomic-output and crash-test checks.",
+            "Restore immutable-SHA, database, atomic-output, systemd and crash-test contracts.",
         )
 
-    def _check_dashboard_contracts(self) -> AuditCheck:
+    def _dashboard_contracts(self) -> AuditCheck:
         index = self._read("dashboard/static/web2/index.html")
-        script = self._read("dashboard/static/web2/phase11_production_v43.js")
+        phase10 = self._read("dashboard/static/web2/phase10_scaling_performance_v42.js")
+        phase11 = self._read("dashboard/static/web2/phase11_production_v43.js")
         stylesheet = self._read("dashboard/static/web2/phase11_production_v43.css")
-        tokens = {
+        expected = {
             "index": (
                 "viewport",
                 "theme-color",
+                "data-phase10-scaling-performance",
                 "data-phase11-production",
-                "phase11_production_v43.js",
             ),
-            "script": (
-                "AbortController",
-                "aria-live",
-                "visibilitychange",
-                "localStorage",
-                "lastSuccessfulAt",
-                "replaceChildren",
-            ),
-            "stylesheet": (
-                "prefers-reduced-motion",
-                "prefers-color-scheme",
-                "@media",
-                ":focus-visible",
-            ),
+            "phase10": ("AbortController", "visibilitychange", "replaceChildren", "lastSuccessfulAt"),
+            "phase11": ("AbortController", "aria-live", "visibilitychange", "localStorage", "lastSuccessfulAt", "replaceChildren"),
+            "stylesheet": ("prefers-reduced-motion", "prefers-color-scheme", "@media", ":focus-visible"),
         }
-        sources = {"index": index, "script": script, "stylesheet": stylesheet}
-        missing = [f"{source}:{token}" for source, expected in tokens.items() for token in expected if token not in sources[source]]
-        unsafe = [token for token in ("innerHTML", "insertAdjacentHTML", "eval(") if token in script]
+        sources = {"index": index, "phase10": phase10, "phase11": phase11, "stylesheet": stylesheet}
+        missing = [
+            f"{name}:{token}"
+            for name, tokens in expected.items()
+            for token in tokens
+            if token not in sources[name]
+        ]
+        unsafe = [
+            f"{name}:{token}"
+            for name, source in (("phase10", phase10), ("phase11", phase11))
+            for token in ("innerHTML", "insertAdjacentHTML", "eval(")
+            if token in source
+        ]
         return AuditCheck(
             "dashboard_responsive_realtime_contract",
             "warning",
@@ -310,15 +335,20 @@ class ProductionAudit:
             "Restore accessible, abortable, visibility-aware and injection-safe rendering.",
         )
 
-    def _check_ci_crash_contracts(self) -> AuditCheck:
-        workflow = self._read(".github/workflows/tests.yml")
+    def _ci_crash_contracts(self) -> AuditCheck:
+        workflows = self._read(".github/workflows/tests.yml") + "\n" + self._read(
+            ".github/workflows/phase11-hardening.yml"
+        )
         required = (
             "tests/test_phase10_controlled_scaling.py",
             "tests/test_phase10_capital_engine.py",
             "tests/test_phase11_production_audit.py",
+            "tests/test_phase11_dashboard_contract.py",
             "tests/test_phase11_crash_resilience.py",
+            "pip_audit",
+            "compileall",
         )
-        missing = [token for token in required if token not in workflow]
+        missing = [token for token in required if token not in workflows]
         return AuditCheck(
             "ci_phase10_phase11_crash_contracts",
             "critical",
@@ -327,14 +357,13 @@ class ProductionAudit:
             "Add Phase 10/11 hardening and crash tests to mandatory CI.",
         )
 
-    def _check_runtime_limits(self) -> AuditCheck:
+    def _runtime_limits(self) -> AuditCheck:
         raw = self.environ.get("PHASE11_MAX_TESTNET_NOTIONAL_USDT", "50")
         maximum = _finite(raw)
-        passed = maximum is not None and 0 < maximum <= 50
         return AuditCheck(
             "bounded_testnet_notional",
             "critical",
-            passed,
+            maximum is not None and 0 < maximum <= 50,
             {"configured": raw, "maximum_usdt": maximum},
             "Keep the hard Testnet ceiling finite and at or below 50 USDT.",
         )
@@ -343,11 +372,8 @@ class ProductionAudit:
         path = self.root / relative
         try:
             path.resolve().relative_to(self.root)
-        except ValueError:
-            return ""
-        try:
             return path.read_text(encoding="utf-8")
-        except OSError:
+        except (ValueError, OSError):
             return ""
 
 
