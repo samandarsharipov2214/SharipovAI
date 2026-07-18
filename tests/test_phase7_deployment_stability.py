@@ -38,7 +38,7 @@ def test_compose_has_stable_restart_health_and_log_contracts() -> None:
     assert "stop_grace_period: 30s" in compose
     assert "PHASE7_CAMPAIGN_MONITOR_ENABLED" in compose
     assert "PHASE7_MONITOR_INTERVAL_SECONDS" in compose
-    assert "max-size: \"10m\"" in compose
-    assert "max-file: \"5\"" in compose
+    assert 'max-size: "20m"' in compose
+    assert 'max-file: "5"' in compose
     assert "interval: 10s" in compose
     assert "restart: unless-stopped" in compose
