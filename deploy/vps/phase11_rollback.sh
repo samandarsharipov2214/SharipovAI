@@ -60,9 +60,13 @@ set_build_provenance(){
 
 verify_container_sha(){
   local expected="$1"
-  local actual
-  actual="$(docker exec sharipovai printenv SHARIPOVAI_BUILD_SHA 2>/dev/null || true)"
-  [[ "$actual" == "$expected" ]]
+  local runtime_sha label_sha
+  runtime_sha="$(docker exec sharipovai printenv SHARIPOVAI_BUILD_SHA 2>/dev/null || true)"
+  label_sha="$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' sharipovai 2>/dev/null || true)"
+  [[ "$label_sha" == "$expected" ]] || return 1
+  if [[ -n "$runtime_sha" && "$runtime_sha" != "unknown" ]]; then
+    [[ "$runtime_sha" == "$expected" ]] || return 1
+  fi
 }
 
 validate_financial_locks(){
@@ -77,10 +81,7 @@ service = payload.get("services", {}).get("sharipovai", {})
 environment = service.get("environment", {})
 if isinstance(environment, list):
     environment = dict(item.split("=", 1) for item in environment if "=" in item)
-required = {
-    "EXCHANGE_LIVE_TRADING_ENABLED": "0",
-    "EXECUTION_KILL_SWITCH": "1",
-}
+required = {"EXCHANGE_LIVE_TRADING_ENABLED": "0", "EXECUTION_KILL_SWITCH": "1"}
 for key, expected in required.items():
     actual = str(environment.get(key, ""))
     if actual != expected:
