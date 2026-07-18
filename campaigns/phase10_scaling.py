@@ -34,15 +34,26 @@ class ScalingExecutionPolicy:
     maximum_drawdown_bps: float = 250.0
 
     def __post_init__(self) -> None:
-        maximum = _required_finite(self.maximum_notional_usdt, "maximum_notional_usdt")
-        multiplier = _required_finite(self.maximum_step_multiplier, "maximum_step_multiplier")
-        drawdown = _required_finite(self.maximum_drawdown_bps, "maximum_drawdown_bps")
+        maximum = _required_finite(
+            self.maximum_notional_usdt,
+            "maximum_notional_usdt",
+        )
+        multiplier = _required_finite(
+            self.maximum_step_multiplier,
+            "maximum_step_multiplier",
+        )
+        drawdown = _required_finite(
+            self.maximum_drawdown_bps,
+            "maximum_drawdown_bps",
+        )
         if not 0 < maximum <= 50:
             raise ValueError("maximum_notional_usdt must be within (0, 50]")
         if not 1 < multiplier <= 2:
             raise ValueError("maximum_step_multiplier must be within (1, 2]")
         if not 60 <= int(self.activation_ttl_seconds) <= 7 * 86400:
-            raise ValueError("activation_ttl_seconds must be between 60 seconds and 7 days")
+            raise ValueError(
+                "activation_ttl_seconds must be between 60 seconds and 7 days"
+            )
         if int(self.minimum_approved_campaigns) < 2:
             raise ValueError("minimum_approved_campaigns must be at least 2")
         if drawdown < 0:
@@ -79,13 +90,27 @@ class ControlledScalingService:
             raise ValueError("exact scaling confirmation is required")
         if not isinstance(plan, Mapping):
             raise ValueError("scaling plan must be a mapping")
-        plan_id = _required_text(plan.get("plan_id"), "plan_id", maximum_length=128)
+        if not _scaling_plan_integrity_valid(plan):
+            raise ValueError("scaling plan integrity check failed")
+
+        plan_id = _required_text(
+            plan.get("plan_id"),
+            "plan_id",
+            maximum_length=128,
+        )
+        plan_evidence_sha256 = _required_text(
+            plan.get("evidence_sha256"),
+            "evidence_sha256",
+            maximum_length=64,
+        )
         if str(plan.get("status") or "") != "eligible_for_manual_scaling_review":
             raise ValueError("scaling plan is not eligible")
         if list(plan.get("failed_gates") or []):
             raise ValueError("scaling plan contains failed gates")
         gates = plan.get("gates")
-        if isinstance(gates, Mapping) and any(value is not True for value in gates.values()):
+        if not isinstance(gates, Mapping) or any(
+            value is not True for value in gates.values()
+        ):
             raise ValueError("scaling plan contains a non-passing gate")
 
         campaign_ids = sorted(
@@ -97,23 +122,42 @@ class ControlledScalingService:
         if len(campaign_ids) < self.policy.minimum_approved_campaigns:
             raise ValueError("insufficient approved campaigns")
 
-        current = _required_finite(plan.get("current_notional_usdt"), "current_notional_usdt")
-        proposed = _required_finite(plan.get("proposed_next_notional_usdt"), "proposed_next_notional_usdt")
-        ceiling = min(self.policy.maximum_notional_usdt, current * self.policy.maximum_step_multiplier)
+        current = _required_finite(
+            plan.get("current_notional_usdt"),
+            "current_notional_usdt",
+        )
+        proposed = _required_finite(
+            plan.get("proposed_next_notional_usdt"),
+            "proposed_next_notional_usdt",
+        )
+        ceiling = min(
+            self.policy.maximum_notional_usdt,
+            current * self.policy.maximum_step_multiplier,
+        )
         if current <= 0 or proposed <= current or proposed > ceiling:
             raise ValueError("proposed notional violates controlled step policy")
 
-        evidence = plan.get("evidence") if isinstance(plan.get("evidence"), Mapping) else {}
-        drawdown = _required_finite(evidence.get("maximum_drawdown_bps", 0.0), "maximum_drawdown_bps")
+        evidence = (
+            plan.get("evidence")
+            if isinstance(plan.get("evidence"), Mapping)
+            else {}
+        )
+        drawdown = _required_finite(
+            evidence.get("maximum_drawdown_bps", 0.0),
+            "maximum_drawdown_bps",
+        )
         if drawdown < 0 or drawdown > self.policy.maximum_drawdown_bps:
             raise ValueError("drawdown exceeds activation policy")
 
         timestamp = _timestamp_ms(now_ms)
-        expires_at_ms = timestamp + int(self.policy.activation_ttl_seconds) * 1000
+        expires_at_ms = (
+            timestamp + int(self.policy.activation_ttl_seconds) * 1000
+        )
         activation = {
-            "schema_version": 3,
+            "schema_version": 4,
             "record_type": "scaling_authority",
             "plan_id": plan_id,
+            "plan_evidence_sha256": plan_evidence_sha256,
             "campaign_ids": campaign_ids,
             "scope": scope,
             "actor": actor,
@@ -131,11 +175,17 @@ class ControlledScalingService:
         activation_id = "p10a_" + activation["authority_hash"][:32]
         activation["activation_id"] = activation_id
 
-        lock_row = self.database.get_json(_ACTIVATIONS_NS, _ACTIVE_LOCK_KEY)
+        lock_row = self.database.get_json(
+            _ACTIVATIONS_NS,
+            _ACTIVE_LOCK_KEY,
+        )
         lock = dict(lock_row["value"]) if lock_row else {}
         lock_expires = _optional_int(lock.get("expires_at_ms")) or 0
         if lock.get("status") == "active" and lock_expires > timestamp:
-            raise ValueError(f"active scaling authority already exists: {lock.get('activation_id', 'unknown')}")
+            raise ValueError(
+                "active scaling authority already exists: "
+                f"{lock.get('activation_id', 'unknown')}"
+            )
         lock_version = int(lock_row["version"]) if lock_row else 0
         lock_payload = {
             "schema_version": 1,
@@ -154,29 +204,30 @@ class ControlledScalingService:
                 expected_version=lock_version,
             )
         except VersionConflict as exc:
-            raise ValueError("another scaling activation won the global authority race") from exc
+            raise ValueError(
+                "another scaling activation won the global authority race"
+            ) from exc
 
         try:
-            self.database.put_json(_ACTIVATIONS_NS, activation_id, activation, expected_version=0)
+            self.database.put_json(
+                _ACTIVATIONS_NS,
+                activation_id,
+                activation,
+                expected_version=0,
+            )
+            self.database.append_event(
+                _ACTIVATIONS_NS,
+                "scaling_activated",
+                activation_id,
+                activation,
+                created_at_ms=timestamp,
+            )
         except Exception:
-            latest = self.database.get_json(_ACTIVATIONS_NS, _ACTIVE_LOCK_KEY)
-            if latest and latest["value"].get("activation_id") == activation_id:
-                aborted = dict(latest["value"])
-                aborted.update({"status": "aborted", "aborted_at_ms": timestamp})
-                self.database.put_json(
-                    _ACTIVATIONS_NS,
-                    _ACTIVE_LOCK_KEY,
-                    aborted,
-                    expected_version=int(latest["version"]),
-                )
+            self._abort_partial_activation(
+                activation_id,
+                timestamp=timestamp,
+            )
             raise
-        self.database.append_event(
-            _ACTIVATIONS_NS,
-            "scaling_activated",
-            activation_id,
-            activation,
-            created_at_ms=timestamp,
-        )
         return activation
 
     def revoke(
@@ -187,7 +238,11 @@ class ControlledScalingService:
         reason: str,
         now_ms: int | None = None,
     ) -> dict[str, Any]:
-        activation_id = _required_text(activation_id, "activation_id", maximum_length=128)
+        activation_id = _required_text(
+            activation_id,
+            "activation_id",
+            maximum_length=128,
+        )
         actor = _required_text(actor, "actor", maximum_length=128)
         reason = _required_text(reason, "reason", maximum_length=1000)
         row = self.database.get_json(_ACTIVATIONS_NS, activation_id)
@@ -215,7 +270,10 @@ class ControlledScalingService:
             activation,
             expected_version=int(row["version"]),
         )
-        lock_row = self.database.get_json(_ACTIVATIONS_NS, _ACTIVE_LOCK_KEY)
+        lock_row = self.database.get_json(
+            _ACTIVATIONS_NS,
+            _ACTIVE_LOCK_KEY,
+        )
         if lock_row and lock_row["value"].get("activation_id") == activation_id:
             lock = dict(lock_row["value"])
             lock.update(
@@ -248,35 +306,66 @@ class ControlledScalingService:
         requested_notional_usdt: float,
         now_ms: int | None = None,
     ) -> dict[str, Any]:
-        row = self.database.get_json(_ACTIVATIONS_NS, str(activation_id))
+        row = self.database.get_json(
+            _ACTIVATIONS_NS,
+            str(activation_id),
+        )
         if row is None:
-            return {"allowed": False, "reason": "activation_not_found", "failed_checks": ["exists"]}
+            return {
+                "allowed": False,
+                "reason": "activation_not_found",
+                "failed_checks": ["exists"],
+            }
         activation = dict(row["value"])
         timestamp = _timestamp_ms(now_ms)
         requested = _optional_finite(requested_notional_usdt)
-        authorized = _optional_finite(activation.get("authorized_notional_usdt"))
+        authorized = _optional_finite(
+            activation.get("authorized_notional_usdt")
+        )
         expires = _optional_int(activation.get("expires_at_ms"))
-        lock_row = self.database.get_json(_ACTIVATIONS_NS, _ACTIVE_LOCK_KEY)
+        lock_row = self.database.get_json(
+            _ACTIVATIONS_NS,
+            _ACTIVE_LOCK_KEY,
+        )
         lock = dict(lock_row["value"]) if lock_row else {}
         checks = {
             "integrity": _integrity_valid(activation),
+            "plan_evidence_bound": len(
+                str(activation.get("plan_evidence_sha256") or "")
+            )
+            == 64,
             "active": activation.get("status") == "active",
             "not_expired": expires is not None and timestamp < expires,
-            "scope_matches": str(scope).strip().upper() == str(activation.get("scope") or "").upper(),
-            "within_notional": requested is not None and authorized is not None and 0 < requested <= authorized,
-            "within_absolute_ceiling": authorized is not None and 0 < authorized <= self.policy.maximum_notional_usdt,
+            "scope_matches": str(scope).strip().upper()
+            == str(activation.get("scope") or "").upper(),
+            "within_notional": requested is not None
+            and authorized is not None
+            and 0 < requested <= authorized,
+            "within_absolute_ceiling": authorized is not None
+            and 0 < authorized <= self.policy.maximum_notional_usdt,
             "testnet_only": activation.get("execution_environment") == "testnet",
-            "canonical_path_only": activation.get("single_canonical_execution_path") is True,
-            "kill_switch_not_overridden": activation.get("kill_switch_override") is False,
+            "canonical_path_only": activation.get(
+                "single_canonical_execution_path"
+            )
+            is True,
+            "kill_switch_not_overridden": activation.get(
+                "kill_switch_override"
+            )
+            is False,
             "mainnet_locked": activation.get("mainnet_enabled") is False,
             "global_lock_matches": (
                 lock.get("status") == "active"
-                and lock.get("activation_id") == activation.get("activation_id")
-                and lock.get("authority_hash") == activation.get("authority_hash")
-                and (_optional_int(lock.get("expires_at_ms")) or 0) == (expires or -1)
+                and lock.get("activation_id")
+                == activation.get("activation_id")
+                and lock.get("authority_hash")
+                == activation.get("authority_hash")
+                and (_optional_int(lock.get("expires_at_ms")) or 0)
+                == (expires or -1)
             ),
         }
-        failed = sorted(name for name, passed in checks.items() if not passed)
+        failed = sorted(
+            name for name, passed in checks.items() if not passed
+        )
         return {
             "allowed": not failed,
             "failed_checks": failed,
@@ -292,17 +381,36 @@ class ControlledScalingService:
     ) -> dict[str, Any]:
         if not isinstance(metrics, Mapping):
             raise ValueError("metrics must be a mapping")
-        campaign_id = _required_text(metrics.get("campaign_id"), "campaign_id", maximum_length=128)
-        normalized = dict(metrics)
-        for key in ("net_pnl_usdt", "fees_usdt", "maximum_drawdown_bps"):
-            normalized[key] = _required_finite(normalized.get(key, 0.0), key)
-        normalized["matched_fill_count"] = _required_non_negative_int(
-            normalized.get("matched_fill_count", 0), "matched_fill_count"
+        campaign_id = _required_text(
+            metrics.get("campaign_id"),
+            "campaign_id",
+            maximum_length=128,
         )
-        if normalized["fees_usdt"] < 0 or normalized["maximum_drawdown_bps"] < 0:
+        normalized = dict(metrics)
+        for key in (
+            "net_pnl_usdt",
+            "fees_usdt",
+            "maximum_drawdown_bps",
+        ):
+            normalized[key] = _required_finite(
+                normalized.get(key, 0.0),
+                key,
+            )
+        normalized["matched_fill_count"] = _required_non_negative_int(
+            normalized.get("matched_fill_count", 0),
+            "matched_fill_count",
+        )
+        if (
+            normalized["fees_usdt"] < 0
+            or normalized["maximum_drawdown_bps"] < 0
+        ):
             raise ValueError("fees and drawdown must be non-negative")
         timestamp = _timestamp_ms(captured_at_ms)
-        material = _snapshot_material(timestamp, campaign_id, normalized)
+        material = _snapshot_material(
+            timestamp,
+            campaign_id,
+            normalized,
+        )
         evidence_hash = hashlib.sha256(_canonical_json(material)).hexdigest()
         snapshot_id = "p10p_" + evidence_hash[:32]
         payload = {
@@ -318,7 +426,12 @@ class ControlledScalingService:
             if existing["value"] != payload:
                 raise VersionConflict("snapshot identity collision")
             return dict(existing["value"])
-        self.database.put_json(_SNAPSHOTS_NS, snapshot_id, payload, expected_version=0)
+        self.database.put_json(
+            _SNAPSHOTS_NS,
+            snapshot_id,
+            payload,
+            expected_version=0,
+        )
         self.database.append_event(
             _SNAPSHOTS_NS,
             "performance_snapshot",
@@ -346,7 +459,11 @@ class ControlledScalingService:
                 raise ValueError("snapshot integrity check failed")
             if _snapshot_month(item) != month:
                 continue
-            snapshot_id = _required_text(item.get("snapshot_id"), "snapshot_id", maximum_length=128)
+            snapshot_id = _required_text(
+                item.get("snapshot_id"),
+                "snapshot_id",
+                maximum_length=128,
+            )
             previous = selected_by_id.get(snapshot_id)
             if previous is not None and previous != item:
                 raise ValueError("conflicting duplicate snapshot identity")
@@ -354,21 +471,46 @@ class ControlledScalingService:
 
         rows: list[dict[str, Any]] = []
         for item in selected_by_id.values():
-            metrics = item.get("metrics") if isinstance(item.get("metrics"), Mapping) else {}
+            metrics = (
+                item.get("metrics")
+                if isinstance(item.get("metrics"), Mapping)
+                else {}
+            )
             rows.append(
                 {
-                    "net_pnl_usdt": _required_finite(metrics.get("net_pnl_usdt", 0.0), "net_pnl_usdt"),
-                    "fees_usdt": _required_finite(metrics.get("fees_usdt", 0.0), "fees_usdt"),
-                    "matched_fill_count": _required_non_negative_int(metrics.get("matched_fill_count", 0), "matched_fill_count"),
-                    "maximum_drawdown_bps": _required_finite(metrics.get("maximum_drawdown_bps", 0.0), "maximum_drawdown_bps"),
+                    "net_pnl_usdt": _required_finite(
+                        metrics.get("net_pnl_usdt", 0.0),
+                        "net_pnl_usdt",
+                    ),
+                    "fees_usdt": _required_finite(
+                        metrics.get("fees_usdt", 0.0),
+                        "fees_usdt",
+                    ),
+                    "matched_fill_count": _required_non_negative_int(
+                        metrics.get("matched_fill_count", 0),
+                        "matched_fill_count",
+                    ),
+                    "maximum_drawdown_bps": _required_finite(
+                        metrics.get("maximum_drawdown_bps", 0.0),
+                        "maximum_drawdown_bps",
+                    ),
                 }
             )
-        if any(row["fees_usdt"] < 0 or row["maximum_drawdown_bps"] < 0 for row in rows):
-            raise ValueError("monthly report contains invalid negative risk metrics")
+        if any(
+            row["fees_usdt"] < 0
+            or row["maximum_drawdown_bps"] < 0
+            for row in rows
+        ):
+            raise ValueError(
+                "monthly report contains invalid negative risk metrics"
+            )
         net = sum(row["net_pnl_usdt"] for row in rows)
         fees = sum(row["fees_usdt"] for row in rows)
         fills = sum(row["matched_fill_count"] for row in rows)
-        max_dd = max((row["maximum_drawdown_bps"] for row in rows), default=0.0)
+        max_dd = max(
+            (row["maximum_drawdown_bps"] for row in rows),
+            default=0.0,
+        )
         aggregate = {
             "month": month,
             "source_snapshot_ids": sorted(selected_by_id),
@@ -379,7 +521,9 @@ class ControlledScalingService:
             "maximum_drawdown_bps": round(max_dd, 6),
             "drawdown_alert": max_dd > self.policy.maximum_drawdown_bps,
         }
-        evidence_hash = hashlib.sha256(_canonical_json(aggregate)).hexdigest()
+        evidence_hash = hashlib.sha256(
+            _canonical_json(aggregate)
+        ).hexdigest()
         report_id = "p10m_" + evidence_hash[:32]
         report = {
             "schema_version": 2,
@@ -392,12 +536,25 @@ class ControlledScalingService:
         existing = self.database.get_json(_MONTHLY_NS, report_id)
         if existing:
             existing_value = dict(existing["value"])
-            comparable_existing = {key: value for key, value in existing_value.items() if key != "generated_at_ms"}
-            comparable_report = {key: value for key, value in report.items() if key != "generated_at_ms"}
+            comparable_existing = {
+                key: value
+                for key, value in existing_value.items()
+                if key != "generated_at_ms"
+            }
+            comparable_report = {
+                key: value
+                for key, value in report.items()
+                if key != "generated_at_ms"
+            }
             if comparable_existing != comparable_report:
                 raise VersionConflict("monthly report identity collision")
             return existing_value
-        self.database.put_json(_MONTHLY_NS, report_id, report, expected_version=0)
+        self.database.put_json(
+            _MONTHLY_NS,
+            report_id,
+            report,
+            expected_version=0,
+        )
         self.database.append_event(
             _MONTHLY_NS,
             "monthly_performance_report",
@@ -408,27 +565,46 @@ class ControlledScalingService:
         return report
 
     def list_activations(self, limit: int = 100) -> list[dict[str, Any]]:
-        rows = list_json_items(self.database, _ACTIVATIONS_NS, limit=limit + 1, newest_first=True)
+        rows = list_json_items(
+            self.database,
+            _ACTIVATIONS_NS,
+            limit=limit + 1,
+            newest_first=True,
+        )
         return [
             dict(row["value"])
             for row in rows
             if row["value"].get("record_type") == "scaling_authority"
         ][:limit]
 
-    def active_activations(self, *, now_ms: int | None = None, limit: int = 500) -> list[dict[str, Any]]:
+    def active_activations(
+        self,
+        *,
+        now_ms: int | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        del limit
         timestamp = _timestamp_ms(now_ms)
-        lock_row = self.database.get_json(_ACTIVATIONS_NS, _ACTIVE_LOCK_KEY)
+        lock_row = self.database.get_json(
+            _ACTIVATIONS_NS,
+            _ACTIVE_LOCK_KEY,
+        )
         if not lock_row:
             return []
         lock = dict(lock_row["value"])
-        if lock.get("status") != "active" or (_optional_int(lock.get("expires_at_ms")) or 0) <= timestamp:
+        if (
+            lock.get("status") != "active"
+            or (_optional_int(lock.get("expires_at_ms")) or 0) <= timestamp
+        ):
             return []
         activation_id = str(lock.get("activation_id") or "")
         row = self.database.get_json(_ACTIVATIONS_NS, activation_id)
         if not row:
             return []
         activation = dict(row["value"])
-        authorized = _optional_finite(activation.get("authorized_notional_usdt"))
+        authorized = _optional_finite(
+            activation.get("authorized_notional_usdt")
+        )
         if authorized is None:
             return []
         result = self.validate_authority(
@@ -440,10 +616,112 @@ class ControlledScalingService:
         return [activation] if result.get("allowed") else []
 
     def list_snapshots(self, limit: int = 500) -> list[dict[str, Any]]:
-        return [dict(row["value"]) for row in list_json_items(self.database, _SNAPSHOTS_NS, limit=limit, newest_first=True)]
+        return [
+            dict(row["value"])
+            for row in list_json_items(
+                self.database,
+                _SNAPSHOTS_NS,
+                limit=limit,
+                newest_first=True,
+            )
+        ]
 
     def list_monthly_reports(self, limit: int = 36) -> list[dict[str, Any]]:
-        return [dict(row["value"]) for row in list_json_items(self.database, _MONTHLY_NS, limit=limit, newest_first=True)]
+        return [
+            dict(row["value"])
+            for row in list_json_items(
+                self.database,
+                _MONTHLY_NS,
+                limit=limit,
+                newest_first=True,
+            )
+        ]
+
+    def _abort_partial_activation(
+        self,
+        activation_id: str,
+        *,
+        timestamp: int,
+    ) -> None:
+        try:
+            row = self.database.get_json(_ACTIVATIONS_NS, activation_id)
+            if row and row["value"].get("status") == "active":
+                aborted = dict(row["value"])
+                aborted.update(
+                    {
+                        "status": "aborted",
+                        "aborted_at_ms": timestamp,
+                    }
+                )
+                self.database.put_json(
+                    _ACTIVATIONS_NS,
+                    activation_id,
+                    aborted,
+                    expected_version=int(row["version"]),
+                )
+        except Exception:
+            pass
+        try:
+            lock_row = self.database.get_json(
+                _ACTIVATIONS_NS,
+                _ACTIVE_LOCK_KEY,
+            )
+            if (
+                lock_row
+                and lock_row["value"].get("activation_id") == activation_id
+            ):
+                lock = dict(lock_row["value"])
+                lock.update(
+                    {
+                        "status": "aborted",
+                        "aborted_at_ms": timestamp,
+                    }
+                )
+                self.database.put_json(
+                    _ACTIVATIONS_NS,
+                    _ACTIVE_LOCK_KEY,
+                    lock,
+                    expected_version=int(lock_row["version"]),
+                )
+        except Exception:
+            pass
+
+
+def _phase9_plan_material(plan: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        key: plan.get(key)
+        for key in (
+            "actor",
+            "reason",
+            "campaign_ids",
+            "report_ids",
+            "invalid_report_ids",
+            "evidence",
+            "gates",
+            "failed_gates",
+            "status",
+            "current_notional_usdt",
+            "proposed_next_notional_usdt",
+            "manual_approval_required",
+            "automatic_scaling",
+            "runtime_flags_changed",
+            "mainnet_enabled",
+        )
+    }
+
+
+def _scaling_plan_integrity_valid(plan: Mapping[str, Any]) -> bool:
+    supplied = str(plan.get("evidence_sha256") or "")
+    plan_id = str(plan.get("plan_id") or "")
+    if len(supplied) != 64 or not plan_id.startswith("p9s_"):
+        return False
+    try:
+        expected = hashlib.sha256(
+            _canonical_json(_phase9_plan_material(plan))
+        ).hexdigest()
+    except (TypeError, ValueError):
+        return False
+    return supplied == expected and plan_id == "p9s_" + expected[:32]
 
 
 def _authority_material(activation: Mapping[str, Any]) -> dict[str, Any]:
@@ -451,6 +729,7 @@ def _authority_material(activation: Mapping[str, Any]) -> dict[str, Any]:
         "schema_version",
         "record_type",
         "plan_id",
+        "plan_evidence_sha256",
         "campaign_ids",
         "scope",
         "actor",
@@ -467,7 +746,9 @@ def _authority_material(activation: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _authority_hash(activation: Mapping[str, Any]) -> str:
-    return hashlib.sha256(_canonical_json(_authority_material(activation))).hexdigest()
+    return hashlib.sha256(
+        _canonical_json(_authority_material(activation))
+    ).hexdigest()
 
 
 def _integrity_valid(activation: Mapping[str, Any]) -> bool:
@@ -475,8 +756,16 @@ def _integrity_valid(activation: Mapping[str, Any]) -> bool:
     return len(supplied) == 64 and supplied == _authority_hash(activation)
 
 
-def _snapshot_material(timestamp: int, campaign_id: str, metrics: Mapping[str, Any]) -> dict[str, Any]:
-    return {"captured_at_ms": timestamp, "campaign_id": campaign_id, "metrics": dict(metrics)}
+def _snapshot_material(
+    timestamp: int,
+    campaign_id: str,
+    metrics: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "captured_at_ms": timestamp,
+        "campaign_id": campaign_id,
+        "metrics": dict(metrics),
+    }
 
 
 def _snapshot_integrity_valid(snapshot: Mapping[str, Any]) -> bool:
@@ -488,15 +777,33 @@ def _snapshot_integrity_valid(snapshot: Mapping[str, Any]) -> bool:
     supplied = str(snapshot.get("evidence_sha256") or "")
     if not campaign_id or len(supplied) != 64:
         return False
-    expected = hashlib.sha256(_canonical_json(_snapshot_material(timestamp, campaign_id, metrics))).hexdigest()
+    try:
+        expected = hashlib.sha256(
+            _canonical_json(
+                _snapshot_material(timestamp, campaign_id, metrics)
+            )
+        ).hexdigest()
+    except (TypeError, ValueError):
+        return False
     return supplied == expected
 
 
 def _canonical_json(value: Any) -> bytes:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8")
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
 
 
-def _required_text(value: Any, name: str, *, maximum_length: int) -> str:
+def _required_text(
+    value: Any,
+    name: str,
+    *,
+    maximum_length: int,
+) -> str:
     text = str(value or "").strip()
     if not text:
         raise ValueError(f"{name} is required")
@@ -549,7 +856,10 @@ def _snapshot_month(snapshot: Mapping[str, Any]) -> str:
     if timestamp is None or timestamp < 0:
         raise ValueError("snapshot captured_at_ms is required")
     try:
-        return datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc).strftime("%Y-%m")
+        return datetime.fromtimestamp(
+            timestamp / 1000,
+            tz=timezone.utc,
+        ).strftime("%Y-%m")
     except (OverflowError, OSError, ValueError) as exc:
         raise ValueError("snapshot captured_at_ms is invalid") from exc
 
