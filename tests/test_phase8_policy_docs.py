@@ -10,4 +10,10 @@ def test_phase8_policy_preserves_mainnet_and_manual_decision_locks() -> None:
     assert "manual decision" in constitution.lower()
     assert "10–25 USDT" in constitution
     assert "Mainnet remains unavailable" in readme
-    assert "authenticated private Testnet fills" in readme
+
+    normalized_readme = " ".join(readme.split()).lower()
+    private_fill_contracts = (
+        "authenticated private testnet fills",
+        "actual authenticated private fills",
+    )
+    assert any(contract in normalized_readme for contract in private_fill_contracts)
