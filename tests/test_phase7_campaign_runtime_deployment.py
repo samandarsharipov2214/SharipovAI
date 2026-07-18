@@ -90,13 +90,14 @@ def test_phase7_campaign_transition_scripts_are_fail_closed() -> None:
     stop = (DEPLOY / "testnet_campaign_stop.sh").read_text(encoding="utf-8")
     assert "I_APPROVE_BOUNDED_TESTNET_RUNTIME_DEPLOYMENT" in deploy
     assert "I_APPROVE_RESTORE_PRODUCTION_KILL_SWITCH" in stop
-    assert deploy.index("phase7_preflight.sh") < deploy.index("export_backup.sh") < deploy.index("up -d --force-recreate")
+    assert deploy.index("phase7_preflight.sh") < deploy.index("export_backup.sh")
+    assert deploy.index("systemd-run") < deploy.index("up -d --force-recreate")
     assert "restoring production-safe compose" in deploy
     assert "TESTNET_CAMPAIGN_MAX_WINDOW_SECONDS" in deploy
-    assert "systemd-run" in deploy
     assert "sharipovai-testnet-auto-stop" in deploy
     assert "systemctl is-active" in deploy
     assert "sharipovai-testnet-auto-stop.timer" in stop
+    assert 'flock -w "${LOCK_WAIT_SECONDS}"' in stop
 
 
 def test_compose_and_image_keep_mainnet_off_and_drop_capabilities() -> None:
