@@ -4,7 +4,7 @@ umask 027
 
 ROOT="${SHARIPOVAI_ROOT:-/opt/sharipovai}"
 OUT="${PHASE11_VERIFY_OUTPUT:-/var/lib/sharipovai/audit/phase11-post-deploy.json}"
-HEALTH_URL="${SHARIPOVAI_HEALTH_URL:-http://127.0.0.1:8000/api/system/health}"
+HEALTH_URL="${SHARIPOVAI_HEALTH_URL:-http://127.0.0.1:8000/api/health}"
 EXPECTED_SHA="${SHARIPOVAI_EXPECTED_SHA:-}"
 [[ -d "$ROOT/.git" ]] || { echo "release root is not a Git worktree" >&2; exit 2; }
 [[ -n "$EXPECTED_SHA" ]] || { echo "SHARIPOVAI_EXPECTED_SHA is required" >&2; exit 2; }
@@ -33,10 +33,8 @@ output = Path(os.environ["PHASE11_VERIFY_OUTPUT"]).expanduser().resolve()
 health_path = Path(os.environ["PHASE11_HEALTH_FILE"]).resolve()
 with health_path.open("r", encoding="utf-8") as handle:
     http_health = json.load(handle)
-if not isinstance(http_health, dict):
-    raise SystemExit("health endpoint did not return a JSON object")
-if str(http_health.get("status") or "").lower() not in {"healthy", "degraded"}:
-    raise SystemExit("canonical system health is blocked")
+if not isinstance(http_health, dict) or str(http_health.get("status") or "").lower() != "ok":
+    raise SystemExit("public liveness endpoint is not healthy")
 
 database = ProjectDatabase().health()
 audit = ProductionAudit(".").run()
