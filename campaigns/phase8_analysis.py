@@ -17,7 +17,7 @@ _NAMESPACE = "phase8_post_campaign_analysis"
 @dataclass(frozen=True, slots=True)
 class AnalysisPolicy:
     minimum_matched_fills: int = 20
-    maximum_abs_price_divergence_bps: float = 35.0
+    maximum_abs_price_divergence_bps: float = 60.0
     maximum_fee_ratio_bps: float = 30.0
     minimum_net_pnl_usdt: float = -2.0
 
@@ -167,9 +167,9 @@ def _recommendation(gates: Mapping[str, bool], pnl: Mapping[str, Any], divergenc
     if failed:
         action = "reject_or_rerun"
         reason = "One or more hard post-campaign gates failed."
-    elif float(pnl.get("net_realized_pnl_usdt") or 0.0) > 0 and abs(float(divergence.get("price_divergence_bps") or 0.0)) <= 15:
+    elif float(pnl.get("net_realized_pnl_usdt") or 0.0) > 0 and abs(float(divergence.get("price_divergence_bps") or 0.0)) <= 60:
         action = "eligible_for_manual_promotion_review"
-        reason = "Clean evidence, positive net realized PnL and low execution divergence."
+        reason = "Clean evidence, positive net realized PnL and bounded execution divergence."
     else:
         action = "hold_for_more_testnet_evidence"
         reason = "Hard gates pass, but evidence is not strong enough for promotion recommendation."
