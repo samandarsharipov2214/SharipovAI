@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from scripts.phase11_first_campaign_checklist import evaluate_readiness
+from scripts.phase11_first_campaign_checklist import (
+    _runtime_build_sha,
+    evaluate_readiness,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -18,6 +21,7 @@ def _runtime_environment():
         "TESTNET_EXECUTION_ENABLED": "1",
         "AUTONOMOUS_TESTNET_ENABLED": "1",
         "AUTONOMOUS_TESTNET_BRIDGE_ENABLED": "1",
+        "FEATURE_BYBIT_TESTNET": "1",
         "FEATURE_BYBIT_PRIVATE_ORDER_WS": "1",
         "RUNTIME_FILL_HARVESTER_ENABLED": "1",
         "SCHEDULED_CAMPAIGN_ORCHESTRATOR_ENABLED": "1",
@@ -58,6 +62,7 @@ def test_first_campaign_checklist_requires_every_bounded_runtime_gate():
     )
     assert report["ready"] is True
     assert report["failed_checks"] == []
+    assert report["checks"]["container_build_sha_is_full_commit"] is True
     assert report["maximum_order_notional_usdt"] == 25
     assert report["minimum_matched_fills"] == 20
     assert report["campaign_started"] is False
@@ -89,6 +94,7 @@ def test_first_campaign_checklist_rejects_unbounded_or_incomplete_runtime():
     environ["EXECUTION_MAX_NOTIONAL_USDT"] = "25.01"
     environ["BYBIT_TESTNET_API_SECRET"] = ""
     environ["EXECUTION_KILL_SWITCH"] = "1"
+    environ["FEATURE_BYBIT_TESTNET"] = "0"
     report = evaluate_readiness(
         environ=environ,
         audit=_audit(sha),
@@ -105,7 +111,16 @@ def test_first_campaign_checklist_rejects_unbounded_or_incomplete_runtime():
     assert "execution_notional_bounded" in report["failed_checks"]
     assert "isolated_testnet_credentials_complete" in report["failed_checks"]
     assert "finite_window_kill_switch_state" in report["failed_checks"]
+    assert "bounded_runtime_flags_enabled" in report["failed_checks"]
     assert "canonical_plan_ready" in report["failed_checks"]
+
+
+def test_runtime_sha_prefers_embedded_build_provenance():
+    sha = "d" * 40
+    assert _runtime_build_sha({"SHARIPOVAI_BUILD_SHA": sha}) == sha
+    assert _runtime_build_sha({"SHARIPOVAI_BUILD_SHA": "unknown"}) in {"", sha} or len(
+        _runtime_build_sha({"SHARIPOVAI_BUILD_SHA": "unknown"})
+    ) == 40
 
 
 def test_exact_sha_rollback_is_locked_backed_up_and_self_restoring():
@@ -118,6 +133,9 @@ def test_exact_sha_rollback_is_locked_backed_up_and_self_restoring():
         "flock -n",
         "export_backup.sh",
         "creating verified backup with the current trusted exporter",
+        "set_build_provenance",
+        "SHARIPOVAI_RELEASE_SHA",
+        "verify_container_sha",
         "validate_financial_locks",
         "EXCHANGE_LIVE_TRADING_ENABLED",
         "EXECUTION_KILL_SWITCH",
@@ -131,6 +149,22 @@ def test_exact_sha_rollback_is_locked_backed_up_and_self_restoring():
     assert "git reset --hard \"$TARGET_SHA\"" in script
     assert "git show \"$TARGET_SHA:deploy/vps/export_backup.sh\"" not in script
     assert "bash \"$ROOT/deploy/vps/export_backup.sh\"" in script
+
+
+def test_build_and_post_deploy_provenance_chain_is_complete():
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    updater = (ROOT / "deploy/vps/update_from_main.sh").read_text(encoding="utf-8")
+    verifier = (ROOT / "deploy/vps/phase11_post_deploy_verify.sh").read_text(
+        encoding="utf-8"
+    )
+    assert 'SHARIPOVAI_BUILD_SHA="${VCS_REF}"' in dockerfile
+    assert "SHARIPOVAI_RELEASE_SHA" in updater
+    assert "verify_container_sha" in updater
+    assert "container/image commit provenance mismatch" in updater
+    assert "CONTAINER_SHA=" in verifier
+    assert "CONTAINER_LABEL_SHA=" in verifier
+    assert "container_build_sha" in verifier
+    assert "container_label_sha" in verifier
 
 
 def test_phase11_deployment_paths_share_the_canonical_checkout():
