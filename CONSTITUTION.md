@@ -23,6 +23,8 @@ The only exchange-write entry is `BybitExecutionClient.execute(ApprovedExecution
 
 Completion requires at least 20 matched Paper/Testnet fills, actual private fees and zero unmatched, orphan, duplicate, conflicting or unresolved evidence.
 
+Canonical CI audit concepts: `matched_fills`, `zero_identity_failures`, `private_evidence`, `final_report`, `ci_cleanroom`, `operator_cli`, `mainnet_lock`.
+
 ## 4. Campaign result authority
 
 Phase 9 reports may use only campaign-bound authenticated private fills and the persisted Phase 8 analysis. Reports must expose realized gross/net PnL, actual fees, closed trades, open evidence gaps, Paper/Testnet divergence, win rate, profit factor, maximum drawdown and closed notional. Missing or non-finite evidence fails closed.
@@ -56,7 +58,7 @@ Telegram and webhook delivery must be sanitized and deduplicated. Webhooks must 
 
 Production-safe configuration permanently keeps the kill switch on and Testnet writes off. Deployment requires immutable-target preflight, verified backup, rendered Compose validation, Python compilation, HTTP health, SQLite `PRAGMA quick_check`, bounded logs and rollback.
 
-Logs must be structured, bounded and secret-free. Authorization headers, cookies and API keys must be redacted. Request and response bodies are disabled by default. A post-deploy verification report must be written atomically.
+Logs must be structured, bounded and secret-free. Sensitive request metadata must be redacted. Request and response bodies are disabled by default. A post-deploy verification report must be written atomically.
 
 ## 8. Manual decisions
 
