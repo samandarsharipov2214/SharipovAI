@@ -21,6 +21,8 @@
   <link rel="stylesheet" href="/static/web2/campaign_operations_v36.css?v=36">
   <link rel="stylesheet" href="/static/web2/campaign_decision_v37.css?v=37">
   <link rel="stylesheet" href="/static/web2/campaign_monitor_v38.css?v=39">
+  <link rel="stylesheet" href="/static/web2/campaign_analysis_v40.css?v=40">
+  <link rel="stylesheet" href="/static/web2/campaign_scaling_v41.css?v=41">
   <link rel="stylesheet" href="/static/web2/site_polish_v23.css?v=25">
   <link rel="stylesheet" href="/static/web2/interface_v30.css?v=30">
 </head>
@@ -29,63 +31,12 @@
     <aside>
       <img src="/static/web2/logo.svg?v=6" class="logo" alt="SharipovAI">
       <nav id="nav" aria-label="Главное меню">
-        <button class="active" data-page="overview">Обзор</button>
-        <button data-page="market">Рынок</button>
-        <button data-page="decision">Решение ИИ</button>
-        <button data-page="portfolio">Портфель</button>
-        <button data-page="trades">Сделки</button>
-        <button data-page="bots">Центр ИИ</button>
-        <button data-page="chat">ИИ-чат</button>
-        <button data-page="news">Новости</button>
-        <button data-page="risk">Центр рисков</button>
-        <button data-page="bybit">Bybit</button>
-        <button data-page="learning">Центр обучения</button>
-        <button data-page="control">Главное управление</button>
-        <button data-page="evidence">Хранилище доказательств</button>
-        <button data-page="virtual">Виртуальный счёт</button>
-        <button data-page="campaigns">Кампании</button>
-        <button data-page="reports">Отчёты</button>
-        <button data-page="settings">Настройки</button>
+        <button class="active" data-page="overview">Обзор</button><button data-page="market">Рынок</button><button data-page="decision">Решение ИИ</button><button data-page="portfolio">Портфель</button><button data-page="trades">Сделки</button><button data-page="bots">Центр ИИ</button><button data-page="chat">ИИ-чат</button><button data-page="news">Новости</button><button data-page="risk">Центр рисков</button><button data-page="bybit">Bybit</button><button data-page="learning">Центр обучения</button><button data-page="control">Главное управление</button><button data-page="evidence">Хранилище доказательств</button><button data-page="virtual">Виртуальный счёт</button><button data-page="campaigns">Кампании</button><button data-page="reports">Отчёты</button><button data-page="settings">Настройки</button>
       </nav>
-      <div class="language-switcher" aria-label="Язык интерфейса">
-        <button data-lang="ru" class="active">RU</button>
-        <button data-lang="en">EN</button>
-        <button data-lang="uz">UZ</button>
-      </div>
+      <div class="language-switcher"><button data-lang="ru" class="active">RU</button><button data-lang="en">EN</button><button data-lang="uz">UZ</button></div>
       <div class="ai-state"><span></span><div><b id="aiModeLabel">Режим ИИ активен</b><small id="modeText">Безопасное исполнение</small></div></div>
     </aside>
-    <main>
-      <header>
-        <div><p id="helloLabel">Привет, Самандар 👋</p><small id="subtitleLabel">SharipovAI — единый центр анализа, управления и контроля</small></div>
-        <div class="header-state"><b><i></i> <span id="systemLabel">Система запускается</span></b><button id="refresh" type="button">Обновить</button></div>
-      </header>
-      <div id="notice" class="notice hidden"></div>
-      <section id="content" aria-live="polite">
-        <div class="title"><h1>Обзор</h1><p>Загрузка виртуального счёта и рыночных данных</p></div>
-        <article class="panel wide"><small>SHARIPOVAI</small><h2>Получение данных</h2><p>Интерфейс не подменяет отсутствующие значения.</p></article>
-      </section>
-    </main>
+    <main><header><div><p id="helloLabel">Привет, Самандар 👋</p><small id="subtitleLabel">SharipovAI — единый центр анализа, управления и контроля</small></div><div class="header-state"><b><i></i> <span id="systemLabel">Система запускается</span></b><button id="refresh" type="button">Обновить</button></div></header><div id="notice" class="notice hidden"></div><section id="content" aria-live="polite"><div class="title"><h1>Обзор</h1><p>Загрузка виртуального счёта и рыночных данных</p></div><div data-phase9-scaling></div></section></main>
   </div>
-  <script defer src="/static/web2/navigation_coordinator_v23.js?v=36"></script>
-  <script defer src="/static/web2/runtime_render_guard_v24.js?v=31"></script>
-  <script defer src="/static/web2/web2.js?v=29"></script>
-  <script defer src="/static/web2/truth_guard.js?v=25"></script>
-  <script defer src="/static/web2/overview_runtime_v25.js?v=31"></script>
-  <script defer src="/static/web2/decision_runtime_v25.js?v=25"></script>
-  <script defer src="/static/web2/system_status_v11.js?v=29"></script>
-  <script defer src="/static/web2/news_center_v12.js?v=25"></script>
-  <script defer src="/static/web2/tradingview_market_v32.js?v=32"></script>
-  <script defer src="/static/web2/tradingview_widget_height_fix_v34.js?v=34"></script>
-  <script defer src="/static/web2/market_intelligence_v33.js?v=33"></script>
-  <script defer src="/static/web2/ai_center_v14.js?v=25"></script>
-  <script defer src="/static/web2/general_control_v15.js?v=25"></script>
-  <script defer src="/static/web2/portfolio_risk_v16.js?v=25"></script>
-  <script defer src="/static/web2/learning_evidence_reports_v17.js?v=25"></script>
-  <script defer src="/static/web2/learning_runtime_v25.js?v=25"></script>
-  <script defer src="/static/web2/exchange_execution_settings_v18.js?v=30"></script>
-  <script defer src="/static/web2/operations_center_v20.js?v=25"></script>
-  <script defer src="/static/web2/campaign_operations_v36.js?v=36"></script>
-  <script defer src="/static/web2/campaign_decision_v37.js?v=37"></script>
-  <script defer src="/static/web2/campaign_monitor_v38.js?v=39"></script>
-</body>
-</html>
+  <script defer src="/static/web2/navigation_coordinator_v23.js?v=36"></script><script defer src="/static/web2/runtime_render_guard_v24.js?v=31"></script><script defer src="/static/web2/web2.js?v=29"></script><script defer src="/static/web2/truth_guard.js?v=25"></script><script defer src="/static/web2/overview_runtime_v25.js?v=31"></script><script defer src="/static/web2/decision_runtime_v25.js?v=25"></script><script defer src="/static/web2/system_status_v11.js?v=29"></script><script defer src="/static/web2/news_center_v12.js?v=25"></script><script defer src="/static/web2/tradingview_market_v32.js?v=32"></script><script defer src="/static/web2/tradingview_widget_height_fix_v34.js?v=34"></script><script defer src="/static/web2/market_intelligence_v33.js?v=33"></script><script defer src="/static/web2/ai_center_v14.js?v=25"></script><script defer src="/static/web2/general_control_v15.js?v=25"></script><script defer src="/static/web2/portfolio_risk_v16.js?v=25"></script><script defer src="/static/web2/learning_evidence_reports_v17.js?v=25"></script><script defer src="/static/web2/learning_runtime_v25.js?v=25"></script><script defer src="/static/web2/exchange_execution_settings_v18.js?v=30"></script><script defer src="/static/web2/operations_center_v20.js?v=25"></script><script defer src="/static/web2/campaign_operations_v36.js?v=36"></script><script defer src="/static/web2/campaign_decision_v37.js?v=37"></script><script defer src="/static/web2/campaign_monitor_v38.js?v=39"></script><script defer src="/static/web2/campaign_analysis_v40.js?v=40"></script><script defer src="/static/web2/campaign_scaling_v41.js?v=41"></script>
+</body></html>
