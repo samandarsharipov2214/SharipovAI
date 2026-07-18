@@ -16,6 +16,10 @@ ACTUAL_SHA="$(git rev-parse HEAD)"
 [[ "$ACTUAL_SHA" == "$EXPECTED_SHA" ]] || { echo "deployed SHA mismatch" >&2; exit 2; }
 [[ -z "$(git status --porcelain --untracked-files=normal)" ]] || { echo "deployed worktree is not clean" >&2; exit 2; }
 docker inspect "$CONTAINER_NAME" >/dev/null 2>&1 || { echo "application container is missing" >&2; exit 2; }
+CONTAINER_SHA="$(docker exec "$CONTAINER_NAME" printenv SHARIPOVAI_BUILD_SHA 2>/dev/null || true)"
+CONTAINER_LABEL_SHA="$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$CONTAINER_NAME" 2>/dev/null || true)"
+[[ "$CONTAINER_SHA" == "$ACTUAL_SHA" ]] || { echo "container runtime SHA mismatch" >&2; exit 2; }
+[[ "$CONTAINER_LABEL_SHA" == "$ACTUAL_SHA" ]] || { echo "container image label SHA mismatch" >&2; exit 2; }
 
 mkdir -p "$(dirname "$OUT")"
 health_file="$(mktemp "$(dirname "$OUT")/.phase11-health.XXXXXX")"
@@ -24,7 +28,13 @@ curl --fail --silent --show-error --max-time 10 --retry 2 --retry-all-errors "$H
 chmod 0600 "$health_file"
 python -m compileall -q .
 
-PHASE11_HEALTH_FILE="$health_file" PHASE11_VERIFY_OUTPUT="$OUT" PHASE11_DEPLOYED_SHA="$ACTUAL_SHA" PHASE11_DEPLOYED_ROOT="$ROOT" python - <<'PY'
+PHASE11_HEALTH_FILE="$health_file" \
+PHASE11_VERIFY_OUTPUT="$OUT" \
+PHASE11_DEPLOYED_SHA="$ACTUAL_SHA" \
+PHASE11_CONTAINER_SHA="$CONTAINER_SHA" \
+PHASE11_CONTAINER_LABEL_SHA="$CONTAINER_LABEL_SHA" \
+PHASE11_DEPLOYED_ROOT="$ROOT" \
+python - <<'PY'
 import json
 import os
 import tempfile
@@ -57,6 +67,8 @@ report = {
     "blockers": sorted(set(blockers)),
     "verified_at_ms": int(time.time() * 1000),
     "deployed_sha": os.environ["PHASE11_DEPLOYED_SHA"],
+    "container_build_sha": os.environ["PHASE11_CONTAINER_SHA"],
+    "container_label_sha": os.environ["PHASE11_CONTAINER_LABEL_SHA"],
     "deployed_root": os.environ["PHASE11_DEPLOYED_ROOT"],
     "http_health": http_health,
     "database_health": database,
