@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import threading
 from datetime import datetime, timezone
 
@@ -8,24 +10,87 @@ import pytest
 from campaigns.phase10_scaling import ControlledScalingService, ScalingExecutionPolicy
 from storage import ProjectDatabase
 
+_ACTIVATIONS_NS = "phase10_scaling_activations"
+_ACTIVE_LOCK_KEY = "__global_active_authority__"
+_PLAN_MATERIAL_KEYS = (
+    "actor",
+    "reason",
+    "campaign_ids",
+    "report_ids",
+    "invalid_report_ids",
+    "evidence",
+    "gates",
+    "failed_gates",
+    "status",
+    "current_notional_usdt",
+    "proposed_next_notional_usdt",
+    "manual_approval_required",
+    "automatic_scaling",
+    "runtime_flags_changed",
+    "mainnet_enabled",
+)
+
 
 def _database(tmp_path):
     return ProjectDatabase(f"sqlite:///{tmp_path / 'phase10.db'}")
 
 
+def _canonical_json(value):
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def _sign_plan(plan):
+    material = {key: plan.get(key) for key in _PLAN_MATERIAL_KEYS}
+    evidence_sha256 = hashlib.sha256(_canonical_json(material)).hexdigest()
+    plan["evidence_sha256"] = evidence_sha256
+    plan["plan_id"] = "p9s_" + evidence_sha256[:32]
+    return plan
+
+
 def _plan(**overrides):
     plan = {
-        "plan_id": "p9s_test",
-        "status": "eligible_for_manual_scaling_review",
-        "failed_gates": [],
-        "gates": {"all_source_gates_clean": True},
+        "actor": "phase9-operator",
+        "reason": "two clean bounded Testnet campaigns",
         "campaign_ids": ["c1", "c2"],
+        "report_ids": ["p9r_1", "p9r_2"],
+        "invalid_report_ids": [],
+        "evidence": {
+            "campaign_count": 2,
+            "matched_fill_count": 40,
+            "minimum_profit_factor": 1.1,
+            "minimum_win_rate": 0.5,
+            "maximum_drawdown_bps": 100,
+            "maximum_price_divergence_bps": 5,
+            "maximum_fee_ratio_bps": 10,
+        },
+        "gates": {
+            "minimum_successful_campaigns": True,
+            "minimum_total_matched_fills": True,
+            "all_source_gates_clean": True,
+            "all_report_evidence_valid": True,
+            "profit_factor": True,
+            "win_rate": True,
+            "drawdown": True,
+            "price_divergence": True,
+            "fee_ratio": True,
+        },
+        "failed_gates": [],
+        "status": "eligible_for_manual_scaling_review",
         "current_notional_usdt": 25,
         "proposed_next_notional_usdt": 37.5,
-        "evidence": {"maximum_drawdown_bps": 100},
+        "manual_approval_required": True,
+        "automatic_scaling": False,
+        "runtime_flags_changed": False,
+        "mainnet_enabled": False,
     }
     plan.update(overrides)
-    return plan
+    return _sign_plan(plan)
 
 
 def _activate(service, *, actor="owner", now_ms=1000):
@@ -56,6 +121,7 @@ def test_activation_is_integrity_protected_and_survives_restart(tmp_path):
     )
     assert result["allowed"] is True
     assert all(result["checks"].values())
+    assert activation["plan_evidence_sha256"] == _plan()["evidence_sha256"]
     assert activation["mainnet_enabled"] is False
     assert activation["kill_switch_override"] is False
 
@@ -105,25 +171,44 @@ def test_expired_revoked_and_non_finite_authority_fail_closed(tmp_path):
         ("proposed_next_notional_usdt", float("inf")),
     ],
 )
-def test_activation_rejects_non_finite_plan_numbers(tmp_path, field, value):
+def test_non_finite_plan_tampering_breaks_integrity_before_activation(
+    tmp_path,
+    field,
+    value,
+):
     service = ControlledScalingService(_database(tmp_path))
-    with pytest.raises(ValueError, match="finite"):
+    plan = _plan()
+    plan[field] = value
+    with pytest.raises(ValueError, match="integrity"):
         service.activate(
-            _plan(**{field: value}),
+            plan,
             actor="owner",
             confirmation="I_APPROVE_CONTROLLED_TESTNET_NOTIONAL_SCALING",
         )
+
+
+def test_tampered_phase9_plan_cannot_create_authority(tmp_path):
+    service = ControlledScalingService(_database(tmp_path))
+    plan = _plan()
+    plan["proposed_next_notional_usdt"] = 49
+    with pytest.raises(ValueError, match="integrity"):
+        service.activate(
+            plan,
+            actor="owner",
+            confirmation="I_APPROVE_CONTROLLED_TESTNET_NOTIONAL_SCALING",
+        )
+    assert service.active_activations(now_ms=2000) == []
 
 
 def test_tampered_authority_and_lock_mismatch_fail_closed(tmp_path):
     database = _database(tmp_path)
     service = ControlledScalingService(database)
     activation = _activate(service)
-    row = database.get_json("phase10_scaling_activations", activation["activation_id"])
+    row = database.get_json(_ACTIVATIONS_NS, activation["activation_id"])
     tampered = dict(row["value"])
     tampered["authorized_notional_usdt"] = 49
     database.put_json(
-        "phase10_scaling_activations",
+        _ACTIVATIONS_NS,
         activation["activation_id"],
         tampered,
         expected_version=row["version"],
@@ -152,7 +237,10 @@ def test_parallel_activation_allows_only_one_global_authority(tmp_path):
         except Exception as exc:  # the losing activation must fail closed
             failures.append(exc)
 
-    threads = [threading.Thread(target=worker, args=(f"owner-{index}",)) for index in range(2)]
+    threads = [
+        threading.Thread(target=worker, args=(f"owner-{index}",))
+        for index in range(2)
+    ]
     for thread in threads:
         thread.start()
     for thread in threads:
@@ -161,6 +249,26 @@ def test_parallel_activation_allows_only_one_global_authority(tmp_path):
     assert len(successes) == 1
     assert len(failures) == 1
     assert isinstance(failures[0], (ValueError, RuntimeError))
+
+
+def test_event_write_failure_aborts_authority_and_global_lock(tmp_path, monkeypatch):
+    database = _database(tmp_path)
+    service = ControlledScalingService(database)
+
+    def fail_event(*_args, **_kwargs):
+        raise RuntimeError("event store unavailable")
+
+    monkeypatch.setattr(database, "append_event", fail_event)
+    with pytest.raises(RuntimeError, match="event store unavailable"):
+        _activate(service)
+
+    assert service.active_activations(now_ms=2000) == []
+    activations = service.list_activations()
+    assert len(activations) == 1
+    assert activations[0]["status"] == "aborted"
+    lock = database.get_json(_ACTIVATIONS_NS, _ACTIVE_LOCK_KEY)
+    assert lock is not None
+    assert lock["value"]["status"] == "aborted"
 
 
 def test_monthly_reports_are_immutable_idempotent_and_retain_history(tmp_path):
@@ -188,8 +296,16 @@ def test_monthly_reports_are_immutable_idempotent_and_retain_history(tmp_path):
         },
         captured_at_ms=july_2,
     )
-    report = service.monthly_report([first, second], month="2026-07", generated_at_ms=july_3)
-    repeated = service.monthly_report([second, first], month="2026-07", generated_at_ms=july_3 + 1)
+    report = service.monthly_report(
+        [first, second],
+        month="2026-07",
+        generated_at_ms=july_3,
+    )
+    repeated = service.monthly_report(
+        [second, first],
+        month="2026-07",
+        generated_at_ms=july_3 + 1,
+    )
     assert repeated["report_id"] == report["report_id"]
     assert report["net_pnl_usdt"] == 1.0
     assert report["matched_fill_count"] == 40
@@ -205,11 +321,18 @@ def test_monthly_reports_are_immutable_idempotent_and_retain_history(tmp_path):
         },
         captured_at_ms=july_3,
     )
-    changed = service.monthly_report([first, second, third], month="2026-07", generated_at_ms=july_3 + 2)
+    changed = service.monthly_report(
+        [first, second, third],
+        month="2026-07",
+        generated_at_ms=july_3 + 2,
+    )
     assert changed["report_id"] != report["report_id"]
     assert changed["drawdown_alert"] is True
     reports = service.list_monthly_reports()
-    assert {item["report_id"] for item in reports} == {report["report_id"], changed["report_id"]}
+    assert {item["report_id"] for item in reports} == {
+        report["report_id"],
+        changed["report_id"],
+    }
 
 
 def test_conflicting_or_corrupt_snapshot_blocks_monthly_report(tmp_path):
@@ -226,6 +349,9 @@ def test_conflicting_or_corrupt_snapshot_blocks_monthly_report(tmp_path):
         captured_at_ms=captured,
     )
     corrupt = dict(snapshot)
-    corrupt["metrics"] = {**snapshot["metrics"], "net_pnl_usdt": 999}
+    corrupt["metrics"] = {
+        **snapshot["metrics"],
+        "net_pnl_usdt": 999,
+    }
     with pytest.raises(ValueError, match="integrity"):
         service.monthly_report([corrupt], month="2026-07")
