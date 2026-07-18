@@ -4,6 +4,8 @@ Status: **not completed until authenticated private execution evidence is captur
 
 This runbook executes one bounded Bybit Testnet campaign. It cannot enable Mainnet, install credentials from application code, bypass reconciliation or treat synthetic fixtures as evidence.
 
+**Synthetic fills are not evidence. Completion requires actual private execution IDs and fees captured from authenticated private order and execution streams.**
+
 ## Completion contract
 
 | Evidence | Requirement |
