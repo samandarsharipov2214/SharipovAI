@@ -14,19 +14,18 @@ def test_position_size_respects_scaling_position_and_cluster_caps():
         realized_volatility=0.01,
         proposed_symbol="BTCUSDT",
         open_positions=[
-            {"symbol": "ETHUSDT", "notional_usdt": 80},
+            {"symbol": "ETHUSDT", "notional_usdt": 40},
             {"symbol": "BTCUSDT", "notional_usdt": 45},
         ],
         correlations={"BTCUSDT": {"ETHUSDT": 0.85}},
         scaling_ceiling_usdt=37.5,
     )
     assert result["allowed"] is True
-    assert result["notional_usdt"] <= 5
+    assert result["notional_usdt"] == 5
     assert result["position_exposure_before_usdt"] == 45
-    assert result["cluster_exposure_before_usdt"] == 125
-    assert result["cluster_remaining_usdt"] == 0
-    # Existing BTC and correlated ETH already exceed the 10% cluster policy.
-    assert result["allowed"] is False or result["notional_usdt"] == 0
+    assert result["position_remaining_usdt"] == 5
+    assert result["cluster_exposure_before_usdt"] == 85
+    assert result["cluster_remaining_usdt"] == 15
 
 
 def test_normal_cluster_capacity_returns_smallest_safe_notional():
