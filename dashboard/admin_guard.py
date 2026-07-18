@@ -17,6 +17,7 @@ _SENSITIVE_PATHS = {
     "/api/execution/testnet-order",
 }
 _SENSITIVE_PREFIXES = (
+    "/api/campaigns/phase9/",
     "/api/campaigns/phase10/",
     "/api/performance/phase10/",
     "/api/risk/phase10/",
@@ -26,8 +27,14 @@ _SENSITIVE_PREFIXES = (
 
 def require_admin(request: Request) -> str:
     """Require explicit auth configuration and an active administrator."""
-    if not all(os.getenv(name, "").strip() for name in ("AUTH_SECRET", "ADMIN_USERNAME", "ADMIN_PASSWORD")):
-        raise HTTPException(status_code=503, detail={"status": "auth_not_configured"})
+    if not all(
+        os.getenv(name, "").strip()
+        for name in ("AUTH_SECRET", "ADMIN_USERNAME", "ADMIN_PASSWORD")
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail={"status": "auth_not_configured"},
+        )
     from .app import _is_admin_request, _session_username
 
     username = _session_username(request)
@@ -39,7 +46,9 @@ def require_admin(request: Request) -> str:
 
 
 def _is_sensitive_path(path: str) -> bool:
-    return path in _SENSITIVE_PATHS or any(path.startswith(prefix) for prefix in _SENSITIVE_PREFIXES)
+    return path in _SENSITIVE_PATHS or any(
+        path.startswith(prefix) for prefix in _SENSITIVE_PREFIXES
+    )
 
 
 def install_sensitive_api_guard(app: FastAPI) -> None:
@@ -54,7 +63,10 @@ def install_sensitive_api_guard(app: FastAPI) -> None:
             try:
                 require_admin(request)
             except HTTPException as exc:
-                return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+                return JSONResponse(
+                    status_code=exc.status_code,
+                    content={"detail": exc.detail},
+                )
         return await call_next(request)
 
 
