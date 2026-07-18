@@ -1,0 +1,36 @@
+name: Source Snapshot
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build source archive
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          tar \
+            --exclude=.git \
+            --exclude=.env \
+            --exclude='*.db' \
+            --exclude='*.sqlite*' \
+            --exclude='data/*' \
+            --exclude='.github/workflows/source-snapshot.yml' \
+            -czf /tmp/sharipovai-source.tgz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sharipovai-source-${{ github.sha }}
+          path: /tmp/sharipovai-source.tgz
+          if-no-files-found: error
+          retention-days: 1
