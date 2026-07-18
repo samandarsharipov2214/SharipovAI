@@ -85,11 +85,10 @@ PY
 
 compose_dir="$ROOT/deploy/vps"
 target_preflight="$(mktemp)"
-target_backup="$(mktemp)"
 target_compose="$(mktemp "$compose_dir/.phase11-rollback-compose.XXXXXX.yml")"
 rendered="$(mktemp)"
 restore_started=0
-cleanup(){ rm -f "$target_preflight" "$target_backup" "$target_compose" "$rendered"; }
+cleanup(){ rm -f "$target_preflight" "$target_compose" "$rendered"; }
 trap cleanup EXIT
 
 restore_original(){
@@ -103,20 +102,19 @@ restore_original(){
   docker compose build
   docker compose up -d --remove-orphans
   health_check || fail "original deployment did not recover"
+  bash smoke_check.sh production || fail "original deployment smoke check failed"
   fail "rollback target rejected and original deployment restored"
 }
 
 git show "$TARGET_SHA:deploy/vps/phase7_preflight.sh" >"$target_preflight"
-git show "$TARGET_SHA:deploy/vps/export_backup.sh" >"$target_backup"
 git show "$TARGET_SHA:deploy/vps/docker-compose.yml" >"$target_compose"
-chmod 0700 "$target_preflight" "$target_backup"
+chmod 0700 "$target_preflight"
 bash -n "$target_preflight"
-bash -n "$target_backup"
 
 log "running rollback-target preflight"
 APP_DIR="$ROOT" COMPOSE_DIR="$compose_dir" PHASE7_COMPOSE_FILE="$target_compose" bash "$target_preflight"
-log "creating verified backup of current deployment"
-APP_DIR="$ROOT" COMPOSE_DIR="$compose_dir" bash "$target_backup"
+log "creating verified backup with the current trusted exporter"
+APP_DIR="$ROOT" COMPOSE_DIR="$compose_dir" bash "$ROOT/deploy/vps/export_backup.sh"
 
 trap 'restore_original "unexpected error at line ${LINENO}"' ERR
 log "resetting $CURRENT_SHA -> $TARGET_SHA"
