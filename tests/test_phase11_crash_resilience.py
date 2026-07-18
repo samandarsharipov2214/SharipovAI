@@ -100,9 +100,10 @@ def test_expired_or_malformed_authority_alerts_fail_closed():
     assert "invalid-scaling-evidence" in malformed[0]["key"]
 
 
-def test_post_deploy_verifier_uses_canonical_health_unique_temp_and_atomic_replace():
+def test_post_deploy_verifier_uses_public_liveness_unique_temp_and_atomic_replace():
     script = (ROOT / "deploy/vps/phase11_post_deploy_verify.sh").read_text(encoding="utf-8")
-    assert "/api/system/health" in script
+    assert "/api/health" in script
+    assert "/api/system/health" not in script
     assert "mktemp" in script
     assert "os.replace" in script
     assert "/tmp/phase11-health.json" not in script
