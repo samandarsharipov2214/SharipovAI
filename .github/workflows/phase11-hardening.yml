@@ -55,6 +55,9 @@ jobs:
     env:
       PYTHONUNBUFFERED: '1'
       PYTHONDONTWRITEBYTECODE: '1'
+      ADMIN_USERNAME: phase11-ci-admin
+      ADMIN_PASSWORD: phase11-ci-password-${{ github.run_id }}
+      AUTH_SECRET: phase11-ci-secret-${{ github.run_id }}
       SHARIPOVAI_DISABLE_AUTH: '0'
       SHARIPOVAI_DATABASE_REQUIRED: '1'
       DATABASE_URL: sqlite:////tmp/sharipovai-phase11-${{ github.run_id }}.db
