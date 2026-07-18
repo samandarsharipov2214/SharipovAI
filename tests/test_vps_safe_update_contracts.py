@@ -43,19 +43,21 @@ def test_update_is_locked_backup_first_and_never_cleans_runtime_files() -> None:
     content = _text(UPDATE)
     assert "flock -n 9" in content
     assert "creating verified backup before code update" in content
-    assert 'bash "${backup_exporter}"' in content
-    assert "git -C \"${APP_DIR}\" reset --hard \"${target_sha}\"" in content
+    assert 'APP_DIR="${APP_DIR}" COMPOSE_DIR="${compose_dir}" bash "${backup_exporter_tmp}"' in content
+    assert 'git -C "${APP_DIR}" reset --hard "${target_sha}"' in content
     assert content.index("creating verified backup before code update") < content.index(
         'reset --hard "${target_sha}"'
     )
     assert "git clean" not in content
 
 
-def test_update_can_bootstrap_backup_exporter_without_mutating_checkout() -> None:
+def test_update_materializes_backup_exporter_from_immutable_target() -> None:
     content = _text(UPDATE)
-    assert 'git -C "${APP_DIR}" fetch --prune origin "${BRANCH}"' in content
-    assert 'show "origin/${BRANCH}:deploy/vps/export_backup.sh"' in content
-    assert content.index('fetch --prune origin "${BRANCH}"') < content.index(
+    assert 'git -C "${APP_DIR}" fetch --no-tags "${FETCH_REMOTE}" "${BRANCH}"' in content
+    assert 'git -C "${APP_DIR}" fetch --prune "${FETCH_REMOTE}" "${BRANCH}"' in content
+    assert 'target_sha="$(git -C "${APP_DIR}" rev-parse FETCH_HEAD)"' in content
+    assert 'show "${target_sha}:deploy/vps/export_backup.sh" >"${backup_exporter_tmp}"' in content
+    assert content.index("materializing immutable target deployment artifacts") < content.index(
         "creating verified backup before code update"
     )
     assert content.index("creating verified backup before code update") < content.index(
