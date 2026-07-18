@@ -76,7 +76,6 @@ class ProductionAudit:
         }
 
     def _execution_lock(self) -> AuditCheck:
-        evidence: dict[str, Any]
         try:
             from exchange_connector.bybit_execution import BybitExecutionClient
             from exchange_connector.execution_contract import MAINNET_EXECUTION_COMPILED
@@ -127,7 +126,9 @@ class ProductionAudit:
             "database_url_configured": bool(str(self.environ.get("DATABASE_URL", "")).strip()),
             "exchange_mode_is_sandbox": str(self.environ.get("EXCHANGE_MODE", "sandbox")).strip().lower() == "sandbox",
         }
-        passed = not unsafe and all(value is True for key, value in evidence.items() if key != "unsafe_enabled_flags")
+        passed = not unsafe and all(
+            value is True for key, value in evidence.items() if key != "unsafe_enabled_flags"
+        )
         return AuditCheck(
             "safe_runtime_configuration",
             "critical",
@@ -243,13 +244,17 @@ class ProductionAudit:
         )
 
     def _deployment_contracts(self) -> AuditCheck:
-        preflight = self._read("deploy/vps/phase11_release_preflight.sh")
-        verifier = self._read("deploy/vps/phase11_post_deploy_verify.sh")
-        installer = self._read("deploy/vps/install_phase10_monthly_monitor.sh")
-        service = self._read("deploy/vps/systemd/sharipovai-monthly-performance.service")
-        timer = self._read("deploy/vps/systemd/sharipovai-monthly-performance.timer")
+        sources = {
+            "preflight": self._read("deploy/vps/phase11_release_preflight.sh"),
+            "post_deploy": self._read("deploy/vps/phase11_post_deploy_verify.sh"),
+            "installer": self._read("deploy/vps/install_phase10_monthly_monitor.sh"),
+            "service": self._read("deploy/vps/systemd/sharipovai-monthly-performance.service"),
+            "timer": self._read("deploy/vps/systemd/sharipovai-monthly-performance.timer"),
+            "monthly_cli": self._read("scripts/phase10_monthly_report.py"),
+        }
         expected = {
             "preflight": (
+                "#!/usr/bin/env bash",
                 "git diff --quiet",
                 "SHARIPOVAI_EXPECTED_SHA",
                 "SHARIPOVAI_DATABASE_REQUIRED",
@@ -257,22 +262,21 @@ class ProductionAudit:
                 "ProductionAudit",
             ),
             "post_deploy": (
+                "#!/usr/bin/env bash",
                 "mktemp",
                 "ProjectDatabase",
                 "os.replace",
                 "audit_sha256",
                 "http_health",
             ),
-            "installer": ("systemd-analyze verify", "systemctl enable --now"),
+            "installer": (
+                "#!/usr/bin/env bash",
+                "systemd-analyze verify",
+                "systemctl enable --now",
+            ),
             "service": ("NoNewPrivileges=true", "ProtectSystem=strict", "SuccessExitStatus=3"),
             "timer": ("OnCalendar=monthly", "Persistent=true", "RandomizedDelaySec=900"),
-        }
-        sources = {
-            "preflight": preflight,
-            "post_deploy": verifier,
-            "installer": installer,
-            "service": service,
-            "timer": timer,
+            "monthly_cli": ("#!/usr/bin/env python3", "os.replace", "os.fsync"),
         }
         missing = [
             f"{name}:{token}"
@@ -280,16 +284,6 @@ class ProductionAudit:
             for token in tokens
             if token not in sources[name]
         ]
-        executables = (
-            "deploy/vps/phase11_release_preflight.sh",
-            "deploy/vps/phase11_post_deploy_verify.sh",
-            "deploy/vps/install_phase10_monthly_monitor.sh",
-            "scripts/phase10_monthly_report.py",
-        )
-        non_executable = [
-            path for path in executables if not (self.root / path).exists() or not os.access(self.root / path, os.X_OK)
-        ]
-        missing.extend(f"not_executable:{path}" for path in non_executable)
         return AuditCheck(
             "deployment_preflight_and_verification",
             "critical",
@@ -299,10 +293,12 @@ class ProductionAudit:
         )
 
     def _dashboard_contracts(self) -> AuditCheck:
-        index = self._read("dashboard/static/web2/index.html")
-        phase10 = self._read("dashboard/static/web2/phase10_scaling_performance_v42.js")
-        phase11 = self._read("dashboard/static/web2/phase11_production_v43.js")
-        stylesheet = self._read("dashboard/static/web2/phase11_production_v43.css")
+        sources = {
+            "index": self._read("dashboard/static/web2/index.html"),
+            "phase10": self._read("dashboard/static/web2/phase10_scaling_performance_v42.js"),
+            "phase11": self._read("dashboard/static/web2/phase11_production_v43.js"),
+            "stylesheet": self._read("dashboard/static/web2/phase11_production_v43.css"),
+        }
         expected = {
             "index": (
                 "viewport",
@@ -311,10 +307,21 @@ class ProductionAudit:
                 "data-phase11-production",
             ),
             "phase10": ("AbortController", "visibilitychange", "replaceChildren", "lastSuccessfulAt"),
-            "phase11": ("AbortController", "aria-live", "visibilitychange", "localStorage", "lastSuccessfulAt", "replaceChildren"),
-            "stylesheet": ("prefers-reduced-motion", "prefers-color-scheme", "@media", ":focus-visible"),
+            "phase11": (
+                "AbortController",
+                "aria-live",
+                "visibilitychange",
+                "localStorage",
+                "lastSuccessfulAt",
+                "replaceChildren",
+            ),
+            "stylesheet": (
+                "prefers-reduced-motion",
+                "prefers-color-scheme",
+                "@media",
+                ":focus-visible",
+            ),
         }
-        sources = {"index": index, "phase10": phase10, "phase11": phase11, "stylesheet": stylesheet}
         missing = [
             f"{name}:{token}"
             for name, tokens in expected.items()
@@ -323,9 +330,9 @@ class ProductionAudit:
         ]
         unsafe = [
             f"{name}:{token}"
-            for name, source in (("phase10", phase10), ("phase11", phase11))
+            for name in ("phase10", "phase11")
             for token in ("innerHTML", "insertAdjacentHTML", "eval(")
-            if token in source
+            if token in sources[name]
         ]
         return AuditCheck(
             "dashboard_responsive_realtime_contract",
