@@ -7,6 +7,7 @@ from .metrics import (
     record_dataset_validation,
     update_runtime_metrics,
 )
+from .phase8_alerts import Phase8RiskAlertMonitor, Phase8RiskAlertService
 from .structured_logging import (
     ContextLoggerAdapter,
     JsonFormatter,
@@ -20,6 +21,8 @@ __all__ = [
     "CampaignCriticalAlertService",
     "ContextLoggerAdapter",
     "JsonFormatter",
+    "Phase8RiskAlertMonitor",
+    "Phase8RiskAlertService",
     "configure_structured_logging",
     "get_structured_logger",
     "log_event",
