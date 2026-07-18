@@ -92,6 +92,11 @@ def test_phase7_campaign_transition_scripts_are_fail_closed() -> None:
     assert "I_APPROVE_RESTORE_PRODUCTION_KILL_SWITCH" in stop
     assert deploy.index("phase7_preflight.sh") < deploy.index("export_backup.sh") < deploy.index("up -d --force-recreate")
     assert "restoring production-safe compose" in deploy
+    assert "TESTNET_CAMPAIGN_MAX_WINDOW_SECONDS" in deploy
+    assert "systemd-run" in deploy
+    assert "sharipovai-testnet-auto-stop" in deploy
+    assert "systemctl is-active" in deploy
+    assert "sharipovai-testnet-auto-stop.timer" in stop
 
 
 def test_compose_and_image_keep_mainnet_off_and_drop_capabilities() -> None:
