@@ -22,7 +22,10 @@ Canonical audited concepts:
 
 Phase 8 adds one-second sequence-aware campaign monitoring, drawdown alerts, immutable post-campaign analysis and a manual-review promotion recommendation. It does not add execution authority or automatic promotion.
 
-Binding policy: `CONSTITUTION.md`.
+Binding policy:
+
+- `CONSTITUTION.md`
+- `CONSTITUTION_PHASE8_AMENDMENT.md`
 
 Operational procedures:
 
