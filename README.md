@@ -8,10 +8,11 @@ Canonical audited concepts:
 - walk_forward sequential evaluation
 - metrics through Prometheus observability
 - execution_status exposed read-only
-- fill_divergence
-- experiment_results_ui
-- experiment_comparison_ui
-- private_stream_default_off
+- experiment registry with persistent experiment evidence
+- fill divergence validation between Paper and Testnet execution
+- experiment results UI at `/backtest-results`
+- experiment comparison UI at `/experiment-comparison`
+- private order stream remains disabled by default with `FEATURE_BYBIT_PRIVATE_ORDER_WS=0`
 - CI cleanroom
 - operator CLI
 - 10–25 USDT
