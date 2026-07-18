@@ -5,9 +5,9 @@ Production documentation index for the safety-first research and bounded Testnet
 Canonical audited concepts:
 
 - historical_data and validated historical manifests
-- sequential walk-forward evaluation
-- Prometheus observability metrics
-- read-only execution status
+- walk_forward sequential evaluation
+- metrics through Prometheus observability
+- execution_status exposed read-only
 - fill_divergence
 - experiment_results_ui
 - experiment_comparison_ui
