@@ -43,6 +43,7 @@ PY
 python -m pip check
 python -m compileall -q .
 python -m pytest \
+  tests/test_phase9_results_and_scaling.py \
   tests/test_phase10_controlled_scaling.py \
   tests/test_phase10_capital_engine.py \
   tests/test_phase11_production_audit.py \
