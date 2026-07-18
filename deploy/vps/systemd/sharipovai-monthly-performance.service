@@ -27,5 +27,6 @@ RestrictSUIDSGID=true
 RestrictRealtime=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
-ReadWritePaths=/var/lib/sharipovai/performance
+ReadWritePaths=/var/lib/sharipovai
+ReadWritePaths=-/opt/sharipovai/data
 UMask=0027
