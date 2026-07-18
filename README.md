@@ -5,6 +5,8 @@ Production documentation index for the safety-first research and bounded Testnet
 Canonical audited concepts:
 
 - historical_data
+- walk_forward
+- metrics
 - execution_status
 - fill_divergence
 - experiment_results_ui
