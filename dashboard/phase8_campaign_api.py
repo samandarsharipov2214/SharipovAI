@@ -6,6 +6,7 @@ from typing import Any, Callable
 from fastapi import FastAPI, HTTPException, Request
 
 from campaigns import Phase8CampaignLiveView, Phase8PostCampaignAnalyzer
+from observability import Phase8RiskAlertMonitor, Phase8RiskAlertService
 from storage import ProjectDatabase
 
 from .admin_guard import install_sensitive_api_guard, require_admin
@@ -25,22 +26,16 @@ def install_phase8_campaign_api(app: FastAPI) -> None:
         raise RuntimeError("Phase 7 campaign services must be installed before Phase 8 API")
 
     install_sensitive_api_guard(app)
-    analyzer = Phase8PostCampaignAnalyzer(
-        database,
-        campaign=campaign,
-        reports=reports,
-        monitor=monitor,
-    )
-    live = Phase8CampaignLiveView(
-        database,
-        operations=operations,
-        monitor=monitor,
-        analyzer=analyzer,
-    )
+    analyzer = Phase8PostCampaignAnalyzer(database, campaign=campaign, reports=reports, monitor=monitor)
+    live = Phase8CampaignLiveView(database, operations=operations, monitor=monitor, analyzer=analyzer)
+    risk_alerts = Phase8RiskAlertMonitor(live.snapshot, Phase8RiskAlertService(database))
     app.state.phase8_post_campaign_analyzer = analyzer
     app.state.phase8_campaign_live_view = live
+    app.state.phase8_risk_alert_monitor = risk_alerts
     app.state.phase8_campaign_api_installed = True
     _register_event(app, "startup", live.start)
+    _register_event(app, "startup", risk_alerts.start)
+    _register_event(app, "shutdown", risk_alerts.stop)
     _register_event(app, "shutdown", live.stop)
 
     @app.get("/api/campaigns/phase8/live")
@@ -48,11 +43,13 @@ def install_phase8_campaign_api(app: FastAPI) -> None:
         require_admin(request)
         try:
             payload = live.refresh() if refresh else live.snapshot(since_sequence=since_sequence)
-            alert_monitor = getattr(app.state, "campaign_critical_alert_monitor", None)
-            critical = alert_monitor.status() if alert_monitor is not None else {}
+            critical_monitor = getattr(app.state, "campaign_critical_alert_monitor", None)
+            critical = critical_monitor.status() if critical_monitor is not None else {}
+            phase8_alerts = risk_alerts.tick() if refresh else risk_alerts.status()
             return {
                 **payload,
                 "critical_alerts": critical,
+                "phase8_risk_alerts": phase8_alerts,
                 "runtime_flags_changed": False,
                 "mainnet_enabled": False,
             }
@@ -107,10 +104,7 @@ def _register_event(app: FastAPI, event: str, handler: Callable[[], None]) -> No
 
 def _service_error(exc: Exception) -> HTTPException:
     status = 404 if isinstance(exc, KeyError) else 409 if isinstance(exc, ValueError) else 503
-    return HTTPException(
-        status_code=status,
-        detail={"status": "unavailable", "message": f"{type(exc).__name__}: {exc}"},
-    )
+    return HTTPException(status_code=status, detail={"status": "unavailable", "message": f"{type(exc).__name__}: {exc}"})
 
 
 __all__ = ["install_phase8_campaign_api"]
