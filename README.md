@@ -20,6 +20,8 @@ Canonical audited concepts:
 - private execution evidence
 - final promotion report
 - manual decision
+- authenticated private Testnet fills
+- Mainnet remains unavailable
 - Mainnet execution is compiled out
 
 Binding policy: `CONSTITUTION.md`.
