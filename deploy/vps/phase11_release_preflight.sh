@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 027
 
-ROOT="${SHARIPOVAI_ROOT:-/opt/sharipovai}"
+ROOT="${SHARIPOVAI_ROOT:-${APP_DIR:-/opt/sharipovai-repo}}"
 EXPECTED_SHA="${SHARIPOVAI_EXPECTED_SHA:-}"
 fail(){ printf 'PHASE11_PREFLIGHT_BLOCKED: %s\n' "$*" >&2; exit 2; }
 
@@ -68,4 +68,4 @@ print(json.dumps({"database": database, "audit": report}, indent=2, sort_keys=Tr
 raise SystemExit(0 if report["status"] == "ready_for_bounded_testnet_preflight" else 2)
 PY
 
-printf 'PHASE11_PREFLIGHT_OK sha=%s\n' "$ACTUAL_SHA"
+printf 'PHASE11_PREFLIGHT_OK root=%s sha=%s\n' "$ROOT" "$ACTUAL_SHA"
