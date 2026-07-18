@@ -48,11 +48,14 @@ class ScalingPolicy:
             raise ValueError("minimum_profit_factor must be non-negative")
         if not 0 <= parsed["minimum_win_rate"] <= 1:
             raise ValueError("minimum_win_rate must be within [0, 1]")
-        if any(parsed[name] < 0 for name in (
-            "maximum_drawdown_bps",
-            "maximum_price_divergence_bps",
-            "maximum_fee_ratio_bps",
-        )):
+        if any(
+            parsed[name] < 0
+            for name in (
+                "maximum_drawdown_bps",
+                "maximum_price_divergence_bps",
+                "maximum_fee_ratio_bps",
+            )
+        ):
             raise ValueError("maximum risk metrics must be non-negative")
 
 
@@ -105,30 +108,6 @@ class CampaignResultsService:
         else:
             profit_factor = "infinity" if gross_profit > 0 else 0.0
         win_rate = wins / len(trades) if trades else 0.0
-        pnl = _finite_mapping(
-            analysis.get("pnl"),
-            allowed=(
-                "gross_realized_pnl_usdt",
-                "net_realized_pnl_usdt",
-                "fees_usdt",
-                "turnover_usdt",
-                "open_inventory_quantity",
-                "open_inventory_cost_usdt",
-            ),
-            name="pnl",
-        )
-        divergence = _finite_mapping(
-            analysis.get("divergence"),
-            allowed=(
-                "paper_average_price",
-                "testnet_average_price",
-                "price_divergence_bps",
-                "paper_fee_usdt",
-                "testnet_fee_usdt",
-                "fee_divergence_usdt",
-            ),
-            name="divergence",
-        )
         material = {
             "schema_version": 2,
             "campaign_id": campaign_id,
@@ -142,8 +121,8 @@ class CampaignResultsService:
             "matched_fill_count": _non_negative_int(
                 analysis.get("matched_fill_count", 0), "matched_fill_count"
             ),
-            "pnl": pnl,
-            "divergence": divergence,
+            "pnl": _normalize_pnl(analysis.get("pnl")),
+            "divergence": _normalize_divergence(analysis.get("divergence")),
             "fee_ratio_bps": _required_finite(
                 analysis.get("fee_ratio_bps", 0.0), "fee_ratio_bps"
             ),
@@ -213,7 +192,9 @@ class CampaignResultsService:
             item = dict(raw)
             campaign_id = str(item.get("campaign_id") or "").strip()
             if not campaign_id or not _report_integrity_valid(item):
-                invalid_report_ids.append(str(item.get("report_id") or campaign_id or "unknown"))
+                invalid_report_ids.append(
+                    str(item.get("report_id") or campaign_id or "unknown")
+                )
                 continue
             previous = by_campaign.get(campaign_id)
             if previous is None or int(item.get("generated_at_ms") or 0) > int(
@@ -232,7 +213,10 @@ class CampaignResultsService:
         ]
         worst_drawdown = max(
             (
-                _required_finite(item.get("maximum_drawdown_bps", 0.0), "maximum_drawdown_bps")
+                _required_finite(
+                    item.get("maximum_drawdown_bps", 0.0),
+                    "maximum_drawdown_bps",
+                )
                 for item in metrics
             ),
             default=0.0,
@@ -254,7 +238,9 @@ class CampaignResultsService:
             (
                 abs(
                     _required_finite(
-                        (item.get("divergence") or {}).get("price_divergence_bps", 0.0),
+                        (item.get("divergence") or {}).get(
+                            "price_divergence_bps", 0.0
+                        ),
                         "price_divergence_bps",
                     )
                 )
@@ -264,14 +250,17 @@ class CampaignResultsService:
         )
         maximum_fee_ratio = max(
             (
-                _required_finite(item.get("fee_ratio_bps", 0.0), "fee_ratio_bps")
+                _required_finite(
+                    item.get("fee_ratio_bps", 0.0), "fee_ratio_bps"
+                )
                 for item in clean
             ),
             default=0.0,
         )
         gates = {
             "all_report_evidence_valid": not invalid_report_ids,
-            "minimum_successful_campaigns": len(clean) >= self.policy.minimum_campaigns,
+            "minimum_successful_campaigns": len(clean)
+            >= self.policy.minimum_campaigns,
             "minimum_total_matched_fills": fill_count >= self.policy.minimum_fills,
             "all_source_gates_clean": all(
                 not item.get("source_failed_gates") for item in clean
@@ -306,7 +295,9 @@ class CampaignResultsService:
             },
             "gates": gates,
             "failed_gates": failed,
-            "status": "eligible_for_manual_scaling_review" if not failed else "blocked",
+            "status": (
+                "eligible_for_manual_scaling_review" if not failed else "blocked"
+            ),
             "current_notional_usdt": self.policy.current_notional_usdt,
             "proposed_next_notional_usdt": (
                 next_notional if not failed else self.policy.current_notional_usdt
@@ -391,35 +382,41 @@ class CampaignResultsService:
 
     def _update_latest_index(self, report: Mapping[str, Any]) -> None:
         campaign_id = str(report["campaign_id"])
-        row = self.database.get_json(_REPORT_INDEX_NS, campaign_id)
-        current = dict(row["value"]) if row else {}
-        current_generated = int(current.get("generated_at_ms") or -1)
-        report_generated = int(report.get("generated_at_ms") or 0)
-        if current and current_generated > report_generated:
+        for _ in range(2):
+            row = self.database.get_json(_REPORT_INDEX_NS, campaign_id)
+            current = dict(row["value"]) if row else {}
+            current_generated = int(current.get("generated_at_ms") or -1)
+            report_generated = int(report.get("generated_at_ms") or 0)
+            if current_generated > report_generated:
+                return
+            index = {
+                "schema_version": 1,
+                "campaign_id": campaign_id,
+                "report_id": str(report["report_id"]),
+                "analysis_id": str(report.get("analysis_id") or ""),
+                "generated_at_ms": report_generated,
+                "evidence_sha256": str(report.get("evidence_sha256") or ""),
+            }
+            if current == index:
+                return
+            try:
+                self.database.put_json(
+                    _REPORT_INDEX_NS,
+                    campaign_id,
+                    index,
+                    expected_version=int(row["version"]) if row else 0,
+                )
+            except VersionConflict:
+                continue
+            self.database.append_event(
+                _REPORT_INDEX_NS,
+                "latest_campaign_report_index",
+                campaign_id,
+                index,
+                created_at_ms=report_generated,
+            )
             return
-        index = {
-            "schema_version": 1,
-            "campaign_id": campaign_id,
-            "report_id": str(report["report_id"]),
-            "analysis_id": str(report.get("analysis_id") or ""),
-            "generated_at_ms": report_generated,
-            "evidence_sha256": str(report.get("evidence_sha256") or ""),
-        }
-        if current == index:
-            return
-        self.database.put_json(
-            _REPORT_INDEX_NS,
-            campaign_id,
-            index,
-            expected_version=int(row["version"]) if row else 0,
-        )
-        self.database.append_event(
-            _REPORT_INDEX_NS,
-            "latest_campaign_report_index",
-            campaign_id,
-            index,
-            created_at_ms=report_generated,
-        )
+        raise VersionConflict("latest Phase 9 report index changed concurrently")
 
 
 def _closed_trades(fills: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -450,7 +447,9 @@ def _closed_trades(fills: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
             "actual_fee",
         )
         if qty <= 0 or price <= 0 or fee < 0:
-            raise ValueError("fill quantity and price must be positive and fee non-negative")
+            raise ValueError(
+                "fill quantity and price must be positive and fee non-negative"
+            )
         if side not in {"buy", "sell"}:
             raise ValueError("fill side must be buy or sell")
         inventory.setdefault(symbol, [])
@@ -488,6 +487,62 @@ def _closed_trades(fills: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     return trades
 
 
+def _normalize_pnl(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError("pnl must be a mapping")
+    numeric_fields = {
+        "gross_realized_pnl_usdt",
+        "fees_usdt",
+        "net_realized_pnl_usdt",
+        "closed_notional_usdt",
+        "return_on_closed_notional_bps",
+    }
+    allowed = numeric_fields | {"open_inventory"}
+    unknown = sorted(set(value) - allowed)
+    if unknown:
+        raise ValueError(f"pnl contains unknown fields: {unknown}")
+    result: dict[str, Any] = {
+        key: _required_finite(raw, f"pnl.{key}")
+        for key, raw in sorted(value.items())
+        if key in numeric_fields
+    }
+    inventory = value.get("open_inventory")
+    if inventory is not None:
+        if not isinstance(inventory, Mapping):
+            raise ValueError("pnl.open_inventory must be a mapping")
+        result["open_inventory"] = {
+            _required_text(symbol, "inventory symbol", 32).upper(): _required_finite(
+                quantity, f"pnl.open_inventory.{symbol}"
+            )
+            for symbol, quantity in sorted(inventory.items())
+        }
+    return result
+
+
+def _normalize_divergence(value: Any) -> dict[str, float]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError("divergence must be a mapping")
+    allowed = {
+        "actual_average_fill_price",
+        "paper_average_fill_price",
+        "price_divergence_bps",
+        "actual_fee_total",
+        "expected_fee_total",
+        "fee_divergence_usdt",
+    }
+    unknown = sorted(set(value) - allowed)
+    if unknown:
+        raise ValueError(f"divergence contains unknown fields: {unknown}")
+    return {
+        key: _required_finite(raw, f"divergence.{key}")
+        for key, raw in sorted(value.items())
+    }
+
+
 def _report_material(report: Mapping[str, Any]) -> dict[str, Any]:
     return {
         key: report.get(key)
@@ -512,10 +567,14 @@ def _report_material(report: Mapping[str, Any]) -> dict[str, Any]:
 
 def _report_integrity_valid(report: Mapping[str, Any]) -> bool:
     supplied = str(report.get("evidence_sha256") or "")
-    if len(supplied) != 64 or not str(report.get("report_id") or "").startswith("p9r_"):
+    if len(supplied) != 64 or not str(report.get("report_id") or "").startswith(
+        "p9r_"
+    ):
         return False
     try:
-        expected = hashlib.sha256(_canonical_json(_report_material(report))).hexdigest()
+        expected = hashlib.sha256(
+            _canonical_json(_report_material(report))
+        ).hexdigest()
     except (TypeError, ValueError):
         return False
     return supplied == expected and str(report.get("report_id")) == "p9r_" + expected[:32]
@@ -527,25 +586,6 @@ def _same_report(left: Mapping[str, Any], right: Mapping[str, Any]) -> bool:
     left_value.pop("generated_at_ms", None)
     right_value.pop("generated_at_ms", None)
     return left_value == right_value
-
-
-def _finite_mapping(
-    value: Any,
-    *,
-    allowed: Sequence[str],
-    name: str,
-) -> dict[str, float]:
-    if value is None:
-        return {}
-    if not isinstance(value, Mapping):
-        raise ValueError(f"{name} must be a mapping")
-    unknown = sorted(set(value) - set(allowed))
-    if unknown:
-        raise ValueError(f"{name} contains unknown fields: {unknown}")
-    return {
-        key: _required_finite(raw, f"{name}.{key}")
-        for key, raw in sorted(value.items())
-    }
 
 
 def _canonical_json(value: Any) -> bytes:
@@ -591,10 +631,9 @@ def _optional_non_negative_int(value: Any) -> int | None:
 
 
 def _timestamp(value: int | None) -> int:
-    timestamp = int(time.time() * 1000) if value is None else _non_negative_int(
+    return int(time.time() * 1000) if value is None else _non_negative_int(
         value, "generated_at_ms"
     )
-    return timestamp
 
 
 __all__ = ["CampaignResultsService", "ScalingPolicy"]
