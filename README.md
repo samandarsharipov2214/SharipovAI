@@ -72,7 +72,7 @@ Verified market evidence
   -> actual fee and partial-fill aggregation
   -> order/execution reconciliation
   -> Runtime Fill Harvester
-  -> immutable final report
+  -> immutable final promotion report
   -> manual decision
 ```
 
@@ -210,7 +210,9 @@ use:
 
 The dashboard cannot submit a raw order or change the Mainnet compile lock.
 
-## Operator control plane
+## Operator CLI and operator control plane
+
+The operator CLI is `scripts/testnet_campaignctl.py`:
 
 ```bash
 python scripts/testnet_campaignctl.py snapshot
