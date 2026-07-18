@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import platform
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,15 +39,14 @@ class ProductionAudit:
         ]
         blockers = [c.name for c in checks if not c.passed and c.severity == "critical"]
         warnings = [c.name for c in checks if not c.passed and c.severity != "critical"]
-        created_at_ms = int(time.time() * 1000)
         payload = {
             "schema_version": 1,
-            "created_at_ms": created_at_ms,
+            "created_at_ms": int(time.time() * 1000),
             "host": {"python": platform.python_version(), "platform": platform.system()},
             "status": "ready_for_bounded_testnet_preflight" if not blockers else "blocked",
             "blockers": blockers,
             "warnings": warnings,
-            "checks": [c.__dict__ for c in checks],
+            "checks": [asdict(c) for c in checks],
             "mainnet_enabled": False,
             "automatic_campaign_launch": False,
         }
@@ -86,9 +86,13 @@ class ProductionAudit:
         return AuditCheck("dashboard_responsive_realtime_contract", "warning", not missing, {"missing": missing})
 
     def _check_runtime_limits(self) -> AuditCheck:
-        max_notional = float(os.getenv("PHASE11_MAX_TESTNET_NOTIONAL_USDT", "50"))
-        passed = 0 < max_notional <= 50
-        return AuditCheck("bounded_testnet_notional", "critical", passed, {"maximum_usdt": max_notional}, "Keep the hard ceiling at or below 50 USDT.")
+        raw = os.getenv("PHASE11_MAX_TESTNET_NOTIONAL_USDT", "50")
+        try:
+            maximum = float(raw)
+        except (TypeError, ValueError):
+            maximum = math.nan
+        passed = math.isfinite(maximum) and 0 < maximum <= 50
+        return AuditCheck("bounded_testnet_notional", "critical", passed, {"configured": raw, "maximum_usdt": maximum if math.isfinite(maximum) else None}, "Keep the hard ceiling at or below 50 USDT.")
 
 
 __all__ = ["AuditCheck", "ProductionAudit"]
