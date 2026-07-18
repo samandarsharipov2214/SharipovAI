@@ -9,6 +9,8 @@ COMPOSE_DIR="${COMPOSE_DIR:-${APP_DIR}/deploy/vps}"
 BASE_ENV_FILE="${BASE_ENV_FILE:-${COMPOSE_DIR}/.env.vps}"
 CAMPAIGN_ENV_FILE="${CAMPAIGN_ENV_FILE:-${COMPOSE_DIR}/.env.testnet-campaign}"
 LOCK_FILE="${LOCK_FILE:-/run/lock/sharipovai-testnet-campaign.lock}"
+MAX_WINDOW_SECONDS="${TESTNET_CAMPAIGN_MAX_WINDOW_SECONDS:-14400}"
+AUTO_STOP_UNIT="sharipovai-testnet-auto-stop"
 
 fail() { printf '[testnet-deploy] ERROR: %s\n' "$*" >&2; exit 1; }
 log() { printf '[testnet-deploy] %s\n' "$*"; }
@@ -17,8 +19,12 @@ log() { printf '[testnet-deploy] %s\n' "$*"; }
 [[ "${CONFIRMATION}" == "${REQUIRED_CONFIRMATION}" ]] || fail "exact confirmation required: ${REQUIRED_CONFIRMATION}"
 [[ -f "${BASE_ENV_FILE}" ]] || fail "missing base env file: ${BASE_ENV_FILE}"
 [[ -f "${CAMPAIGN_ENV_FILE}" ]] || fail "missing campaign env file: ${CAMPAIGN_ENV_FILE}"
+[[ "${MAX_WINDOW_SECONDS}" =~ ^[0-9]+$ ]] || fail 'TESTNET_CAMPAIGN_MAX_WINDOW_SECONDS must be an integer'
+(( MAX_WINDOW_SECONDS >= 300 && MAX_WINDOW_SECONDS <= 86400 )) || fail 'Testnet campaign window must be within 300..86400 seconds'
 chmod 600 "${BASE_ENV_FILE}" "${CAMPAIGN_ENV_FILE}"
-for command in docker python3 curl flock git; do command -v "${command}" >/dev/null || fail "missing command: ${command}"; done
+for command in docker python3 curl flock git systemctl systemd-run; do
+  command -v "${command}" >/dev/null || fail "missing command: ${command}"
+done
 install -d -m 0755 "$(dirname "${LOCK_FILE}")"
 exec 9>"${LOCK_FILE}"
 flock -n 9 || fail 'another campaign deployment transition is running'
@@ -27,8 +33,14 @@ python3 "${COMPOSE_DIR}/validate_runtime_env.py" --env-file "${BASE_ENV_FILE}" -
 APP_DIR="${APP_DIR}" COMPOSE_DIR="${COMPOSE_DIR}" bash "${COMPOSE_DIR}/phase7_preflight.sh"
 APP_DIR="${APP_DIR}" COMPOSE_DIR="${COMPOSE_DIR}" bash "${COMPOSE_DIR}/export_backup.sh"
 
+cancel_auto_stop() {
+  systemctl stop "${AUTO_STOP_UNIT}.timer" "${AUTO_STOP_UNIT}.service" >/dev/null 2>&1 || true
+  systemctl reset-failed "${AUTO_STOP_UNIT}.service" >/dev/null 2>&1 || true
+}
+
 rollback() {
   trap - ERR
+  cancel_auto_stop
   log 'campaign runtime deployment failed; restoring production-safe compose'
   docker compose --project-directory "${COMPOSE_DIR}" -f "${COMPOSE_DIR}/docker-compose.yml" --env-file "${BASE_ENV_FILE}" up -d --force-recreate --remove-orphans
   BASE_ENV_FILE="${BASE_ENV_FILE}" COMPOSE_DIR="${COMPOSE_DIR}" bash "${COMPOSE_DIR}/smoke_check.sh" production || true
@@ -41,6 +53,17 @@ compose=(docker compose --project-directory "${COMPOSE_DIR}" -f "${COMPOSE_DIR}/
 log 'recreating application container in bounded Testnet mode'
 "${compose[@]}" up -d --force-recreate --remove-orphans
 BASE_ENV_FILE="${BASE_ENV_FILE}" CAMPAIGN_ENV_FILE="${CAMPAIGN_ENV_FILE}" COMPOSE_DIR="${COMPOSE_DIR}" bash "${COMPOSE_DIR}/smoke_check.sh" testnet-campaign
+
+cancel_auto_stop
+systemd-run \
+  --unit="${AUTO_STOP_UNIT}" \
+  --on-active="${MAX_WINDOW_SECONDS}s" \
+  --property=Type=oneshot \
+  --property=User=root \
+  --property=NoNewPrivileges=true \
+  /bin/bash "${COMPOSE_DIR}/testnet_campaign_stop.sh" I_APPROVE_RESTORE_PRODUCTION_KILL_SWITCH >/dev/null
+systemctl is-active --quiet "${AUTO_STOP_UNIT}.timer"
+
 trap - ERR
 commit="$(git -C "${APP_DIR}" rev-parse HEAD 2>/dev/null || true)"
-log "TESTNET_RUNTIME_READY commit=${commit:-unknown} mainnet=false max_notional_usdt=25"
+log "TESTNET_RUNTIME_READY commit=${commit:-unknown} mainnet=false max_notional_usdt=25 auto_stop_seconds=${MAX_WINDOW_SECONDS}"
