@@ -5,11 +5,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_phase11_dashboard_assets_are_wired():
     index = (ROOT / "dashboard/static/web2/index.html").read_text(encoding="utf-8")
-    init = (ROOT / "dashboard/__init__.py").read_text(encoding="utf-8")
+    phase10 = (ROOT / "dashboard/phase10_scaling_api.py").read_text(encoding="utf-8")
     assert "data-phase11-production" in index
     assert "phase11_production_v43.css" in index
     assert "phase11_production_v43.js" in index
-    assert "install_phase11_production_api" in init
+    assert "install_phase11_production_api" in phase10
 
 
 def test_phase11_dashboard_is_mobile_and_accessibility_aware():
