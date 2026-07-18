@@ -61,15 +61,18 @@ def healthy_app(tmp_path: Path, monkeypatch) -> FastAPI:
     return app
 
 
-def test_health_center_reports_healthy_runtime(tmp_path: Path, monkeypatch) -> None:
+def test_health_center_reports_healthy_runtime_without_request_path_writes(
+    tmp_path: Path, monkeypatch
+) -> None:
     app = healthy_app(tmp_path, monkeypatch)
     snapshot = SystemHealthCenter(app).snapshot()
     assert snapshot["status"] == "healthy"
     assert snapshot["safe_mode"] is False
     assert snapshot["automatic_financial_recovery"] is False
     assert snapshot["automatic_failover"] is False
+    assert snapshot["request_path_persistence"] is False
     assert snapshot["counts"] == {"healthy": 8, "degraded": 0, "blocked": 0}
-    assert app.state.project_database.saved[("system_runtime", "health_center")]["status"] == "healthy"
+    assert app.state.project_database.saved == {}
 
 
 def test_missing_kill_switch_blocks_system_even_with_other_components_healthy(
