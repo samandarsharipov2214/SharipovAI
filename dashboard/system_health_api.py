@@ -1,8 +1,8 @@
 """Unified read-only health center for the existing SharipovAI runtime.
 
 The health center aggregates evidence from components already present in the
-application. It does not create another AI organ and it never restarts or
-activates financial execution. Recovery actions are recommendations only.
+application. It does not create another AI organ, mutate persistent state, restart
+components or activate financial execution. Recovery actions are recommendations only.
 """
 from __future__ import annotations
 
@@ -55,7 +55,7 @@ class SystemHealthCenter:
         for item in components:
             counts[item.status] = counts.get(item.status, 0) + 1
         overall = "blocked" if counts["blocked"] else "degraded" if counts["degraded"] else "healthy"
-        payload = {
+        return {
             "status": overall,
             "checked_at_ms": checked_at_ms,
             "counts": counts,
@@ -63,15 +63,8 @@ class SystemHealthCenter:
             "safe_mode": overall == "blocked",
             "automatic_financial_recovery": False,
             "automatic_failover": False,
+            "request_path_persistence": False,
         }
-        database = getattr(self.app.state, "project_database", None)
-        put_json = getattr(database, "put_json", None)
-        if callable(put_json):
-            try:
-                put_json("system_runtime", "health_center", payload)
-            except Exception:
-                pass
-        return payload
 
     def _database(self) -> ComponentHealth:
         database = getattr(self.app.state, "project_database", None)
