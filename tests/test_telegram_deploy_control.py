@@ -39,10 +39,12 @@ def test_owner_claim_and_deploy_request_are_restricted(tmp_path: Path, monkeypat
     assert payload["actor_id"] == 111
 
 
-def test_watcher_is_fixed_command_and_never_mounts_docker_socket():
+def test_watcher_is_fixed_command_https_only_and_never_mounts_docker_socket():
     source = Path("scripts/sharipovai_deploy_watcher.sh").read_text(encoding="utf-8")
     assert '[[ "$action" != "deploy_main" ]]' in source
-    assert "git merge --ff-only origin/main" in source
-    assert "bash scripts/deploy_web2_refresh_fix.sh" in source
+    assert 'git fetch --no-tags "${FETCH_REMOTE}" main' in source
+    assert 'target_sha="$(git rev-parse FETCH_HEAD)"' in source
+    assert 'git reset --hard "${target_sha}"' in source
+    assert 'SHARIPOVAI_DEPLOY_WATCHER_ACTIVE=1 bash "$ROOT/scripts/deploy_web2_refresh_fix.sh"' in source
     assert "docker.sock" not in source
     assert "amnezia-awg2" not in source

@@ -12,8 +12,32 @@ UNIT_FILE="/etc/systemd/system/sharipovai-deploy-watcher.service"
 docker container inspect "$SERVICE" >/dev/null
 bash -n "$WATCHER_SOURCE"
 
+origin_url="$(git -C "$ROOT" remote get-url origin)"
+watcher_fetch_url="${SHARIPOVAI_WATCHER_FETCH_URL:-}"
+if [[ -z "$watcher_fetch_url" ]]; then
+  case "$origin_url" in
+    git@github.com:*)
+      watcher_fetch_url="https://github.com/${origin_url#git@github.com:}"
+      ;;
+    ssh://git@github.com/*)
+      watcher_fetch_url="https://github.com/${origin_url#ssh://git@github.com/}"
+      ;;
+    https://github.com/*)
+      watcher_fetch_url="$origin_url"
+      ;;
+    *)
+      echo "Set SHARIPOVAI_WATCHER_FETCH_URL to a non-interactive HTTPS repository URL" >&2
+      exit 1
+      ;;
+  esac
+fi
+[[ "$watcher_fetch_url" =~ ^https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+(\.git)?$ ]] || {
+  echo "Watcher fetch URL must be an HTTPS GitHub repository URL" >&2
+  exit 1
+}
+
 install -o root -g root -m 0750 "$WATCHER_SOURCE" "$WATCHER_TARGET"
-cat >"$UNIT_FILE" <<'UNIT'
+cat >"$UNIT_FILE" <<EOF
 [Unit]
 Description=SharipovAI Telegram protected deployment watcher
 After=docker.service network-online.target
@@ -22,6 +46,7 @@ Requires=docker.service
 
 [Service]
 Type=simple
+Environment=FETCH_REMOTE=${watcher_fetch_url}
 ExecStart=/usr/local/sbin/sharipovai-deploy-watcher
 Restart=always
 RestartSec=5
@@ -35,7 +60,7 @@ ReadWritePaths=/opt/sharipovai-repo /run /tmp
 
 [Install]
 WantedBy=multi-user.target
-UNIT
+EOF
 
 systemctl daemon-reload
 systemctl enable sharipovai-deploy-watcher.service >/dev/null
