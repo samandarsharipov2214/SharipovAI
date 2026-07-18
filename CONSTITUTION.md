@@ -1,71 +1,83 @@
 # SharipovAI Constitution
 
-Version: `2026.07-phase9-results-scaling-v12`  
+Version: `2026.07-phase10-controlled-scaling-performance-v13`  
 Status: **Binding development, deployment and runtime policy**
 
 ## 1. Capital protection
 
-Capital preservation overrides speed, activity and profit. Mainnet execution remains compiled out while `MAINNET_EXECUTION_COMPILED=False`. No environment variable, dashboard, Telegram command, LLM, experiment, report, scaling plan or manual decision may override that lock.
+Capital preservation overrides speed, activity and profit. Mainnet execution remains compiled out while `MAINNET_EXECUTION_COMPILED=False`. No environment variable, dashboard, Telegram command, LLM, experiment, report, scaling plan, activation or manual decision may override that lock.
 
 ## 2. Canonical execution authority
 
-The only exchange-write entry is `BybitExecutionClient.execute(ApprovedExecutionRequest)`. Dashboard, Telegram, schedulers, strategies, CLIs, agents and analysis services may not call an exchange endpoint directly. Every intent requires deterministic identity, durable reservation and authenticated private order/execution reconciliation. Ambiguous outcomes are never blind-retried.
+The only exchange-write entry is `BybitExecutionClient.execute(ApprovedExecutionRequest)`. Dashboard, Telegram, schedulers, strategies, CLIs, agents, analysis services and scaling services may not call an exchange endpoint directly. Every intent requires deterministic identity, durable reservation and authenticated private order/execution reconciliation. Ambiguous outcomes are never blind-retried.
 
-## 3. Bounded Testnet campaign
+## 3. Controlled Testnet scaling
 
-- Spot Testnet only.
-- 10–25 USDT accepted notional per campaign order until a separately audited scaling release is approved.
-- One global non-terminal campaign.
-- Isolated Testnet credentials without withdrawal or transfer permission.
-- Fresh authenticated private `order` and `execution` streams.
-- Restart-safe reconciliation.
-- Mainnet compiled out.
+Phase 10 scaling may execute only after an eligible persisted Phase 9 plan and exact owner confirmation:
 
-Completion requires at least 20 matched Paper/Testnet fills, actual private fees and zero unmatched, orphan, duplicate, conflicting or unresolved evidence.
+`I_APPROVE_CONTROLLED_TESTNET_NOTIONAL_SCALING`
 
-## 4. Campaign result authority
+A valid activation must be:
 
-Phase 9 reports may use only campaign-bound authenticated private fills and the persisted Phase 8 analysis. Reports must expose realized gross/net PnL, actual fees, closed trades, open evidence gaps, Paper/Testnet divergence, win rate, profit factor, maximum drawdown and closed notional. Missing or non-finite evidence fails closed.
+1. Testnet-only;
+2. scope-bound;
+3. expiring;
+4. persisted with actor, campaign IDs, previous notional, authorized notional and authority hash;
+5. revocable;
+6. no greater than 1.5 times the previous notional;
+7. no greater than 50 USDT;
+8. unable to override the kill switch;
+9. unable to enable Mainnet;
+10. consumed only through the existing canonical execution path.
 
-Reports are evidence authority only. They cannot place orders, change credentials, modify risk limits, change notional, approve promotion or enable Mainnet.
+An activation is authority to validate a bounded request. It is not an order, campaign success claim, profit guarantee or permanent capital allocation. Expired, revoked, mismatched-scope or excessive-notional authority fails closed.
 
-## 5. Scaling preparation
+## 4. Campaign and scaling evidence
 
-Scaling is never automatic. A scaling plan is a persisted proposal for manual review only.
+Only campaign-bound authenticated private Testnet fills, actual fees, clean identity reconciliation and persisted campaign reports are execution evidence. REST acceptance, Paper fills, screenshots, synthetic fixtures and activation records are not proof of execution or profitability.
 
-Default gates require:
+Scaling eligibility requires at least two clean campaigns, at least 40 matched fills, source gates clean, profit factor at least 1.05, win rate at least 40 percent, maximum drawdown at most 250 bps, absolute price divergence at most 25 bps and fee ratio at most 30 bps.
 
-1. at least two completed successful bounded campaigns;
-2. at least 40 total matched fills;
-3. all source gates clean;
-4. profit factor at least 1.05;
-5. win rate at least 40 percent;
-6. maximum drawdown at most 250 bps;
-7. absolute price divergence at most 25 bps;
-8. fee ratio at most 30 bps.
+## 5. Risk and capital engine
 
-A passing plan may propose only one step from 25 to 37.5 USDT and may never exceed 50 USDT. It does not change runtime state. A separate audited policy change, CI, owner approval and finite Testnet release are required before any larger notional becomes executable.
+Position sizing must be deterministic and use the smallest applicable limit. Inputs include equity, stop distance, realized volatility, per-position exposure, correlated-cluster exposure and active scaling ceiling.
 
-## 6. Advanced monitoring and alerts
+Default limits:
 
-Dashboard monitoring is read-only. Critical drawdown, source-gate failure, stale private evidence, reconciliation failure, orphan/duplicate/unresolved identity and campaign blockers must remain visible.
+- risk budget: 0.25 percent of equity;
+- maximum single-position exposure: 5 percent of equity;
+- maximum correlated-cluster exposure: 10 percent of equity;
+- correlation threshold: absolute correlation of 0.70;
+- absolute Testnet ceiling: 50 USDT.
 
-Telegram and webhook delivery must be sanitized and deduplicated. Webhooks must use HTTPS. Delivery failure cannot erase, resolve or downgrade canonical alert evidence. Telegram notification is never execution authority.
+Invalid equity, invalid stop distance, non-finite inputs, exhausted cluster capacity, missing scaling authority or expired authority fail closed. Correlation data may reduce size but may never increase it beyond another limit.
 
-## 7. Production deployment and logging
+## 6. Long-term performance authority
 
-Production-safe configuration permanently keeps the kill switch on and Testnet writes off. Deployment requires immutable-target preflight, verified backup, rendered Compose validation, Python compilation, HTTP health, SQLite `PRAGMA quick_check`, bounded logs and rollback.
+Performance snapshots and monthly reports must be persisted. Monthly reports expose at minimum net PnL, actual fees, matched fill count and maximum drawdown. Historical negative results cannot be deleted, converted to green or omitted from a later aggregate.
 
-Logs must be structured, bounded and secret-free. Authorization headers, cookies and API keys must be redacted. Request and response bodies are disabled by default. A post-deploy verification report must be written atomically.
+Maximum monthly drawdown above 250 bps is critical. Negative monthly net PnL and reports without matched fills are warnings. Alert delivery failure cannot erase canonical evidence.
 
-## 8. Manual decisions
+## 7. Monitoring and notifications
 
-`eligible_for_manual_scaling_review` means review only. It is not a capital allocation, deployment, promotion or execution approval. Actor and reason are mandatory. Failed gates cannot be overridden by UI, Telegram, LLM output or narrative confidence.
+Critical alerts include expired active scaling authority, drawdown breach, stale private evidence, reconciliation failure, orphan/duplicate/unresolved identity and kill-switch anomalies. Critical alerts are eligible for dashboard, Telegram and HTTPS webhook delivery through the existing persistent alert authority.
 
-## 9. CI and merge
+Telegram is notification only. It cannot activate scaling, revoke evidence, submit orders or override failed gates.
 
-Merge requires dependency audit, compileall, hard Mainnet lock tests, campaign/reconciliation tests, Phase 8 analysis tests, Phase 9 report/scaling tests, dashboard contracts, deployment contracts and complete pytest. Failed, queued, skipped or missing checks are not approval.
+## 8. Dashboard
 
-## 10. Secrets and claims
+Scaling Dashboard and Performance Overview are read-only views. They may show active authority, scope, authorized notional, expiry, monthly PnL, fees, matched fills, drawdown and alerts. They may not display Mainnet as enabled, create a second execution route or hide missing evidence.
 
-Secrets are forbidden in Git, logs, metrics, reports and tests. SharipovAI must not promise profit or fabricate campaign completion, fills, PnL, risk metrics, alert delivery or scaling eligibility.
+## 9. Deployment and logging
+
+Production-safe configuration permanently keeps the kill switch on and Testnet writes off outside finite approved windows. Deployment requires immutable-target preflight, verified backup, rendered Compose validation, Python compilation, HTTP health, SQLite integrity, bounded structured logs and rollback.
+
+Secrets, authorization headers, cookies and API keys must be redacted. Request and response bodies remain disabled by default.
+
+## 10. CI and merge
+
+Merge requires dependency audit, compileall, hard Mainnet lock tests, campaign/reconciliation tests, Phase 8 analysis tests, Phase 9 report/scaling tests, Phase 10 activation, capital-engine, monitoring and dashboard contracts, deployment contracts and complete pytest. Failed, queued, skipped or missing checks are not approval.
+
+## 11. Secrets and claims
+
+Secrets are forbidden in Git, logs, metrics, reports and tests. SharipovAI must not promise profit or fabricate campaign completion, fills, PnL, risk metrics, alert delivery, scaling eligibility or scaling execution.
