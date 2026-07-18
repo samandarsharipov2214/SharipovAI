@@ -37,6 +37,6 @@ def test_phase7_ui_polls_live_private_evidence_additively() -> None:
     assert "phase7MonitorPanel" in source
     assert "campaign_operations_v36.js?v=36" in index
     assert "campaign_decision_v37.js?v=37" in index
-    assert "campaign_monitor_v38.css?v=38" in index
-    assert "campaign_monitor_v38.js?v=38" in index
+    assert "campaign_monitor_v38.css?v=39" in index
+    assert "campaign_monitor_v38.js?v=39" in index
     assert CSS.exists()
