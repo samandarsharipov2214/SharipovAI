@@ -12,6 +12,7 @@ on:
       - 'dashboard/**'
       - 'deploy/**'
       - 'scripts/phase10_monthly_report.py'
+      - 'scripts/phase11_first_campaign_checklist.py'
       - 'tests/test_phase9_results_and_scaling.py'
       - 'tests/test_phase10_*.py'
       - 'tests/test_phase11_*.py'
@@ -32,6 +33,7 @@ on:
       - 'dashboard/**'
       - 'deploy/**'
       - 'scripts/phase10_monthly_report.py'
+      - 'scripts/phase11_first_campaign_checklist.py'
       - 'tests/test_phase9_results_and_scaling.py'
       - 'tests/test_phase10_*.py'
       - 'tests/test_phase11_*.py'
@@ -109,7 +111,7 @@ jobs:
       - name: Compile production sources
         run: python -m compileall -q .
 
-      - name: Run Phase 9 to Phase 11 crash and dashboard contracts
+      - name: Run Phase 9 to Phase 11 crash dashboard and launch contracts
         run: |
           python -m pytest \
             tests/test_phase9_results_and_scaling.py \
@@ -119,6 +121,7 @@ jobs:
             tests/test_phase11_dashboard_contract.py \
             tests/test_phase11_crash_resilience.py \
             tests/test_phase11_security_headers.py \
+            tests/test_phase11_launch_preparation.py \
             tests/test_system_health_center.py \
             tests/test_web2_market_chart_contract.py \
             -q --tb=short \
