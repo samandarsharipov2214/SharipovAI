@@ -20,5 +20,12 @@ Canonical audited concepts:
 - manual decision
 - Mainnet execution is compiled out
 
+Phase 8 adds one-second sequence-aware campaign monitoring, drawdown alerts, immutable post-campaign analysis and a manual-review promotion recommendation. It does not add execution authority or automatic promotion.
+
 Binding policy: `CONSTITUTION.md`.
-Operational procedures: `docs/phase7-production-testnet-campaign.md` and `docs/first-real-testnet-campaign.md`.
+
+Operational procedures:
+
+- `docs/phase7-production-testnet-campaign.md`
+- `docs/first-real-testnet-campaign.md`
+- `docs/phase8-production-campaign-intelligence.md`
