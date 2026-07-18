@@ -72,5 +72,8 @@ def install_phase10_scaling_api(app: FastAPI) -> None:
             scaling_ceiling_usdt=float(body.get("scaling_ceiling_usdt") or 0),
         )
 
+    from .phase11_production_api import install_phase11_production_api
+    install_phase11_production_api(app)
+
 
 __all__ = ["install_phase10_scaling_api"]
