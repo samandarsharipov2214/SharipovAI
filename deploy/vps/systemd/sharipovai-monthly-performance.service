@@ -1,0 +1,19 @@
+[Unit]
+Description=SharipovAI monthly performance report
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/sharipovai-repo
+EnvironmentFile=-/opt/sharipovai-repo/.env.production
+ExecStart=/bin/bash -lc 'MONTH=$(date -u -d "last month" +%%Y-%%m); /usr/bin/docker exec sharipovai python scripts/phase10_monthly_report.py --month "$MONTH" --output "/var/lib/sharipovai/performance/$MONTH.json"'
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/sharipovai
+
+[Install]
+WantedBy=multi-user.target
