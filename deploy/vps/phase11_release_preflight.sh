@@ -35,6 +35,7 @@ git diff --cached --quiet -- || fail "staged worktree changes are present"
 python - <<'PY'
 import math
 import os
+
 value = float(os.getenv("PHASE11_MAX_TESTNET_NOTIONAL_USDT", "50"))
 if not math.isfinite(value) or not 0 < value <= 50:
     raise SystemExit("Testnet ceiling must be finite and within (0, 50]")
@@ -49,6 +50,9 @@ python -m pytest \
   tests/test_phase11_production_audit.py \
   tests/test_phase11_dashboard_contract.py \
   tests/test_phase11_crash_resilience.py \
+  tests/test_phase11_security_headers.py \
+  tests/test_system_health_center.py \
+  tests/test_web2_market_chart_contract.py \
   -q --tb=short
 
 python - <<'PY'
