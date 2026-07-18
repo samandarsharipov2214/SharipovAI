@@ -5,12 +5,14 @@ on:
     branches: [main]
     paths:
       - 'audit/**'
+      - 'campaigns/phase9_results.py'
       - 'campaigns/phase10_scaling.py'
       - 'risk/phase10_capital_engine.py'
       - 'observability/phase10_performance_alerts.py'
       - 'dashboard/**'
       - 'deploy/**'
       - 'scripts/phase10_monthly_report.py'
+      - 'tests/test_phase9_results_and_scaling.py'
       - 'tests/test_phase10_*.py'
       - 'tests/test_phase11_*.py'
       - 'requirements*.txt'
@@ -21,12 +23,14 @@ on:
     branches: [main]
     paths:
       - 'audit/**'
+      - 'campaigns/phase9_results.py'
       - 'campaigns/phase10_scaling.py'
       - 'risk/phase10_capital_engine.py'
       - 'observability/phase10_performance_alerts.py'
       - 'dashboard/**'
       - 'deploy/**'
       - 'scripts/phase10_monthly_report.py'
+      - 'tests/test_phase9_results_and_scaling.py'
       - 'tests/test_phase10_*.py'
       - 'tests/test_phase11_*.py'
       - 'requirements*.txt'
@@ -101,9 +105,10 @@ jobs:
       - name: Compile production sources
         run: python -m compileall -q .
 
-      - name: Run Phase 10 and Phase 11 crash contracts
+      - name: Run Phase 9 to Phase 11 crash contracts
         run: |
           python -m pytest \
+            tests/test_phase9_results_and_scaling.py \
             tests/test_phase10_controlled_scaling.py \
             tests/test_phase10_capital_engine.py \
             tests/test_phase11_production_audit.py \
