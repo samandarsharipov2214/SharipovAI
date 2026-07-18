@@ -24,7 +24,7 @@ def _runtime_environment():
         "FEATURE_BYBIT_TESTNET": "1",
         "FEATURE_BYBIT_PRIVATE_ORDER_WS": "1",
         "RUNTIME_FILL_HARVESTER_ENABLED": "1",
-        "SCHEDULED_CAMPAIGN_ORCHESTRATOR_ENABLED": "1",
+        "SCHEDULED_CAMPAIGN_ORCHESTRATOR_ENABLED": "0",
         "PHASE6_TESTNET_RELEASE_GATE": "green",
         "EXECUTION_MAX_NOTIONAL_USDT": "25",
         "SHADOW_TESTNET_MAX_NOTIONAL_USDT": "25",
@@ -63,6 +63,8 @@ def test_first_campaign_checklist_requires_every_bounded_runtime_gate():
     assert report["ready"] is True
     assert report["failed_checks"] == []
     assert report["checks"]["container_build_sha_is_full_commit"] is True
+    assert report["checks"]["live_legacy_and_scheduler_disabled"] is True
+    assert report["scheduler_enabled"] is False
     assert report["maximum_order_notional_usdt"] == 25
     assert report["minimum_matched_fills"] == 20
     assert report["campaign_started"] is False
@@ -95,6 +97,7 @@ def test_first_campaign_checklist_rejects_unbounded_or_incomplete_runtime():
     environ["BYBIT_TESTNET_API_SECRET"] = ""
     environ["EXECUTION_KILL_SWITCH"] = "1"
     environ["FEATURE_BYBIT_TESTNET"] = "0"
+    environ["SCHEDULED_CAMPAIGN_ORCHESTRATOR_ENABLED"] = "1"
     report = evaluate_readiness(
         environ=environ,
         audit=_audit(sha),
@@ -112,15 +115,15 @@ def test_first_campaign_checklist_rejects_unbounded_or_incomplete_runtime():
     assert "isolated_testnet_credentials_complete" in report["failed_checks"]
     assert "finite_window_kill_switch_state" in report["failed_checks"]
     assert "bounded_runtime_flags_enabled" in report["failed_checks"]
+    assert "live_legacy_and_scheduler_disabled" in report["failed_checks"]
     assert "canonical_plan_ready" in report["failed_checks"]
 
 
 def test_runtime_sha_prefers_embedded_build_provenance():
     sha = "d" * 40
     assert _runtime_build_sha({"SHARIPOVAI_BUILD_SHA": sha}) == sha
-    assert _runtime_build_sha({"SHARIPOVAI_BUILD_SHA": "unknown"}) in {"", sha} or len(
-        _runtime_build_sha({"SHARIPOVAI_BUILD_SHA": "unknown"})
-    ) == 40
+    fallback = _runtime_build_sha({"SHARIPOVAI_BUILD_SHA": "unknown"})
+    assert fallback == "" or len(fallback) == 40
 
 
 def test_exact_sha_rollback_is_locked_backed_up_and_self_restoring():
@@ -146,9 +149,9 @@ def test_exact_sha_rollback_is_locked_backed_up_and_self_restoring():
         "/api/health",
     )
     assert all(token in script for token in required)
-    assert "git reset --hard \"$TARGET_SHA\"" in script
-    assert "git show \"$TARGET_SHA:deploy/vps/export_backup.sh\"" not in script
-    assert "bash \"$ROOT/deploy/vps/export_backup.sh\"" in script
+    assert 'git reset --hard "$TARGET_SHA"' in script
+    assert 'git show "$TARGET_SHA:deploy/vps/export_backup.sh"' not in script
+    assert 'bash "$ROOT/deploy/vps/export_backup.sh"' in script
 
 
 def test_build_and_post_deploy_provenance_chain_is_complete():
@@ -183,8 +186,8 @@ def test_phase11_deployment_paths_share_the_canonical_checkout():
     for source in (preflight, verifier, installer):
         assert "/opt/sharipovai-repo" in source
         assert "APP_DIR" in source
-    assert "rendered_service=\"$(mktemp)\"" in installer
-    assert "chmod 0600 \"$rendered_service\"" in installer
+    assert 'rendered_service="$(mktemp)"' in installer
+    assert 'chmod 0600 "$rendered_service"' in installer
     assert "/dev/stdin" not in installer
     assert "@SHARIPOVAI_ROOT@" in service
     assert "ReadWritePaths=-@SHARIPOVAI_ROOT@/data" in service
