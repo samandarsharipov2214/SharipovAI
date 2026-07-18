@@ -1,0 +1,11 @@
+[Unit]
+Description=Schedule SharipovAI monthly performance report
+
+[Timer]
+OnCalendar=monthly
+Persistent=true
+RandomizedDelaySec=900
+Unit=sharipovai-monthly-performance.service
+
+[Install]
+WantedBy=timers.target
