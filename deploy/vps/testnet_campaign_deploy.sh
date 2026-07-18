@@ -29,18 +29,24 @@ install -d -m 0755 "$(dirname "${LOCK_FILE}")"
 exec 9>"${LOCK_FILE}"
 flock -n 9 || fail 'another campaign deployment transition is running'
 
+if systemctl is-active --quiet "${AUTO_STOP_UNIT}.service"; then
+  fail 'automatic production-lock restoration is currently running'
+fi
+
 python3 "${COMPOSE_DIR}/validate_runtime_env.py" --env-file "${BASE_ENV_FILE}" --env-file "${CAMPAIGN_ENV_FILE}" --mode testnet-campaign
 APP_DIR="${APP_DIR}" COMPOSE_DIR="${COMPOSE_DIR}" bash "${COMPOSE_DIR}/phase7_preflight.sh"
 APP_DIR="${APP_DIR}" COMPOSE_DIR="${COMPOSE_DIR}" bash "${COMPOSE_DIR}/export_backup.sh"
 
-cancel_auto_stop() {
-  systemctl stop "${AUTO_STOP_UNIT}.timer" "${AUTO_STOP_UNIT}.service" >/dev/null 2>&1 || true
-  systemctl reset-failed "${AUTO_STOP_UNIT}.service" >/dev/null 2>&1 || true
+cancel_pending_auto_stop() {
+  systemctl stop "${AUTO_STOP_UNIT}.timer" >/dev/null 2>&1 || true
+  if ! systemctl is-active --quiet "${AUTO_STOP_UNIT}.service"; then
+    systemctl reset-failed "${AUTO_STOP_UNIT}.service" >/dev/null 2>&1 || true
+  fi
 }
 
 rollback() {
   trap - ERR
-  cancel_auto_stop
+  cancel_pending_auto_stop
   log 'campaign runtime deployment failed; restoring production-safe compose'
   docker compose --project-directory "${COMPOSE_DIR}" -f "${COMPOSE_DIR}/docker-compose.yml" --env-file "${BASE_ENV_FILE}" up -d --force-recreate --remove-orphans
   BASE_ENV_FILE="${BASE_ENV_FILE}" COMPOSE_DIR="${COMPOSE_DIR}" bash "${COMPOSE_DIR}/smoke_check.sh" production || true
@@ -54,7 +60,7 @@ log 'recreating application container in bounded Testnet mode'
 "${compose[@]}" up -d --force-recreate --remove-orphans
 BASE_ENV_FILE="${BASE_ENV_FILE}" CAMPAIGN_ENV_FILE="${CAMPAIGN_ENV_FILE}" COMPOSE_DIR="${COMPOSE_DIR}" bash "${COMPOSE_DIR}/smoke_check.sh" testnet-campaign
 
-cancel_auto_stop
+cancel_pending_auto_stop
 systemd-run \
   --unit="${AUTO_STOP_UNIT}" \
   --on-active="${MAX_WINDOW_SECONDS}s" \
