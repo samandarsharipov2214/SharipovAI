@@ -24,6 +24,7 @@ _REQUIRED_TRUE = (
     "TESTNET_EXECUTION_ENABLED",
     "AUTONOMOUS_TESTNET_ENABLED",
     "AUTONOMOUS_TESTNET_BRIDGE_ENABLED",
+    "FEATURE_BYBIT_TESTNET",
     "FEATURE_BYBIT_PRIVATE_ORDER_WS",
     "RUNTIME_FILL_HARVESTER_ENABLED",
     "SCHEDULED_CAMPAIGN_ORCHESTRATOR_ENABLED",
@@ -50,23 +51,28 @@ def evaluate_readiness(
     mainnet_secret = bool(str(environ.get("BYBIT_MAINNET_API_SECRET", "")).strip())
     max_execution = _finite(environ.get("EXECUTION_MAX_NOTIONAL_USDT", ""))
     max_shadow = _finite(environ.get("SHADOW_TESTNET_MAX_NOTIONAL_USDT", ""))
-    expected_sha_valid = len(expected_sha) == 40 and all(
-        char in "0123456789abcdef" for char in expected_sha
-    )
+    expected_sha_valid = _full_sha(expected_sha)
+    current_sha_valid = _full_sha(current_sha)
     audit_blockers = list(audit.get("blockers") or [])
     plan_blockers = list(plan.get("blockers") or [])
 
     checks = {
         "expected_sha_is_full_commit": expected_sha_valid,
-        "deployed_sha_matches": expected_sha_valid and current_sha == expected_sha,
-        "audit_sha_matches_deployment": str(audit.get("deployed_sha") or "") == expected_sha,
-        "production_audit_ready": audit.get("status") == "ready_for_bounded_testnet_preflight"
+        "container_build_sha_is_full_commit": current_sha_valid,
+        "deployed_sha_matches": expected_sha_valid
+        and current_sha_valid
+        and current_sha == expected_sha,
+        "audit_sha_matches_deployment": str(audit.get("deployed_sha") or "")
+        == expected_sha,
+        "production_audit_ready": audit.get("status")
+        == "ready_for_bounded_testnet_preflight"
         and not audit_blockers,
         "audit_mainnet_locked": audit.get("mainnet_enabled") is False,
         "mainnet_compile_lock": MAINNET_EXECUTION_COMPILED is False,
         "sandbox_exchange_mode": str(environ.get("EXCHANGE_MODE", "")).strip().lower()
         == "sandbox",
-        "testnet_base_url": "testnet" in str(environ.get("EXCHANGE_BASE_URL", "")).lower(),
+        "testnet_base_url": str(environ.get("EXCHANGE_BASE_URL", "")).strip().rstrip("/")
+        == "https://api-testnet.bybit.com",
         "bounded_runtime_flags_enabled": all(
             _truthy(environ.get(name, "0")) for name in _REQUIRED_TRUE
         ),
@@ -76,7 +82,9 @@ def evaluate_readiness(
         "finite_window_kill_switch_state": not _truthy(
             environ.get("EXECUTION_KILL_SWITCH", "1")
         ),
-        "release_gate_green": str(environ.get("PHASE6_TESTNET_RELEASE_GATE", "")).strip()
+        "release_gate_green": str(
+            environ.get("PHASE6_TESTNET_RELEASE_GATE", "")
+        ).strip()
         == "green",
         "isolated_testnet_credentials_complete": testnet_key and testnet_secret,
         "mainnet_credentials_absent": not mainnet_key and not mainnet_secret,
@@ -87,11 +95,12 @@ def evaluate_readiness(
         and plan.get("can_start") is True
         and not plan_blockers,
         "no_scaling_authority_before_first_campaign": active_scaling_authorities == 0,
-        "automatic_campaign_launch_disabled": audit.get("automatic_campaign_launch") is False,
+        "automatic_campaign_launch_disabled": audit.get("automatic_campaign_launch")
+        is False,
     }
     failed = sorted(name for name, passed in checks.items() if not passed)
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "ready" if not failed else "blocked",
         "ready": not failed,
         "checked_at_ms": int(time.time() * 1000),
@@ -144,18 +153,15 @@ def main(argv: list[str] | None = None) -> int:
         _emit(report, args.output)
         return 2
     if not isinstance(audit, dict):
-        report = _blocked("post_deploy_audit_not_object", expected_sha=args.expected_sha)
+        report = _blocked(
+            "post_deploy_audit_not_object",
+            expected_sha=args.expected_sha,
+        )
         _emit(report, args.output)
         return 2
 
     try:
-        current_sha = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        ).stdout.strip()
+        current_sha = _runtime_build_sha(os.environ)
         services = build_services()
         plan = services.operations.first_testnet_plan(
             experiment_id=str(args.experiment_id),
@@ -181,9 +187,26 @@ def main(argv: list[str] | None = None) -> int:
     return 0 if report.get("ready") is True else 2
 
 
+def _runtime_build_sha(environ: Mapping[str, str]) -> str:
+    embedded = str(environ.get("SHARIPOVAI_BUILD_SHA", "")).strip().lower()
+    if _full_sha(embedded):
+        return embedded
+    try:
+        candidate = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        ).stdout.strip().lower()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return candidate if _full_sha(candidate) else ""
+
+
 def _blocked(reason: str, *, expected_sha: str, error_type: str = "") -> dict[str, Any]:
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "blocked",
         "ready": False,
         "checked_at_ms": int(time.time() * 1000),
@@ -211,7 +234,10 @@ def _emit(payload: Mapping[str, Any], output: str) -> None:
         return
     path = Path(output).expanduser().resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        dir=path.parent,
+    )
     temporary = Path(temporary_name)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
@@ -222,6 +248,11 @@ def _emit(payload: Mapping[str, Any], output: str) -> None:
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _full_sha(value: Any) -> bool:
+    text = str(value).strip().lower()
+    return len(text) == 40 and all(char in "0123456789abcdef" for char in text)
 
 
 def _truthy(value: Any) -> bool:
