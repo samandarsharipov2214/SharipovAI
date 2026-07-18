@@ -56,9 +56,6 @@ trap rollback ERR
 
 compose=(docker compose --project-directory "${COMPOSE_DIR}" -f "${COMPOSE_DIR}/docker-compose.yml" -f "${COMPOSE_DIR}/docker-compose.testnet-campaign.yml" --env-file "${CAMPAIGN_ENV_FILE}")
 "${compose[@]}" config >/dev/null
-log 'recreating application container in bounded Testnet mode'
-"${compose[@]}" up -d --force-recreate --remove-orphans
-BASE_ENV_FILE="${BASE_ENV_FILE}" CAMPAIGN_ENV_FILE="${CAMPAIGN_ENV_FILE}" COMPOSE_DIR="${COMPOSE_DIR}" bash "${COMPOSE_DIR}/smoke_check.sh" testnet-campaign
 
 cancel_pending_auto_stop
 systemd-run \
@@ -69,6 +66,11 @@ systemd-run \
   --property=NoNewPrivileges=true \
   /bin/bash "${COMPOSE_DIR}/testnet_campaign_stop.sh" I_APPROVE_RESTORE_PRODUCTION_KILL_SWITCH >/dev/null
 systemctl is-active --quiet "${AUTO_STOP_UNIT}.timer"
+log "automatic production-lock restoration armed for ${MAX_WINDOW_SECONDS} seconds"
+
+log 'recreating application container in bounded Testnet mode'
+"${compose[@]}" up -d --force-recreate --remove-orphans
+BASE_ENV_FILE="${BASE_ENV_FILE}" CAMPAIGN_ENV_FILE="${CAMPAIGN_ENV_FILE}" COMPOSE_DIR="${COMPOSE_DIR}" bash "${COMPOSE_DIR}/smoke_check.sh" testnet-campaign
 
 trap - ERR
 commit="$(git -C "${APP_DIR}" rev-parse HEAD 2>/dev/null || true)"
