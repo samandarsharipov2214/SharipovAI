@@ -57,6 +57,23 @@ health_check() {
   return 1
 }
 
+set_build_provenance() {
+  local sha="$1"
+  export SHARIPOVAI_RELEASE_SHA="${sha}"
+  export SHARIPOVAI_RELEASE_TAG="${sha:0:12}"
+  export SHARIPOVAI_BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+
+verify_container_sha() {
+  local expected="$1"
+  local actual
+  actual="$(docker exec sharipovai printenv SHARIPOVAI_BUILD_SHA 2>/dev/null || true)"
+  [[ "${actual}" == "${expected}" ]] || return 1
+  local label
+  label="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "sharipovai:${expected:0:12}" 2>/dev/null || true)"
+  [[ "${label}" == "${expected}" ]]
+}
+
 validate_financial_locks() {
   local rendered="$1"
   python3 - "${rendered}" <<'PY'
@@ -98,6 +115,7 @@ rollback() {
   rollback_started=1
   log "deployment failed: ${reason}; rolling back to ${previous_sha}"
   git -C "${APP_DIR}" reset --hard "${previous_sha}"
+  set_build_provenance "${previous_sha}"
   cd "${compose_dir}"
   local rollback_config
   rollback_config="$(mktemp)"
@@ -107,6 +125,7 @@ rollback() {
   docker compose build
   docker compose up -d --remove-orphans
   health_check || fail 'rollback container did not become healthy'
+  verify_container_sha "${previous_sha}" || fail 'rollback container SHA is incorrect'
   fail "new deployment was rolled back safely: ${reason}"
 }
 
@@ -119,11 +138,12 @@ else
   git -C "${APP_DIR}" fetch --prune "${FETCH_REMOTE}" "${BRANCH}"
   target_sha="$(git -C "${APP_DIR}" rev-parse "${FETCH_REMOTE}/${BRANCH}")"
 fi
-[[ -n "${target_sha}" ]] || fail 'target commit could not be resolved'
+[[ "${target_sha}" =~ ^[0-9a-f]{40}$ ]] || fail 'target commit could not be resolved to a full SHA'
 
 if [[ "${target_sha}" == "${previous_sha}" ]]; then
-  log "already up to date at ${target_sha}"
+  log "already at ${target_sha}"
   health_check || fail 'current deployment is not healthy'
+  verify_container_sha "${target_sha}" || fail 'current container does not embed the deployed SHA; rebuild required'
   exit 0
 fi
 
@@ -152,7 +172,7 @@ COMPOSE_DIR="${compose_dir}" \
 PHASE7_COMPOSE_FILE="${target_compose_tmp}" \
 bash "${preflight_tmp}"
 
-log "creating verified backup before code update"
+log 'creating verified backup before code update'
 APP_DIR="${APP_DIR}" COMPOSE_DIR="${compose_dir}" bash "${backup_exporter_tmp}"
 
 trap 'rollback "unexpected error at line ${LINENO}"' ERR
@@ -160,13 +180,14 @@ log "updating ${previous_sha} -> ${target_sha}"
 git -C "${APP_DIR}" checkout -q "${BRANCH}"
 git -C "${APP_DIR}" reset --hard "${target_sha}"
 chmod 600 "${compose_dir}/.env.vps"
+set_build_provenance "${target_sha}"
 
 cd "${compose_dir}"
 rendered_config="$(mktemp)"
 docker compose config --format json >"${rendered_config}"
 validate_financial_locks "${rendered_config}"
 
-log 'building the new image'
+log 'building the new image with immutable commit provenance'
 docker compose build --pull
 log 'starting the updated services'
 docker compose up -d --remove-orphans
@@ -174,6 +195,7 @@ docker compose up -d --remove-orphans
 health_check || rollback 'health endpoint did not recover in time'
 container_state="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' sharipovai 2>/dev/null || true)"
 [[ "${container_state}" == "healthy" || "${container_state}" == "running" ]] || rollback "container state is ${container_state:-missing}"
+verify_container_sha "${target_sha}" || rollback 'container/image commit provenance mismatch'
 
 trap - ERR
 log "deployment completed successfully at ${target_sha}"
