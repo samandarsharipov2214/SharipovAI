@@ -45,11 +45,10 @@ def install_phase8_campaign_api(app: FastAPI) -> None:
             payload = live.refresh() if refresh else live.snapshot(since_sequence=since_sequence)
             critical_monitor = getattr(app.state, "campaign_critical_alert_monitor", None)
             critical = critical_monitor.status() if critical_monitor is not None else {}
-            phase8_alerts = risk_alerts.tick() if refresh else risk_alerts.status()
             return {
                 **payload,
                 "critical_alerts": critical,
-                "phase8_risk_alerts": phase8_alerts,
+                "phase8_risk_alerts": risk_alerts.status(),
                 "runtime_flags_changed": False,
                 "mainnet_enabled": False,
             }
