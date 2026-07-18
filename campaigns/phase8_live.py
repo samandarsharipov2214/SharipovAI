@@ -19,6 +19,17 @@ _STATE_NAMESPACE = "phase8_campaign_live"
 _EVENT_NAMESPACE = "phase8_campaign_live_events"
 _TERMINAL = {"completed", "blocked", "cancelled"}
 _TRUE = {"1", "true", "yes", "on"}
+_EPHEMERAL_KEYS = {
+    "checked_at_ms",
+    "last_heartbeat_ms",
+    "heartbeat_age_seconds",
+    "worker_running",
+    "enabled",
+    "poll_interval_seconds",
+    "created_at_ms",
+    "event_id",
+    "version",
+}
 
 
 class Phase8CampaignLiveView:
@@ -46,6 +57,7 @@ class Phase8CampaignLiveView:
             monitor=self.monitor,
         )
         self.interval = _bounded_float("PHASE8_LIVE_INTERVAL_SECONDS", 1.0, 0.5, 30.0)
+        self.persist_interval = _bounded_float("PHASE8_LIVE_PERSIST_SECONDS", 15.0, 5.0, 300.0)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._lock = threading.RLock()
@@ -100,24 +112,35 @@ class Phase8CampaignLiveView:
             material = {
                 "campaign_id": campaign_id,
                 "campaign_status": str(selected.get("status") or monitor.get("status") or "idle"),
-                "monitor": monitor,
-                "analysis": analysis,
+                "operations": _semantic(operations),
+                "monitor": _semantic(monitor),
+                "analysis": _semantic(analysis),
                 "alerts": alerts,
                 "drawdown_breached": bool(drawdown.get("breached")),
                 "recommendation_action": str(recommendation.get("action") or "PENDING"),
             }
             digest = hashlib.sha256(
-                json.dumps(material, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8")
+                json.dumps(
+                    material,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                    allow_nan=False,
+                ).encode("utf-8")
             ).hexdigest()
             previous_digest = str(self._state.get("material_sha256") or "")
-            sequence = int(self._state.get("sequence", 0) or 0) + int(digest != previous_digest)
+            changed = digest != previous_digest
+            sequence = int(self._state.get("sequence", 0) or 0) + int(changed)
+            last_persisted = int(self._state.get("last_persisted_at_ms", 0) or 0)
+            should_persist = changed or timestamp - last_persisted >= int(self.persist_interval * 1000)
             payload = {
                 "status": "degraded" if analysis_error else str(material["campaign_status"] or "idle"),
                 "campaign_id": campaign_id,
                 "checked_at_ms": timestamp,
+                "last_persisted_at_ms": timestamp if should_persist else last_persisted,
                 "sequence": sequence,
                 "material_sha256": digest,
-                "changed": digest != previous_digest,
+                "changed": changed,
                 "operations": operations,
                 "monitor": monitor,
                 "analysis": analysis,
@@ -129,8 +152,9 @@ class Phase8CampaignLiveView:
                 "mainnet_enabled": False,
             }
             self._state = payload
-            self._save()
-            if digest != previous_digest:
+            if should_persist:
+                self._save()
+            if changed:
                 self.database.append_event(
                     _EVENT_NAMESPACE,
                     "live_state_changed",
@@ -156,6 +180,7 @@ class Phase8CampaignLiveView:
                 "enabled": self.enabled(),
                 "worker_running": bool(self._thread and self._thread.is_alive()),
                 "poll_interval_seconds": self.interval,
+                "persist_interval_seconds": self.persist_interval,
                 "runtime_flags_changed": False,
                 "mainnet_enabled": False,
             }
@@ -171,7 +196,9 @@ class Phase8CampaignLiveView:
                         "status": "degraded",
                         "checked_at_ms": int(time.time() * 1000),
                         "analysis_error": f"{type(exc).__name__}: {exc}",
-                        "alerts": sorted(set([*self._state.get("alerts", []), "phase8_live_refresh_error"])),
+                        "alerts": sorted(
+                            set([*self._state.get("alerts", []), "phase8_live_refresh_error"])
+                        ),
                         "runtime_flags_changed": False,
                         "mainnet_enabled": False,
                     }
@@ -186,6 +213,7 @@ class Phase8CampaignLiveView:
             "status": "idle",
             "campaign_id": "",
             "checked_at_ms": 0,
+            "last_persisted_at_ms": 0,
             "sequence": 0,
             "material_sha256": "",
             "operations": {},
@@ -206,6 +234,20 @@ class Phase8CampaignLiveView:
             dict(self._state),
             expected_version=int(current["version"]) if current else 0,
         )
+
+
+def _semantic(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            str(key): _semantic(item)
+            for key, item in value.items()
+            if str(key) not in _EPHEMERAL_KEYS
+        }
+    if isinstance(value, list):
+        return [_semantic(item) for item in value]
+    if isinstance(value, tuple):
+        return [_semantic(item) for item in value]
+    return value
 
 
 def _analysis_alerts(analysis: Mapping[str, Any]) -> list[str]:
