@@ -2,62 +2,65 @@
 
 SharipovAI is a safety-first AI trading operating system for verified market evidence, deterministic risk, realistic Paper execution and bounded Bybit Testnet campaigns.
 
-> **Production state:** Mainnet execution is compiled out. Production boots with the kill switch engaged. Testnet writes exist only inside an explicitly authorized bounded window.
+> **Production state:** Mainnet execution is compiled out. Production boots with the kill switch engaged. Testnet writes exist only inside an explicitly authorized bounded window. Scaling preparation is evidence-only and cannot alter runtime notional.
 
-## Phase 8
+## Phase 9
 
-Phase 8 adds campaign launch operations and post-campaign analysis on top of Phase 7 deployment, monitoring and evidence controls.
+Phase 9 adds detailed campaign results, risk metrics, fail-closed notional scaling preparation, advanced dashboard/Telegram alert projection and deployment verification.
 
 Delivered:
 
-- finite bounded Testnet campaign runner requiring exact operator confirmations;
-- authenticated private fill monitoring;
-- FIFO realized gross/net PnL analysis;
-- actual fee, turnover and open-inventory analysis;
-- Paper/Testnet price and fee divergence;
-- hard evidence gates and deterministic recommendation;
-- persistent Telegram/HTTPS webhook critical alerts;
-- responsive live campaign and analysis dashboard;
-- immutable database records and append-only analysis events;
-- mandatory manual decision;
+- realized gross/net PnL and actual fees;
+- closed-trade reconstruction from authenticated private fills;
+- win rate, profit factor, maximum drawdown and closed notional;
+- Paper/Testnet price and fee divergence retention;
+- immutable Phase 9 campaign reports;
+- step-by-step scaling gates across multiple campaigns;
+- a bounded next-step proposal from 25 to 37.5 USDT, capped at 50 USDT;
+- mandatory manual scaling review;
+- dashboard scaling panel and critical alert projection;
+- Telegram/HTTPS delivery through the persistent Phase 7 alert authority;
+- structured logging defaults and atomic post-deploy verification;
 - Mainnet remains unavailable.
 
 ## Documentation
 
 - [`CONSTITUTION.md`](CONSTITUTION.md)
-- [`docs/phase7-production-testnet-campaign.md`](docs/phase7-production-testnet-campaign.md)
 - [`docs/phase8-campaign-launch-and-analysis.md`](docs/phase8-campaign-launch-and-analysis.md)
+- [`docs/phase9-results-scaling-monitoring.md`](docs/phase9-results-scaling-monitoring.md)
 
-## Campaign launch
-
-```bash
-sudo bash deploy/vps/testnet_campaign_deploy.sh I_APPROVE_BOUNDED_TESTNET_RUNTIME_DEPLOYMENT
-
-docker exec sharipovai python scripts/first_testnet_campaign.py \
-  --experiment-id '<promoted-experiment-id>' \
-  --scope BTCUSDT \
-  --actor '<operator>' \
-  --output-dir /var/lib/sharipovai/evidence/testnet-campaigns \
-  --start-confirmation I_APPROVE_BOUNDED_TESTNET_SHADOW_CAMPAIGN \
-  --cycle-confirmation I_APPROVE_BOUNDED_TESTNET_CAMPAIGN_CYCLE \
-  --report-confirmation I_APPROVE_IMMUTABLE_CAMPAIGN_REPORT
-```
-
-Close the execution window after completion, failure, timeout or abort:
-
-```bash
-sudo bash deploy/vps/testnet_campaign_stop.sh I_APPROVE_RESTORE_PRODUCTION_KILL_SWITCH
-```
-
-## Post-campaign API
+## Phase 9 API
 
 ```text
-POST /api/campaigns/phase8/analyze/{campaign_id}
-GET  /api/campaigns/phase8/analysis/{campaign_id}
-GET  /api/campaigns/phase8/analyses
+POST /api/campaigns/phase9/report/{campaign_id}
+GET  /api/campaigns/phase9/report/{campaign_id}
+GET  /api/campaigns/phase9/reports
+POST /api/campaigns/phase9/scaling-plan
+GET  /api/campaigns/phase9/scaling-plans
 ```
 
-Analysis never places orders, changes flags, approves promotion or enables Mainnet.
+All routes are admin-only. No endpoint changes execution flags or order notional.
+
+## Scaling preparation
+
+```bash
+python scripts/phase9_scaling_plan.py \
+  --campaign-id '<campaign-1>' \
+  --campaign-id '<campaign-2>' \
+  --actor '<authenticated-operator>' \
+  --reason 'two clean bounded campaigns' \
+  --output /var/lib/sharipovai/campaign_reports/phase9-scaling-plan.json
+```
+
+Exit code `0` means eligible for manual scaling review. Exit code `2` means blocked. Neither result changes runtime state.
+
+## Production verification
+
+```bash
+sudo bash deploy/vps/phase9_post_deploy_verify.sh
+```
+
+The verifier checks Compose rendering, Python compilation, HTTP health and SQLite integrity. It writes an atomic JSON report and fails closed.
 
 ## Alert delivery
 
@@ -68,7 +71,7 @@ ALERT_TELEGRAM_CHAT_ID=<chat-id>
 ALERT_WEBHOOK_URL=https://<trusted-endpoint>
 ```
 
-Telegram additionally uses `BOT_TOKEN`. Non-HTTPS webhooks are rejected. Delivery failure does not erase canonical alert evidence.
+Critical drawdown and failed evidence gates are Telegram-eligible. Blocked scaling plans are dashboard/webhook warnings. Delivery failure never erases canonical alert evidence.
 
 ## Verification
 
@@ -76,10 +79,10 @@ Telegram additionally uses `BOT_TOKEN`. Non-HTTPS webhooks are rejected. Deliver
 python -m pip install -r requirements-dev.txt
 python -m pip check
 python -m compileall -q .
-python -m pytest tests/test_phase8_post_campaign_analysis.py -q --tb=short
+python -m pytest tests/test_phase9_results_and_scaling.py tests/test_phase9_dashboard_contract.py tests/test_phase9_deployment_contract.py -q --tb=short
 python -m pytest -q --tb=short
 ```
 
 ## Truth rule
 
-A campaign is not real or completed until authenticated private Testnet fills, actual fees, clean reconciliation, 20+ matched fills and the canonical final report exist. Screenshots, synthetic fixtures and accepted REST responses are not proof.
+A campaign, PnL result or scaling eligibility is never fabricated. Only campaign-bound authenticated private Testnet fills, actual fees, clean reconciliation and persisted reports are evidence. A passing scaling plan is not approval and cannot enable Mainnet.
