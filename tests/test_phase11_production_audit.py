@@ -34,14 +34,27 @@ def _safe_environment(monkeypatch, tmp_path):
     return dict(os.environ)
 
 
+def _failed_checks(report):
+    return [
+        {
+            "name": item["name"],
+            "severity": item["severity"],
+            "evidence": item["evidence"],
+        }
+        for item in report["checks"]
+        if not item["passed"]
+    ]
+
+
 def test_full_audit_is_ready_deterministic_and_mainnet_false(
-    tmp_path, monkeypatch
+    tmp_path,
+    monkeypatch,
 ):
     environment = _safe_environment(monkeypatch, tmp_path)
     first = ProductionAudit(ROOT, environ=environment).run()
     second = ProductionAudit(ROOT, environ=environment).run()
+    assert first["blockers"] == [], _failed_checks(first)
     assert first["status"] == "ready_for_bounded_testnet_preflight"
-    assert first["blockers"] == []
     assert first["mainnet_enabled"] is False
     assert first["automatic_campaign_launch"] is False
     assert len(first["audit_sha256"]) == 64
@@ -50,7 +63,8 @@ def test_full_audit_is_ready_deterministic_and_mainnet_false(
 
 
 def test_audit_blocks_live_execution_and_invalid_notional(
-    tmp_path, monkeypatch
+    tmp_path,
+    monkeypatch,
 ):
     environment = _safe_environment(monkeypatch, tmp_path)
     environment["EXCHANGE_LIVE_TRADING_ENABLED"] = "1"
