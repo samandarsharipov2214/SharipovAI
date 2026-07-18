@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 027
 
-ROOT="${SHARIPOVAI_ROOT:-/opt/sharipovai}"
+ROOT="${SHARIPOVAI_ROOT:-${APP_DIR:-/opt/sharipovai-repo}}"
 OUT="${PHASE11_VERIFY_OUTPUT:-/var/lib/sharipovai/audit/phase11-post-deploy.json}"
 HEALTH_URL="${SHARIPOVAI_HEALTH_URL:-http://127.0.0.1:8000/api/health}"
 EXPECTED_SHA="${SHARIPOVAI_EXPECTED_SHA:-}"
@@ -11,6 +11,7 @@ EXPECTED_SHA="${SHARIPOVAI_EXPECTED_SHA:-}"
 cd "$ROOT"
 ACTUAL_SHA="$(git rev-parse HEAD)"
 [[ "$ACTUAL_SHA" == "$EXPECTED_SHA" ]] || { echo "deployed SHA mismatch" >&2; exit 2; }
+[[ -z "$(git status --porcelain --untracked-files=normal)" ]] || { echo "deployed worktree is not clean" >&2; exit 2; }
 
 mkdir -p "$(dirname "$OUT")"
 health_file="$(mktemp "$(dirname "$OUT")/.phase11-health.XXXXXX")"
@@ -19,7 +20,7 @@ curl --fail --silent --show-error --max-time 10 --retry 2 --retry-all-errors "$H
 chmod 0600 "$health_file"
 python -m compileall -q .
 
-PHASE11_HEALTH_FILE="$health_file" PHASE11_VERIFY_OUTPUT="$OUT" PHASE11_DEPLOYED_SHA="$ACTUAL_SHA" python - <<'PY'
+PHASE11_HEALTH_FILE="$health_file" PHASE11_VERIFY_OUTPUT="$OUT" PHASE11_DEPLOYED_SHA="$ACTUAL_SHA" PHASE11_DEPLOYED_ROOT="$ROOT" python - <<'PY'
 import json
 import os
 import tempfile
@@ -42,9 +43,7 @@ status = "ready_for_bounded_testnet_preflight"
 blockers = list(audit.get("blockers") or [])
 if database.get("status") != "ok":
     blockers.append("canonical_database_health")
-if audit.get("status") != "ready_for_bounded_testnet_preflight":
-    status = "blocked"
-if blockers:
+if audit.get("status") != "ready_for_bounded_testnet_preflight" or blockers:
     status = "blocked"
 
 report = {
@@ -53,6 +52,7 @@ report = {
     "blockers": sorted(set(blockers)),
     "verified_at_ms": int(time.time() * 1000),
     "deployed_sha": os.environ["PHASE11_DEPLOYED_SHA"],
+    "deployed_root": os.environ["PHASE11_DEPLOYED_ROOT"],
     "http_health": http_health,
     "database_health": database,
 }
@@ -79,4 +79,4 @@ print(serialized, end="")
 raise SystemExit(0 if status == "ready_for_bounded_testnet_preflight" else 2)
 PY
 
-printf 'PHASE11_POST_DEPLOY_OK output=%s sha=%s\n' "$OUT" "$ACTUAL_SHA"
+printf 'PHASE11_POST_DEPLOY_OK root=%s output=%s sha=%s\n' "$ROOT" "$OUT" "$ACTUAL_SHA"
