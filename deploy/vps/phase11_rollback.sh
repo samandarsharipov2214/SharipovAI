@@ -51,6 +51,20 @@ health_check(){
   return 1
 }
 
+set_build_provenance(){
+  local sha="$1"
+  export SHARIPOVAI_RELEASE_SHA="$sha"
+  export SHARIPOVAI_RELEASE_TAG="${sha:0:12}"
+  export SHARIPOVAI_BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+
+verify_container_sha(){
+  local expected="$1"
+  local actual
+  actual="$(docker exec sharipovai printenv SHARIPOVAI_BUILD_SHA 2>/dev/null || true)"
+  [[ "$actual" == "$expected" ]]
+}
+
 validate_financial_locks(){
   local rendered="$1"
   python3 - "$rendered" <<'PY'
@@ -98,10 +112,12 @@ restore_original(){
   restore_started=1
   log "rollback target failed: $reason; restoring original $CURRENT_SHA"
   git reset --hard "$CURRENT_SHA"
+  set_build_provenance "$CURRENT_SHA"
   cd "$compose_dir"
   docker compose build
   docker compose up -d --remove-orphans
   health_check || fail "original deployment did not recover"
+  verify_container_sha "$CURRENT_SHA" || fail "original container SHA did not recover"
   bash smoke_check.sh production || fail "original deployment smoke check failed"
   fail "rollback target rejected and original deployment restored"
 }
@@ -119,12 +135,14 @@ APP_DIR="$ROOT" COMPOSE_DIR="$compose_dir" bash "$ROOT/deploy/vps/export_backup.
 trap 'restore_original "unexpected error at line ${LINENO}"' ERR
 log "resetting $CURRENT_SHA -> $TARGET_SHA"
 git reset --hard "$TARGET_SHA"
+set_build_provenance "$TARGET_SHA"
 cd "$compose_dir"
 docker compose config --format json >"$rendered"
 validate_financial_locks "$rendered"
 docker compose build
 docker compose up -d --remove-orphans
 health_check || restore_original "health endpoint did not recover"
+verify_container_sha "$TARGET_SHA" || restore_original "container SHA differs from rollback target"
 bash smoke_check.sh production || restore_original "production smoke check failed"
 container_state="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' sharipovai 2>/dev/null || true)"
 [[ "$container_state" == "healthy" || "$container_state" == "running" ]] || restore_original "container state is ${container_state:-missing}"
