@@ -52,6 +52,7 @@ python -m pytest \
   tests/test_phase11_crash_resilience.py \
   tests/test_phase11_security_headers.py \
   tests/test_phase11_launch_preparation.py \
+  tests/test_phase11_evidence_handoff.py \
   tests/test_system_health_center.py \
   tests/test_web2_market_chart_contract.py \
   -q --tb=short
