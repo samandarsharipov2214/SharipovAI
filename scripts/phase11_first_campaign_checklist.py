@@ -27,12 +27,12 @@ _REQUIRED_TRUE = (
     "FEATURE_BYBIT_TESTNET",
     "FEATURE_BYBIT_PRIVATE_ORDER_WS",
     "RUNTIME_FILL_HARVESTER_ENABLED",
-    "SCHEDULED_CAMPAIGN_ORCHESTRATOR_ENABLED",
 )
 _REQUIRED_FALSE = (
     "EXCHANGE_LIVE_TRADING_ENABLED",
     "FEATURE_BYBIT_LIVE_EXECUTION",
     "BYBIT_ALLOW_LEGACY_EXCHANGE_CREDENTIALS",
+    "SCHEDULED_CAMPAIGN_ORCHESTRATOR_ENABLED",
 )
 
 
@@ -76,7 +76,7 @@ def evaluate_readiness(
         "bounded_runtime_flags_enabled": all(
             _truthy(environ.get(name, "0")) for name in _REQUIRED_TRUE
         ),
-        "live_and_legacy_flags_disabled": all(
+        "live_legacy_and_scheduler_disabled": all(
             not _truthy(environ.get(name, "0")) for name in _REQUIRED_FALSE
         ),
         "finite_window_kill_switch_state": not _truthy(
@@ -100,7 +100,7 @@ def evaluate_readiness(
     }
     failed = sorted(name for name, passed in checks.items() if not passed)
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "status": "ready" if not failed else "blocked",
         "ready": not failed,
         "checked_at_ms": int(time.time() * 1000),
@@ -117,6 +117,7 @@ def evaluate_readiness(
         "actual_private_fills_required": True,
         "actual_fee_evidence_required": True,
         "manual_start_required": True,
+        "scheduler_enabled": False,
         "runtime_flags_changed": False,
         "campaign_started": False,
         "mainnet_enabled": False,
@@ -206,7 +207,7 @@ def _runtime_build_sha(environ: Mapping[str, str]) -> str:
 
 def _blocked(reason: str, *, expected_sha: str, error_type: str = "") -> dict[str, Any]:
     payload = {
-        "schema_version": 2,
+        "schema_version": 3,
         "status": "blocked",
         "ready": False,
         "checked_at_ms": int(time.time() * 1000),
