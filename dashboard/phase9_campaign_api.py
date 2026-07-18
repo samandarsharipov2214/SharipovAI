@@ -1,7 +1,7 @@
 """Admin-only Phase 9 results, scaling and monitoring API."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Mapping
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
@@ -34,7 +34,30 @@ def install_phase9_campaign_api(app: FastAPI) -> None:
         source = analysis.get(campaign_id)
         if source is None:
             raise HTTPException(status_code=409, detail="Phase 8 analysis is required")
-        return service.build_report(source, monitor.actual_fills(campaign_id))
+        report = service.build_report(source, monitor.actual_fills(campaign_id))
+        response = dict(report)
+        performance = getattr(app.state, "phase10_scaling_service", None)
+        if performance is None:
+            response["performance_tracking_status"] = "phase10_not_installed"
+            return response
+        try:
+            snapshot = performance.record_snapshot(
+                _performance_metrics(report, source),
+                captured_at_ms=int(source.get("generated_at_ms") or report.get("generated_at_ms") or 0),
+            )
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "status": "performance_tracking_blocked",
+                    "error_type": type(exc).__name__,
+                    "campaign_id": campaign_id,
+                },
+            ) from exc
+        response["performance_tracking_status"] = "recorded"
+        response["performance_snapshot_id"] = snapshot["snapshot_id"]
+        response["performance_evidence_sha256"] = snapshot["evidence_sha256"]
+        return response
 
     @app.get("/api/campaigns/phase9/report/{campaign_id}")
     def get_report(request: Request, campaign_id: str) -> dict[str, Any]:
@@ -66,6 +89,20 @@ def install_phase9_campaign_api(app: FastAPI) -> None:
         require_admin(request)
         rows = service.list_scaling_plans(min(max(limit, 1), 500))
         return {"status": "ok", "count": len(rows), "plans": rows, "mainnet_enabled": False}
+
+
+def _performance_metrics(report: Mapping[str, Any], analysis: Mapping[str, Any]) -> dict[str, Any]:
+    pnl = report.get("pnl") if isinstance(report.get("pnl"), Mapping) else {}
+    risk = report.get("risk_metrics") if isinstance(report.get("risk_metrics"), Mapping) else {}
+    return {
+        "campaign_id": str(report.get("campaign_id") or ""),
+        "analysis_id": str(report.get("analysis_id") or analysis.get("analysis_id") or ""),
+        "date": "",
+        "net_pnl_usdt": pnl.get("net_realized_pnl_usdt", 0.0),
+        "fees_usdt": pnl.get("fees_usdt", analysis.get("fees_usdt", 0.0)),
+        "matched_fill_count": report.get("matched_fill_count", 0),
+        "maximum_drawdown_bps": risk.get("maximum_drawdown_bps", 0.0),
+    }
 
 
 __all__ = ["install_phase9_campaign_api"]
