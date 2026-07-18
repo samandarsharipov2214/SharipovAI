@@ -94,7 +94,11 @@ def test_first_campaign_checklist_rejects_unbounded_or_incomplete_runtime():
         audit=_audit(sha),
         current_sha=sha,
         expected_sha=sha,
-        plan={"status": "blocked", "can_start": False, "blockers": ["private_stream_stale"]},
+        plan={
+            "status": "blocked",
+            "can_start": False,
+            "blockers": ["private_stream_stale"],
+        },
         active_scaling_authorities=0,
     )
     assert report["ready"] is False
@@ -113,7 +117,11 @@ def test_exact_sha_rollback_is_locked_backed_up_and_self_restoring():
         "git merge-base --is-ancestor",
         "flock -n",
         "export_backup.sh",
+        "creating verified backup with the current trusted exporter",
         "validate_financial_locks",
+        "EXCHANGE_LIVE_TRADING_ENABLED",
+        "EXECUTION_KILL_SWITCH",
+        "TESTNET_EXECUTION_ENABLED",
         "restore_original",
         "docker compose build",
         "smoke_check.sh production",
@@ -121,16 +129,28 @@ def test_exact_sha_rollback_is_locked_backed_up_and_self_restoring():
     )
     assert all(token in script for token in required)
     assert "git reset --hard \"$TARGET_SHA\"" in script
-    assert "mainnet" not in script.lower() or "mainnet" in "validate financial locks"
+    assert "git show \"$TARGET_SHA:deploy/vps/export_backup.sh\"" not in script
+    assert "bash \"$ROOT/deploy/vps/export_backup.sh\"" in script
 
 
 def test_phase11_deployment_paths_share_the_canonical_checkout():
-    preflight = (ROOT / "deploy/vps/phase11_release_preflight.sh").read_text(encoding="utf-8")
-    verifier = (ROOT / "deploy/vps/phase11_post_deploy_verify.sh").read_text(encoding="utf-8")
-    installer = (ROOT / "deploy/vps/install_phase10_monthly_monitor.sh").read_text(encoding="utf-8")
-    service = (ROOT / "deploy/vps/systemd/sharipovai-monthly-performance.service").read_text(encoding="utf-8")
+    preflight = (ROOT / "deploy/vps/phase11_release_preflight.sh").read_text(
+        encoding="utf-8"
+    )
+    verifier = (ROOT / "deploy/vps/phase11_post_deploy_verify.sh").read_text(
+        encoding="utf-8"
+    )
+    installer = (ROOT / "deploy/vps/install_phase10_monthly_monitor.sh").read_text(
+        encoding="utf-8"
+    )
+    service = (
+        ROOT / "deploy/vps/systemd/sharipovai-monthly-performance.service"
+    ).read_text(encoding="utf-8")
     for source in (preflight, verifier, installer):
         assert "/opt/sharipovai-repo" in source
         assert "APP_DIR" in source
+    assert "rendered_service=\"$(mktemp)\"" in installer
+    assert "chmod 0600 \"$rendered_service\"" in installer
+    assert "/dev/stdin" not in installer
     assert "@SHARIPOVAI_ROOT@" in service
     assert "ReadWritePaths=-@SHARIPOVAI_ROOT@/data" in service
