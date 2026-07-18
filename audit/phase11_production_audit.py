@@ -1,8 +1,4 @@
-"""Deterministic fail-closed production readiness audit.
-
-The audit never changes execution flags, credentials, campaign state, scaling
-authority, or order state. Database health may initialize the canonical schema.
-"""
+"""Deterministic fail-closed production-readiness audit."""
 from __future__ import annotations
 
 import hashlib
@@ -27,7 +23,7 @@ class AuditCheck:
 
 
 class ProductionAudit:
-    """Run secret-free checks and emit deterministic evidence."""
+    """Inspect code, configuration and canonical storage without enabling execution."""
 
     def __init__(
         self,
@@ -47,7 +43,7 @@ class ProductionAudit:
             self._required_assets(),
             self._deployment_contracts(),
             self._dashboard_contracts(),
-            self._ci_crash_contracts(),
+            self._ci_contracts(),
             self._runtime_limits(),
         ]
         blockers = sorted(
@@ -61,11 +57,9 @@ class ProductionAudit:
             if not item.passed and item.severity != "critical"
         )
         deterministic = {
-            "schema_version": 4,
+            "schema_version": 5,
             "status": (
-                "ready_for_bounded_testnet_preflight"
-                if not blockers
-                else "blocked"
+                "ready_for_bounded_testnet_preflight" if not blockers else "blocked"
             ),
             "blockers": blockers,
             "warnings": warnings,
@@ -88,40 +82,39 @@ class ProductionAudit:
     def _execution_lock(self) -> AuditCheck:
         try:
             from exchange_connector.bybit_execution import BybitExecutionClient
-            from exchange_connector.execution_contract import (
-                MAINNET_EXECUTION_COMPILED,
-            )
+            from exchange_connector.execution_contract import MAINNET_EXECUTION_COMPILED
 
             status = BybitExecutionClient().status()
             evidence = {
                 "compiled": bool(MAINNET_EXECUTION_COMPILED),
-                "live_execution_enabled": bool(
-                    status.get("live_execution_enabled")
-                ),
-                "mainnet_hard_blocked": bool(
-                    status.get("mainnet_hard_blocked")
-                ),
+                "live_execution_enabled": bool(status.get("live_execution_enabled")),
                 "testnet_execution_enabled": bool(
                     status.get("testnet_execution_enabled")
                 ),
+                "mainnet_hard_blocked": bool(status.get("mainnet_hard_blocked")),
                 "kill_switch": bool(status.get("kill_switch")),
+                "canonical_execution_contract": status.get(
+                    "canonical_execution_contract"
+                ),
             }
             passed = (
                 MAINNET_EXECUTION_COMPILED is False
                 and evidence["live_execution_enabled"] is False
-                and evidence["mainnet_hard_blocked"] is True
                 and evidence["testnet_execution_enabled"] is False
+                and evidence["mainnet_hard_blocked"] is True
                 and evidence["kill_switch"] is True
+                and evidence["canonical_execution_contract"]
+                == "ApprovedExecutionRequest"
             )
         except Exception as exc:
-            evidence = {"error_type": type(exc).__name__}
             passed = False
+            evidence = {"error_type": type(exc).__name__}
         return AuditCheck(
             "compile_and_runtime_execution_lock",
             "critical",
             passed,
             evidence,
-            "Restore the compile lock, kill switch and disabled execution state.",
+            "Restore compile lock, kill switch and disabled execution state.",
         )
 
     def _runtime_configuration(self) -> AuditCheck:
@@ -138,7 +131,6 @@ class ProductionAudit:
         unsafe = sorted(
             name for name in disabled if _truthy(self.environ.get(name, "0"))
         )
-        auth_names = ("AUTH_SECRET", "ADMIN_USERNAME", "ADMIN_PASSWORD")
         evidence = {
             "unsafe_enabled_flags": unsafe,
             "kill_switch_engaged": _truthy(
@@ -149,7 +141,7 @@ class ProductionAudit:
             ),
             "authentication_material_configured": all(
                 bool(str(self.environ.get(name, "")).strip())
-                for name in auth_names
+                for name in ("AUTH_SECRET", "ADMIN_USERNAME", "ADMIN_PASSWORD")
             ),
             "database_required": _truthy(
                 self.environ.get("SHARIPOVAI_DATABASE_REQUIRED", "1")
@@ -172,7 +164,7 @@ class ProductionAudit:
             "critical",
             passed,
             evidence,
-            "Disable execution flags, configure auth/database and keep sandbox mode.",
+            "Disable execution flags and configure authentication and database.",
         )
 
     def _database_health(self) -> AuditCheck:
@@ -185,26 +177,23 @@ class ProductionAudit:
             passed = health.get("status") == "ok" and int(
                 health.get("schema_version") or 0
             ) >= 1
+            error = str(health.get("error") or "")
             evidence = {
                 "status": health.get("status"),
                 "backend": health.get("backend"),
                 "required": health.get("required"),
                 "schema_version": health.get("schema_version"),
-                "error_type": str(health.get("error") or "").split(":", 1)[0]
-                or None,
+                "error_type": error.split(":", 1)[0] or None,
             }
         except Exception as exc:
             passed = False
-            evidence = {
-                "status": "error",
-                "error_type": type(exc).__name__,
-            }
+            evidence = {"status": "error", "error_type": type(exc).__name__}
         return AuditCheck(
             "canonical_database_health",
             "critical",
             passed,
             evidence,
-            "Restore the canonical database and verify schema migrations.",
+            "Restore canonical database and schema migrations.",
         )
 
     def _secret_hygiene(self) -> AuditCheck:
@@ -220,7 +209,7 @@ class ProductionAudit:
             name for name in forbidden if (self.root / name).exists()
         )
         tracked: list[str] = []
-        git_verified = False
+        verified = False
         try:
             result = subprocess.run(
                 ["git", "ls-files", "-z"],
@@ -229,7 +218,7 @@ class ProductionAudit:
                 capture_output=True,
                 timeout=5,
             )
-            git_verified = True
+            verified = True
             paths = [
                 item.decode("utf-8", errors="replace")
                 for item in result.stdout.split(b"\0")
@@ -239,21 +228,20 @@ class ProductionAudit:
                 path
                 for path in paths
                 if Path(path).name in forbidden
-                or Path(path).suffix.lower()
-                in {".pem", ".key", ".p12", ".pfx"}
+                or Path(path).suffix.lower() in {".pem", ".key", ".p12", ".pfx"}
             )
         except (OSError, subprocess.SubprocessError):
-            git_verified = False
+            pass
         return AuditCheck(
             "secret_file_hygiene",
             "critical",
-            not present and not tracked and git_verified,
+            not present and not tracked and verified,
             {
                 "forbidden_root_files": present,
                 "forbidden_tracked_files": tracked,
-                "git_inventory_verified": git_verified,
+                "git_inventory_verified": verified,
             },
-            "Remove tracked secret material, rotate credentials and verify Git inventory.",
+            "Remove secret material and verify Git inventory.",
         )
 
     def _required_assets(self) -> AuditCheck:
@@ -264,17 +252,21 @@ class ProductionAudit:
             "campaigns/phase9_results.py",
             "campaigns/phase10_scaling.py",
             "risk/phase10_capital_engine.py",
-            "dashboard/static/web2/index.html",
-            "dashboard/phase9_campaign_api.py",
-            "dashboard/phase10_scaling_api.py",
+            "dashboard/__init__.py",
+            "dashboard/security_headers.py",
             "dashboard/phase11_production_api.py",
+            "dashboard/static/web2/index.html",
             "deploy/vps/phase11_release_preflight.sh",
             "deploy/vps/phase11_post_deploy_verify.sh",
+            "deploy/vps/phase11_rollback.sh",
             "deploy/vps/install_phase10_monthly_monitor.sh",
             "deploy/vps/systemd/sharipovai-monthly-performance.service",
             "deploy/vps/systemd/sharipovai-monthly-performance.timer",
-            "tests/test_phase9_results_and_scaling.py",
+            "scripts/phase10_monthly_report.py",
+            "scripts/phase11_first_campaign_checklist.py",
             "tests/test_phase11_crash_resilience.py",
+            "tests/test_phase11_security_headers.py",
+            "tests/test_phase11_launch_preparation.py",
         )
         missing: list[str] = []
         escaped: list[str] = []
@@ -292,71 +284,71 @@ class ProductionAudit:
             "critical",
             not missing and not escaped,
             {"missing": missing, "escaped_root": escaped},
-            "Restore required assets and remove symlinks escaping the repository root.",
+            "Restore required assets and remove escaping symlinks.",
         )
 
     def _deployment_contracts(self) -> AuditCheck:
         sources = {
-            "preflight": self._read(
-                "deploy/vps/phase11_release_preflight.sh"
-            ),
-            "post_deploy": self._read(
-                "deploy/vps/phase11_post_deploy_verify.sh"
-            ),
-            "installer": self._read(
-                "deploy/vps/install_phase10_monthly_monitor.sh"
-            ),
+            "preflight": self._read("deploy/vps/phase11_release_preflight.sh"),
+            "post": self._read("deploy/vps/phase11_post_deploy_verify.sh"),
+            "rollback": self._read("deploy/vps/phase11_rollback.sh"),
+            "installer": self._read("deploy/vps/install_phase10_monthly_monitor.sh"),
             "service": self._read(
                 "deploy/vps/systemd/sharipovai-monthly-performance.service"
             ),
             "timer": self._read(
                 "deploy/vps/systemd/sharipovai-monthly-performance.timer"
             ),
-            "monthly_cli": self._read("scripts/phase10_monthly_report.py"),
+            "monthly": self._read("scripts/phase10_monthly_report.py"),
+            "launch": self._read("scripts/phase11_first_campaign_checklist.py"),
         }
         expected = {
             "preflight": (
-                "#!/usr/bin/env bash",
-                "git diff --quiet",
+                "/opt/sharipovai-repo",
                 "SHARIPOVAI_EXPECTED_SHA",
-                "AUTH_SECRET",
-                "ADMIN_USERNAME",
-                "ADMIN_PASSWORD",
-                "SHARIPOVAI_DATABASE_REQUIRED",
-                "tests/test_phase9_results_and_scaling.py",
-                "tests/test_phase11_crash_resilience.py",
+                "git status --porcelain",
                 "ProductionAudit",
+                "tests/test_phase11_security_headers.py",
             ),
-            "post_deploy": (
-                "#!/usr/bin/env bash",
+            "post": (
+                "/opt/sharipovai-repo",
                 "/api/health",
-                "mktemp",
+                "git status --porcelain",
                 "ProjectDatabase",
                 "os.replace",
-                "audit_sha256",
-                "http_health",
+            ),
+            "rollback": (
+                "I_APPROVE_PHASE11_EXACT_SHA_ROLLBACK",
+                "git merge-base --is-ancestor",
+                "flock -n",
+                "export_backup.sh",
+                "restore_original",
+                "smoke_check.sh production",
             ),
             "installer": (
-                "#!/usr/bin/env bash",
+                "/opt/sharipovai-repo",
+                "rendered_service=\"$(mktemp)\"",
                 "systemd-analyze verify",
                 "systemctl enable --now",
             ),
             "service": (
+                "@SHARIPOVAI_ROOT@",
                 "NoNewPrivileges=true",
                 "ProtectSystem=strict",
-                "SuccessExitStatus=3",
-                "ReadWritePaths=/var/lib/sharipovai",
-                "ReadWritePaths=-/opt/sharipovai/data",
+                "ReadWritePaths=-@SHARIPOVAI_ROOT@/data",
             ),
             "timer": (
                 "OnCalendar=monthly",
                 "Persistent=true",
                 "RandomizedDelaySec=900",
             ),
-            "monthly_cli": (
-                "#!/usr/bin/env python3",
-                "os.replace",
-                "os.fsync",
+            "monthly": ("os.replace", "os.fsync", "allow_nan=False"),
+            "launch": (
+                "MAINNET_EXECUTION_COMPILED",
+                "first_testnet_plan",
+                "maximum_order_notional_usdt",
+                "minimum_matched_fills",
+                "campaign_started",
             ),
         }
         missing = [
@@ -370,7 +362,7 @@ class ProductionAudit:
             "critical",
             not missing,
             {"missing_contracts": missing},
-            "Restore SHA, auth, database, atomic output, systemd and crash contracts.",
+            "Restore canonical root, rollback, monitoring and launch contracts.",
         )
 
     def _dashboard_contracts(self) -> AuditCheck:
@@ -382,15 +374,18 @@ class ProductionAudit:
             "phase11": self._read(
                 "dashboard/static/web2/phase11_production_v43.js"
             ),
-            "stylesheet": self._read(
+            "style": self._read(
                 "dashboard/static/web2/phase11_production_v43.css"
             ),
             "guard": self._read("dashboard/admin_guard.py"),
+            "entry": self._read("dashboard/__init__.py"),
+            "headers": self._read("dashboard/security_headers.py"),
         }
         expected = {
             "index": (
                 "viewport",
                 "theme-color",
+                "data-theme=\"dark\"",
                 "data-phase10-scaling-performance",
                 "data-phase11-production",
             ),
@@ -405,10 +400,9 @@ class ProductionAudit:
                 "aria-live",
                 "visibilitychange",
                 "localStorage",
-                "lastSuccessfulAt",
                 "replaceChildren",
             ),
-            "stylesheet": (
+            "style": (
                 "prefers-reduced-motion",
                 "prefers-color-scheme",
                 "@media",
@@ -418,6 +412,17 @@ class ProductionAudit:
                 "/api/campaigns/phase9/",
                 "/api/campaigns/phase10/",
                 "/api/production/phase11/",
+            ),
+            "entry": (
+                "install_global_auth_guard(app)",
+                "install_security_headers(app)",
+                "install_phase10_scaling_api(app)",
+            ),
+            "headers": (
+                "X-Content-Type-Options",
+                "X-Frame-Options",
+                "Strict-Transport-Security",
+                "Cache-Control",
             ),
         }
         missing = [
@@ -434,13 +439,13 @@ class ProductionAudit:
         ]
         return AuditCheck(
             "dashboard_responsive_realtime_contract",
-            "warning",
+            "critical",
             not missing and not unsafe,
             {"missing": missing, "unsafe_dom_patterns": unsafe},
-            "Restore accessible, authorized and injection-safe rendering.",
+            "Restore authorized, accessible and injection-safe rendering.",
         )
 
-    def _ci_crash_contracts(self) -> AuditCheck:
+    def _ci_contracts(self) -> AuditCheck:
         workflows = self._read(".github/workflows/tests.yml") + "\n" + self._read(
             ".github/workflows/phase11-hardening.yml"
         )
@@ -451,6 +456,10 @@ class ProductionAudit:
             "tests/test_phase11_production_audit.py",
             "tests/test_phase11_dashboard_contract.py",
             "tests/test_phase11_crash_resilience.py",
+            "tests/test_phase11_security_headers.py",
+            "tests/test_phase11_launch_preparation.py",
+            "tests/test_system_health_center.py",
+            "tests/test_web2_market_chart_contract.py",
             "pip_audit",
             "compileall",
         )
@@ -460,7 +469,7 @@ class ProductionAudit:
             "critical",
             not missing,
             {"missing": missing},
-            "Add immutable evidence, hardening and crash tests to mandatory CI.",
+            "Add all hardening and launch tests to mandatory CI.",
         )
 
     def _runtime_limits(self) -> AuditCheck:
@@ -471,7 +480,7 @@ class ProductionAudit:
             "critical",
             maximum is not None and 0 < maximum <= 50,
             {"configured": raw, "maximum_usdt": maximum},
-            "Keep the hard Testnet ceiling finite and at or below 50 USDT.",
+            "Keep hard Testnet ceiling finite and at or below 50 USDT.",
         )
 
     def _read(self, relative: str) -> str:
@@ -483,7 +492,7 @@ class ProductionAudit:
             return ""
 
 
-def _truthy(value: str) -> bool:
+def _truthy(value: Any) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
