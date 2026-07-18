@@ -1,0 +1,31 @@
+[Unit]
+Description=SharipovAI immutable monthly performance report
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/opt/sharipovai/scripts/phase10_monthly_report.py
+
+[Service]
+Type=oneshot
+User=sharipovai
+Group=sharipovai
+WorkingDirectory=/opt/sharipovai
+EnvironmentFile=/etc/sharipovai/sharipovai.env
+ExecStart=/bin/bash -lc 'month=$(date -u -d "$(date -u +%%Y-%%m-01) -1 month" +%%Y-%%m); exec /opt/sharipovai/.venv/bin/python scripts/phase10_monthly_report.py --month "$month" --output "/var/lib/sharipovai/performance/$month.json"'
+SuccessExitStatus=3
+TimeoutStartSec=300
+Nice=10
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ReadWritePaths=/var/lib/sharipovai/performance
+UMask=0027
