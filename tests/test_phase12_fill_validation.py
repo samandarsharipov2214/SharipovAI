@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from experiments import ExperimentRegistry
 from storage import ProjectDatabase
-from validation import Phase12FillValidationService
+from validation import ExpectedPaperFillAnalyzer, Phase12FillValidationService
 
 
 def _database(tmp_path) -> ProjectDatabase:
@@ -78,6 +78,20 @@ def test_phase12_detects_missing_and_divergent_fills(tmp_path) -> None:
     assert report["promotion_eligible"] is False
     assert "unmatched_paper_fills" in report["failed_gates"]
     assert report["runtime_flags_changed"] is False
+
+
+def test_zero_actual_fill_is_not_replaced_by_requested_quantity() -> None:
+    expected, paper, _ = _rows()
+    paper[0] = {**paper[0], "filled_quantity": 0.0, "fee": 0.0}
+    report = ExpectedPaperFillAnalyzer().analyze(
+        expected,
+        paper,
+        created_at_ms=1_700_000_025_000,
+    )
+    assert report.validation_passed is False
+    assert "paper_fill_ratio_error_exceeded" in report.failed_gates
+    pair = next(item for item in report.pairs if item["match_id"] == "match-00")
+    assert pair["fill_ratio"] == 0.0
 
 
 def test_phase12_fill_validation_is_idempotent(tmp_path) -> None:
