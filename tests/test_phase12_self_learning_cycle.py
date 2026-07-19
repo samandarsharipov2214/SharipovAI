@@ -50,6 +50,39 @@ def test_outcome_attribution_is_idempotent_and_reconciled(tmp_path) -> None:
         service.record(conflicting)
 
 
+def test_outcome_replay_repairs_missing_agent_projection_without_double_count(tmp_path) -> None:
+    database = _database(tmp_path)
+    service = OutcomeAttributionService(database)
+    service.record(_outcome())
+    metric = database.get_json("self_learning_agent_metrics", "market-agent")
+    assert metric is not None
+    database.put_json(
+        "self_learning_agent_metrics",
+        "market-agent",
+        {
+            "agent_id": "market-agent",
+            "outcome_count": 0,
+            "correct_count": 0,
+            "confidence_error_sum": 0.0,
+            "attributed_pnl": 0.0,
+            "attributed_drawdown": 0.0,
+            "regimes": {},
+            "sources": {},
+            "applied_outcomes": [],
+        },
+        expected_version=int(metric["version"]),
+    )
+    service.record(_outcome())
+    repaired = database.get_json("self_learning_agent_metrics", "market-agent")
+    assert repaired is not None
+    assert repaired["value"]["outcome_count"] == 1
+    assert repaired["value"]["applied_outcomes"] == ["outcome-1"]
+    service.record(_outcome())
+    stable = database.get_json("self_learning_agent_metrics", "market-agent")
+    assert stable is not None
+    assert stable["value"]["outcome_count"] == 1
+
+
 def test_policy_rejects_synthetic_and_non_finite_evidence() -> None:
     synthetic = _outcome()
     synthetic["evidence_class"] = "synthetic"
