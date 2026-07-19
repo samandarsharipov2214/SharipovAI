@@ -20,6 +20,7 @@ _REQUIRED = (
     "deploy/vps/phase12_rollback.sh",
     "README.md",
     "CONSTITUTION.md",
+    "CONSTITUTION_PHASE12_AMENDMENT.md",
 )
 
 
@@ -41,8 +42,22 @@ def run_checklist(root: Path, *, expected_sha: str = "", allow_no_git: bool = Fa
     missing = [name for name in _REQUIRED if not (root / name).is_file()]
     checks["required_files_present"] = not missing
     details["missing_files"] = missing
-    docs = ((root / "README.md").read_text(encoding="utf-8") + "\n" + (root / "CONSTITUTION.md").read_text(encoding="utf-8")).lower()
-    tokens = ("phase 12", "outcome attribution", "paper research champion", "fill divergence", "final report", "operator cli", "exact sha", "rollback")
+    docs = "\n".join(
+        (root / name).read_text(encoding="utf-8")
+        for name in ("README.md", "CONSTITUTION.md", "CONSTITUTION_PHASE12_AMENDMENT.md")
+        if (root / name).is_file()
+    ).lower()
+    tokens = (
+        "phase 12",
+        "outcome attribution",
+        "paper research champion",
+        "automatic execution promotion is forbidden",
+        "fill divergence",
+        "final report",
+        "operator cli",
+        "exact sha",
+        "rollback",
+    )
     missing_tokens = [token for token in tokens if token not in docs]
     checks["documentation_contract"] = not missing_tokens
     details["missing_documentation_tokens"] = missing_tokens
