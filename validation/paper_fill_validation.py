@@ -63,8 +63,12 @@ class ExpectedPaperFillAnalyzer:
         report_id: str | None = None,
         created_at_ms: int | None = None,
     ) -> PaperFillValidationReport:
-        expected = {_expected(item).match_id: _expected(item) for item in expected_fills}
-        actual = {_actual(item)["match_id"]: _actual(item) for item in actual_fills}
+        expected_items = [_expected(item) for item in expected_fills]
+        actual_items = [_actual(item) for item in actual_fills]
+        expected = {item.match_id: item for item in expected_items}
+        actual = {item["match_id"]: item for item in actual_items}
+        if len(expected) != len(expected_items) or len(actual) != len(actual_items):
+            raise ValueError("duplicate fill identity is forbidden")
         if not expected and not actual:
             raise ValueError("paper fill validation requires observations")
         common = sorted(set(expected) & set(actual))
@@ -171,15 +175,15 @@ def _expected(value: ExpectedPaperFill | Mapping[str, Any]) -> ExpectedPaperFill
     if side not in {"BUY", "SELL"}:
         raise ValueError("side must be BUY or SELL")
     return ExpectedPaperFill(
-        match_id=_identifier(value.get("match_id") or value.get("order_link_id"), "match_id"),
+        match_id=_identifier(_first(value, "match_id", "order_link_id"), "match_id"),
         symbol=_identifier(str(value.get("symbol") or "").upper(), "symbol"),
         side=side,
-        submitted_at_ms=_positive_int(value.get("submitted_at_ms"), "submitted_at_ms"),
-        requested_quantity=_positive(value.get("requested_quantity"), "requested_quantity"),
-        reference_price=_positive(value.get("reference_price"), "reference_price"),
-        expected_fill_price=_positive(value.get("expected_fill_price"), "expected_fill_price"),
-        expected_latency_ms=_nonnegative(value.get("expected_latency_ms"), "expected_latency_ms"),
-        expected_fee=_nonnegative(value.get("expected_fee"), "expected_fee"),
+        submitted_at_ms=_positive_int(_first(value, "submitted_at_ms"), "submitted_at_ms"),
+        requested_quantity=_positive(_first(value, "requested_quantity"), "requested_quantity"),
+        reference_price=_positive(_first(value, "reference_price"), "reference_price"),
+        expected_fill_price=_positive(_first(value, "expected_fill_price"), "expected_fill_price"),
+        expected_latency_ms=_nonnegative(_first(value, "expected_latency_ms"), "expected_latency_ms"),
+        expected_fee=_nonnegative(_first(value, "expected_fee"), "expected_fee"),
     )
 
 
@@ -190,14 +194,21 @@ def _actual(value: Mapping[str, Any]) -> dict[str, Any]:
     if side not in {"BUY", "SELL"}:
         raise ValueError("side must be BUY or SELL")
     return {
-        "match_id": _identifier(value.get("match_id") or value.get("order_link_id") or value.get("trade_id"), "match_id"),
+        "match_id": _identifier(_first(value, "match_id", "order_link_id", "trade_id"), "match_id"),
         "symbol": _identifier(str(value.get("symbol") or "").upper(), "symbol"),
         "side": side,
-        "first_fill_at_ms": _positive_int(value.get("first_fill_at_ms") or value.get("filled_at_ms"), "first_fill_at_ms"),
-        "filled_quantity": _nonnegative(value.get("filled_quantity") or value.get("quantity"), "filled_quantity"),
-        "average_fill_price": _positive(value.get("average_fill_price") or value.get("price"), "average_fill_price"),
-        "fee": _nonnegative(value.get("fee") or value.get("actual_fee") or 0.0, "fee"),
+        "first_fill_at_ms": _positive_int(_first(value, "first_fill_at_ms", "filled_at_ms"), "first_fill_at_ms"),
+        "filled_quantity": _nonnegative(_first(value, "filled_quantity", "quantity"), "filled_quantity"),
+        "average_fill_price": _positive(_first(value, "average_fill_price", "price"), "average_fill_price"),
+        "fee": _nonnegative(_first(value, "fee", "actual_fee", default=0.0), "fee"),
     }
+
+
+def _first(value: Mapping[str, Any], *names: str, default: Any = None) -> Any:
+    for name in names:
+        if name in value and value[name] is not None:
+            return value[name]
+    return default
 
 
 def _identifier(value: Any, name: str) -> str:
@@ -254,7 +265,9 @@ def _percentile(values: list[float], percentile: float) -> float:
 
 
 def _digest(value: Any) -> str:
-    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")).hexdigest()
+    return hashlib.sha256(
+        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    ).hexdigest()
 
 
 __all__ = ["ExpectedPaperFill", "ExpectedPaperFillAnalyzer", "PaperFillValidationReport", "PaperFillValidationThresholds"]
