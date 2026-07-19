@@ -45,6 +45,7 @@ from .phase10_scaling_api import install_phase10_scaling_api
 from .private_order_ws_api import install_private_order_ws_api
 from .routers import install_operational_routers
 from .security_headers import install_security_headers
+from .self_learning_api import install_self_learning_api
 from .source_status_compat_api import install_source_status_compat_api
 from .system_health_api import install_system_health_api
 from .system_watchdog import install_system_watchdog
@@ -66,6 +67,7 @@ install_phase7_campaign_api(app)
 install_phase8_campaign_api(app)
 install_phase9_campaign_api(app)
 install_phase10_scaling_api(app)
+install_self_learning_api(app)
 install_source_status_compat_api(app)
 install_operational_routers(app)
 install_web2_host(app)
