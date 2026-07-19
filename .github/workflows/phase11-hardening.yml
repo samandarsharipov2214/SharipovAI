@@ -124,6 +124,15 @@ jobs:
       - name: Compile production sources
         run: python -m compileall -q .
 
+      - name: Verify exact Phase 12 merge candidate
+        run: |
+          set -Eeuo pipefail
+          python scripts/phase12_premerge_checklist.py \
+            --root . \
+            --expected-sha "$(git rev-parse HEAD)" \
+            > phase12-premerge-checklist.json
+          cat phase12-premerge-checklist.json
+
       - name: Run Phase 9 to Phase 12 crash and evidence contracts
         run: |
           set -Eeuo pipefail
@@ -157,15 +166,6 @@ jobs:
           print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
           raise SystemExit(0 if report['status'] == 'ready_for_bounded_testnet_preflight' else 2)
           PY
-
-      - name: Run Phase 12 pre-merge checklist
-        run: |
-          set -Eeuo pipefail
-          python scripts/phase12_premerge_checklist.py \
-            --root . \
-            --expected-sha "$(git rev-parse HEAD)" \
-            > phase12-premerge-checklist.json
-          cat phase12-premerge-checklist.json
 
       - name: Upload hardening evidence
         if: always()
