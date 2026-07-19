@@ -54,27 +54,43 @@ class Phase12FillValidationService:
         expected_rows = list(expected_paper_fills)
         paper_rows = list(actual_paper_fills)
         testnet_rows = list(testnet_fills)
+
+        expected_probe = self.expected_analyzer.analyze(
+            expected_rows,
+            paper_rows,
+            report_id="paperfill_probe",
+            created_at_ms=timestamp,
+        )
+        shadow_probe = self.shadow_analyzer.analyze(
+            paper_rows,
+            testnet_rows,
+            report_id="fillval_probe",
+            created_at_ms=timestamp,
+        )
+        expected_sha = _digest(_stable_evidence(expected_probe.to_dict()))
+        shadow_sha = _digest(_stable_evidence(shadow_probe.to_dict()))
         input_sha = _digest({
             "experiment_id": experiment_id,
-            "expected_paper_fills": expected_rows,
-            "actual_paper_fills": paper_rows,
-            "testnet_fills": testnet_rows,
+            "expected_paper_evidence_sha256": expected_sha,
+            "paper_testnet_evidence_sha256": shadow_sha,
         })
         expected_report = self.expected_analyzer.analyze(
             expected_rows,
             paper_rows,
-            report_id=f"paperfill_{input_sha[:24]}",
+            report_id=f"paperfill_{expected_sha[:24]}",
             created_at_ms=timestamp,
         )
         shadow_report = self.shadow_analyzer.analyze(
             paper_rows,
             testnet_rows,
-            report_id=f"fillval_{input_sha[24:48]}",
+            report_id=f"fillval_{shadow_sha[:24]}",
             created_at_ms=timestamp,
         )
         document = {
             "experiment_id": experiment_id,
             "input_sha256": input_sha,
+            "expected_paper_evidence_sha256": expected_sha,
+            "paper_testnet_evidence_sha256": shadow_sha,
             "expected_vs_actual_paper": expected_report.to_dict(),
             "paper_vs_testnet_shadow": shadow_report.to_dict(),
             "promotion_eligible": bool(expected_report.validation_passed and shadow_report.promotion_eligible),
@@ -165,9 +181,21 @@ class Phase12FillValidationService:
 
 
 def _stable_evidence(value: Any) -> Any:
-    volatile = {"created_at_ms", "updated_at_ms", "database_updated_at_ms", "event_id", "version", "actor"}
+    volatile = {
+        "created_at_ms",
+        "updated_at_ms",
+        "database_updated_at_ms",
+        "event_id",
+        "version",
+        "actor",
+        "report_id",
+    }
     if isinstance(value, Mapping):
-        return {str(key): _stable_evidence(item) for key, item in value.items() if str(key) not in volatile and str(key) != "evidence_sha256"}
+        return {
+            str(key): _stable_evidence(item)
+            for key, item in value.items()
+            if str(key) not in volatile and str(key) != "evidence_sha256"
+        }
     if isinstance(value, list):
         return [_stable_evidence(item) for item in value]
     if isinstance(value, tuple):
@@ -176,7 +204,9 @@ def _stable_evidence(value: Any) -> Any:
 
 
 def _digest(value: Any) -> str:
-    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")).hexdigest()
+    return hashlib.sha256(
+        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    ).hexdigest()
 
 
 __all__ = ["Phase12FillValidationService"]
