@@ -26,6 +26,9 @@ services:
       PHASE7_MONITOR_STALE_SECONDS: "20"
       PHASE7_CAMPAIGN_REPORT_DIR: /var/lib/sharipovai/campaign_reports
       CRITICAL_ALERT_MONITOR_ENABLED: "1"
+      SELF_LEARNING_ENABLED: "1"
+      SELF_LEARNING_INTERVAL_SECONDS: "60"
+      SELF_LEARNING_RESEARCH_SCOPE: global.paper
       EXCHANGE_MODE: sandbox
       EXCHANGE_BASE_URL: https://api-testnet.bybit.com
       EXCHANGE_LIVE_TRADING_ENABLED: "0"
