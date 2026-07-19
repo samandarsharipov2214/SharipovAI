@@ -24,9 +24,10 @@ def test_web2_uses_tradingview_chart_with_verified_project_evidence() -> None:
     assert "Math.random" not in intelligence
 
 
-def test_russian_is_default_and_three_languages_exist() -> None:
+def test_russian_is_default_three_languages_exist_and_theme_is_declared() -> None:
     html = (WEB2 / "index.html").read_text(encoding="utf-8")
-    assert '<html lang="ru">' in html
+    assert '<html lang="ru"' in html
+    assert 'data-theme="dark"' in html
     assert "Решение ИИ" in html
     assert "Центр рисков" in html
     assert "Центр обучения" in html

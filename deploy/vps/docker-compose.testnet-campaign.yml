@@ -12,7 +12,7 @@ services:
       FEATURE_BYBIT_TESTNET: "1"
       FEATURE_BYBIT_PRIVATE_ORDER_WS: "1"
       RUNTIME_FILL_HARVESTER_ENABLED: "1"
-      SCHEDULED_CAMPAIGN_ORCHESTRATOR_ENABLED: "1"
+      SCHEDULED_CAMPAIGN_ORCHESTRATOR_ENABLED: "0"
       CRITICAL_ALERT_MONITOR_ENABLED: "1"
       EXECUTION_MAX_NOTIONAL_USDT: "25"
       SHADOW_TESTNET_MAX_NOTIONAL_USDT: "25"
@@ -22,3 +22,4 @@ services:
     labels:
       ai.sharipov.runtime-mode: bounded-testnet-campaign
       ai.sharipov.mainnet-enabled: "false"
+      ai.sharipov.campaign-start-mode: manual-only

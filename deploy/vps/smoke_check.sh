@@ -38,7 +38,6 @@ service = payload.get("services", {}).get("sharipovai", {})
 environment = service.get("environment", {})
 if isinstance(environment, list):
     environment = dict(item.split("=", 1) for item in environment if "=" in item)
-
 required = {
     "EXCHANGE_LIVE_TRADING_ENABLED": "0",
     "FEATURE_BYBIT_LIVE_EXECUTION": "0",
@@ -57,7 +56,7 @@ else:
             "FEATURE_BYBIT_TESTNET": "1",
             "FEATURE_BYBIT_PRIVATE_ORDER_WS": "1",
             "RUNTIME_FILL_HARVESTER_ENABLED": "1",
-            "SCHEDULED_CAMPAIGN_ORCHESTRATOR_ENABLED": "1",
+            "SCHEDULED_CAMPAIGN_ORCHESTRATOR_ENABLED": "0",
             "CRITICAL_ALERT_MONITOR_ENABLED": "1",
             "PHASE6_TESTNET_RELEASE_GATE": "green",
         }
