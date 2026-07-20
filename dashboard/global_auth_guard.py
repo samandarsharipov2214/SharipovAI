@@ -9,6 +9,8 @@ from urllib.parse import quote
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
+from .auth_saas import resolve_authenticated_principal
+
 _PUBLIC_EXACT = {
     "/login",
     "/register",
@@ -17,6 +19,12 @@ _PUBLIC_EXACT = {
     "/api/health",
     "/startup",
     "/api/security/status",
+    "/api/auth/login",
+    "/api/auth/register",
+    "/api/auth/logout",
+    "/api/auth/me",
+    "/api/billing/webhook",
+    "/api/markets/overview",
     "/metrics",
     "/telegram/webhook",
 }
@@ -42,8 +50,19 @@ def _session_resolver(app: FastAPI) -> Callable[[Request], str | None]:
     return _session_username
 
 
+def _principal(request: Request, app: FastAPI) -> str | None:
+    jwt_principal = resolve_authenticated_principal(request)
+    if jwt_principal:
+        return jwt_principal
+    resolver = _session_resolver(app)
+    try:
+        return resolver(request)
+    except Exception:
+        return None
+
+
 def install_global_auth_guard(app: FastAPI) -> None:
-    """Require a valid session for every non-public route."""
+    """Require a valid session or JWT cookie for every non-public route."""
 
     if getattr(app.state, "global_auth_guard_installed", False):
         return
@@ -59,11 +78,7 @@ def install_global_auth_guard(app: FastAPI) -> None:
         if path in _PUBLIC_EXACT or any(path.startswith(prefix) for prefix in _PUBLIC_PREFIXES):
             return await call_next(request)
 
-        resolver = _session_resolver(app)
-        try:
-            username = resolver(request)
-        except Exception:
-            username = None
+        username = _principal(request, app)
         if username:
             return await call_next(request)
 
