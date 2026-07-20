@@ -19,6 +19,7 @@ ensure_event_handler_compat(app)
 def create_app(*args: Any, **kwargs: Any):
     install_final_ci_contracts()
     instance = importlib.import_module("dashboard.app").create_app(*args, **kwargs)
+    install_gemini_chat_api(instance)
     install_security_headers(instance)
     return instance
 
@@ -34,6 +35,7 @@ from .database_api import install_database_api
 from .exceptions import DashboardError
 from .execution_stages_api import install_execution_stages_api
 from .fill_harvester_api import install_fill_harvester_api
+from .gemini_chat_api import install_gemini_chat_api
 from .global_auth_guard import install_global_auth_guard
 from .market_data_api import install_market_data_api
 from .news_agent_network_api import install_news_agent_network_api
@@ -69,6 +71,7 @@ install_phase10_scaling_api(app)
 install_source_status_compat_api(app)
 install_operational_routers(app)
 install_web2_host(app)
+install_gemini_chat_api(app)
 install_global_auth_guard(app)
 install_security_headers(app)
 install_observability(app)
