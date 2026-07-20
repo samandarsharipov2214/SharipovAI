@@ -43,7 +43,7 @@ Frontend:
 ```bash
 cd frontend/sharipovai-vite
 cp .env.example .env.local
-npm install
+npm install --ignore-scripts --no-audit --no-fund
 npm run typecheck
 npm run dev
 ```
@@ -54,12 +54,13 @@ Open `http://127.0.0.1:5173`. Vite proxies `/api` to `http://127.0.0.1:8000`.
 
 ```bash
 cd frontend/sharipovai-vite
-npm ci
+npm install --ignore-scripts --no-audit --no-fund
+npm run typecheck
 npm run build
 npm run preview
 ```
 
-Use an HTTPS reverse proxy and serve the generated `dist/` directory. Keep API and frontend on the same origin whenever possible.
+Use an HTTPS reverse proxy and serve the generated `dist/` directory. Keep API and frontend on the same origin.
 
 ## Key rotation
 
