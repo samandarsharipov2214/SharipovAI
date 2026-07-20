@@ -1,6 +1,7 @@
 import {
   Activity,
   KeyRound,
+  LogOut,
   Monitor,
   Moon,
   ShieldCheck,
@@ -8,26 +9,31 @@ import {
   Sun,
 } from "lucide-react";
 
+import { useBilling } from "../../hooks/useBilling";
+import { useAuth } from "../../hooks/useAuth";
 import { useTheme, type ThemePreference } from "../../hooks/useTheme";
+import { AuthPanel } from "../auth/AuthPanel";
+import { PricingPanel } from "../billing/PricingPanel";
 import { ChatPanel } from "../chat/ChatPanel";
+import { MarketOverview } from "../markets/MarketOverview";
 
 const statusCards = [
   {
     title: "Gemini credentials",
     value: "Server only",
-    detail: "GEMINI_API_KEY не компилируется во frontend.",
+    detail: "GEMINI_API_KEY остаётся только в backend env.",
     icon: KeyRound,
   },
   {
-    title: "Chat transport",
-    value: "Same-origin API",
-    detail: "Cookie session, timeout, abort и no-store requests.",
+    title: "Signal delivery",
+    value: "Protected API",
+    detail: "JWT cookie + same-origin + backend market context.",
     icon: ShieldCheck,
   },
   {
     title: "Execution authority",
-    value: "Read-only AI",
-    detail: "Чат не может отправлять raw orders или менять Mainnet lock.",
+    value: "Analysis only",
+    detail: "SharipovAI даёт сигналы и анализ, но не торгует за пользователя.",
     icon: Activity,
   },
 ] as const;
@@ -35,15 +41,20 @@ const statusCards = [
 const themeOptions: Array<{
   value: ThemePreference;
   label: string;
-  icon: typeof Moon;
 }> = [
-  { value: "dark", label: "Тёмная", icon: Moon },
-  { value: "light", label: "Светлая", icon: Sun },
-  { value: "system", label: "Системная", icon: Monitor },
+  { value: "dark", label: "Тёмная" },
+  { value: "light", label: "Светлая" },
+  { value: "system", label: "Системная" },
 ];
 
 export function Dashboard() {
   const { theme, setTheme } = useTheme();
+  const auth = useAuth();
+  const billing = useBilling(auth.status === "authenticated");
+  const authenticated = auth.status === "authenticated" && Boolean(auth.user);
+  const chatLockedReason = authenticated && billing.billing && !billing.billing.can_send_messages
+    ? "Бесплатный лимит исчерпан. Оформите Pro plan, чтобы продолжить анализ рынка."
+    : null;
 
   return (
     <div className="min-h-screen">
@@ -59,41 +70,54 @@ export function Dashboard() {
             </div>
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">
-                SharipovAI OS
+                SharipovAI Signals
               </p>
-              <h1 className="text-xl font-semibold text-white">Secure AI Operations</h1>
+              <h1 className="text-xl font-semibold text-white">AI Crypto Research SaaS</h1>
             </div>
           </div>
 
-          <label className="flex items-center gap-3 text-sm text-slate-300">
-            <span>Тема</span>
-            <select
-              className="min-h-11 rounded-xl border border-white/10 bg-slate-900 px-3 text-white outline-none focus:border-cyan-300 focus:ring-2 focus:ring-cyan-300/20"
-              value={theme}
-              onChange={(event) => setTheme(event.target.value as ThemePreference)}
-            >
-              {themeOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
+          <div className="flex flex-wrap items-center gap-3">
+            {authenticated && auth.user && (
+              <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-300">
+                {auth.user.display_name || auth.user.email}
+              </div>
+            )}
+            <label className="flex items-center gap-3 text-sm text-slate-300">
+              <span>Тема</span>
+              <select
+                className="min-h-11 rounded-xl border border-white/10 bg-slate-900 px-3 text-white outline-none focus:border-cyan-300 focus:ring-2 focus:ring-cyan-300/20"
+                value={theme}
+                onChange={(event) => setTheme(event.target.value as ThemePreference)}
+              >
+                {themeOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {authenticated && (
+              <button className="secondary-button" type="button" onClick={() => void auth.signOut()}>
+                <LogOut className="size-4" aria-hidden="true" />
+                Выйти
+              </button>
+            )}
+          </div>
         </div>
       </header>
 
-      <main id="main-content" className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+      <main id="main-content" className="mx-auto max-w-7xl space-y-8 px-4 py-8 sm:px-6 lg:px-8">
         <section aria-labelledby="security-status-title">
           <div className="mb-5 flex items-end justify-between gap-4">
             <div>
               <p className="eyebrow">Production architecture</p>
               <h2 id="security-status-title" className="mt-2 text-2xl font-semibold text-white">
-                Безопасность чата
+                Безопасный AI analysis stack
               </h2>
             </div>
             <span className="status-pill">
               <span className="size-2 rounded-full bg-emerald-300" aria-hidden="true" />
-              Fail-closed
+              Same-origin
             </span>
           </div>
 
@@ -111,9 +135,46 @@ export function Dashboard() {
           </div>
         </section>
 
-        <div className="mt-8">
-          <ChatPanel />
-        </div>
+        <MarketOverview markets={billing.markets} />
+
+        {!authenticated ? (
+          <AuthPanel
+            busy={auth.busy}
+            error={auth.error}
+            onLogin={auth.login}
+            onRegister={auth.register}
+          />
+        ) : (
+          <div className="grid gap-8 xl:grid-cols-[1.2fr_0.8fr]">
+            <div className="space-y-4">
+              {billing.billing && (
+                <div className="surface-card text-sm text-slate-300">
+                  <p>
+                    Сообщений в периоде: <span className="font-semibold text-white">{billing.billing.messages_used_this_period}</span>
+                    {billing.billing.message_limit !== null ? (
+                      <>
+                        {" "}/ <span className="font-semibold text-white">{billing.billing.message_limit}</span>
+                      </>
+                    ) : (
+                      " / unlimited"
+                    )}
+                  </p>
+                  <p className="mt-2 text-slate-400">
+                    План: {billing.billing.plan_code}, статус: {billing.billing.subscription_status}
+                  </p>
+                </div>
+              )}
+              <ChatPanel disabledReason={chatLockedReason} />
+            </div>
+            <PricingPanel
+              billing={billing.billing}
+              busy={billing.busy}
+              error={billing.error}
+              onCheckout={billing.startCheckout}
+              onManage={billing.openPortal}
+            />
+          </div>
+        )}
       </main>
     </div>
   );
