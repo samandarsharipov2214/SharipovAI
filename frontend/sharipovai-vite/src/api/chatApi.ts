@@ -14,13 +14,15 @@ const responseSchema = z.object({
 
 const errorSchema = z
   .object({
-    detail: z.union([
-      z.string(),
-      z.object({
-        status: z.string().optional(),
-        message: z.string().optional(),
-      }),
-    ]).optional(),
+    detail: z
+      .union([
+        z.string(),
+        z.object({
+          status: z.string().optional(),
+          message: z.string().optional(),
+        }),
+      ])
+      .optional(),
   })
   .passthrough();
 
@@ -28,18 +30,21 @@ const REQUEST_TIMEOUT_MS = 35_000;
 
 function apiBaseUrl(): string {
   const raw = import.meta.env.VITE_API_BASE_URL?.trim();
-  if (!raw) {
-    return "";
-  }
+  if (!raw) return "";
 
-  const parsed = new URL(raw);
-  if (!['http:', 'https:'].includes(parsed.protocol)) {
+  const parsed = new URL(raw, window.location.origin);
+  if (!["http:", "https:"].includes(parsed.protocol)) {
     throw new ChatApiError("Некорректный адрес API.", {
       code: "bad_request",
     });
   }
+  if (parsed.origin !== window.location.origin) {
+    throw new ChatApiError("API должен использовать тот же origin, что и интерфейс.", {
+      code: "forbidden",
+    });
+  }
 
-  return parsed.origin;
+  return parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/$/, "");
 }
 
 function endpoint(path: string): string {
@@ -64,9 +69,7 @@ function userMessage(status: number): string {
 
 async function safeJson(response: Response): Promise<unknown> {
   const contentType = response.headers.get("content-type") ?? "";
-  if (!contentType.includes("application/json")) {
-    return null;
-  }
+  if (!contentType.includes("application/json")) return null;
 
   try {
     return await response.json();
@@ -133,9 +136,7 @@ export async function requestChat(
       requestId: parsed.data.request_id,
     };
   } catch (error) {
-    if (error instanceof ChatApiError) {
-      throw error;
-    }
+    if (error instanceof ChatApiError) throw error;
 
     if (controller.signal.aborted) {
       if (externalSignal?.aborted) {
