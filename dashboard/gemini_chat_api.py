@@ -1,6 +1,7 @@
 """Authenticated server-side Gemini gateway for browser chat clients."""
 from __future__ import annotations
 
+import inspect
 import os
 import re
 import secrets
@@ -12,6 +13,8 @@ from urllib.parse import urlsplit
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -172,6 +175,27 @@ def install_gemini_chat_api(app: FastAPI) -> None:
         return
     app.state.gemini_chat_api_installed = True
 
+    previous_validation_handler = app.exception_handlers.get(
+        RequestValidationError,
+        request_validation_exception_handler,
+    )
+
+    async def sanitized_validation_handler(
+        request: Request,
+        exc: RequestValidationError,
+    ):
+        if request.url.path == "/api/ai/chat":
+            return JSONResponse(
+                status_code=422,
+                content={"detail": {"status": "invalid_request"}},
+                headers={"Cache-Control": "no-store"},
+            )
+
+        result = previous_validation_handler(request, exc)
+        return await result if inspect.isawaitable(result) else result
+
+    app.add_exception_handler(RequestValidationError, sanitized_validation_handler)
+
     @app.middleware("http")
     async def gemini_chat_early_guard(request: Request, call_next):
         if request.url.path == "/api/ai/chat":
@@ -179,7 +203,11 @@ def install_gemini_chat_api(app: FastAPI) -> None:
                 _require_same_origin(request)
                 _principal(request)
             except HTTPException as exc:
-                return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+                return JSONResponse(
+                    status_code=exc.status_code,
+                    content={"detail": exc.detail},
+                    headers={"Cache-Control": "no-store"},
+                )
         return await call_next(request)
 
     @app.post("/api/ai/chat", response_model=GeminiChatResponse)
