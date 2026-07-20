@@ -7,7 +7,7 @@ import re
 import secrets
 import threading
 import time
-from collections import defaultdict, deque
+from collections import OrderedDict, deque
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
@@ -55,15 +55,26 @@ class GeminiChatResponse(BaseModel):
 
 
 class _SlidingWindowLimiter:
-    def __init__(self) -> None:
+    """Thread-safe bounded LRU collection of per-principal request windows."""
+
+    def __init__(self, *, max_buckets: int = 10_000) -> None:
         self._lock = threading.Lock()
-        self._events: dict[str, deque[float]] = defaultdict(deque)
+        self._max_buckets = max(100, max_buckets)
+        self._events: OrderedDict[str, deque[float]] = OrderedDict()
 
     def allow(self, key: str, *, limit: int, window_seconds: int = 60) -> bool:
         now = time.monotonic()
         cutoff = now - window_seconds
         with self._lock:
-            bucket = self._events[key]
+            bucket = self._events.get(key)
+            if bucket is None:
+                if len(self._events) >= self._max_buckets:
+                    self._events.popitem(last=False)
+                bucket = deque()
+                self._events[key] = bucket
+            else:
+                self._events.move_to_end(key)
+
             while bucket and bucket[0] <= cutoff:
                 bucket.popleft()
             if len(bucket) >= limit:
