@@ -2,11 +2,8 @@ import {
   Activity,
   KeyRound,
   LogOut,
-  Monitor,
-  Moon,
   ShieldCheck,
   Sparkles,
-  Sun,
 } from "lucide-react";
 
 import { useBilling } from "../../hooks/useBilling";
