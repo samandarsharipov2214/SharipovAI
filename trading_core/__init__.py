@@ -26,11 +26,18 @@ from .models import (
     WalkForwardResult,
     WalkForwardWindowResult,
 )
+from .paper_broker import PaperBrokerConfig, RestartSafePaperBroker
 from .strategies import (
     BreakoutStrategy,
     BuyAndHoldStrategy,
     MeanReversionStrategy,
     TrendFollowingStrategy,
+)
+from .strategy_suite import (
+    StrategyComparison,
+    StrategySuiteConfig,
+    StrategySuiteReport,
+    evaluate_strategy_suite,
 )
 
 __all__ = [
@@ -47,17 +54,23 @@ __all__ = [
     "FundingPayment",
     "MarketEvent",
     "MeanReversionStrategy",
+    "PaperBrokerConfig",
     "PortfolioSnapshot",
     "Position",
+    "RestartSafePaperBroker",
     "Side",
     "Signal",
     "Strategy",
+    "StrategyComparison",
     "StrategyFactory",
+    "StrategySuiteConfig",
+    "StrategySuiteReport",
     "TrendFollowingStrategy",
     "WalkForwardBacktester",
     "WalkForwardConfig",
     "WalkForwardResult",
     "WalkForwardWindowResult",
     "compare_strategy_to_benchmarks",
+    "evaluate_strategy_suite",
     "run_benchmark_suite",
 ]
