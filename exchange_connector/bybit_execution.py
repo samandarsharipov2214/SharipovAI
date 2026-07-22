@@ -22,6 +22,9 @@ from .execution_contract import (
     validate_execution_request,
 )
 from .execution_idempotency import ExecutionIdempotencyRepository
+from .execution_kill_switch import PersistentExecutionKillSwitch
+
+_SUBMISSION_CAPABILITY = object()
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,11 +53,11 @@ class BybitRejectedOrder(RuntimeError):
 
 
 class BybitExecutionClient:
-    """Submit canonical spot testnet requests after every gate passes.
+    """Submit only canonical ``ApprovedExecutionRequest`` objects to Testnet.
 
-    Mainnet is compiled out. Every testnet request is durably reserved before
-    the network call. Unknown outcomes stay unresolved and require
-    reconciliation; they are never retried blindly.
+    Mainnet is compiled out. Every request is durably reserved before the
+    network call. Unknown outcomes remain unresolved, trip a persistent kill
+    switch and require explicit reconciliation before execution can resume.
     """
 
     def __init__(
@@ -63,6 +66,7 @@ class BybitExecutionClient:
         *,
         database: ProjectDatabase | None = None,
         idempotency: ExecutionIdempotencyRepository | None = None,
+        kill_switch: PersistentExecutionKillSwitch | None = None,
     ) -> None:
         self.mode = os.getenv("EXCHANGE_MODE", "sandbox").strip().lower()
         configured_url = os.getenv(
@@ -81,14 +85,19 @@ class BybitExecutionClient:
             maximum=1000.0,
         )
         self._client = client
+        self.database = database or ProjectDatabase()
+        self.database.initialize()
         self.idempotency = idempotency or ExecutionIdempotencyRepository(
-            database=database,
+            database=self.database,
             environment="testnet",
         )
+        self.kill_switch = kill_switch or PersistentExecutionKillSwitch(self.database)
 
     def status(self) -> dict[str, Any]:
         credentials = bool(self.api_key and self.api_secret)
         identity = self.idempotency.snapshot()
+        kill_switch = self.kill_switch.state()
+        unresolved_count = len(identity["unresolved"])
         return {
             "mode": self.mode,
             "credential_profile": self.credential_profile,
@@ -97,15 +106,19 @@ class BybitExecutionClient:
                 self.mode == "sandbox"
                 and credentials
                 and _truthy("TESTNET_EXECUTION_ENABLED")
+                and not kill_switch.active
+                and unresolved_count == 0
             ),
             "live_execution_enabled": False,
             "mainnet_execution_compiled": MAINNET_EXECUTION_COMPILED,
             "mainnet_hard_blocked": True,
             "canonical_execution_contract": "ApprovedExecutionRequest",
+            "direct_submission_methods": 0,
             "idempotency_repository": "ProjectDatabase/OrderIntentRegistry",
-            "unresolved_execution_count": len(identity["unresolved"]),
-            "restart_safe": bool(identity["restart_safe"]),
-            "kill_switch": _truthy("EXECUTION_KILL_SWITCH"),
+            "unresolved_execution_count": unresolved_count,
+            "restart_safe": bool(identity["restart_safe"]) and unresolved_count == 0,
+            "kill_switch": kill_switch.active,
+            "kill_switch_state": kill_switch.to_dict(),
             "max_notional_usdt": self.max_notional,
         }
 
@@ -115,10 +128,28 @@ class BybitExecutionClient:
         *,
         now_ms: int | None = None,
     ) -> ExecutionResult:
-        """Reserve, submit and bind one canonical testnet request."""
+        """Reserve, submit and bind one canonical Testnet request.
 
+        No mapping, candidate, raw symbol/side tuple or dashboard payload is
+        accepted here. A duplicate or any pre-existing unresolved reservation
+        blocks before the exchange call.
+        """
+
+        if not isinstance(request, ApprovedExecutionRequest):
+            raise TypeError("request must be ApprovedExecutionRequest")
         current_ms = int(time.time() * 1000) if now_ms is None else int(now_ms)
         validate_execution_request(request, now_ms=current_ms)
+        self.kill_switch.assert_open()
+
+        unresolved = self.idempotency.unresolved()
+        if unresolved:
+            self.kill_switch.trip(
+                reason="unresolved_execution_state_before_submission",
+                actor="BybitExecutionClient.execute",
+                source="idempotency_preflight",
+            )
+            raise RuntimeError("execution blocked until unresolved reservations are reconciled")
+
         normalized = self._preflight(
             symbol=request.symbol,
             side=request.side.value,
@@ -133,6 +164,7 @@ class BybitExecutionClient:
                 **normalized,
                 order_link_id=request.order_link_id,
                 candidate_id=request.candidate_id,
+                capability=_SUBMISSION_CAPABILITY,
             )
         except BybitRejectedOrder:
             self.idempotency.mark_rejected(
@@ -141,13 +173,23 @@ class BybitExecutionClient:
             )
             raise
         except Exception as exc:
+            self.kill_switch.trip(
+                reason=f"ambiguous_exchange_outcome:{type(exc).__name__}",
+                actor="BybitExecutionClient.execute",
+                source="network_submission",
+            )
             raise RuntimeError(
-                "execution outcome is ambiguous; request remains Submitted "
-                "and startup reconciliation is required"
+                "execution outcome is ambiguous; request remains Submitted, "
+                "persistent kill switch is active and reconciliation is required"
             ) from exc
         if not result.order_id:
+            self.kill_switch.trip(
+                reason="accepted_response_missing_order_id",
+                actor="BybitExecutionClient.execute",
+                source="exchange_response",
+            )
             raise RuntimeError(
-                "exchange accepted response without orderId; reconciliation required"
+                "exchange accepted response without orderId; kill switch active and reconciliation required"
             )
         self.idempotency.bind_accepted(
             request,
@@ -199,8 +241,7 @@ class BybitExecutionClient:
                 f"Order notional {notional:.2f} exceeds safety cap "
                 f"{self.max_notional:.2f} USDT"
             )
-        if _truthy("EXECUTION_KILL_SWITCH"):
-            raise RuntimeError("Execution kill switch is active")
+        self.kill_switch.assert_open()
         if not self.api_key or not self.api_secret:
             raise RuntimeError(f"{self.credential_profile} credentials are not configured")
         if not _truthy("TESTNET_EXECUTION_ENABLED"):
@@ -223,7 +264,10 @@ class BybitExecutionClient:
         category: str,
         order_link_id: str,
         candidate_id: str,
+        capability: object,
     ) -> ExecutionResult:
+        if capability is not _SUBMISSION_CAPABILITY:
+            raise RuntimeError("direct exchange submission is forbidden")
         del reference_price
         base_url = validate_bybit_base_url(self.base_url, environment="sandbox")
         body = {
