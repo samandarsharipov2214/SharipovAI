@@ -7,6 +7,7 @@ from .fill_divergence import (
     FillValidationRepository,
 )
 from .runtime_fill_harvester import RuntimeFillHarvester
+from .shadow_execution import ShadowExecutionReport, ShadowExecutionValidator
 
 __all__ = [
     "DivergenceThresholds",
@@ -15,4 +16,6 @@ __all__ = [
     "FillObservation",
     "FillValidationRepository",
     "RuntimeFillHarvester",
+    "ShadowExecutionReport",
+    "ShadowExecutionValidator",
 ]
