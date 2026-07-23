@@ -32,6 +32,7 @@ from .execution_idempotency import (
     DuplicateExecutionBlocked,
     ExecutionIdempotencyRepository,
 )
+from .execution_kill_switch import KillSwitchState, PersistentExecutionKillSwitch
 from .models import ExchangeConfig, ExchangeOrderPreview, ExchangeStatus
 from .private_ws_gate import PrivateStreamGateReport, PrivateStreamHealthRepository
 from .safe_client import SafeExchangeConnector
@@ -48,7 +49,9 @@ __all__ = (
     "ExecutionIdempotencyRepository",
     "FeeSchedule",
     "InstrumentRules",
+    "KillSwitchState",
     "MAINNET_EXECUTION_COMPILED",
+    "PersistentExecutionKillSwitch",
     "PrivateStreamGateReport",
     "PrivateStreamHealthRepository",
     "SafeExchangeConnector",

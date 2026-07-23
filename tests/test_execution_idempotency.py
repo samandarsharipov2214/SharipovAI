@@ -91,7 +91,10 @@ def test_duplicate_reservation_is_blocked(tmp_path) -> None:
     assert repository.snapshot()["restart_safe"] is False
 
 
-def test_successful_submission_binds_exchange_order_id(tmp_path, monkeypatch) -> None:
+def test_successful_submission_binds_exchange_order_id_and_blocks_until_private_reconciliation(
+    tmp_path,
+    monkeypatch,
+) -> None:
     _execution_env(monkeypatch)
     database = _database(tmp_path)
 
@@ -121,13 +124,14 @@ def test_successful_submission_binds_exchange_order_id(tmp_path, monkeypatch) ->
     assert record["status"] == "Submitted"
     assert record["order_id"] == "testnet-order-1"
 
-    with pytest.raises(DuplicateExecutionBlocked):
+    with pytest.raises(RuntimeError, match="unresolved reservations are reconciled"):
         client.execute(request, now_ms=10_000_001)
+    assert client.kill_switch.state().active is True
 
     http_client.close()
 
 
-def test_network_timeout_remains_unresolved_and_blocks_retry(tmp_path, monkeypatch) -> None:
+def test_network_timeout_latches_kill_switch_across_restart(tmp_path, monkeypatch) -> None:
     _execution_env(monkeypatch)
     database = _database(tmp_path)
 
@@ -146,8 +150,45 @@ def test_network_timeout_remains_unresolved_and_blocks_retry(tmp_path, monkeypat
     assert record["status"] == "Submitted"
     assert record["order_id"] == ""
     assert client.status()["restart_safe"] is False
+    assert client.kill_switch.state().active is True
 
-    with pytest.raises(DuplicateExecutionBlocked):
-        client.execute(request, now_ms=10_000_001)
+    restarted = BybitExecutionClient(
+        client=http_client,
+        database=_database(tmp_path),
+    )
+    assert restarted.kill_switch.state().active is True
+    with pytest.raises(RuntimeError, match="kill switch is active"):
+        restarted.execute(request, now_ms=10_000_001)
 
     http_client.close()
+
+
+def test_executor_rejects_non_approved_request_before_any_exchange_call(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _execution_env(monkeypatch)
+    client = BybitExecutionClient(database=_database(tmp_path))
+
+    with pytest.raises(TypeError, match="ApprovedExecutionRequest"):
+        client.execute({"symbol": "BTCUSDT"})  # type: ignore[arg-type]
+
+
+def test_private_submission_method_requires_internal_capability(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _execution_env(monkeypatch)
+    client = BybitExecutionClient(database=_database(tmp_path))
+
+    with pytest.raises(RuntimeError, match="direct exchange submission is forbidden"):
+        client._send_market_order(
+            symbol="BTCUSDT",
+            side="Buy",
+            quantity=0.0002,
+            reference_price=50_000.0,
+            category="spot",
+            order_link_id="sai_00000000000000000000000000000000",
+            candidate_id="candidate",
+            capability=object(),
+        )
