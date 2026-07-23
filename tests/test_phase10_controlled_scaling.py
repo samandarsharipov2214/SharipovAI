@@ -225,6 +225,10 @@ def test_tampered_authority_and_lock_mismatch_fail_closed(tmp_path):
 
 def test_parallel_activation_allows_only_one_global_authority(tmp_path):
     database_url = f"sqlite:///{tmp_path / 'race.db'}"
+    # Schema bootstrap is a separate concern from the authority-lock race. Prepare
+    # it once so both workers start from the same ready database and race only on
+    # the optimistic global authority lock.
+    ProjectDatabase(database_url).initialize()
     successes = []
     failures = []
     barrier = threading.Barrier(2)
