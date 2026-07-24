@@ -13,11 +13,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Probe public endpoints after recovery interval
+      - name: Probe public endpoints during recovery build
         shell: bash
         run: |
           set +e
-          echo probe_generation=2
+          echo probe_generation=3
           base=https://85-137-88-17.sslip.io
           for path in /health /api/release/status /api/security/status /login /api/run; do
             body="$(mktemp)"
