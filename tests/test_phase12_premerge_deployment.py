@@ -1,20 +1,40 @@
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
-from scripts.phase12_premerge_checklist import run_checklist
+from scripts.phase12_premerge_checklist import _REQUIRED, run_checklist
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_phase12_premerge_checklist_passes_clean_source_snapshot() -> None:
-    report = run_checklist(ROOT, allow_no_git=True)
+def _source_snapshot(tmp_path: Path) -> Path:
+    snapshot = tmp_path / "phase12-source-snapshot"
+    for relative_name in _REQUIRED:
+        source = ROOT / relative_name
+        target = snapshot / relative_name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+    return snapshot
+
+
+def test_phase12_premerge_checklist_passes_clean_source_snapshot(tmp_path: Path) -> None:
+    report = run_checklist(_source_snapshot(tmp_path), allow_no_git=True)
     assert report["status"] == "ready_for_merge"
     assert report["blockers"] == []
     assert report["mainnet_enabled"] is False
     assert report["automatic_execution_promotion"] is False
     assert len(report["evidence_sha256"]) == 64
+
+
+def test_phase12_premerge_checklist_blocks_incomplete_snapshot(tmp_path: Path) -> None:
+    snapshot = _source_snapshot(tmp_path)
+    (snapshot / "validation" / "phase12_validation.py").unlink()
+    report = run_checklist(snapshot, allow_no_git=True)
+    assert report["status"] == "blocked"
+    assert "required_files_present" in report["blockers"]
+    assert "validation/phase12_validation.py" in report["details"]["missing_files"]
 
 
 def test_phase12_deployment_scripts_have_valid_syntax_and_exact_sha_contracts() -> None:
