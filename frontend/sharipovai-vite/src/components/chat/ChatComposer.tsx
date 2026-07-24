@@ -14,6 +14,7 @@ const DRAFT_KEY = "sharipovai.chat.draft";
 
 interface ChatComposerProps {
   isLoading: boolean;
+  disabledReason?: string | null;
   onCancel: () => void;
   onSend: (message: string) => Promise<boolean>;
 }
@@ -26,14 +27,15 @@ function initialDraft(): string {
   }
 }
 
-export function ChatComposer({ isLoading, onCancel, onSend }: ChatComposerProps) {
+export function ChatComposer({ isLoading, disabledReason, onCancel, onSend }: ChatComposerProps) {
   const [draft, setDraft] = useState(initialDraft);
   const debouncedDraft = useDebouncedValue(draft, 250);
   const descriptionId = useId();
   const validationId = useId();
   const trimmed = debouncedDraft.trim();
   const tooLong = debouncedDraft.length > MAX_MESSAGE_LENGTH;
-  const canSend = trimmed.length > 0 && !tooLong && !isLoading;
+  const locked = Boolean(disabledReason);
+  const canSend = trimmed.length > 0 && !tooLong && !isLoading && !locked;
 
   useEffect(() => {
     try {
@@ -78,15 +80,15 @@ export function ChatComposer({ isLoading, onCancel, onSend }: ChatComposerProps)
           onKeyDown={handleKeyDown}
           rows={3}
           maxLength={MAX_MESSAGE_LENGTH}
-          disabled={isLoading}
+          disabled={isLoading || locked}
           aria-describedby={`${descriptionId} ${validationId}`}
           aria-invalid={tooLong}
-          placeholder="Спросите о системе, рисках, отчётах или стратегии…"
+          placeholder={locked ? "Чат временно заблокирован до активации плана." : "Спросите про BTC, ETH, уровни, тренд или рыночный риск…"}
           className="min-h-24 w-full resize-y bg-transparent px-3 py-2 text-sm leading-6 text-white outline-none placeholder:text-slate-600 disabled:cursor-not-allowed disabled:opacity-60"
         />
         <div className="flex flex-col gap-3 border-t border-white/5 px-2 pt-2 sm:flex-row sm:items-center sm:justify-between">
           <div className="text-xs text-slate-500">
-            <span id={descriptionId}>Enter — отправить, Shift+Enter — новая строка.</span>
+            <span id={descriptionId}>{disabledReason || "Enter — отправить, Shift+Enter — новая строка."}</span>
             <span
               id={validationId}
               className={tooLong ? "ml-2 text-rose-300" : "ml-2"}
