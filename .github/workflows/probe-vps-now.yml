@@ -1,0 +1,36 @@
+name: Probe VPS Now
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/probe-vps-now.yml
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Probe public endpoints
+        shell: bash
+        run: |
+          set +e
+          base=https://85-137-88-17.sslip.io
+          for path in /health /api/release/status /api/security/status /login /api/run; do
+            body="$(mktemp)"
+            code="$(curl -k -sS --max-time 10 -o "$body" -w '%{http_code}' "$base$path" 2>&1)"
+            echo "$path code=$code"
+            head -c 2000 "$body" 2>/dev/null || true
+            echo
+            rm -f "$body"
+          done
+          body="$(mktemp)"
+          code="$(curl -k -sS --max-time 10 -o "$body" -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' \
+            -H 'X-Telegram-Bot-Api-Secret-Token: deliberately-invalid' \
+            --data '{"update_id":999999999}' "$base/telegram/webhook" 2>&1)"
+          echo "/telegram/webhook invalid-secret code=$code"
+          head -c 2000 "$body" 2>/dev/null || true
+          echo
