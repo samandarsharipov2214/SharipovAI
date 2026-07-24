@@ -1,0 +1,34 @@
+name: Discover VPS Deploy Wrapper c4b368f
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/discover-vps-deploy-wrapper-c4b368f.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    runs-on: [self-hosted, linux, x64, sharipovai-ci]
+    timeout-minutes: 5
+    steps:
+      - name: Discover existing restricted deployment paths
+        shell: bash
+        run: |
+          set +e
+          echo '=== sudo policy ==='
+          sudo -n -l 2>&1
+          echo '=== candidate wrappers ==='
+          find /usr/local/sbin /usr/local/bin /opt -maxdepth 3 -type f \
+            \( -iname '*sharipov*deploy*' -o -iname '*sharipov*update*' -o -iname '*release*wrapper*' \) \
+            -printf '%M %u:%g %p\n' 2>/dev/null | sort
+          echo '=== relevant units ==='
+          systemctl list-unit-files --type=service --no-pager 2>/dev/null \
+            | grep -Ei 'sharipov|deploy|release' || true
+          echo '=== docker socket ==='
+          ls -l /var/run/docker.sock 2>&1 || true
+          getfacl -p /var/run/docker.sock 2>/dev/null || true
+          echo '=== production scripts readable ==='
+          find /opt/sharipovai-repo/deploy/vps -maxdepth 1 -type f -printf '%M %u:%g %f\n' 2>/dev/null | sort || true
