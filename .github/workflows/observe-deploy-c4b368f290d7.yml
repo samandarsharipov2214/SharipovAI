@@ -1,0 +1,105 @@
+name: Observe Production Deploy c4b368f290d7
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/observe-deploy-c4b368f290d7.yml'
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  observe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Wait for deployment and production verification
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          BRANCH: ops/deploy-c4b368f290d7
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import time
+          import urllib.parse
+          import urllib.request
+
+          repository = os.environ['REPOSITORY']
+          branch = os.environ['BRANCH']
+          token = os.environ['GH_TOKEN']
+          url = (
+              f'https://api.github.com/repos/{repository}/actions/runs?'
+              + urllib.parse.urlencode({'branch': branch, 'per_page': 100})
+          )
+          headers = {
+              'Accept': 'application/vnd.github+json',
+              'Authorization': f'Bearer {token}',
+              'X-GitHub-Api-Version': '2022-11-28',
+              'User-Agent': 'SharipovAI-deploy-observer',
+          }
+
+          def runs():
+              request = urllib.request.Request(url, headers=headers)
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  payload = json.load(response)
+              return payload.get('workflow_runs', [])
+
+          deadline = time.time() + 40 * 60
+          last = None
+          while time.time() < deadline:
+              relevant = [
+                  {
+                      'id': item.get('id'),
+                      'name': item.get('name'),
+                      'event': item.get('event'),
+                      'status': item.get('status'),
+                      'conclusion': item.get('conclusion'),
+                      'head_sha': item.get('head_sha'),
+                      'html_url': item.get('html_url'),
+                      'created_at': item.get('created_at'),
+                  }
+                  for item in runs()
+                  if item.get('name') in {
+                      'One-time Production Deploy c4b368f290d7',
+                      'Verify Production Release c4b368f290d7',
+                  }
+              ]
+              relevant.sort(key=lambda item: (item.get('created_at') or '', item.get('id') or 0))
+              state = json.dumps(relevant, ensure_ascii=False, indent=2, sort_keys=True)
+              if state != last:
+                  print(state, flush=True)
+                  last = state
+
+              deploys = [item for item in relevant if item['name'].startswith('One-time')]
+              verifications = [item for item in relevant if item['name'].startswith('Verify Production')]
+              deploy_success = any(item['conclusion'] == 'success' for item in deploys)
+              verify_success = any(item['conclusion'] == 'success' for item in verifications)
+
+              if deploy_success and verify_success:
+                  print(json.dumps({
+                      'status': 'success',
+                      'deployment_runs': deploys,
+                      'verification_runs': verifications,
+                  }, ensure_ascii=False, indent=2, sort_keys=True))
+                  raise SystemExit(0)
+
+              active = any(item['status'] in {'queued', 'pending', 'in_progress', 'waiting'} for item in relevant)
+              if relevant and not active:
+                  print(json.dumps({
+                      'status': 'failed',
+                      'deployment_runs': deploys,
+                      'verification_runs': verifications,
+                  }, ensure_ascii=False, indent=2, sort_keys=True))
+                  raise SystemExit(2)
+
+              time.sleep(20)
+
+          print(json.dumps({'status': 'timeout', 'last_observed': json.loads(last or '[]')}, indent=2))
+          raise SystemExit(3)
+          PY
