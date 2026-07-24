@@ -1,0 +1,72 @@
+name: Diagnose Telegram Delivery
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/diagnose-telegram-delivery.yml
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: [self-hosted, Linux, X64, sharipovai-ci]
+    timeout-minutes: 10
+    steps:
+      - name: Inspect public and local delivery path
+        shell: bash
+        run: |
+          set +e
+          echo '=== clock and identity ==='
+          date -Is
+          id
+
+          echo '=== service visibility ==='
+          for unit in sharipovai-deploy-watcher.service sharipovai-agent.service; do
+            printf '%s=' "$unit"
+            systemctl is-active "$unit" 2>&1 || true
+          done
+
+          echo '=== DNS ==='
+          getent hosts 85-137-88-17.sslip.io 2>&1 || true
+          getent hosts api.telegram.org 2>&1 | head -n 4 || true
+
+          probe() {
+            local name="$1" url="$2" method="${3:-GET}"
+            local headers body status
+            headers="$(mktemp)"
+            body="$(mktemp)"
+            if [[ "$method" == POST ]]; then
+              status="$(curl -k -sS --max-time 15 -o "$body" -D "$headers" -w '%{http_code}' \
+                -X POST -H 'Content-Type: application/json' \
+                -H 'X-Telegram-Bot-Api-Secret-Token: deliberately-invalid' \
+                --data '{"update_id":999999999}' "$url" 2>&1)"
+            else
+              status="$(curl -k -sS --max-time 15 -o "$body" -D "$headers" -w '%{http_code}' "$url" 2>&1)"
+            fi
+            echo "--- $name ---"
+            echo "url=$url"
+            echo "status=$status"
+            sed -n '1,12p' "$headers" || true
+            head -c 1500 "$body" || true
+            echo
+            rm -f "$headers" "$body"
+          }
+
+          echo '=== local app ==='
+          probe local_health http://127.0.0.1:8000/health
+          probe local_release http://127.0.0.1:8000/api/release/status
+          probe local_security http://127.0.0.1:8000/api/security/status
+          probe local_webhook_route http://127.0.0.1:8000/telegram/webhook POST
+
+          echo '=== public app ==='
+          probe public_health https://85-137-88-17.sslip.io/health
+          probe public_release https://85-137-88-17.sslip.io/api/release/status
+          probe public_security https://85-137-88-17.sslip.io/api/security/status
+          probe public_webhook_route https://85-137-88-17.sslip.io/telegram/webhook POST
+
+          echo '=== Telegram network reachability ==='
+          probe telegram_api https://api.telegram.org
+
+          echo '=== listeners ==='
+          ss -ltn 2>&1 | grep -E '(:80|:443|:8000)\b' || true
