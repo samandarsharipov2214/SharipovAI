@@ -1,0 +1,202 @@
+name: Verify Production Release c4b368f290d7
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/verify-production-c4b368f290d7.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-deploy-c4b368f290d7
+  cancel-in-progress: false
+
+jobs:
+  verify-production:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, linux, x64, sharipovai-ci]
+    timeout-minutes: 35
+    env:
+      RELEASE_SHA: c4b368f290d71b6b37a595748722132526705155
+      APP_DIR: /opt/sharipovai-repo
+      PUBLIC_BASE_URL: https://85-137-88-17.sslip.io
+      EVIDENCE_DIR: /tmp/sharipovai-verify-c4b368f290d7
+
+    steps:
+      - name: Checkout verification control
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Prepare verification
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$EVIDENCE_DIR"
+          mkdir -p "$EVIDENCE_DIR"
+          remote_sha="$(git ls-remote https://github.com/samandarsharipov2214/SharipovAI.git refs/heads/main | awk '{print $1}')"
+          [[ "$remote_sha" == "$RELEASE_SHA" ]]
+          if [[ "$EUID" -eq 0 ]]; then
+            printf 'SUDO_BIN=\n' >> "$GITHUB_ENV"
+          elif sudo -n true; then
+            printf 'SUDO_BIN=sudo\n' >> "$GITHUB_ENV"
+          else
+            echo 'Passwordless sudo is required for VPS verification.' >&2
+            exit 1
+          fi
+
+      - name: Verify release provenance and container state
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          run_privileged() { if [[ -n "${SUDO_BIN:-}" ]]; then sudo -n "$@"; else "$@"; fi; }
+          host_sha="$(git -C "$APP_DIR" rev-parse HEAD)"
+          runtime_sha="$(run_privileged docker exec sharipovai printenv SHARIPOVAI_BUILD_SHA)"
+          image_sha="$(run_privileged docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' sharipovai)"
+          container_state="$(run_privileged docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' sharipovai)"
+          [[ "$host_sha" == "$RELEASE_SHA" ]]
+          [[ "$runtime_sha" == "$RELEASE_SHA" ]]
+          [[ "$image_sha" == "$RELEASE_SHA" ]]
+          [[ "$container_state" == "healthy" || "$container_state" == "running" ]]
+          printf 'host_sha=%s\nruntime_sha=%s\nimage_sha=%s\ncontainer_state=%s\n' \
+            "$host_sha" "$runtime_sha" "$image_sha" "$container_state" \
+            | tee "$EVIDENCE_DIR/provenance.txt"
+
+      - name: Verify exact SHA release evidence
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          run_privileged() { if [[ -n "${SUDO_BIN:-}" ]]; then sudo -n "$@"; else "$@"; fi; }
+          run_privileged env APP_DIR="$APP_DIR" SHARIPOVAI_EXPECTED_SHA="$RELEASE_SHA" \
+            PHASE12_PREFLIGHT_OUTPUT="$EVIDENCE_DIR/phase12-preflight.json" \
+            bash "$APP_DIR/deploy/vps/phase12_release_preflight.sh" \
+            2>&1 | tee "$EVIDENCE_DIR/preflight.log"
+          run_privileged env APP_DIR="$APP_DIR" SHARIPOVAI_EXPECTED_SHA="$RELEASE_SHA" \
+            PHASE12_VERIFY_OUTPUT="$EVIDENCE_DIR/phase12-post-deploy.json" \
+            bash "$APP_DIR/deploy/vps/phase12_post_deploy_verify.sh" \
+            2>&1 | tee "$EVIDENCE_DIR/post-deploy.log"
+
+      - name: Verify database SaaS schema and safety flags
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          run_privileged() { if [[ -n "${SUDO_BIN:-}" ]]; then sudo -n "$@"; else "$@"; fi; }
+          run_privileged docker exec -i sharipovai python - <<'PY' | tee "$EVIDENCE_DIR/runtime.json"
+          import json
+          import os
+          from sqlalchemy import inspect, text
+          from dashboard.db_saas import engine
+
+          required = {
+              "EXECUTION_KILL_SWITCH": "1",
+              "EXCHANGE_MODE": "sandbox",
+              "EXCHANGE_LIVE_TRADING_ENABLED": "0",
+              "FEATURE_BYBIT_LIVE_EXECUTION": "0",
+              "TESTNET_EXECUTION_ENABLED": "0",
+              "AUTONOMOUS_TESTNET_ENABLED": "0",
+              "AUTONOMOUS_TESTNET_BRIDGE_ENABLED": "0",
+              "FEATURE_BYBIT_PRIVATE_ORDER_WS": "0",
+              "RUNTIME_FILL_HARVESTER_ENABLED": "0",
+              "SCHEDULED_CAMPAIGN_ORCHESTRATOR_ENABLED": "0",
+              "SHARIPOVAI_DISABLE_AUTH": "0",
+              "SHARIPOVAI_DATABASE_REQUIRED": "1",
+          }
+          actual = {key: os.getenv(key, "0") for key in required}
+          mismatches = {key: {"expected": value, "actual": actual[key]} for key, value in required.items() if actual[key].strip().lower() != value}
+          with engine.connect() as connection:
+              connection.execute(text("SELECT 1"))
+          tables = set(inspect(engine).get_table_names())
+          missing = sorted({"saas_users", "saas_subscriptions", "saas_chat_messages"} - tables)
+          report = {
+              "status": "ok" if not mismatches and not missing else "blocked",
+              "safety_flags": actual,
+              "mismatches": mismatches,
+              "missing_saas_tables": missing,
+              "gemini_configured": bool(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")),
+              "stripe_configured": bool(os.getenv("STRIPE_SECRET_KEY") and os.getenv("STRIPE_WEBHOOK_SECRET") and os.getenv("STRIPE_MONTHLY_PRICE_ID")),
+          }
+          print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+          if report["status"] != "ok":
+              raise SystemExit(2)
+          PY
+
+      - name: Run production runtime audits
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          run_privileged() { if [[ -n "${SUDO_BIN:-}" ]]; then sudo -n "$@"; else "$@"; fi; }
+          run_privileged docker exec sharipovai python scripts/execution_foundation_audit.py > "$EVIDENCE_DIR/execution-audit.log"
+          run_privileged docker exec sharipovai python scripts/research_foundation_audit.py --json > "$EVIDENCE_DIR/research-audit.json"
+          run_privileged docker exec sharipovai python scripts/promotion_foundation_audit.py --json > "$EVIDENCE_DIR/promotion-audit.json"
+          run_privileged docker exec sharipovai python scripts/campaign_foundation_audit.py --json > "$EVIDENCE_DIR/campaign-audit.json"
+          cat "$EVIDENCE_DIR/execution-audit.log"
+          cat "$EVIDENCE_DIR/research-audit.json"
+          cat "$EVIDENCE_DIR/promotion-audit.json"
+          cat "$EVIDENCE_DIR/campaign-audit.json"
+
+      - name: Verify HTTPS auth boundaries and market API
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          curl -fsS --max-time 10 http://127.0.0.1:8000/health > "$EVIDENCE_DIR/local-health.json"
+          curl -fsS --max-time 15 "$PUBLIC_BASE_URL/health" > "$EVIDENCE_DIR/public-health.json"
+          curl -fsS --max-time 10 http://127.0.0.1:8000/api/auth/me > "$EVIDENCE_DIR/auth-me.json"
+          python - "$EVIDENCE_DIR/auth-me.json" <<'PY'
+          import json, sys
+          payload = json.load(open(sys.argv[1], encoding="utf-8"))
+          assert payload.get("authenticated") is False, payload
+          PY
+          protected_code="$(curl -sS --max-time 10 -o "$EVIDENCE_DIR/protected.json" -w '%{http_code}' http://127.0.0.1:8000/api/production/phase11/overview)"
+          login_code="$(curl -sS --max-time 15 -o "$EVIDENCE_DIR/login.html" -w '%{http_code}' "$PUBLIC_BASE_URL/login)"
+          [[ "$protected_code" == "401" ]]
+          [[ "$login_code" == "200" ]]
+          printf 'protected_status=%s\nlogin_status=%s\n' "$protected_code" "$login_code" > "$EVIDENCE_DIR/http-status.txt"
+          market_code=000
+          for attempt in 1 2 3; do
+            market_code="$(curl -sS --max-time 20 -o "$EVIDENCE_DIR/markets.json" -w '%{http_code}' http://127.0.0.1:8000/api/markets/overview || true)"
+            [[ "$market_code" == "200" ]] && break
+            sleep 3
+          done
+          printf 'market_status=%s\n' "$market_code" >> "$EVIDENCE_DIR/http-status.txt"
+          if [[ "$market_code" == "200" ]]; then
+            python - "$EVIDENCE_DIR/markets.json" <<'PY'
+          import json, sys
+          payload = json.load(open(sys.argv[1], encoding="utf-8"))
+          assert payload.get("status") == "ok", payload
+          assert isinstance(payload.get("markets"), list), payload
+          PY
+          else
+            echo 'external CoinGecko dependency unavailable' > "$EVIDENCE_DIR/market-warning.txt"
+          fi
+
+      - name: Verify restart recovery
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          run_privileged() { if [[ -n "${SUDO_BIN:-}" ]]; then sudo -n "$@"; else "$@"; fi; }
+          run_privileged docker restart sharipovai | tee "$EVIDENCE_DIR/restart.log"
+          healthy=0
+          for attempt in $(seq 1 35); do
+            if curl -fsS --max-time 5 http://127.0.0.1:8000/health >/dev/null; then healthy=1; break; fi
+            sleep 2
+          done
+          [[ "$healthy" == "1" ]]
+          [[ "$(run_privileged docker exec sharipovai printenv SHARIPOVAI_BUILD_SHA)" == "$RELEASE_SHA" ]]
+          [[ "$(run_privileged docker exec sharipovai printenv EXECUTION_KILL_SWITCH)" == "1" ]]
+          curl -fsS --max-time 15 "$PUBLIC_BASE_URL/health" > "$EVIDENCE_DIR/public-health-after-restart.json"
+
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: verify-production-c4b368f290d7-${{ github.run_id }}
+          path: /tmp/sharipovai-verify-c4b368f290d7
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Clean temporary evidence
+        if: always()
+        shell: bash
+        run: rm -rf "$EVIDENCE_DIR"
