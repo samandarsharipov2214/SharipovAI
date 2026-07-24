@@ -9,13 +9,18 @@ on:
       - 'campaigns/phase10_scaling.py'
       - 'risk/phase10_capital_engine.py'
       - 'observability/phase10_performance_alerts.py'
+      - 'learning_engine/**'
+      - 'experiments/registry.py'
+      - 'validation/**'
       - 'dashboard/**'
       - 'deploy/**'
       - 'scripts/phase10_monthly_report.py'
       - 'scripts/phase11_first_campaign_checklist.py'
+      - 'scripts/phase12_premerge_checklist.py'
       - 'tests/test_phase9_results_and_scaling.py'
       - 'tests/test_phase10_*.py'
       - 'tests/test_phase11_*.py'
+      - 'tests/test_phase12_*.py'
       - 'tests/test_system_health_center.py'
       - 'tests/test_web2_market_chart_contract.py'
       - 'requirements*.txt'
@@ -30,13 +35,18 @@ on:
       - 'campaigns/phase10_scaling.py'
       - 'risk/phase10_capital_engine.py'
       - 'observability/phase10_performance_alerts.py'
+      - 'learning_engine/**'
+      - 'experiments/registry.py'
+      - 'validation/**'
       - 'dashboard/**'
       - 'deploy/**'
       - 'scripts/phase10_monthly_report.py'
       - 'scripts/phase11_first_campaign_checklist.py'
+      - 'scripts/phase12_premerge_checklist.py'
       - 'tests/test_phase9_results_and_scaling.py'
       - 'tests/test_phase10_*.py'
       - 'tests/test_phase11_*.py'
+      - 'tests/test_phase12_*.py'
       - 'tests/test_system_health_center.py'
       - 'tests/test_web2_market_chart_contract.py'
       - 'requirements*.txt'
@@ -61,16 +71,16 @@ jobs:
          github.event.pull_request.head.repo.full_name == github.repository)
       }}
     runs-on: [self-hosted, linux, x64, sharipovai-ci]
-    timeout-minutes: 30
+    timeout-minutes: 35
     env:
       PYTHONUNBUFFERED: '1'
       PYTHONDONTWRITEBYTECODE: '1'
-      ADMIN_USERNAME: phase11-ci-admin
-      ADMIN_PASSWORD: phase11-ci-password-${{ github.run_id }}
-      AUTH_SECRET: phase11-ci-secret-${{ github.run_id }}
+      ADMIN_USERNAME: phase12-ci-admin
+      ADMIN_PASSWORD: phase12-ci-password-${{ github.run_id }}
+      AUTH_SECRET: phase12-ci-secret-${{ github.run_id }}
       SHARIPOVAI_DISABLE_AUTH: '0'
       SHARIPOVAI_DATABASE_REQUIRED: '1'
-      DATABASE_URL: sqlite:////tmp/sharipovai-phase11-${{ github.run_id }}.db
+      DATABASE_URL: sqlite:////tmp/sharipovai-phase12-${{ github.run_id }}.db
       EXECUTION_KILL_SWITCH: '1'
       EXCHANGE_MODE: sandbox
       EXCHANGE_BASE_URL: https://api-testnet.bybit.com
@@ -84,7 +94,10 @@ jobs:
       BYBIT_ALLOW_LEGACY_EXCHANGE_CREDENTIALS: '0'
       RUNTIME_FILL_HARVESTER_ENABLED: '0'
       SCHEDULED_CAMPAIGN_ORCHESTRATOR_ENABLED: '0'
+      SELF_LEARNING_ENABLED: '0'
+      SELF_LEARNING_INTERVAL_SECONDS: '60'
       PHASE11_MAX_TESTNET_NOTIONAL_USDT: '50'
+      EVIDENCE_DIR: /tmp/phase12-hardening-${{ github.run_id }}
 
     steps:
       - name: Checkout
@@ -103,6 +116,7 @@ jobs:
 
       - name: Install and audit dependencies
         run: |
+          set -Eeuo pipefail
           python -m pip install --upgrade pip --quiet
           python -m pip install -r requirements-dev.txt --quiet
           python -m pip check
@@ -111,8 +125,24 @@ jobs:
       - name: Compile production sources
         run: python -m compileall -q .
 
-      - name: Run Phase 9 to Phase 11 crash dashboard and launch contracts
+      - name: Prepare isolated evidence directory
         run: |
+          set -Eeuo pipefail
+          rm -rf "$EVIDENCE_DIR"
+          mkdir -p "$EVIDENCE_DIR"
+
+      - name: Verify exact Phase 12 merge candidate
+        run: |
+          set -Eeuo pipefail
+          python scripts/phase12_premerge_checklist.py \
+            --root . \
+            --expected-sha "$(git rev-parse HEAD)" \
+            > "$EVIDENCE_DIR/phase12-premerge-checklist.json"
+          cat "$EVIDENCE_DIR/phase12-premerge-checklist.json"
+
+      - name: Run Phase 9 to Phase 12 crash and evidence contracts
+        run: |
+          set -Eeuo pipefail
           python -m pytest \
             tests/test_phase9_results_and_scaling.py \
             tests/test_phase10_controlled_scaling.py \
@@ -123,20 +153,27 @@ jobs:
             tests/test_phase11_security_headers.py \
             tests/test_phase11_launch_preparation.py \
             tests/test_phase11_evidence_handoff.py \
+            tests/test_phase12_self_learning_cycle.py \
+            tests/test_phase12_fill_validation.py \
+            tests/test_phase12_premerge_deployment.py \
             tests/test_system_health_center.py \
             tests/test_web2_market_chart_contract.py \
             -q --tb=short \
-            --junitxml=phase11-hardening-junit.xml
+            --junitxml="$EVIDENCE_DIR/phase12-hardening-junit.xml"
 
       - name: Run deterministic production audit
         run: |
           python - <<'PY'
           import json
+          import os
+          from pathlib import Path
           from audit.phase11_production_audit import ProductionAudit
           report = ProductionAudit('.').run()
-          with open('phase11-production-audit.json', 'w', encoding='utf-8') as handle:
-              json.dump(report, handle, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False)
-              handle.write('\n')
+          output = Path(os.environ['EVIDENCE_DIR']) / 'phase11-production-audit.json'
+          output.write_text(
+              json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False) + '\n',
+              encoding='utf-8',
+          )
           print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
           raise SystemExit(0 if report['status'] == 'ready_for_bounded_testnet_preflight' else 2)
           PY
@@ -145,17 +182,16 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: phase11-hardening-evidence-${{ github.run_id }}
-          path: |
-            phase11-hardening-junit.xml
-            phase11-production-audit.json
+          name: phase12-hardening-evidence-${{ github.run_id }}
+          path: /tmp/phase12-hardening-${{ github.run_id }}
           if-no-files-found: error
           retention-days: 14
 
-      - name: Remove isolated database state
+      - name: Remove isolated state
         if: always()
         run: |
+          rm -rf "$EVIDENCE_DIR"
           rm -f \
-            /tmp/sharipovai-phase11-${{ github.run_id }}.db \
-            /tmp/sharipovai-phase11-${{ github.run_id }}.db-wal \
-            /tmp/sharipovai-phase11-${{ github.run_id }}.db-shm
+            /tmp/sharipovai-phase12-${{ github.run_id }}.db \
+            /tmp/sharipovai-phase12-${{ github.run_id }}.db-wal \
+            /tmp/sharipovai-phase12-${{ github.run_id }}.db-shm

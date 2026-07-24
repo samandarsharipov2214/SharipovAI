@@ -196,6 +196,56 @@ GET /api/performance/phase10/overview
 
 Sensitive Phase 9–11 routes are authorized before request body parsing.
 
+## Phase 12 evidence-driven self-learning and validation
+
+Phase 12 closes the research learning loop without creating execution authority:
+
+```text
+verified Paper/Testnet outcome
+  -> immutable outcome attribution
+  -> persistent agent metrics
+  -> evidence-gated research challenger
+  -> canonical Experiment Registry
+  -> walk-forward / benchmark / data-validation checks
+  -> automatic Paper research champion
+  -> separate manual promotion decision for every execution stage
+```
+
+`OutcomeAttributionService` accepts only verified Paper or authenticated Testnet
+evidence. Synthetic, mock, demo, fixture, non-finite and conflicting evidence is
+blocked. PnL and drawdown attribution must reconcile exactly to the settled outcome.
+
+`ResearchChallengerService` creates persistent challenger experiments with commit SHA,
+manifest hash, strategy configuration and learning evidence. Automatic promotion is
+restricted to **Paper research champion**. Automatic execution promotion is forbidden.
+Testnet, scaling and every future Mainnet decision remain separate evidence-gated manual
+decisions.
+
+`Phase12FillValidationService` combines expected-versus-actual Paper validation with
+Paper-versus-Testnet shadow comparison. It measures latency, price/slippage, fees, fill
+ratio, missing fills and partial fills, stores an immutable SHA-256 report in the
+Experiment Registry and never performs auto-promotion. The canonical final report and
+operator CLI remain required for campaign promotion.
+
+The self-learning supervisor is restart-safe, bounded and observable. It scans canonical
+Paper settlements, processes each immutable outcome once and persists status in
+`ProjectDatabase`. Its failure degrades learning only; it cannot submit an order, change
+capital, alter credentials, release the kill switch or modify runtime flags.
+
+Phase 12 pre-merge and deployment contracts:
+
+```bash
+python scripts/phase12_premerge_checklist.py --expected-sha "$(git rev-parse HEAD)"
+export SHARIPOVAI_EXPECTED_SHA='<40-character-reviewed-sha>'
+sudo -E APP_DIR=/opt/sharipovai-repo bash deploy/vps/phase12_release_preflight.sh
+sudo APP_DIR=/opt/sharipovai-repo bash deploy/vps/update_from_main.sh
+sudo -E APP_DIR=/opt/sharipovai-repo bash deploy/vps/phase12_post_deploy_verify.sh
+```
+
+Rollback requires the exact reviewed current SHA, an ancestor target SHA and the explicit
+Phase 12 confirmation. The wrapper delegates to the proven Phase 11 rollback, then
+re-verifies exact SHA, container provenance, health and production-safe locks.
+
 ## Dashboard
 
 Campaign Operations, Live Monitoring, Campaign Analysis, Scaling and Production panels
@@ -255,9 +305,9 @@ python -m pytest -q --tb=short
 ```bash
 cd /opt/sharipovai-repo
 export SHARIPOVAI_EXPECTED_SHA='<40-character-reviewed-sha>'
-sudo -E APP_DIR=/opt/sharipovai-repo bash deploy/vps/phase11_release_preflight.sh
+sudo -E APP_DIR=/opt/sharipovai-repo bash deploy/vps/phase12_release_preflight.sh
 sudo APP_DIR=/opt/sharipovai-repo bash deploy/vps/update_from_main.sh
-sudo -E APP_DIR=/opt/sharipovai-repo bash deploy/vps/phase11_post_deploy_verify.sh
+sudo -E APP_DIR=/opt/sharipovai-repo bash deploy/vps/phase12_post_deploy_verify.sh
 sudo APP_DIR=/opt/sharipovai-repo bash deploy/vps/install_phase10_monthly_monitor.sh
 ```
 
