@@ -1,0 +1,41 @@
+name: Diagnose VPS Permissions c4b368f290d7
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/diagnose-vps-permissions-c4b368f290d7.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: [self-hosted, linux, x64, sharipovai-ci]
+    timeout-minutes: 5
+    steps:
+      - name: Inspect runner access without mutation
+        shell: bash
+        run: |
+          set -u
+          echo '=== identity ==='
+          id
+          echo '=== app path ==='
+          ls -ld /opt /opt/sharipovai-repo 2>&1 || true
+          test -d /opt/sharipovai-repo/.git && echo 'app_git=present' || echo 'app_git=missing'
+          test -r /opt/sharipovai-repo/.git/HEAD && echo 'app_read=yes' || echo 'app_read=no'
+          test -w /opt/sharipovai-repo && echo 'app_write=yes' || echo 'app_write=no'
+          echo '=== sudo ==='
+          if sudo -n true 2>/dev/null; then echo 'sudo_noninteractive=yes'; else echo 'sudo_noninteractive=no'; fi
+          echo '=== docker ==='
+          if docker info >/dev/null 2>&1; then
+            echo 'docker_direct=yes'
+            docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'
+          else
+            echo 'docker_direct=no'
+          fi
+          if sudo -n docker info >/dev/null 2>&1; then echo 'docker_sudo=yes'; else echo 'docker_sudo=no'; fi
+          echo '=== current release ==='
+          git -C /opt/sharipovai-repo rev-parse HEAD 2>&1 || true
+          docker inspect --format 'runtime={{range .Config.Env}}{{println .}}{{end}}' sharipovai 2>/dev/null \
+            | grep '^runtime=SHARIPOVAI_BUILD_SHA=' || true
