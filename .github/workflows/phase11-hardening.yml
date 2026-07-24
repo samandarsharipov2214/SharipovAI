@@ -97,6 +97,7 @@ jobs:
       SELF_LEARNING_ENABLED: '0'
       SELF_LEARNING_INTERVAL_SECONDS: '60'
       PHASE11_MAX_TESTNET_NOTIONAL_USDT: '50'
+      EVIDENCE_DIR: ${{ runner.temp }}/phase12-hardening-${{ github.run_id }}
 
     steps:
       - name: Checkout
@@ -124,18 +125,20 @@ jobs:
       - name: Compile production sources
         run: python -m compileall -q .
 
+      - name: Prepare isolated evidence directory
+        run: |
+          set -Eeuo pipefail
+          rm -rf "$EVIDENCE_DIR"
+          mkdir -p "$EVIDENCE_DIR"
+
       - name: Verify exact Phase 12 merge candidate
         run: |
           set -Eeuo pipefail
-          report_path="$(mktemp)"
-          trap 'rm -f "$report_path"' EXIT
           python scripts/phase12_premerge_checklist.py \
             --root . \
             --expected-sha "$(git rev-parse HEAD)" \
-            > "$report_path"
-          mv "$report_path" phase12-premerge-checklist.json
-          trap - EXIT
-          cat phase12-premerge-checklist.json
+            > "$EVIDENCE_DIR/phase12-premerge-checklist.json"
+          cat "$EVIDENCE_DIR/phase12-premerge-checklist.json"
 
       - name: Run Phase 9 to Phase 12 crash and evidence contracts
         run: |
@@ -156,17 +159,21 @@ jobs:
             tests/test_system_health_center.py \
             tests/test_web2_market_chart_contract.py \
             -q --tb=short \
-            --junitxml=phase12-hardening-junit.xml
+            --junitxml="$EVIDENCE_DIR/phase12-hardening-junit.xml"
 
       - name: Run deterministic production audit
         run: |
           python - <<'PY'
           import json
+          import os
+          from pathlib import Path
           from audit.phase11_production_audit import ProductionAudit
           report = ProductionAudit('.').run()
-          with open('phase11-production-audit.json', 'w', encoding='utf-8') as handle:
-              json.dump(report, handle, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False)
-              handle.write('\n')
+          output = Path(os.environ['EVIDENCE_DIR']) / 'phase11-production-audit.json'
+          output.write_text(
+              json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False) + '\n',
+              encoding='utf-8',
+          )
           print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
           raise SystemExit(0 if report['status'] == 'ready_for_bounded_testnet_preflight' else 2)
           PY
@@ -176,16 +183,14 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: phase12-hardening-evidence-${{ github.run_id }}
-          path: |
-            phase12-hardening-junit.xml
-            phase11-production-audit.json
-            phase12-premerge-checklist.json
+          path: ${{ runner.temp }}/phase12-hardening-${{ github.run_id }}
           if-no-files-found: error
           retention-days: 14
 
-      - name: Remove isolated database state
+      - name: Remove isolated state
         if: always()
         run: |
+          rm -rf "$EVIDENCE_DIR"
           rm -f \
             /tmp/sharipovai-phase12-${{ github.run_id }}.db \
             /tmp/sharipovai-phase12-${{ github.run_id }}.db-wal \
