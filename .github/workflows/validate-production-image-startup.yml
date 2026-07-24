@@ -1,0 +1,114 @@
+name: Validate Production Image Startup
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/validate-production-image-startup.yml
+
+permissions:
+  contents: read
+
+jobs:
+  validate-image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      IMAGE: sharipovai-startup-validation:local
+      BUILD_SHA: 93c8edbbcaa0f97e15e8d7d12d934f8b1358ddfb
+    steps:
+      - name: Checkout validation tree
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Build production image
+        run: |
+          docker build \
+            --build-arg VCS_REF="$BUILD_SHA" \
+            --build-arg BUILD_DATE="2026-07-24T00:00:00Z" \
+            -t "$IMAGE" .
+
+      - name: Validate data permissions and application startup
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          volume="sharipovai-startup-${GITHUB_RUN_ID}"
+          container="sharipovai-startup-${GITHUB_RUN_ID}"
+          cleanup() {
+            docker rm -f "$container" >/dev/null 2>&1 || true
+            docker volume rm "$volume" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker volume create "$volume" >/dev/null
+
+          docker run --rm \
+            --network none \
+            --user 0:0 \
+            --read-only \
+            --security-opt no-new-privileges:true \
+            --cap-drop ALL \
+            --cap-add CHOWN \
+            --cap-add DAC_OVERRIDE \
+            --cap-add FOWNER \
+            -v "$volume:/var/lib/sharipovai" \
+            --entrypoint /bin/sh \
+            "$IMAGE" -ec \
+            'install -d -m 0750 -o 10001 -g 10001 /var/lib/sharipovai; chown -R 10001:10001 /var/lib/sharipovai; chmod -R u+rwX,go-rwx /var/lib/sharipovai'
+
+          docker run -d --name "$container" \
+            --security-opt no-new-privileges:true \
+            --cap-drop ALL \
+            -p 127.0.0.1::8000 \
+            -v "$volume:/var/lib/sharipovai" \
+            -e ENVIRONMENT=production \
+            -e AUTH_SECRET=startup-validation-auth-secret \
+            -e ADMIN_USERNAME=validation-admin \
+            -e ADMIN_PASSWORD=startup-validation-password \
+            -e SHARIPOVAI_DATA_DIR=/var/lib/sharipovai \
+            -e DATABASE_URL=sqlite:////var/lib/sharipovai/sharipovai_saas.sqlite3 \
+            -e SHARIPOVAI_DATABASE_REQUIRED=1 \
+            -e EXCHANGE_MODE=sandbox \
+            -e EXCHANGE_BASE_URL=https://api-testnet.bybit.com \
+            -e EXCHANGE_LIVE_TRADING_ENABLED=0 \
+            -e FEATURE_BYBIT_LIVE_EXECUTION=0 \
+            -e EXECUTION_KILL_SWITCH=1 \
+            -e TESTNET_EXECUTION_ENABLED=0 \
+            -e AUTONOMOUS_TESTNET_ENABLED=0 \
+            -e AUTONOMOUS_TESTNET_BRIDGE_ENABLED=0 \
+            -e FEATURE_BYBIT_TESTNET=0 \
+            -e FEATURE_BYBIT_PRIVATE_ORDER_WS=0 \
+            -e RUNTIME_FILL_HARVESTER_ENABLED=0 \
+            -e SCHEDULED_CAMPAIGN_ORCHESTRATOR_ENABLED=0 \
+            "$IMAGE" >/dev/null
+
+          port="$(docker port "$container" 8000/tcp | sed 's/.*://')"
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:${port}/health" >/tmp/health.json; then
+              break
+            fi
+            if ! docker inspect --format '{{.State.Running}}' "$container" | grep -q true; then
+              docker logs "$container"
+              exit 1
+            fi
+            sleep 2
+          done
+          curl --fail --silent --show-error "http://127.0.0.1:${port}/health" | tee /tmp/health.json
+          curl --fail --silent --show-error "http://127.0.0.1:${port}/api/release/status" | tee /tmp/release.json
+          python - "$BUILD_SHA" /tmp/release.json <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          expected = sys.argv[1]
+          payload = json.loads(Path(sys.argv[2]).read_text(encoding='utf-8'))
+          assert payload['release_sha'] == expected, payload
+          assert payload['environment'] == 'production', payload
+          assert payload['auth_enabled'] is True, payload
+          assert payload['database_required'] is True, payload
+          assert payload['mainnet_execution_compiled'] is False, payload
+          assert payload['execution_kill_switch'] is True, payload
+          assert payload['testnet_execution_enabled'] is False, payload
+          assert payload['live_execution_enabled'] is False, payload
+          PY
+          code="$(curl -sS -o /tmp/protected.json -w '%{http_code}' "http://127.0.0.1:${port}/api/run")"
+          test "$code" = 401
+          echo PRODUCTION_IMAGE_STARTUP_OK
