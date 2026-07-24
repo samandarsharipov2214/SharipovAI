@@ -245,6 +245,9 @@ successful.
 7. Trades before activation cannot attach to a campaign.
 8. Failures are persisted and never blind-retried.
 9. Campaign Operations UI is evidence and control-plane visibility only.
+10. The operator control plane uses the canonical services and explicit confirmation tokens;
+    it cannot install credentials, bypass approval gates, clear the kill switch, enable
+    Mainnet or submit a raw exchange order.
 
 ## 14. Controlled Testnet scaling
 
