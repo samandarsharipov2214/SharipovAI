@@ -9,27 +9,92 @@ permissions:
   contents: read
 
 jobs:
-  diagnose:
-    runs-on: [self-hosted, Linux, X64, sharipovai-ci]
-    timeout-minutes: 10
+  observe-public-recovery:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    env:
+      BASE_URL: https://85-137-88-17.sslip.io
+      EXPECTED_SHA: 62246caa908281b497ad09e250506715bfa647ed
     steps:
-      - name: Inspect recovery blockers
+      - name: Wait for exact release and verify public safety contracts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for attempt in $(seq 1 90); do
+            health_code="$(curl -k -sS --max-time 8 -o /tmp/health.json -w '%{http_code}' "$BASE_URL/health" || true)"
+            release_code="$(curl -k -sS --max-time 8 -o /tmp/release.json -w '%{http_code}' "$BASE_URL/api/release/status" || true)"
+            echo "attempt=$attempt health=$health_code release=$release_code"
+            cat /tmp/health.json 2>/dev/null || true
+            echo
+            cat /tmp/release.json 2>/dev/null || true
+            echo
+            if [[ "$health_code" == 200 && "$release_code" == 200 ]]; then
+              python - "$EXPECTED_SHA" /tmp/release.json <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          expected = sys.argv[1]
+          payload = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+          required = {
+              "status": "ok",
+              "release_sha": expected,
+              "environment": "production",
+              "auth_enabled": True,
+              "database_required": True,
+              "exchange_mode": "sandbox",
+              "mainnet_execution_compiled": False,
+              "execution_kill_switch": True,
+              "testnet_execution_enabled": False,
+              "autonomous_testnet_enabled": False,
+              "autonomous_testnet_bridge_enabled": False,
+              "private_order_stream_enabled": False,
+              "runtime_fill_harvester_enabled": False,
+              "scheduled_campaign_orchestrator_enabled": False,
+              "live_execution_enabled": False,
+          }
+          mismatches = {key: (payload.get(key), value) for key, value in required.items() if payload.get(key) != value}
+          if mismatches:
+              raise SystemExit(f"release contract mismatch: {mismatches!r}")
+          PY
+              webhook_code="$(curl -k -sS --max-time 8 -o /tmp/webhook.json -w '%{http_code}' \
+                -X POST -H 'Content-Type: application/json' \
+                -H 'X-Telegram-Bot-Api-Secret-Token: deliberately-invalid' \
+                --data '{"update_id":999999999}' "$BASE_URL/telegram/webhook" || true)"
+              protected_code="$(curl -k -sS --max-time 8 -o /tmp/protected.json -w '%{http_code}' "$BASE_URL/api/run" || true)"
+              echo "webhook_invalid_secret=$webhook_code protected_api=$protected_code"
+              cat /tmp/webhook.json 2>/dev/null || true
+              echo
+              cat /tmp/protected.json 2>/dev/null || true
+              echo
+              [[ "$webhook_code" == 403 ]]
+              [[ "$protected_code" == 401 ]]
+              exit 0
+            fi
+            sleep 10
+          done
+          echo 'production did not recover to the exact release before timeout' >&2
+          exit 1
+
+  inspect-host-agent:
+    runs-on: [self-hosted, Linux, X64, sharipovai-ci]
+    timeout-minutes: 18
+    steps:
+      - name: Inspect root-agent outcome without mutation
         shell: bash
         run: |
           set +e
-          date -Is
-          echo '=== DISK ==='
-          df -hT / /opt /var/lib/docker 2>&1 || true
-          df -Pm /opt/sharipovai-repo/deploy/vps 2>&1 || true
-          df -i / /opt /var/lib/docker 2>&1 || true
-          echo '=== MEMORY ==='
-          free -h 2>&1 || true
-          echo '=== DOCKER SERVICE ==='
-          systemctl --no-pager --full status docker.service 2>&1 | tail -n 40 || true
-          systemctl show docker.service -p ActiveState -p SubState -p Result --no-pager 2>&1 || true
-          echo '=== AGENT STATUS ==='
-          cat /var/lib/sharipovai-agent/status.json 2>&1 || true
-          systemctl show sharipovai-agent.service -p ActiveState -p Result -p ExecMainStatus --no-pager 2>&1 || true
-          echo '=== HTTP ==='
-          curl -sS --max-time 5 -o /dev/null -w 'local=%{http_code}\n' http://127.0.0.1:8000/health 2>&1 || true
-          curl -k -sS --max-time 8 -o /dev/null -w 'public=%{http_code}\n' https://85-137-88-17.sslip.io/health 2>&1 || true
+          for attempt in $(seq 1 90); do
+            echo "=== attempt $attempt $(date -Is) ==="
+            cat /var/lib/sharipovai-agent/status.json 2>&1 || true
+            systemctl show sharipovai-agent.service -p ActiveState -p Result -p ExecMainStatus --no-pager 2>&1 || true
+            local_code="$(curl -sS --max-time 5 -o /tmp/local-health.json -w '%{http_code}' http://127.0.0.1:8000/health 2>/dev/null || true)"
+            echo "local_health=$local_code"
+            cat /tmp/local-health.json 2>/dev/null || true
+            echo
+            if [[ "$local_code" == 200 ]]; then
+              exit 0
+            fi
+            sleep 10
+          done
+          exit 1
