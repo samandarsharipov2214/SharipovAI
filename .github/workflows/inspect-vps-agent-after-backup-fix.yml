@@ -1,0 +1,41 @@
+name: Inspect VPS Agent After Backup Fix
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/inspect-vps-agent-after-backup-fix.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: [self-hosted, Linux, X64, sharipovai-ci]
+    timeout-minutes: 5
+    steps:
+      - name: Read maintenance and runtime state
+        shell: bash
+        run: |
+          set +e
+          date -Is
+          echo '=== agent status ==='
+          cat /var/lib/sharipovai-agent/status.json 2>&1 || true
+          echo
+          systemctl show sharipovai-agent.service \
+            -p ActiveState -p SubState -p Result -p ExecMainCode -p ExecMainStatus \
+            -p ActiveEnterTimestamp -p InactiveEnterTimestamp --no-pager 2>&1 || true
+          echo '=== timer ==='
+          systemctl show sharipovai-agent.timer \
+            -p ActiveState -p SubState -p LastTriggerUSec -p NextElapseUSecRealtime --no-pager 2>&1 || true
+          echo '=== local endpoints ==='
+          for path in /health /api/release/status /api/security/status; do
+            body="$(mktemp)"
+            code="$(curl -sS --max-time 8 -o "$body" -w '%{http_code}' "http://127.0.0.1:8000$path" 2>&1)"
+            echo "$path code=$code"
+            head -c 2000 "$body" 2>/dev/null || true
+            echo
+            rm -f "$body"
+          done
+          echo '=== services ==='
+          systemctl is-active sharipovai-deploy-watcher.service 2>&1 || true
+          systemctl is-active docker.service 2>&1 || true
