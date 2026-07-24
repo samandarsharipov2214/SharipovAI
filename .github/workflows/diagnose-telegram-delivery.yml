@@ -13,27 +13,23 @@ jobs:
     runs-on: [self-hosted, Linux, X64, sharipovai-ci]
     timeout-minutes: 10
     steps:
-      - name: Isolate recovery failure
+      - name: Inspect recovery blockers
         shell: bash
         run: |
           set +e
-          echo '=== NOW ==='
           date -Is
-          echo '=== STATUS JSON ==='
+          echo '=== DISK ==='
+          df -hT / /opt /var/lib/docker 2>&1 || true
+          df -Pm /opt/sharipovai-repo/deploy/vps 2>&1 || true
+          df -i / /opt /var/lib/docker 2>&1 || true
+          echo '=== MEMORY ==='
+          free -h 2>&1 || true
+          echo '=== DOCKER SERVICE ==='
+          systemctl --no-pager --full status docker.service 2>&1 | tail -n 40 || true
+          systemctl show docker.service -p ActiveState -p SubState -p Result --no-pager 2>&1 || true
+          echo '=== AGENT STATUS ==='
           cat /var/lib/sharipovai-agent/status.json 2>&1 || true
-          echo
-          echo '=== SERVICE RESULT ==='
-          systemctl show sharipovai-agent.service \
-            -p ActiveState -p SubState -p Result -p ExecMainCode -p ExecMainStatus \
-            -p ActiveEnterTimestamp -p InactiveEnterTimestamp --no-pager 2>&1 || true
-          echo '=== TIMER ==='
-          systemctl show sharipovai-agent.timer \
-            -p ActiveState -p SubState -p LastTriggerUSec -p NextElapseUSecRealtime --no-pager 2>&1 || true
-          echo '=== LAST AGENT LOG ==='
-          journalctl -u sharipovai-agent.service --since '20 minutes ago' \
-            --no-pager -o cat 2>&1 | tail -n 180 || true
-          echo '=== CURRENT HTTP ==='
-          printf 'local_health='; curl -sS --max-time 5 -o /tmp/local-health -w '%{http_code}' http://127.0.0.1:8000/health 2>&1; echo
-          cat /tmp/local-health 2>/dev/null || true; echo
-          printf 'public_health='; curl -k -sS --max-time 8 -o /tmp/public-health -w '%{http_code}' https://85-137-88-17.sslip.io/health 2>&1; echo
-          cat /tmp/public-health 2>/dev/null || true; echo
+          systemctl show sharipovai-agent.service -p ActiveState -p Result -p ExecMainStatus --no-pager 2>&1 || true
+          echo '=== HTTP ==='
+          curl -sS --max-time 5 -o /dev/null -w 'local=%{http_code}\n' http://127.0.0.1:8000/health 2>&1 || true
+          curl -k -sS --max-time 8 -o /dev/null -w 'public=%{http_code}\n' https://85-137-88-17.sslip.io/health 2>&1 || true
