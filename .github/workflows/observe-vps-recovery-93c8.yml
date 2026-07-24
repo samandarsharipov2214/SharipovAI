@@ -1,0 +1,73 @@
+name: Observe VPS Recovery 93c8edbbcaa0
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/observe-vps-recovery-93c8.yml
+
+permissions:
+  contents: read
+
+jobs:
+  observe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      BASE_URL: https://85-137-88-17.sslip.io
+      EXPECTED_SHA: 93c8edbbcaa0f97e15e8d7d12d934f8b1358ddfb
+    steps:
+      - name: Wait for exact safe runtime
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for attempt in $(seq 1 120); do
+            health_code="$(curl -k -sS --max-time 8 -o /tmp/health.json -w '%{http_code}' "$BASE_URL/health" || true)"
+            release_code="$(curl -k -sS --max-time 8 -o /tmp/release.json -w '%{http_code}' "$BASE_URL/api/release/status" || true)"
+            printf 'attempt=%s health=%s release=%s\n' "$attempt" "$health_code" "$release_code"
+            if [[ "$health_code" == 200 && "$release_code" == 200 ]]; then
+              python - "$EXPECTED_SHA" /tmp/release.json <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          expected = sys.argv[1]
+          payload = json.loads(Path(sys.argv[2]).read_text(encoding='utf-8'))
+          required = {
+              'status': 'ok',
+              'release_sha': expected,
+              'environment': 'production',
+              'auth_enabled': True,
+              'database_required': True,
+              'exchange_mode': 'sandbox',
+              'mainnet_execution_compiled': False,
+              'execution_kill_switch': True,
+              'testnet_execution_enabled': False,
+              'autonomous_testnet_enabled': False,
+              'autonomous_testnet_bridge_enabled': False,
+              'private_order_stream_enabled': False,
+              'runtime_fill_harvester_enabled': False,
+              'scheduled_campaign_orchestrator_enabled': False,
+              'live_execution_enabled': False,
+          }
+          mismatches = {key: {'actual': payload.get(key), 'expected': expected_value} for key, expected_value in required.items() if payload.get(key) != expected_value}
+          if mismatches:
+              raise SystemExit(json.dumps({'mismatches': mismatches, 'payload': payload}, indent=2, sort_keys=True))
+          print(json.dumps(payload, indent=2, sort_keys=True))
+          PY
+              webhook_code="$(curl -k -sS --max-time 8 -o /tmp/webhook.json -w '%{http_code}' \
+                -X POST -H 'Content-Type: application/json' \
+                -H 'X-Telegram-Bot-Api-Secret-Token: deliberately-invalid' \
+                --data '{"update_id":999999999}' "$BASE_URL/telegram/webhook" || true)"
+              protected_code="$(curl -k -sS --max-time 8 -o /tmp/protected.json -w '%{http_code}' "$BASE_URL/api/run" || true)"
+              login_code="$(curl -k -sS --max-time 8 -o /tmp/login.html -w '%{http_code}' "$BASE_URL/login" || true)"
+              printf 'webhook_invalid_secret=%s protected_api=%s login=%s\n' "$webhook_code" "$protected_code" "$login_code"
+              [[ "$webhook_code" == 403 ]]
+              [[ "$protected_code" == 401 ]]
+              [[ "$login_code" == 200 ]]
+              grep -q 'SharipovAI' /tmp/login.html
+              echo VPS_RECOVERY_VERIFIED
+              exit 0
+            fi
+            sleep 10
+          done
+          echo 'VPS did not recover to exact safe runtime before timeout' >&2
+          exit 1
