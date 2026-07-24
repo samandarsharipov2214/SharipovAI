@@ -9,6 +9,7 @@ from storage import ProjectDatabase
 
 from exchange_connector.bybit_order_state import BybitOrderStateStore
 from exchange_connector.execution_idempotency import ExecutionIdempotencyRepository
+from exchange_connector.execution_kill_switch import PersistentExecutionKillSwitch
 from exchange_connector.private_ws_gate import PrivateStreamHealthRepository
 
 from .execution_journal import ExecutionJournal
@@ -53,6 +54,7 @@ class StartupExecutionReconciler:
         private_orders: BybitOrderStateStore | None = None,
         journal: ExecutionJournal | None = None,
         private_stream_gate: PrivateStreamHealthRepository | None = None,
+        kill_switch: PersistentExecutionKillSwitch | None = None,
         require_private_stream: bool | None = None,
         environment: str = "testnet",
     ) -> None:
@@ -72,6 +74,7 @@ class StartupExecutionReconciler:
             database=self.database,
             environment=environment,
         )
+        self.kill_switch = kill_switch or PersistentExecutionKillSwitch(self.database)
         self.require_private_stream = (
             _testnet_private_stream_required()
             if require_private_stream is None
@@ -192,7 +195,7 @@ class StartupExecutionReconciler:
         }
         unresolved = sorted(set(unresolved) | final_unresolved)
         restart_safe = not errors and not unresolved
-        return StartupReconciliationReport(
+        report = StartupReconciliationReport(
             status="ok" if restart_safe else "blocked",
             restart_safe=restart_safe,
             environment=self.environment,
@@ -206,6 +209,15 @@ class StartupExecutionReconciler:
             private_stream_ready=stream_report.ready,
             private_stream_status=stream_report.to_dict(),
         )
+        if not report.restart_safe:
+            switch = self.kill_switch.state()
+            if not switch.active or switch.source == "environment":
+                self.kill_switch.trip(
+                    reason="startup_reconciliation_failed",
+                    actor="StartupExecutionReconciler",
+                    source="startup_reconciliation",
+                )
+        return report
 
     def assert_restart_safe(self) -> StartupReconciliationReport:
         report = self.reconcile()

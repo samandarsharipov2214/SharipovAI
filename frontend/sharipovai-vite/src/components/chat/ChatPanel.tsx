@@ -4,7 +4,11 @@ import { useChat } from "../../hooks/useChat";
 import { ChatComposer } from "./ChatComposer";
 import { MessageList } from "./MessageList";
 
-export function ChatPanel() {
+interface ChatPanelProps {
+  disabledReason?: string | null;
+}
+
+export function ChatPanel({ disabledReason }: ChatPanelProps) {
   const {
     messages,
     error,
@@ -35,10 +39,10 @@ export function ChatPanel() {
             Server-side Gemini proxy
           </div>
           <h2 id="chat-title" className="mt-2 text-xl font-semibold text-white">
-            General Controller Chat
+            Crypto Signals Chat
           </h2>
           <p className="mt-1 text-sm text-slate-400">
-            Ответы являются аналитической поддержкой, а не разрешением на сделку.
+            Ответы являются аналитической поддержкой и исследованием рынка, а не исполнением сделок.
           </p>
         </div>
         <button
@@ -51,6 +55,12 @@ export function ChatPanel() {
           Очистить
         </button>
       </header>
+
+      {disabledReason && (
+        <div className="m-4 rounded-2xl border border-amber-300/30 bg-amber-300/10 p-4 text-sm text-amber-100" role="status">
+          {disabledReason}
+        </div>
+      )}
 
       {error && (
         <div
@@ -78,7 +88,12 @@ export function ChatPanel() {
       )}
 
       <MessageList messages={messages} />
-      <ChatComposer isLoading={isLoading} onCancel={cancel} onSend={sendMessage} />
+      <ChatComposer
+        isLoading={isLoading}
+        disabledReason={disabledReason}
+        onCancel={cancel}
+        onSend={sendMessage}
+      />
     </section>
   );
 }

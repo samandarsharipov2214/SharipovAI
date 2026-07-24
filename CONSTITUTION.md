@@ -1,26 +1,26 @@
 # SharipovAI Constitution
 
-Version: `2026.07-phase11-production-launch-v16`  
+Version: `2026.07-phase13-trading-execution-v17`  
 Status: **Binding development and runtime policy**
 
-This document defines non-negotiable rules for research, execution, risk, campaigns,
-scaling, evidence, CI, dashboards, security and deployment. A conflicting feature is
-invalid even when profitable or operationally convenient.
+This document defines non-negotiable rules for research, Paper, Testnet, controlled
+Mainnet, execution, campaigns, evidence, security, CI, deployment and scaling. A
+conflicting feature is invalid even when profitable or operationally convenient.
 
 ## 1. Capital protection and compile lock
 
 1. Capital preservation has priority over activity, speed and profit.
-2. Mainnet execution is compiled out while `MAINNET_EXECUTION_COMPILED=False`.
+2. Mainnet execution is unavailable while `MAINNET_EXECUTION_COMPILED=False`.
 3. Environment variables, dashboards, Telegram, LLM output, stored state, experiments,
-   reports, schedules, scaling authorities and manual decisions cannot override it.
+   reports, schedules, scaling authorities and manual decisions cannot override the
+   compile lock.
 4. Automated keys must not have withdrawal or transfer permission.
-5. Future Mainnet requires a separate audited build, limited subaccount, measured
-   Testnet evidence, legal review and expiring owner approval.
-6. Martingale, automatic averaging down, leverage increase and all-in allocation are forbidden.
-7. Promotion, campaign and scaling records are evidence authority only, never direct
+5. Martingale, automatic averaging down, uncontrolled leverage increase and all-in
+   allocation are forbidden.
+6. Promotion, campaign and scaling records are evidence authority only, never direct
    exchange authority.
 
-## 2. Promotion stages and promotion gate
+## 2. Promotion stages
 
 ```text
 READ_ONLY -> PAPER -> TESTNET -> CONTROLLED_MAINNET -> SCALE
@@ -28,17 +28,17 @@ READ_ONLY -> PAPER -> TESTNET -> CONTROLLED_MAINNET -> SCALE
 
 Skipping a stage is forbidden.
 
-- `READ_ONLY`: verified reads without exchange writes.
-- `PAPER`: virtual capital and fills over verified market evidence.
-- `TESTNET`: bounded writes through `ApprovedExecutionRequest`, durable idempotency,
-  authenticated private evidence and reconciliation.
-- `CONTROLLED_MAINNET`: unavailable while Mainnet execution is compiled out.
-- `SCALE`: never automatic and requires measured evidence plus owner approval.
+- `READ_ONLY`: verified market/account reads without exchange writes.
+- `PAPER`: virtual capital and realistic fills over verified market evidence.
+- `TESTNET`: bounded exchange writes through `ApprovedExecutionRequest`, durable
+  idempotency, authenticated private evidence and reconciliation.
+- `CONTROLLED_MAINNET`: unavailable in the current build.
+- `SCALE`: never automatic and requires measured evidence plus expiring owner approval.
 
-Promotion is blocked by failed/skipped CI, missing out-of-sample evidence, stale private
-streams, fill divergence, data-quality failure, zero-liquidity evidence, orphan data,
-duplicate identities, unresolved orders, reconciliation failure or breached loss and
-drawdown limits. Failed automated gates cannot be overridden.
+Promotion is blocked by failed, cancelled, queued or skipped CI; missing out-of-sample
+evidence; stale private streams; fill divergence; data-quality failure; orphan evidence;
+duplicate identity; unresolved order; reconciliation failure; kill-switch state; or
+breached loss, drawdown, exposure and correlation limits.
 
 ## 3. Canonical decision and execution path
 
@@ -50,10 +50,10 @@ Market Intelligence
   -> Decision Quality
   -> Security Guard
   -> TradingCandidate validation
-  -> Paper execution
+  -> Paper execution and benchmark evidence
   -> Campaign authorization where required
   -> Testnet shadow plan
-  -> Actual fee/instrument validation
+  -> Actual fee and instrument validation
   -> ApprovedExecutionRequest
   -> Durable idempotency reservation
   -> Bybit Testnet executor
@@ -61,38 +61,63 @@ Market Intelligence
   -> Private execution topic
   -> Runtime Fill Harvester
   -> Reconciliation
+  -> Fill divergence report
   -> Final report
   -> Manual decision
 ```
 
-No dashboard, Telegram handler, Learning Engine, agent, strategy, scheduler, operator CLI
-or LLM may call an exchange order endpoint directly. The only write entry is:
+No dashboard, Telegram handler, Learning Engine, strategy, scheduler, operator CLI,
+agent or LLM may call an exchange order endpoint directly. The only exchange-write entry
+is:
 
 ```python
 BybitExecutionClient.execute(approved_request)
 ```
 
-## 4. Idempotency and unknown outcomes
+The executor accepts an actual `ApprovedExecutionRequest` object only. Raw symbol/side/
+quantity arguments, dictionaries, dashboard payloads and direct calls to the private
+submission method are forbidden. The internal submission capability is not an execution
+permission that can be serialized or exposed.
 
-1. Every request has deterministic `sai_...` `orderLinkId` from immutable intent.
+## 4. Persistent kill switch
+
+1. `EXECUTION_KILL_SWITCH=1` is the outer hard lock.
+2. A durable `PersistentExecutionKillSwitch` is stored in `ProjectDatabase` and survives
+   process, container and host restarts.
+3. An ambiguous network outcome, accepted response without `orderId`, unresolved intent
+   before submission or failed startup reconciliation must latch the persistent switch.
+4. Restart, deployment, a new worker, a dashboard action or a successful strategy cannot
+   clear the latch.
+5. Clearing requires all of the following:
+   - environment kill switch explicitly off;
+   - restart-safe reconciliation;
+   - zero unresolved execution intents;
+   - explicit confirmation `I_ACKNOWLEDGE_RECONCILIATION_IS_CLEAN`;
+   - authenticated operator identity and persisted audit evidence.
+6. A failure to persist the switch blocks execution.
+
+## 5. Idempotency and unknown outcomes
+
+1. Every request has deterministic `sai_...` `orderLinkId` derived from immutable intent.
 2. Intent is reserved in `ProjectDatabase` before the network call.
 3. The same intent cannot be submitted twice.
 4. A timeout after reservation is ambiguous, not a retry signal.
-5. Ambiguous requests remain unresolved until authenticated evidence or explicit
-   reconciliation resolves them.
+5. Ambiguous requests remain `Submitted`/unresolved until authenticated private evidence
+   or explicit reconciliation resolves them.
 6. Startup blocks on missing journal evidence, orphan order/fill, identity mismatch,
-   quantity mismatch or unresolved intent.
-7. Retry requires a new explicit attempt identity.
+   quantity mismatch, stale stream or unresolved intent.
+7. Retry requires a new explicit attempt identity after the previous attempt is terminal
+   and reconciled.
+8. Any unresolved reservation blocks every later exchange write, not only the same symbol.
 
-## 5. Private order and execution evidence
+## 6. Private order and execution evidence
 
 The read-only private WebSocket must subscribe to both `order` and `execution`.
-Private order and execution evidence is canonical:
 
 - `execId` is write-once;
 - exact replay is deduplicated;
 - conflicting `execId` reuse blocks reconciliation;
-- quantity, price, value, time, maker/taker state and actual fees are persisted;
+- quantity, price, value, timestamps, maker/taker role and actual fees are persisted;
 - partial fills aggregate by `orderLinkId`;
 - cumulative order quantity equals summed execution quantity;
 - execution without private order is orphan evidence;
@@ -101,14 +126,12 @@ Private order and execution evidence is canonical:
 
 A fee that cannot be normalized with verified evidence blocks approval.
 
-## 6. Hard risk and correlation-aware sizing
+## 7. Hard risk and sizing
 
 Hard limits override confidence, consensus, expected profit and manual preference.
 Mandatory blocks include stale data, kill switch, invalid instrument, loss/drawdown,
 exposure/correlation limits, liquidity floor, missing evidence, non-finite values,
-expired requests, duplicates, unresolved identities and Mainnet.
-
-Default research/Paper policy:
+expired request, duplicate, unresolved identity and Mainnet.
 
 | Rule | Default |
 | --- | ---: |
@@ -120,258 +143,216 @@ Default research/Paper policy:
 | Maximum daily loss | 2% |
 | Leverage | 1× |
 
-Soft risk may only reduce size: `LOW=1.0`, `MEDIUM=0.6`, `HIGH=0.25`, `CRITICAL=0.0`.
+Missing correlation evidence is not zero correlation. Invalid or non-finite input returns
+zero authorized notional. Final notional is the smallest risk, volatility, position,
+cluster, campaign/scaling authority and absolute environment capacity.
 
-Correlation rules:
-
-1. Missing correlation evidence is not zero correlation; it blocks sizing.
-2. Correlations must be finite and within `[-1, 1]`.
-3. Duplicate positions aggregate by symbol.
-4. Same-symbol exposure reduces remaining position capacity.
-5. Correlated exposure reduces remaining cluster capacity.
-6. Final notional is the smallest risk, volatility, position, cluster, authority and
-   absolute Testnet capacity.
-7. Invalid or non-finite input returns zero authorized notional.
-
-## 7. Paper realism and historical-data integrity
+## 8. Restart-safe Paper trading
 
 Only capital and fills are virtual. Quotes, timestamps, spread, maker/taker fees,
-slippage, impact, funding, risk, drawdown and evidence are production-style.
-Synthetic prices, fabricated trades and fake catch-up fills are forbidden.
+slippage, nonlinear market impact, funding, risk, drawdown and evidence are
+production-style.
 
-Backtests:
+1. Paper account state is persisted in `ProjectDatabase` with optimistic versioning.
+2. A stable `fill_id` is an idempotency key; replay returns the stored fill and cannot
+   change cash or position twice.
+3. Cash, positions, average entry, fees, slippage, spread cost, funding and realized PnL
+   survive restart.
+4. Funding accrues using verified rate, elapsed time and configured interval.
+5. Buy cannot exceed available virtual cash. Sell cannot exceed the open position.
+6. Non-finite, corrupted or incompatible state blocks Paper execution.
+7. Fill and funding history is bounded without changing account totals.
+8. Synthetic prices, fabricated trades and fake catch-up fills are forbidden.
 
-1. process immutable events in `(timestamp, symbol)` order;
+## 9. Strategy and backtest rules
+
+Mandatory simple strategies in `trading_core` are:
+
+- Buy-and-Hold benchmark;
+- Trend Following;
+- Breakout;
+- Mean Reversion.
+
+Backtests and strategy comparisons:
+
+1. process immutable events in strict `(timestamp, symbol)` order;
 2. forbid lookahead, leakage, duplicate bars and random time-series splits;
-3. include spread, fees, slippage, impact and funding;
-4. share applicable models and risk rules with Paper/Testnet;
+3. include bid/ask spread, fees, slippage, impact and funding;
+4. use the same applicable risk and cost models as Paper/Testnet;
 5. record configuration, historical manifest identity and commit SHA;
 6. require versioned datasets and visible missing intervals;
-7. compare buy-and-hold, trend, breakout and mean reversion;
+7. compare every candidate with Buy-and-Hold and the other mandatory benchmarks;
 8. require sequential walk-forward out-of-sample evidence;
-9. remain evidence, never permission to trade.
+9. report return, net PnL, drawdown, fees, slippage, funding, Sharpe, Sortino,
+   profit factor, trade count and exposure time;
+10. never promote automatically.
 
-## 8. Experiment registry and manual approval rules
+A strategy that does not beat Buy-and-Hold after costs, has non-positive net PnL,
+insufficient trades or exceeds drawdown gates is not eligible even for Paper review.
+A ranking is evidence for review, not execution authority.
+
+## 10. Experiment registry and manual approval
 
 Every candidate requires a persistent experiment registry record with immutable ID,
 source commit, validated manifest SHA-256, strategy/backtest configuration, walk-forward
 results, benchmarks, data validation, Paper summary, fill divergence, automated report
 and explicit manual approval or rejection.
 
-The registry is append-only with optimistic versions. Automation may fail closed but may
-never change stage, champion, execution flags or deployment.
+The experiment registry is append-only with optimistic versions. Automation may fail
+closed but may never change stage, champion, execution flags, credentials or deployment.
+Failed automated gates cannot be overridden.
 
-Manual approval rules:
+## 11. Paper/Testnet Shadow Testing
 
-1. every target requires a current automated report;
-2. tokens bind experiment/stage or campaign/report/action;
-3. actor and non-empty reason are mandatory;
-4. failed automated gates cannot be overridden;
-5. approval/rejection is immutable evidence only;
-6. approval cannot change flags, credentials, capital, deployment or Mainnet.
+Paper and Testnet share source candidate identity but retain separate observations.
+`ShadowExecutionValidator` combines:
 
-## 9. Initial Testnet shadow policy
+- at least 20 matched Paper/Testnet fills;
+- zero unmatched Paper fills;
+- zero unmatched Testnet fills;
+- bounded p95 latency divergence;
+- bounded p95 slippage divergence;
+- bounded fee divergence;
+- bounded partial-fill rate and fill-ratio delta;
+- zero unresolved execution intents;
+- restart-safe idempotency state;
+- inactive persistent kill switch.
 
-Paper and Testnet share a source candidate but retain separate observations.
+The report is immutable SHA-256 evidence. It may return `shadow_eligible=true` only.
+`controlled_live_eligible` must remain `false` in this phase. Shadow evidence cannot set
+runtime flags, credentials, notional, deployment or Mainnet availability.
+
+## 12. Initial bounded Testnet campaign
 
 - Initial accepted Testnet notional is **10–25 USDT** per order.
-- Dynamic filters, private streams and restart reconciliation are mandatory.
+- Dynamic instrument filters, private streams and restart reconciliation are mandatory.
 - Historical Paper trades cannot be replayed into a new campaign.
 - Mainnet execution is compiled out.
 
-A completed campaign requires:
+A completed campaign requires 20+ actual matched private fills, actual fees, fresh
+authenticated streams, restart-safe reconciliation and zero orphan, duplicate,
+conflicting, unmatched or unresolved evidence. A sample below 20 remains running, never
+successful.
 
-| Gate | Requirement |
-| --- | ---: |
-| Matched Paper/Testnet fills | 20+ actual matched fills |
-| Unmatched Paper fills | 0 |
-| Unmatched Testnet fills | 0 |
-| Orphan evidence | zero orphan |
-| Duplicate/conflicting identities | 0 |
-| Unresolved intents | 0 |
-| Actual private execution fees | Present |
-| Private streams | Fresh and authenticated |
-| Reconciliation | Restart-safe |
-
-A sample below 20 remains running, never successful. A campaign row, screenshot, copied
-JSON or Paper-only fill is not private execution proof.
-
-## 10. Scheduled campaigns and single authorization
+## 13. Campaign Operations and scheduling
 
 1. Scheduler uses only experiments manually approved for `testnet`.
 2. State is persisted in `ProjectDatabase`.
 3. Worker is disabled by default.
 4. At most one global non-terminal campaign authorization exists.
-5. A schedule creates bounded authorization, not raw-order authority.
-6. Authorization binds campaign ID, experiment ID and scope.
-7. Trades before activation cannot attach to the campaign.
+5. Authorization binds campaign ID, experiment ID and scope.
+6. A schedule is not raw-order authority.
+7. Trades before activation cannot attach to a campaign.
 8. Failures are persisted and never blind-retried.
-9. Scheduler cannot change runtime flags or Mainnet availability.
+9. Campaign Operations UI is evidence and control-plane visibility only.
+10. The operator control plane uses the canonical services and explicit confirmation tokens;
+    it cannot install credentials, bypass approval gates, clear the kill switch, enable
+    Mainnet or submit a raw exchange order.
 
-## 11. Immutable Phase 9 reports
+## 14. Controlled Testnet scaling
 
-1. Campaign results use evidence-derived `report_id` and append-only storage.
-2. A separate index may point to the latest report but cannot replace history.
-3. Report SHA covers campaign/analysis identity, metrics and trades.
-4. Scaling rejects corrupted or non-finite report evidence.
-5. Multiple reports from one campaign count as one campaign.
+Scaling requires at least two distinct clean campaigns, an eligible SHA-256 protected
+plan, no failed gate, increase no greater than `1.5x`, an absolute Testnet ceiling no
+greater than `50 USDT`, exact confirmation, one persistent global lock, finite expiry,
+canonical execution path, no kill-switch override and Mainnet false.
 
-## 12. Controlled scaling authority
+Expired, revoked, tampered, non-finite or lock-mismatched authority fails closed. Scaling
+is never automatic.
 
-A Phase 10 authority requires:
+## 15. Controlled Mainnet transition
 
-1. eligible SHA-256 protected Phase 9 plan with no failed gate;
-2. at least two distinct clean campaigns;
-3. finite current/proposed notionals;
-4. increase no greater than `1.5x`;
-5. absolute Testnet ceiling at most `50 USDT`;
-6. exact confirmation `I_APPROVE_CONTROLLED_TESTNET_NOTIONAL_SCALING`;
-7. canonical authority hash bound to the plan hash;
-8. one persistent global optimistic lock;
-9. scope and finite expiration;
-10. Testnet environment, canonical execution path, no kill-switch override and Mainnet false.
+Controlled Mainnet requires a separate pull request and separate audited build where the
+compile lock is deliberately changed. Testnet success alone is insufficient.
 
-Expired, revoked, tampered, non-finite or lock-mismatched authority fails closed.
-Partial persistence/audit failure changes authority and lock to `aborted`. Scaling is
-never automatic.
+Before any real-capital order, all gates below are mandatory:
 
-## 13. Performance evidence
+1. complete green CI on the exact release SHA;
+2. independent security review of every exchange-write path;
+3. proof that only `ApprovedExecutionRequest` reaches the exchange adapter;
+4. at least three distinct clean Testnet campaigns and at least 100 matched fills;
+5. zero unresolved, orphan, duplicate or conflicting identities across all campaigns;
+6. p95 Paper/Testnet latency, slippage, fee and fill-ratio divergence within approved
+   thresholds;
+7. restart, network partition, database failure and stale-stream crash tests green;
+8. persistent kill-switch trip and clear drills green;
+9. limited isolated Mainnet subaccount with withdrawal and transfer disabled;
+10. no Mainnet credentials in CI, source, logs or Testnet environment;
+11. hard initial Mainnet notional and daily loss limits below owner-approved values;
+12. legal/regulatory review for the operator jurisdiction;
+13. expiring owner authorization bound to SHA, account, symbol scope and maximum notional;
+14. manual first-order confirmation and continuous private reconciliation;
+15. tested exact-SHA rollback and emergency stop.
 
-1. Phase 9 reports create immutable Phase 10 snapshots.
-2. Snapshot SHA covers stable timestamp and metrics.
-3. Exact replay is idempotent; conflicting identity reuse is forbidden.
-4. Monthly reports verify every snapshot before aggregation.
-5. Monthly reports use evidence-derived IDs and retain history.
-6. Net PnL, fees, matched fills and maximum drawdown are mandatory.
-7. Drawdown breach creates a critical alert and failed result.
-8. No-fill month remains visible and cannot be called successful.
+The first Controlled Mainnet build must be manual-only, one order at a time, no scheduler,
+no autonomous scaling and no credential reuse from Testnet. Any failed gate re-engages the
+persistent kill switch and ends the window.
 
-## 14. First real bounded Testnet campaign
+## 16. Final report and decision
 
-A real campaign requires complete current-head CI, exact deployed SHA, clean post-deploy
-audit, isolated Testnet credentials, no Mainnet credentials, private `order` and
-`execution` health, restart-safe reconciliation, approved experiment, zero active
-campaigns, zero scaling authorities and an explicit finite operator window.
-
-Pre-deploy audit is not campaign permission. After bounded Testnet runtime deployment,
-`scripts/phase11_first_campaign_checklist.py` must return:
-
-```text
-ready = true
-failed_checks = []
-campaign_started = false
-mainnet_enabled = false
-```
-
-The checklist is read-only. Actual start remains a separate operator action. Completion
-requires 20+ actual matched private fills, actual fees and zero orphan, duplicate,
-unmatched, conflicting or unresolved evidence.
-
-## 15. Operator control plane
-
-`scripts/testnet_campaignctl.py` is the operator control plane over canonical services.
-
-- `snapshot` and `plan` are read-only.
-- `start`, `cycle`, `report` and `decision` require distinct confirmations.
-- It cannot set environment variables, install credentials, disable the kill switch,
-  submit raw orders, deploy code or enable Mainnet.
-- Report generation is idempotent for unchanged evidence.
-- Campaign decisions bind campaign ID, report ID and action.
-
-## 16. Final report and manual decision
-
-The final report combines experiment identity, campaign metrics, fill divergence,
-private stream health, startup/execution reconciliation, actual fees and zero
-identity-failure gates. It stores evidence SHA-256 and returns only
+The final report combines experiment identity, campaign metrics, benchmark comparison,
+fill divergence, private stream health, startup/execution reconciliation, actual fees and
+zero identity-failure gates. It stores evidence SHA-256 and returns only
 `eligible_for_manual_decision` or `blocked`.
 
-Automatic report generation never removes the separate manual decision. A blocked
-report cannot be approved.
+Automatic report generation never removes the separate manual decision. A blocked report
+cannot be approved.
 
-## 17. Dashboard and API security
+## 17. Dashboard, SaaS and API security
 
-1. Sensitive Phase 9–11 routes require an active administrator.
-2. Authorization occurs before request body parsing.
+1. Sensitive execution routes require an active administrator.
+2. Authorization occurs before request-body parsing.
 3. Models reject extra fields, invalid symbols and non-finite floats.
-4. Dashboard uses safe DOM APIs, not `innerHTML`, `insertAdjacentHTML` or `eval`.
-5. Live requests require timeout, cancellation, visibility awareness and backoff.
-6. Missing/stale data is unavailable or blocked, never invented.
-7. Dark/light/system themes, mobile layout, focus and reduced motion are mandatory.
-8. Responses require MIME-sniff, clickjacking, referrer and permissions protection;
-   HSTS is emitted only on HTTPS.
-9. Dashboard cannot change the Mainnet compile lock or start a raw order.
+4. Browser chat and SaaS APIs are same-origin and use protected cookies.
+5. Gemini, exchange and billing secrets never reach the browser.
+6. Dashboard uses safe DOM APIs, not `innerHTML`, `insertAdjacentHTML` or `eval`.
+7. Missing/stale data is unavailable or blocked, never invented.
+8. Dashboard, billing and LLM features cannot create an exchange order or clear a kill
+   switch.
 
-## 18. Production audit, deployment and rollback
-
-Production readiness requires:
-
-- canonical checkout `/opt/sharipovai-repo`;
-- immutable approved full SHA and clean worktree;
-- dependency audit, compilation, full pytest and dedicated crash suite;
-- compile/runtime Mainnet lock and engaged production-safe kill switch;
-- auth enabled, database required and sandbox mode;
-- canonical SQLite/PostgreSQL health;
-- tracked secret-file hygiene;
-- atomic post-deploy evidence with deterministic SHA-256;
-- persistent monthly monitoring;
-- verified first-campaign launch checklist;
-- exact-SHA rollback to a reviewed ancestor.
-
-Rollback requires `I_APPROVE_PHASE11_EXACT_SHA_ROLLBACK`, deployment lock, current-release
-backup, target preflight, financial-lock verification, health/smoke checks and automatic
-restoration of the original SHA if the target fails.
-
-The deterministic audit hash excludes timestamps and host metadata. Identical audited
-state must produce identical SHA-256 evidence.
-
-## 19. CI cleanroom and crash rules
-
-Merge requires dependency install, `pip check`, `pip-audit`, compilation, hard Mainnet
-lock, execution/idempotency/reconciliation tests, private evidence tests, campaign tests,
-research audits, complete pytest, Phase 9–11 hardening, retained artifacts and rollback.
-
-CI cleanroom runs before imports and:
-
-1. verifies kill switch and disabled execution flags;
-2. rejects production exchange mode/base URL;
-3. deletes only explicit SQLite/WAL/journal/runtime paths;
-4. permits deletion only in workspace or `/tmp`;
-5. refuses broad discovery and unsafe roots;
-6. retains JSON evidence;
-7. fails collection on violation.
-
-Failures are classified as `regression`, `stale_test` or `environment_contamination`.
-Classification cannot convert a failed, missing, cancelled, queued or skipped workflow
-to green.
-
-Mandatory crash scenarios include restart, timeout, database failure, malformed payload,
-duplicate identity, non-finite data, stale streams, expired authority, corrupted evidence,
-concurrent activation, partial event persistence, wrong deploy root, failed rollback and
-SHA mismatch.
-
-## 20. Database, evidence and secrets
+## 18. Database, evidence and secrets
 
 `ProjectDatabase` is the canonical source for experiments, reports, schedules, campaigns,
-decisions, intents, private state, reconciliation, validation, scaling, performance,
-audit and project memory.
+decisions, intents, private state, reconciliation, validation, kill-switch state, Paper
+accounts, scaling, performance, audit and project memory.
 
 Secrets, keys, seed phrases, credentials and tokens are forbidden in Git, logs, metrics,
 experiments, reports, test artifacts and documentation examples.
+
+## 19. Production audit, deployment and rollback
+
+Production readiness requires canonical checkout, immutable approved full SHA, clean
+worktree, dependency audit, compilation, complete pytest, dedicated crash suite, Mainnet
+compile lock, engaged production-safe kill switch, auth enabled, database required,
+sandbox mode, database health, secret hygiene, atomic post-deploy evidence, persistent
+monitoring and exact-SHA rollback to a reviewed ancestor.
+
+Rollback cannot clear execution state or convert unresolved evidence to terminal state.
+
+## 20. CI cleanroom and crash rules
+
+Merge requires dependency install, `pip check`, `pip-audit`, compilation, execution
+contract tests, kill-switch tests, idempotency/reconciliation tests, Paper restart tests,
+strategy/benchmark tests, private evidence tests, Shadow divergence tests, campaign tests,
+research audits and complete pytest.
+
+Mandatory crash scenarios include restart, ambiguous timeout, database failure, duplicate
+identity, non-finite data, stale streams, corrupted state, concurrent updates, missing
+private evidence, partial persistence, wrong deploy root, failed rollback and SHA mismatch.
+A failed, missing, cancelled, queued or skipped workflow is not green.
 
 ## 21. Profit and user claims
 
 SharipovAI reports measured results after all modeled and available actual costs. It must
 not promise guaranteed income, fabricate performance or scale capital based only on a
-backtest, confidence score or narrative.
+backtest, confidence score, subscription tier or narrative.
 
 ## Change history
 
 | Version | Date | Summary |
 | --- | --- | --- |
-| `2026.07-phase11-production-launch-v16` | 2026-07-19 | Canonical checkout, exact-SHA preflight/post-deploy/rollback, machine first-campaign gate, security headers and expanded crash contracts. |
-| `2026.07-phase11-deep-audit-v15` | 2026-07-19 | Scaling integrity, correlation fail-closed sizing, immutable performance history and deterministic audit. |
+| `2026.07-phase13-trading-execution-v17` | 2026-07-22 | Persistent execution kill switch, restart-safe realistic Paper broker, benchmarked Trend/Breakout/Mean Reversion suite, Shadow execution evidence and explicit Controlled Mainnet transition gates. |
+| `2026.07-phase11-production-launch-v16` | 2026-07-19 | Exact-SHA preflight/post-deploy/rollback, machine first-campaign gate and expanded crash contracts. |
+| `2026.07-phase11-deep-audit-v15` | 2026-07-19 | Scaling integrity, correlation fail-closed sizing and deterministic production audit. |
 | `2026.07-ci-cleanroom-testnet-operations-v9` | 2026-07-16 | CI cleanroom, bounded operator CLI and first-real-Testnet runbook. |
-| `2026.07-scheduled-execution-evidence-v7` | 2026-07-14 | Scheduled orchestration, private evidence and bounded campaigns. |
 | `2026.07-research-promotion-v4` | 2026-07-14 | Versioned data, funding/impact modeling, walk-forward evaluation and benchmarks. |
 | `2026.07-execution-research-v3` | 2026-07-14 | Durable idempotency, reconciliation, hard risk and event-driven backtesting. |
-| `2026.07-safety-foundation-v2` | 2026-07-14 | Mainnet compile lock, canonical execution request and truthful CI. |

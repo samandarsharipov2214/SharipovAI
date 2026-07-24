@@ -6,19 +6,28 @@ from typing import Any
 
 from .app import app
 from .admin_auth_compat import install_admin_auth_compat
+from .auth_saas import install_saas_auth_api
+from .billing_saas import install_saas_billing_api
+from .db_saas import init_saas_database
 from .final_ci_contracts import install_final_ci_contracts
 from .lifecycle_compat import ensure_event_handler_compat
+from .market_context_api import install_market_context_api
 from .telegram_restore_compat import install_telegram_restore_compat
 
 install_admin_auth_compat(force=True)
 install_final_ci_contracts(app)
 install_telegram_restore_compat()
 ensure_event_handler_compat(app)
+init_saas_database()
 
 
 def create_app(*args: Any, **kwargs: Any):
     install_final_ci_contracts()
     instance = importlib.import_module("dashboard.app").create_app(*args, **kwargs)
+    init_saas_database()
+    install_saas_auth_api(instance)
+    install_saas_billing_api(instance)
+    install_market_context_api(instance)
     install_gemini_chat_api(instance)
     install_security_headers(instance)
     return instance
@@ -73,6 +82,9 @@ install_self_learning_api(app)
 install_source_status_compat_api(app)
 install_operational_routers(app)
 install_web2_host(app)
+install_saas_auth_api(app)
+install_saas_billing_api(app)
+install_market_context_api(app)
 install_gemini_chat_api(app)
 install_global_auth_guard(app)
 install_security_headers(app)
