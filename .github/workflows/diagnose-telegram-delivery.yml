@@ -21,11 +21,17 @@ jobs:
           date -Is
           id
 
-          echo '=== service visibility ==='
-          for unit in sharipovai-deploy-watcher.service sharipovai-agent.service; do
-            printf '%s=' "$unit"
-            systemctl is-active "$unit" 2>&1 || true
-          done
+          echo '=== service state ==='
+          systemctl --no-pager --full status sharipovai-agent.service 2>&1 || true
+          systemctl --no-pager --full status sharipovai-agent.timer 2>&1 || true
+          systemctl --no-pager --full status sharipovai-deploy-watcher.service 2>&1 || true
+          echo '=== timers ==='
+          systemctl list-timers --all --no-pager 2>&1 | grep -E 'sharipovai|NEXT|LEFT' || true
+          echo '=== maintenance status file ==='
+          ls -la /var/lib/sharipovai-agent 2>&1 || true
+          cat /var/lib/sharipovai-agent/status.json 2>&1 || true
+          echo '=== agent journal ==='
+          journalctl -u sharipovai-agent.service -n 160 --no-pager 2>&1 || true
 
           echo '=== DNS ==='
           getent hosts 85-137-88-17.sslip.io 2>&1 || true
