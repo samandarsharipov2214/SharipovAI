@@ -13,66 +13,27 @@ jobs:
     runs-on: [self-hosted, Linux, X64, sharipovai-ci]
     timeout-minutes: 10
     steps:
-      - name: Inspect public and local delivery path
+      - name: Isolate recovery failure
         shell: bash
         run: |
           set +e
-          echo '=== clock and identity ==='
+          echo '=== NOW ==='
           date -Is
-          id
-
-          echo '=== service state ==='
-          systemctl --no-pager --full status sharipovai-agent.service 2>&1 || true
-          systemctl --no-pager --full status sharipovai-agent.timer 2>&1 || true
-          systemctl --no-pager --full status sharipovai-deploy-watcher.service 2>&1 || true
-          echo '=== timers ==='
-          systemctl list-timers --all --no-pager 2>&1 | grep -E 'sharipovai|NEXT|LEFT' || true
-          echo '=== maintenance status file ==='
-          ls -la /var/lib/sharipovai-agent 2>&1 || true
+          echo '=== STATUS JSON ==='
           cat /var/lib/sharipovai-agent/status.json 2>&1 || true
-          echo '=== agent journal ==='
-          journalctl -u sharipovai-agent.service -n 160 --no-pager 2>&1 || true
-
-          echo '=== DNS ==='
-          getent hosts 85-137-88-17.sslip.io 2>&1 || true
-          getent hosts api.telegram.org 2>&1 | head -n 4 || true
-
-          probe() {
-            local name="$1" url="$2" method="${3:-GET}"
-            local headers body status
-            headers="$(mktemp)"
-            body="$(mktemp)"
-            if [[ "$method" == POST ]]; then
-              status="$(curl -k -sS --max-time 15 -o "$body" -D "$headers" -w '%{http_code}' \
-                -X POST -H 'Content-Type: application/json' \
-                -H 'X-Telegram-Bot-Api-Secret-Token: deliberately-invalid' \
-                --data '{"update_id":999999999}' "$url" 2>&1)"
-            else
-              status="$(curl -k -sS --max-time 15 -o "$body" -D "$headers" -w '%{http_code}' "$url" 2>&1)"
-            fi
-            echo "--- $name ---"
-            echo "url=$url"
-            echo "status=$status"
-            sed -n '1,12p' "$headers" || true
-            head -c 1500 "$body" || true
-            echo
-            rm -f "$headers" "$body"
-          }
-
-          echo '=== local app ==='
-          probe local_health http://127.0.0.1:8000/health
-          probe local_release http://127.0.0.1:8000/api/release/status
-          probe local_security http://127.0.0.1:8000/api/security/status
-          probe local_webhook_route http://127.0.0.1:8000/telegram/webhook POST
-
-          echo '=== public app ==='
-          probe public_health https://85-137-88-17.sslip.io/health
-          probe public_release https://85-137-88-17.sslip.io/api/release/status
-          probe public_security https://85-137-88-17.sslip.io/api/security/status
-          probe public_webhook_route https://85-137-88-17.sslip.io/telegram/webhook POST
-
-          echo '=== Telegram network reachability ==='
-          probe telegram_api https://api.telegram.org
-
-          echo '=== listeners ==='
-          ss -ltn 2>&1 | grep -E '(:80|:443|:8000)\b' || true
+          echo
+          echo '=== SERVICE RESULT ==='
+          systemctl show sharipovai-agent.service \
+            -p ActiveState -p SubState -p Result -p ExecMainCode -p ExecMainStatus \
+            -p ActiveEnterTimestamp -p InactiveEnterTimestamp --no-pager 2>&1 || true
+          echo '=== TIMER ==='
+          systemctl show sharipovai-agent.timer \
+            -p ActiveState -p SubState -p LastTriggerUSec -p NextElapseUSecRealtime --no-pager 2>&1 || true
+          echo '=== LAST AGENT LOG ==='
+          journalctl -u sharipovai-agent.service --since '20 minutes ago' \
+            --no-pager -o cat 2>&1 | tail -n 180 || true
+          echo '=== CURRENT HTTP ==='
+          printf 'local_health='; curl -sS --max-time 5 -o /tmp/local-health -w '%{http_code}' http://127.0.0.1:8000/health 2>&1; echo
+          cat /tmp/local-health 2>/dev/null || true; echo
+          printf 'public_health='; curl -k -sS --max-time 8 -o /tmp/public-health -w '%{http_code}' https://85-137-88-17.sslip.io/health 2>&1; echo
+          cat /tmp/public-health 2>/dev/null || true; echo
