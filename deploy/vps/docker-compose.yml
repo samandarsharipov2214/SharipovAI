@@ -1,4 +1,30 @@
 services:
+  data-permissions:
+    image: sharipovai:${SHARIPOVAI_RELEASE_TAG:-local}
+    user: "0:0"
+    restart: "no"
+    network_mode: none
+    read_only: true
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        install -d -m 0750 -o 10001 -g 10001 /var/lib/sharipovai
+        chown -R 10001:10001 /var/lib/sharipovai
+        chmod -R u+rwX,go-rwx /var/lib/sharipovai
+    volumes:
+      - sharipovai_data:/var/lib/sharipovai
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+    labels:
+      ai.sharipov.service: data-permissions
+      ai.sharipov.runtime-mode: recovery-only
+
   sharipovai:
     build:
       context: ../..
@@ -11,6 +37,9 @@ services:
     restart: unless-stopped
     init: true
     stop_grace_period: 30s
+    depends_on:
+      data-permissions:
+        condition: service_completed_successfully
     env_file:
       - .env.vps
     environment:
