@@ -1,0 +1,19 @@
+name: Final VPS Verification Trigger
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: final-vps-trigger-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  trigger:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Confirm verification event
+        run: echo FINAL_VPS_VERIFICATION_EVENT_OK
