@@ -97,7 +97,7 @@ jobs:
       SELF_LEARNING_ENABLED: '0'
       SELF_LEARNING_INTERVAL_SECONDS: '60'
       PHASE11_MAX_TESTNET_NOTIONAL_USDT: '50'
-      EVIDENCE_DIR: ${{ runner.temp }}/phase12-hardening-${{ github.run_id }}
+      EVIDENCE_DIR: /tmp/phase12-hardening-${{ github.run_id }}
 
     steps:
       - name: Checkout
@@ -183,7 +183,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: phase12-hardening-evidence-${{ github.run_id }}
-          path: ${{ runner.temp }}/phase12-hardening-${{ github.run_id }}
+          path: /tmp/phase12-hardening-${{ github.run_id }}
           if-no-files-found: error
           retention-days: 14
 
