@@ -1,0 +1,214 @@
+name: Final VPS Recovery Verification
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/final-vps-recovery-verification.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: final-vps-recovery-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  RELEASE_SHA: 93c8edbbcaa0f97e15e8d7d12d934f8b1358ddfb
+  PUBLIC_BASE_URL: https://85-137-88-17.sslip.io
+
+jobs:
+  production-image-startup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact verification tree
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Build production image
+        run: |
+          docker build \
+            --build-arg VCS_REF="$RELEASE_SHA" \
+            --build-arg BUILD_DATE="2026-07-24T00:00:00Z" \
+            -t sharipovai-final-verify:local .
+
+      - name: Verify permissions init and production startup
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          image=sharipovai-final-verify:local
+          volume="sharipovai-final-verify-${GITHUB_RUN_ID}"
+          container="sharipovai-final-verify-${GITHUB_RUN_ID}"
+          cleanup() {
+            docker rm -f "$container" >/dev/null 2>&1 || true
+            docker volume rm "$volume" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker volume create "$volume" >/dev/null
+
+          docker run --rm \
+            --network none --user 0:0 --read-only \
+            --security-opt no-new-privileges:true \
+            --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
+            -v "$volume:/var/lib/sharipovai" \
+            --entrypoint /bin/sh "$image" -ec \
+            'install -d -m 0750 -o 10001 -g 10001 /var/lib/sharipovai; chown -R 10001:10001 /var/lib/sharipovai; chmod -R u+rwX,go-rwx /var/lib/sharipovai'
+
+          docker run -d --name "$container" \
+            --security-opt no-new-privileges:true --cap-drop ALL \
+            -p 127.0.0.1::8000 \
+            -v "$volume:/var/lib/sharipovai" \
+            -e ENVIRONMENT=production \
+            -e AUTH_SECRET=final-verification-auth-secret \
+            -e ADMIN_USERNAME=verification-admin \
+            -e ADMIN_PASSWORD=final-verification-password \
+            -e SHARIPOVAI_DATA_DIR=/var/lib/sharipovai \
+            -e DATABASE_URL=sqlite:////var/lib/sharipovai/sharipovai_saas.sqlite3 \
+            -e SHARIPOVAI_DATABASE_REQUIRED=1 \
+            -e EXCHANGE_MODE=sandbox \
+            -e EXCHANGE_BASE_URL=https://api-testnet.bybit.com \
+            -e EXCHANGE_LIVE_TRADING_ENABLED=0 \
+            -e FEATURE_BYBIT_LIVE_EXECUTION=0 \
+            -e EXECUTION_KILL_SWITCH=1 \
+            -e TESTNET_EXECUTION_ENABLED=0 \
+            -e AUTONOMOUS_TESTNET_ENABLED=0 \
+            -e AUTONOMOUS_TESTNET_BRIDGE_ENABLED=0 \
+            -e FEATURE_BYBIT_TESTNET=0 \
+            -e FEATURE_BYBIT_PRIVATE_ORDER_WS=0 \
+            -e RUNTIME_FILL_HARVESTER_ENABLED=0 \
+            -e SCHEDULED_CAMPAIGN_ORCHESTRATOR_ENABLED=0 \
+            "$image" >/dev/null
+
+          port="$(docker port "$container" 8000/tcp | sed 's/.*://')"
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:${port}/health" >/tmp/health.json; then
+              break
+            fi
+            if ! docker inspect --format '{{.State.Running}}' "$container" | grep -q true; then
+              docker logs "$container"
+              exit 1
+            fi
+            sleep 2
+          done
+          curl --fail --silent --show-error "http://127.0.0.1:${port}/health" | tee /tmp/health.json
+          curl --fail --silent --show-error "http://127.0.0.1:${port}/api/release/status" | tee /tmp/release.json
+          protected_code="$(curl -sS -o /tmp/protected.json -w '%{http_code}' "http://127.0.0.1:${port}/api/run")"
+          test "$protected_code" = 401
+          python - "$RELEASE_SHA" /tmp/release.json <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          expected = sys.argv[1]
+          payload = json.loads(Path(sys.argv[2]).read_text(encoding='utf-8'))
+          required = {
+              'status': 'ok',
+              'release_sha': expected,
+              'environment': 'production',
+              'auth_enabled': True,
+              'database_required': True,
+              'exchange_mode': 'sandbox',
+              'mainnet_execution_compiled': False,
+              'execution_kill_switch': True,
+              'testnet_execution_enabled': False,
+              'autonomous_testnet_enabled': False,
+              'autonomous_testnet_bridge_enabled': False,
+              'private_order_stream_enabled': False,
+              'runtime_fill_harvester_enabled': False,
+              'scheduled_campaign_orchestrator_enabled': False,
+              'live_execution_enabled': False,
+          }
+          mismatches = {key: (payload.get(key), value) for key, value in required.items() if payload.get(key) != value}
+          assert not mismatches, mismatches
+          PY
+          echo PRODUCTION_IMAGE_STARTUP_OK
+
+  public-runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Wait for exact public runtime and auth boundaries
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for attempt in $(seq 1 150); do
+            health_code="$(curl -k -sS --max-time 8 -o /tmp/health.json -w '%{http_code}' "$PUBLIC_BASE_URL/health" || true)"
+            release_code="$(curl -k -sS --max-time 8 -o /tmp/release.json -w '%{http_code}' "$PUBLIC_BASE_URL/api/release/status" || true)"
+            printf 'attempt=%s health=%s release=%s\n' "$attempt" "$health_code" "$release_code"
+            if [[ "$health_code" == 200 && "$release_code" == 200 ]]; then
+              python - "$RELEASE_SHA" /tmp/release.json <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          expected = sys.argv[1]
+          payload = json.loads(Path(sys.argv[2]).read_text(encoding='utf-8'))
+          required = {
+              'status': 'ok',
+              'release_sha': expected,
+              'environment': 'production',
+              'auth_enabled': True,
+              'database_required': True,
+              'exchange_mode': 'sandbox',
+              'mainnet_execution_compiled': False,
+              'execution_kill_switch': True,
+              'testnet_execution_enabled': False,
+              'autonomous_testnet_enabled': False,
+              'autonomous_testnet_bridge_enabled': False,
+              'private_order_stream_enabled': False,
+              'runtime_fill_harvester_enabled': False,
+              'scheduled_campaign_orchestrator_enabled': False,
+              'live_execution_enabled': False,
+          }
+          mismatches = {key: (payload.get(key), value) for key, value in required.items() if payload.get(key) != value}
+          assert not mismatches, {'mismatches': mismatches, 'payload': payload}
+          print(json.dumps(payload, indent=2, sort_keys=True))
+          PY
+              webhook_code="$(curl -k -sS --max-time 8 -o /tmp/webhook.json -w '%{http_code}' \
+                -X POST -H 'Content-Type: application/json' \
+                -H 'X-Telegram-Bot-Api-Secret-Token: deliberately-invalid' \
+                --data '{"update_id":999999999}' "$PUBLIC_BASE_URL/telegram/webhook" || true)"
+              protected_code="$(curl -k -sS --max-time 8 -o /tmp/protected.json -w '%{http_code}' "$PUBLIC_BASE_URL/api/run" || true)"
+              login_code="$(curl -k -sS --max-time 8 -o /tmp/login.html -w '%{http_code}' "$PUBLIC_BASE_URL/login" || true)"
+              printf 'webhook_invalid_secret=%s protected_api=%s login=%s\n' "$webhook_code" "$protected_code" "$login_code"
+              test "$webhook_code" = 403
+              test "$protected_code" = 401
+              test "$login_code" = 200
+              grep -q SharipovAI /tmp/login.html
+              echo PUBLIC_RUNTIME_OK
+              exit 0
+            fi
+            sleep 10
+          done
+          echo 'public runtime did not recover before timeout' >&2
+          exit 1
+
+  host-agent-status:
+    runs-on: [self-hosted, Linux, X64, sharipovai-ci]
+    timeout-minutes: 7
+    steps:
+      - name: Inspect maintenance agent and local runtime
+        shell: bash
+        run: |
+          set +e
+          date -Is
+          echo '=== agent status ==='
+          cat /var/lib/sharipovai-agent/status.json 2>&1 || true
+          echo
+          systemctl show sharipovai-agent.service \
+            -p ActiveState -p SubState -p Result -p ExecMainCode -p ExecMainStatus \
+            -p ActiveEnterTimestamp -p InactiveEnterTimestamp --no-pager 2>&1 || true
+          echo '=== timer ==='
+          systemctl show sharipovai-agent.timer \
+            -p ActiveState -p SubState -p LastTriggerUSec -p NextElapseUSecRealtime --no-pager 2>&1 || true
+          echo '=== local endpoints ==='
+          for path in /health /api/release/status /api/security/status; do
+            body="$(mktemp)"
+            code="$(curl -sS --max-time 8 -o "$body" -w '%{http_code}' "http://127.0.0.1:8000$path" 2>&1)"
+            echo "$path code=$code"
+            head -c 3000 "$body" 2>/dev/null || true
+            echo
+            rm -f "$body"
+          done
+          echo '=== services ==='
+          systemctl is-active sharipovai-deploy-watcher.service 2>&1 || true
+          systemctl is-active docker.service 2>&1 || true
