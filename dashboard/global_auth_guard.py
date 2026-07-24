@@ -19,6 +19,7 @@ _PUBLIC_EXACT = {
     "/api/health",
     "/startup",
     "/api/security/status",
+    "/api/release/status",
     "/api/auth/login",
     "/api/auth/register",
     "/api/auth/logout",
