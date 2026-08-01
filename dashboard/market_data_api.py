@@ -16,6 +16,7 @@ from exchange_connector.bybit_websocket_worker import BybitWebSocketWorker
 from exchange_connector.market_data import MarketDataService, MarketDataUnavailable, normalize_symbol
 from exchange_connector.multi_exchange_consensus import ConsensusUnavailable, MultiExchangeConsensus
 from exchange_connector.order_preview import OrderPreviewError, build_order_preview
+from storage import ProjectDatabase
 
 _BYBIT_MARKET_URL = "https://api.bybit.com/v5/market"
 _ALLOWED_INTERVALS = {"1", "3", "5", "15", "30", "60", "120", "240", "360", "720", "D", "W", "M"}
@@ -46,7 +47,7 @@ def install_market_data_api(app: FastAPI) -> None:
     app.state.market_data_api_installed = True
     _configure_public_stream_feature()
     app.state.market_data_service = MarketDataService()
-    app.state.bybit_websocket_worker = BybitWebSocketWorker()
+    app.state.bybit_websocket_worker = BybitWebSocketWorker(database=ProjectDatabase())
     app.state.multi_exchange_consensus = MultiExchangeConsensus(app.state.market_data_service)
     app.state.bybit_instrument_rules = BybitInstrumentRulesService()
     _register_lifecycle_handler(app, "startup", app.state.bybit_websocket_worker.start)

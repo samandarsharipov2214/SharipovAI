@@ -143,9 +143,9 @@ class BybitWebSocketState:
                 previous
                 and sequence is not None
                 and previous.sequence is not None
-                and sequence <= previous.sequence
+                and sequence < previous.sequence
             ):
-                raise ValueError("ticker sequence did not advance")
+                raise ValueError("ticker sequence moved backwards")
             self._quotes[symbol] = quote
         self._persist(quote)
         return quote
