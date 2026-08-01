@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from capital_allocation import CapitalAllocationPolicy, build_capital_allocation, capital_snapshot
+from profitability_gate import evaluate_profitability_candidate
 from paper_activity_engine import (
     PaperActivityEngine as LegacyPaperActivityEngine,
     max_open_positions,
@@ -151,6 +152,51 @@ class MarketPaperActivityEngine(LegacyPaperActivityEngine):
             return self._capital_wait(state, allocation)
 
         side = "BUY" if change > 0 else "SELL"
+
+        estimated_entry_fee = round(
+            float(allocation.get("notional", 0.0) or 0.0) * FEE_RATE,
+            4,
+        )
+        profitability = evaluate_profitability_candidate(
+            symbol=symbol,
+            side=side,
+            tick_count=tick_count,
+            notional=float(allocation.get("notional", 0.0) or 0.0),
+            estimated_fee=estimated_entry_fee,
+            state=state,
+            gate={**gate, "max_open_positions": max_open_positions()},
+        )
+        state["last_profitability_gate"] = profitability
+
+        if profitability.get("decision") != "ALLOW":
+            state["skipped_count"] = int(state.get("skipped_count", 0) or 0) + 1
+            state["last_reason"] = "profitability_gate_wait"
+            state["last_reason_ru"] = str(
+                profitability.get(
+                    "reason_ru",
+                    "виртуальная сделка пропущена из-за недостаточной ожидаемой прибыльности",
+                )
+            )
+            state["last_tick_status"] = "wait_profitability"
+            state.setdefault("skipped_signals", []).append(
+                {
+                    "time": now,
+                    "symbol": symbol,
+                    "change_24h_percent": change,
+                    "gate": gate,
+                    "profitability": profitability,
+                }
+            )
+            state["skipped_signals"] = state["skipped_signals"][-100:]
+            self._save(state)
+            return {
+                "status": "wait",
+                "reason": state["last_reason"],
+                "profitability": profitability,
+                "gate": gate,
+                "state": self.state(),
+            }
+
         trade = self._open_trade(
             state,
             now,
@@ -160,6 +206,9 @@ class MarketPaperActivityEngine(LegacyPaperActivityEngine):
             gate=gate,
             allocation=allocation,
         )
+        trade["expected_net_usdt"] = profitability.get("expected_net_usdt", 0.0)
+        trade["edge_to_fee_ratio"] = profitability.get("edge_to_fee_ratio", 0.0)
+        trade["profitability_reason_ru"] = profitability.get("reason_ru", "")
         state["last_reason"] = "opened_market_backed_virtual_trade"
         state["last_reason_ru"] = (
             f"открыта виртуальная {side} {symbol} на {trade['notional']:.2f} USDT "
@@ -435,7 +484,7 @@ def _critical_gate_block(gate: dict[str, Any]) -> bool:
     if not bool(gate.get("market_data_verified", False)):
         return True
     action = str((gate.get("market_regime") or {}).get("recommended_action", "BLOCK"))
-    if action == "BLOCK":
+    if action in {"BLOCK", "WAIT"}:
         return True
     critical = (
         "Актуальная рыночная котировка не подтверждена",

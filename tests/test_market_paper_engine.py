@@ -44,6 +44,10 @@ def _policy() -> CapitalAllocationPolicy:
 
 def test_market_engine_opens_and_persists_real_price_trade(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("VIRTUAL_ACCOUNT_MAX_OPEN", "8")
+    monkeypatch.setenv("VIRTUAL_MIN_CONFIDENCE", "50")
+    monkeypatch.setenv("VIRTUAL_MIN_EXPECTED_NET_USDT", "-100")
+    monkeypatch.setenv("VIRTUAL_MIN_EDGE_TO_FEE_RATIO", "0")
+    monkeypatch.setenv("VIRTUAL_MAX_NEGATIVE_STREAK", "999")
     path = tmp_path / "virtual_account.json"
     factory = lambda symbol: _payload(symbol)
     engine = MarketPaperActivityEngine(
@@ -76,17 +80,21 @@ def test_market_engine_opens_and_persists_real_price_trade(tmp_path, monkeypatch
     assert reloaded["summary"]["market_price_accounting"] is True
 
 
-def test_news_wait_does_not_prevent_virtual_evidence_collection(tmp_path) -> None:
+def test_news_wait_blocks_virtual_entry(tmp_path) -> None:
     path = tmp_path / "virtual_account.json"
     factory = lambda symbol: _payload(symbol, shock=100.0)
-    engine = MarketPaperActivityEngine(path=path, market_payload_factory=factory, allocation_policy=_policy())
+    engine = MarketPaperActivityEngine(
+        path=path,
+        market_payload_factory=factory,
+        allocation_policy=_policy(),
+    )
 
     result = engine.tick(force=True, now=1_000)
 
-    assert result["status"] == "ok"
+    assert result["status"] == "blocked"
     assert result["gate"]["market_regime"]["recommended_action"] == "WAIT"
-    assert result["gate"]["can_trade_real"] is False
-    assert result["trade"]["real_order_placed"] is False
+    assert result["state"]["summary"]["trade_count"] == 0
+    assert result["state"]["summary"]["open_positions"] == 0
 
 
 def test_unverified_market_data_blocks_virtual_entry(tmp_path) -> None:
@@ -106,7 +114,11 @@ def test_unverified_market_data_blocks_virtual_entry(tmp_path) -> None:
     assert result["state"]["summary"]["real_orders_blocked"] is True
 
 
-def test_catch_up_never_fabricates_historical_trades(tmp_path) -> None:
+def test_catch_up_never_fabricates_historical_trades(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("VIRTUAL_MIN_CONFIDENCE", "50")
+    monkeypatch.setenv("VIRTUAL_MIN_EXPECTED_NET_USDT", "-100")
+    monkeypatch.setenv("VIRTUAL_MIN_EDGE_TO_FEE_RATIO", "0")
+    monkeypatch.setenv("VIRTUAL_MAX_NEGATIVE_STREAK", "999")
     path = tmp_path / "virtual_account.json"
     factory = lambda symbol: _payload(symbol)
     engine = MarketPaperActivityEngine(path=path, market_payload_factory=factory, allocation_policy=_policy())
@@ -154,3 +166,25 @@ def test_trade_explanation_maps_close_reason() -> None:
     assert "Покупка BTC/USDT" in trade["entry_reason_ru"]
     assert trade["close_reason_ru"] == "достигнута цель прибыли"
     assert "Закрытие" in trade["operation_explanation_ru"]
+
+
+def test_market_engine_profitability_gate_blocks_bad_candidate(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("VIRTUAL_MIN_CONFIDENCE", "95")
+    path = tmp_path / "virtual_account.json"
+    factory = lambda symbol: _payload(symbol, shock=0.0)
+
+    engine = MarketPaperActivityEngine(
+        path=path,
+        market_payload_factory=factory,
+        allocation_policy=_policy(),
+    )
+
+    result = engine.tick(force=True, now=1_000)
+
+    assert result["status"] == "wait"
+    assert result["profitability"]["decision"] == "WAIT"
+    assert result["state"]["summary"]["trade_count"] == 0
+    assert result["state"]["summary"]["last_tick_status"] == "wait_profitability"
