@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import sqlite3
+import sys
 import tarfile
 from pathlib import Path
 
-from tools import self_healing_agent as agent
+
+MODULE_PATH = Path(__file__).resolve().parents[1] / "tools" / "self_healing_agent.py"
+SPEC = importlib.util.spec_from_file_location("sharipovai_self_healing_agent", MODULE_PATH)
+assert SPEC is not None and SPEC.loader is not None
+agent = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = agent
+SPEC.loader.exec_module(agent)
 
 
 def make_config(tmp_path: Path) -> agent.Config:
