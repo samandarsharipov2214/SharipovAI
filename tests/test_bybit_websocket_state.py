@@ -66,11 +66,32 @@ def test_stale_future_and_invalid_receipt_times_fail_closed(monkeypatch) -> None
         state.ingest_ticker(future, received_at_ms=NOW)
 
 
-def test_sequence_must_advance() -> None:
+def test_sequence_must_not_move_backwards() -> None:
     state = BybitWebSocketState()
-    state.ingest_ticker(_ticker(cs=10), received_at_ms=NOW)
-    with pytest.raises(ValueError, match="sequence"):
-        state.ingest_ticker(_ticker(cs=10, ts=NOW), received_at_ms=NOW + 1)
+
+    first = state.ingest_ticker(
+        _ticker(cs=10),
+        received_at_ms=NOW,
+    )
+
+    repeated = state.ingest_ticker(
+        _ticker(
+            cs=10,
+            ts=NOW,
+            data={"symbol": "BTCUSDT", "lastPrice": "64001.0"},
+        ),
+        received_at_ms=NOW + 1,
+    )
+
+    assert first.sequence == 10
+    assert repeated.sequence == 10
+    assert repeated.price == 64001.0
+
+    with pytest.raises(ValueError, match="sequence moved backwards"):
+        state.ingest_ticker(
+            _ticker(cs=9, ts=NOW + 1),
+            received_at_ms=NOW + 2,
+        )
 
 
 def test_disconnect_and_staleness_make_cached_quote_unusable() -> None:
