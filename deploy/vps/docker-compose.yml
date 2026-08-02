@@ -73,6 +73,7 @@ services:
       PHASE6_TESTNET_RELEASE_GATE: blocked
     volumes:
       - sharipovai_data:/var/lib/sharipovai
+      - ../..:/workspace:ro
     tmpfs:
       - /tmp:size=128m,mode=1777
     ports:
