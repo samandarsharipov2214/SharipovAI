@@ -1,0 +1,46 @@
+name: Diagnose Telegram Delivery
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/diagnose-telegram-delivery.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inspect-installed-recovery-control:
+    runs-on: [self-hosted, Linux, X64, sharipovai-ci]
+    timeout-minutes: 5
+    steps:
+      - name: Read installed root recovery contracts
+        shell: bash
+        run: |
+          set +e
+          echo '=== identity ==='
+          id
+          date -Is
+          echo '=== agent unit ==='
+          systemctl cat sharipovai-agent.service 2>&1 || true
+          echo '=== agent timer ==='
+          systemctl cat sharipovai-agent.timer 2>&1 || true
+          echo '=== deploy watcher unit ==='
+          systemctl cat sharipovai-deploy-watcher.service 2>&1 || true
+          echo '=== installed watcher files ==='
+          ls -la /usr/local/sbin/*sharipov* /var/lib/sharipovai* /run/sharipovai* 2>&1 || true
+          for file in /usr/local/sbin/*sharipov*; do
+            [ -f "$file" ] || continue
+            echo "===== $file ====="
+            sed -n '1,260p' "$file" 2>&1 || true
+          done
+          echo '=== production repository ==='
+          git -C /opt/sharipovai-repo rev-parse HEAD 2>&1 || true
+          git -C /opt/sharipovai-repo status --short --branch 2>&1 || true
+          echo '=== readable deployment scripts ==='
+          for file in /opt/sharipovai-repo/deploy/vps/remote_agent.sh /opt/sharipovai-repo/deploy/vps/update_from_main.sh; do
+            echo "===== $file ====="
+            sed -n '1,260p' "$file" 2>&1 || true
+          done
+          echo '=== status and public health ==='
+          cat /var/lib/sharipovai-agent/status.json 2>&1 || true
+          curl -k -sS -D - --max-time 8 https://85-137-88-17.sslip.io/health 2>&1 || true
