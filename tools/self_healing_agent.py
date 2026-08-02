@@ -52,7 +52,6 @@ ACTION_PRIORITY = {
 AUTO_COMMIT_PREFIX = "[self-healing]"
 EXPECTED_CONTAINERS = ("sharipovai", "sharipovai-caddy")
 RUNTIME_IGNORES = {
-    ".git",
     ".pytest_cache",
     ".mypy_cache",
     ".ruff_cache",
