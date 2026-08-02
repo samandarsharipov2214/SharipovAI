@@ -103,9 +103,9 @@ def _ai_bots_payload() -> dict[str, Any]:
         from agent_health import build_agent_health_snapshot
 
         snapshot = build_agent_health_snapshot()
-        bots = list(snapshot.get("agents", []))[:9]
+        bots = list(snapshot.get("agents", []))
         summary = dict(snapshot.get("summary", {}))
-        summary["canonical_ai_count"] = 9
+        summary["canonical_ai_count"] = len(bots)
         return {"status": snapshot.get("status", "warning"), "supervisor": {"name": "General Controller"}, "summary": summary, "bots": bots, "agents": bots}
 
     from dashboard.routes import _ai_bots, _supervisor
@@ -114,7 +114,18 @@ def _ai_bots_payload() -> dict[str, Any]:
     active = sum(str(bot.get("status", "")).lower() in {"active", "working", "ok"} for bot in bots)
     supervisor = dict(_supervisor(bots))
     supervisor["name"] = "Генеральный контролёр AI"
-    return {"status": "ok", "supervisor": supervisor, "summary": {"total_bots": len(bots), "active": max(active, 8), "warnings": max(0, len(bots) - active)}, "bots": bots}
+    return {
+        "status": "ok",
+        "supervisor": supervisor,
+        "summary": {
+            "total_bots": len(bots),
+            "canonical_ai_count": len(bots),
+            "active": active,
+            "warnings": max(0, len(bots) - active),
+        },
+        "bots": bots,
+        "agents": bots,
+    }
 
 
 def _ai_bots_page() -> str:

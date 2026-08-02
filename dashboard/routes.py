@@ -164,6 +164,7 @@ def ai_bots_api() -> dict[str, Any]:
         "supervisor": _supervisor(),
         "summary": {
             "total_bots": len(bots),
+            "canonical_ai_count": len(bots),
             "active": len(bots) - len(stale),
             "warnings": len(stale),
             "offline": 0,

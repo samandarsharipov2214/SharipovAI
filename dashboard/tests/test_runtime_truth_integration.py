@@ -26,20 +26,29 @@ def test_specialized_news_routes_are_installed(monkeypatch, tmp_path) -> None:
         assert payload.get("agent_count", len(payload.get("agents", []))) >= 1
 
 
-def test_ai_bots_endpoint_returns_nine_canonical_organs(monkeypatch, tmp_path) -> None:
+def test_ai_bots_endpoint_returns_canonical_organs(monkeypatch, tmp_path) -> None:
     _configure_runtime(monkeypatch, tmp_path)
     with TestClient(create_app()) as client:
         response = client.get("/api/ai-bots")
         assert response.status_code == 200
         payload = response.json()
         bots = payload.get("bots", payload.get("agents", []))
-        ids = {bot.get("id") for bot in bots}
-        assert len(bots) == 9
-        assert payload["summary"]["canonical_ai_count"] == 9
-        assert "virtual_execution" in ids
-        assert "decision_quality" in ids
-        assert "telegram_bot_ai" not in ids
-        assert "stress_lab_ai" not in ids
+        expected_names = {
+            "General Controller",
+            "Market Agent",
+            "News Agent",
+            "Risk Engine",
+            "Portfolio Engine",
+            "Paper Trading Bot",
+            "Confidence Engine",
+            "Consensus Engine",
+            "Stress Bot",
+            "Learning Engine",
+            "Security Guard",
+        }
+        actual_names = {str(item.get("name", "")) for item in bots}
+        assert actual_names == expected_names
+        assert len(bots) == len(expected_names)
 
 
 def test_legacy_demo_state_mirrors_virtual_account(monkeypatch, tmp_path) -> None:
