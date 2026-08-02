@@ -43,8 +43,8 @@ EXIT_UNRESOLVED = 30
 ACTION_PRIORITY = {
     "none": 0,
     "restart_caddy": 10,
-    "restart_sharipovai": 20,
     "compose_up": 30,
+    "restart_sharipovai": 35,
     "git_revert": 40,
     "restore_database": 50,
 }
@@ -664,6 +664,7 @@ class SelfHealingAgent:
 
         head = self._git("rev-parse", "HEAD").strip()
         last_tested = str(self.state.value.get("last_tested_sha", "")).strip()
+        bootstrap = not bool(last_tested)
         if last_tested and self._git_ok("cat-file", "-e", f"{last_tested}^{{commit}}"):
             base = last_tested
         else:
@@ -704,6 +705,14 @@ class SelfHealingAgent:
                 changed,
                 max_tests=self.config.max_related_tests,
             )
+            if bootstrap:
+                for fixed_test in (
+                    "tests/test_self_healing_agent.py",
+                    "tests/test_phase11_production_audit.py",
+                ):
+                    if (snapshot / fixed_test).is_file() and fixed_test not in tests:
+                        tests.append(fixed_test)
+                tests = sorted(tests)[: self.config.max_related_tests]
             if not tests:
                 changed_python = sorted(item for item in changed if item.endswith(".py"))
                 if not changed_python:
@@ -988,7 +997,10 @@ class SelfHealingAgent:
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
-            output = (exc.stdout or "") + "\nSELF_HEALING_TIMEOUT\n"
+            raw_output = exc.stdout or ""
+            if isinstance(raw_output, bytes):
+                raw_output = raw_output.decode("utf-8", errors="replace")
+            output = str(raw_output) + "\nSELF_HEALING_TIMEOUT\n"
             return subprocess.CompletedProcess(command, 124, output, "")
 
     def _save_test_output(self, result: subprocess.CompletedProcess[str]) -> None:
@@ -1158,6 +1170,10 @@ def discover_related_tests(
         path = Path(relative)
         if path.name.startswith("test_") and path.suffix == ".py":
             selected.add(relative)
+        if relative == "Dockerfile" or relative.startswith("deploy/vps/"):
+            audit = repo / "tests" / "test_phase11_production_audit.py"
+            if audit.is_file():
+                selected.add(audit.relative_to(repo).as_posix())
         if path.suffix != ".py" or path.stem in {"__init__", "conftest"}:
             continue
         dotted = ".".join(path.with_suffix("").parts)
@@ -1174,10 +1190,6 @@ def discover_related_tests(
                 name = candidate.name.lower()
                 if any(part in name for part in ("bybit", "market_stream", "exchange")):
                     selected.add(candidate.relative_to(repo).as_posix())
-        if relative in {"Dockerfile"} or relative.startswith("deploy/vps/"):
-            audit = repo / "tests" / "test_phase11_production_audit.py"
-            if audit.is_file():
-                selected.add(audit.relative_to(repo).as_posix())
 
     for candidate in candidates:
         if len(selected) >= max_tests:
