@@ -1,0 +1,13 @@
+[Unit]
+Description=Run SharipovAI self-healing every 15 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+AccuracySec=30s
+RandomizedDelaySec=30s
+Persistent=true
+Unit=sharipovai-self-healing.service
+
+[Install]
+WantedBy=timers.target
