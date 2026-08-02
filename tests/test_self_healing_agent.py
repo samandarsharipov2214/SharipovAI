@@ -78,8 +78,10 @@ def test_action_priority_and_persistence(tmp_path: Path) -> None:
     logger = agent.build_logger(config.log_file)
     action = agent.ActionRequest(config, logger)
     action.request("restart_caddy", "caddy")
-    action.request("restore_database", "db")
+    action.request("compose_up", "stack")
     action.request("restart_sharipovai", "app")
+    assert action.action == "restart_sharipovai"
+    action.request("restore_database", "db")
     action.persist()
 
     assert config.action_file.read_text().strip() == "restore_database"
@@ -113,3 +115,15 @@ def test_discover_related_tests(tmp_path: Path) -> None:
         max_tests=25,
     )
     assert "tests/test_market.py" in selected
+
+
+def test_deploy_change_selects_production_audit(tmp_path: Path) -> None:
+    (tmp_path / "tests").mkdir()
+    audit = tmp_path / "tests" / "test_phase11_production_audit.py"
+    audit.write_text("def test_audit(): pass\n")
+    selected = agent.discover_related_tests(
+        tmp_path,
+        {"deploy/vps/docker-compose.yml"},
+        max_tests=25,
+    )
+    assert "tests/test_phase11_production_audit.py" in selected
