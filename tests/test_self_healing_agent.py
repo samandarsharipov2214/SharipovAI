@@ -127,3 +127,16 @@ def test_deploy_change_selects_production_audit(tmp_path: Path) -> None:
         max_tests=25,
     )
     assert "tests/test_phase11_production_audit.py" in selected
+
+
+def test_repository_snapshot_keeps_git_metadata(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    (source / ".git").mkdir(parents=True)
+    (source / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    (source / "module.py").write_text("VALUE = 1\n")
+
+    agent.copy_repository_snapshot(source, destination)
+
+    assert (destination / ".git" / "HEAD").is_file()
+    assert (destination / "module.py").is_file()
