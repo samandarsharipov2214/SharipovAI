@@ -66,14 +66,24 @@ wait_for_health() {
 }
 
 ensure_stack() {
-    local recovery_needed=0
+    local recovery_needed=0 deadline
     container_running sharipovai || recovery_needed=1
     container_running sharipovai-caddy || recovery_needed=1
     if [ "$recovery_needed" -eq 1 ]; then
         log "Stack is incomplete; running docker compose up -d."
         compose up -d || return 1
     fi
-    wait_for_health
+
+    # Do not require the HTTP health check here. An unhealthy but running
+    # application container is exactly the state the Python agent must inspect.
+    deadline=$((SECONDS + ${SELF_HEALING_CONTAINER_START_TIMEOUT_SECONDS:-90}))
+    while [ "$SECONDS" -lt "$deadline" ]; do
+        if container_running sharipovai; then
+            return 0
+        fi
+        sleep 3
+    done
+    return 1
 }
 
 write_runtime_input() {
@@ -280,7 +290,7 @@ main() {
     fi
 
     if ! ensure_stack; then
-        log "Unable to bring SharipovAI stack to a healthy state."
+        log "Unable to bring SharipovAI stack to a running state."
         exit 1
     fi
 
