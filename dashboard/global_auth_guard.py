@@ -6,10 +6,11 @@ from collections.abc import Callable
 from typing import Any
 from urllib.parse import quote
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from .auth_saas import resolve_authenticated_principal
+from .internal_service_auth import require_internal_service
 
 _PUBLIC_EXACT = {
     "/login",
@@ -63,7 +64,7 @@ def _principal(request: Request, app: FastAPI) -> str | None:
 
 
 def install_global_auth_guard(app: FastAPI) -> None:
-    """Require a valid session or JWT cookie for every non-public route."""
+    """Require service auth for internal routes and user auth elsewhere."""
 
     if getattr(app.state, "global_auth_guard_installed", False):
         return
@@ -72,10 +73,21 @@ def install_global_auth_guard(app: FastAPI) -> None:
 
     @app.middleware("http")
     async def global_auth_guard(request: Request, call_next: Callable[[Request], Any]):
+        path = request.url.path
+        if path.startswith("/internal/"):
+            try:
+                require_internal_service(request)
+            except HTTPException as exc:
+                return JSONResponse(
+                    {"detail": exc.detail},
+                    status_code=exc.status_code,
+                    headers={"Cache-Control": "no-store"},
+                )
+            return await call_next(request)
+
         if auth_disabled():
             return await call_next(request)
 
-        path = request.url.path
         if path in _PUBLIC_EXACT or any(path.startswith(prefix) for prefix in _PUBLIC_PREFIXES):
             return await call_next(request)
 
