@@ -36,15 +36,17 @@ def _rule(pattern: str, reason: str) -> _PatternRule:
 
 
 _DANGEROUS_RULES: Final[tuple[_PatternRule, ...]] = (
-    _rule(r"\beval\s*\(", "dynamic code execution via eval()"),
-    _rule(r"\bexec\s*\(", "dynamic code execution via exec()"),
-    _rule(r"\bcompile\s*\(", "dynamic code generation via compile()"),
+    _rule(r"(?<![.\w])eval\s*\(", "dynamic code execution via eval()"),
+    _rule(r"(?<![.\w])exec\s*\(", "dynamic code execution via exec()"),
+    _rule(r"(?<![.\w])compile\s*\(", "dynamic code generation via compile()"),
     _rule(r"\bos\.system\s*\(", "shell execution via os.system()"),
     _rule(r"\bos\.popen\s*\(", "shell execution via os.popen()"),
     _rule(
         r"\bsubprocess\.(?:run|Popen|call|check_call|check_output)\s*\([\s\S]{0,600}?\bshell\s*=\s*True\b",
         "subprocess shell=True",
     ),
+    _rule(r"\b(?:bash|sh)\s+-c\s+", "shell command interpreter invocation"),
+    _rule(r"\b(?:Invoke-Expression|iex)\b", "PowerShell dynamic expression execution"),
     _rule(r"\bpickle\.loads?\s*\(", "unsafe pickle deserialization"),
     _rule(r"\bmarshal\.loads?\s*\(", "unsafe marshal deserialization"),
     _rule(r"\bssl\._create_unverified_context\b", "TLS verification disabled"),
@@ -69,18 +71,21 @@ _DANGEROUS_RULES: Final[tuple[_PatternRule, ...]] = (
     _rule(r"/var/run/docker\.sock", "Docker socket access"),
     _rule(r"\bMAINNET_EXECUTION_COMPILED\s*=\s*True\b", "Mainnet compile lock enabled"),
     _rule(
-        r"\bEXCHANGE_LIVE_TRADING_ENABLED\s*[:=]\s*[\"']?1\b",
+        r"\bEXCHANGE_LIVE_TRADING_ENABLED\s*[:=]\s*[\"']?(?:1|true|yes|on)\b",
         "live trading enabled",
     ),
     _rule(
-        r"\bLIVE_EXECUTION_MANUAL_UNLOCK\s*[:=]\s*[\"']?1\b",
+        r"\bLIVE_EXECUTION_MANUAL_UNLOCK\s*[:=]\s*[\"']?(?:1|true|yes|on)\b",
         "live execution unlock enabled",
     ),
     _rule(
-        r"\bEXECUTION_KILL_SWITCH\s*[:=]\s*[\"']?0\b",
+        r"\bEXECUTION_KILL_SWITCH\s*[:=]\s*[\"']?(?:0|false|no|off)\b",
         "execution kill switch disabled",
     ),
-    _rule(r"\bSHARIPOVAI_DISABLE_AUTH\s*[:=]", "authentication bypass configured"),
+    _rule(
+        r"\bSHARIPOVAI_DISABLE_AUTH\s*[:=]\s*[\"']?(?:1|true|yes|on)\b",
+        "authentication bypass enabled",
+    ),
     _rule(r"\breal_orders_blocked\s*=\s*False\b", "real-order block disabled"),
     _rule(r"\blive_execution_enabled\s*=\s*True\b", "live execution enabled"),
     _rule(
@@ -97,9 +102,11 @@ _TEST_DISABLE_RULES: Final[tuple[_PatternRule, ...]] = (
     _rule(r"@pytest\.mark\.(?:skip|skipif|xfail)\b", "pytest skip/xfail marker added"),
     _rule(r"\bpytest\.(?:skip|xfail)\s*\(", "pytest skip/xfail call added"),
     _rule(r"@(?:unittest\.)?(?:skip|skipIf|skipUnless)\b", "unittest skip marker added"),
+    _rule(r"\bpytest\.raises\s*\(\s*(?:Exception|BaseException)\b", "over-broad exception expectation added"),
     _rule(r"\bassert\s+(?:True|1)\s*(?:#.*)?$", "vacuous assertion added"),
     _rule(r"#\s*noqa\b", "lint suppression added to a test"),
     _rule(r"#\s*type:\s*ignore\b", "type-check suppression added to a test"),
+    _rule(r"#\s*pragma:\s*no\s*cover\b", "coverage suppression added to a test"),
     _rule(
         r"except\s+(?:Exception|BaseException)(?:\s+as\s+\w+)?\s*:\s*(?:#.*\n\s*)?(?:pass|return\b)",
         "broad exception is silently swallowed in a test",
@@ -160,6 +167,12 @@ _EXECUTABLE_SUFFIXES: Final[frozenset[str]] = frozenset(
 _EXECUTABLE_NAMES: Final[frozenset[str]] = frozenset(
     {"makefile", "procfile", "entrypoint", "entrypoint.sh"}
 )
+_TEST_CONTRACT_NAMES: Final[frozenset[str]] = frozenset(
+    {"conftest.py", "pytest_plugins.py"}
+)
+_TEST_POLICY_NAMES: Final[frozenset[str]] = frozenset(
+    {"noxfile.py"}
+)
 
 
 class SecurityGuard:
@@ -216,9 +229,9 @@ class SecurityGuard:
                 if rule.expression.search(removed_text) and not rule.expression.search(added_text):
                     reasons.append(f"critical safety weakening in {path}: {rule.reason}")
 
-        if any(is_test_path(candidate) for candidate in file_patch.paths):
+        if any(_is_test_contract_path(candidate) for candidate in file_patch.paths):
             reasons.extend(_test_weakening_reasons(file_patch))
-        if any(is_test_policy_path(candidate) for candidate in file_patch.paths):
+        if any(_is_test_policy_contract_path(candidate) for candidate in file_patch.paths):
             reasons.extend(_test_policy_reasons(file_patch))
         return reasons
 
@@ -258,6 +271,14 @@ def _should_scan_dangerous_content(path: str) -> bool:
     return pure.suffix.casefold() in _EXECUTABLE_SUFFIXES or pure.name.casefold() in _EXECUTABLE_NAMES
 
 
+def _is_test_contract_path(path: str) -> bool:
+    return is_test_path(path) or PurePosixPath(path).name.casefold() in _TEST_CONTRACT_NAMES
+
+
+def _is_test_policy_contract_path(path: str) -> bool:
+    return is_test_policy_path(path) or PurePosixPath(path).name.casefold() in _TEST_POLICY_NAMES
+
+
 def _policy_text(lines: tuple[str, ...]) -> str:
     retained: list[str] = []
     for line in lines:
@@ -287,7 +308,7 @@ def _test_weakening_reasons(file_patch: FilePatch) -> list[str]:
     path = file_patch.display_path
     reasons: list[str] = []
     if file_patch.deleted:
-        reasons.append(f"test weakening detected in {path}: test file deleted")
+        reasons.append(f"test weakening detected in {path}: test contract deleted")
         return reasons
 
     added_text = "\n".join(file_patch.added_lines)
@@ -320,6 +341,9 @@ def _test_weakening_reasons(file_patch: FilePatch) -> list[str]:
 
 def _test_policy_reasons(file_patch: FilePatch) -> list[str]:
     path = file_patch.display_path
+    if file_patch.deleted:
+        return [f"test weakening detected in {path}: test policy file deleted"]
+
     added_text = "\n".join(file_patch.added_lines)
     reasons = [
         f"test weakening detected in {path}: {rule.reason}"
