@@ -31,6 +31,7 @@ def create_app(*args: Any, **kwargs: Any):
     install_market_context_api(instance)
     install_release_status_api(instance)
     install_gemini_chat_api(instance)
+    install_internal_ai_code_fix_api(instance)
     install_security_headers(instance)
     return instance
 
@@ -48,6 +49,7 @@ from .execution_stages_api import install_execution_stages_api
 from .fill_harvester_api import install_fill_harvester_api
 from .gemini_chat_api import install_gemini_chat_api
 from .global_auth_guard import install_global_auth_guard
+from .internal_ai_code_fix_api import install_internal_ai_code_fix_api
 from .market_data_api import install_market_data_api
 from .news_agent_network_api import install_news_agent_network_api
 from .observability import install_observability
@@ -89,6 +91,7 @@ install_saas_billing_api(app)
 install_market_context_api(app)
 install_release_status_api(app)
 install_gemini_chat_api(app)
+install_internal_ai_code_fix_api(app)
 install_global_auth_guard(app)
 install_security_headers(app)
 install_observability(app)
