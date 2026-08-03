@@ -1,0 +1,121 @@
+name: Apply Development Control Integration
+
+on:
+  push:
+    branches: [feat/general-controller-owner-approval]
+    paths: ['.github/workflows/apply-dev-control-integration.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/general-controller-owner-approval
+          fetch-depth: 0
+      - name: Route successful AI fixes through General Controller
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('tools/self_healing_agent.py')
+          source = path.read_text(encoding='utf-8')
+          start = source.index('    def _handle_test_failure(self, *, head: str, output: str, command: Any) -> None:\n')
+          end = source.index('    def check_websocket(self, *, allow_restart: bool) -> None:\n', start)
+          replacement = '''    def _handle_test_failure(self, *, head: str, output: str, command: Any) -> None:
+              excerpt = output[-3000:]
+
+              # AI-generated changes are proposals only. A successful fixer result is
+              # reviewed by Security Guard and sent to the Telegram owner; this agent
+              # never applies the patch directly.
+              try:
+                  from development_control.self_healing_bridge import route_successful_ai_fix
+
+                  decision = route_successful_ai_fix(
+                      self,
+                      head=head,
+                      output=output,
+                      command=command,
+                  )
+              except Exception as exc:  # noqa: BLE001 - fail closed at integration boundary
+                  self.logger.exception("AI fixer proposal routing failed")
+                  self.unresolved.append(
+                      f"AI fixer proposal routing failed: {type(exc).__name__}: {exc}"
+                  )
+                  decision = None
+
+              if decision is not None:
+                  if decision.status == "awaiting_owner":
+                      title = "Исправление ожидает вашего решения"
+                      body = (
+                          f"Decision={decision.short_id}\\nHEAD={head}\\n"
+                          "Патч прошёл Security Guard и отправлен владельцу. "
+                          "До нажатия «Применить» код не изменяется."
+                      )
+                  else:
+                      title = "Security Guard заблокировал исправление"
+                      body = (
+                          f"Decision={decision.short_id}\\nHEAD={head}\\n"
+                          f"Причины: {decision.security_verdict.get('reasons', [])}"
+                      )
+                  self.unresolved.append(
+                      f"Development proposal {decision.short_id}: {decision.status}"
+                  )
+                  self.notifier.send(
+                      title,
+                      body,
+                      fingerprint=f"development_proposal:{decision.decision_id}",
+                      force=True,
+                  )
+                  return
+
+              subject = self._git("log", "-1", "--pretty=%s").strip()
+              last_auto_commit = str(self.state.value.get("last_auto_commit", "")).strip()
+              automatic = head == last_auto_commit or subject.startswith(AUTO_COMMIT_PREFIX)
+
+              if automatic:
+                  self.action.request(
+                      "git_revert",
+                      f"Changed-module tests failed after automatic commit: {subject}",
+                      expected_sha=head,
+                      details={"command": command, "output_tail": excerpt},
+                  )
+                  title = "Автоматический коммит не прошёл тесты"
+                  body = (
+                      f"HEAD={head}\\nsubject={subject}\\n"
+                      "Запрошен безопасный git revert с проверкой точного SHA.\\n\\n"
+                      f"{excerpt}"
+                  )
+                  self.notifier.send(
+                      title,
+                      body,
+                      fingerprint=f"auto_commit_test_failure:{head}",
+                      force=True,
+                  )
+                  return
+
+              self.unresolved.append("Changed-module pytest failed for a non-automatic commit")
+              self.notifier.send(
+                  "Тесты изменённых модулей упали",
+                  (
+                      f"HEAD={head}\\nКоммит не помечен как автоматический, поэтому откат "
+                      f"не выполнен.\\n\\n{excerpt}"
+                  ),
+                  fingerprint=f"manual_commit_test_failure:{head}",
+                  force=True,
+              )
+
+          '''
+          path.write_text(source[:start] + replacement + source[end:], encoding='utf-8')
+          PY
+          python -m compileall -q tools/self_healing_agent.py development_control telegram_development_control.py
+          rm .github/workflows/apply-dev-control-integration.yml
+          git config user.name 'SharipovAI Development Controller'
+          git config user.email 'actions@github.com'
+          git add tools/self_healing_agent.py .github/workflows/apply-dev-control-integration.yml
+          git commit -m 'feat(self-healing): require owner approval for AI fixes'
+          git push origin HEAD:feat/general-controller-owner-approval
