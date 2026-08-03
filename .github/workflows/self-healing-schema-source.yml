@@ -4,12 +4,16 @@ on:
   push:
     branches:
       - feat/self-healing-agent-learning-schema
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read
 
 jobs:
   snapshot:
+    if: github.head_ref == 'feat/self-healing-agent-learning-schema' || github.ref_name == 'feat/self-healing-agent-learning-schema'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
