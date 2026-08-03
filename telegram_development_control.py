@@ -1,11 +1,19 @@
-"""Telegram owner approval messages for development changes."""
+"""Telegram owner approval messages and callbacks for development changes."""
 from __future__ import annotations
 
 import json
 import os
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Mapping
 from urllib import parse as urlparse
 from urllib import request as urlrequest
+
+
+@dataclass(frozen=True, slots=True)
+class DevelopmentCallback:
+    action: str
+    short_id: str
+    token: str = ""
 
 
 def send_development_approval(decision: Any, *, bot_token: str | None = None, owner_id: str | None = None) -> dict[str, Any]:
@@ -57,4 +65,60 @@ def send_development_approval(decision: Any, *, bot_token: str | None = None, ow
     return result
 
 
-__all__ = ["send_development_approval"]
+def parse_development_callback(data: str) -> DevelopmentCallback:
+    parts = str(data).split(":")
+    if len(parts) == 3 and parts[0] == "devfix" and parts[1] == "i":
+        return DevelopmentCallback("info", _short_id(parts[2]))
+    if len(parts) == 4 and parts[0] == "devfix" and parts[1] in {"a", "r"}:
+        token = parts[3].strip()
+        if not token or len(token) > 64:
+            raise ValueError("invalid development callback token")
+        return DevelopmentCallback("approve" if parts[1] == "a" else "reject", _short_id(parts[2]), token)
+    raise ValueError("unsupported development callback")
+
+
+def handle_development_callback(callback_query: Mapping[str, Any], *, controller: Any | None = None) -> dict[str, Any]:
+    """Validate and execute one Telegram inline callback.
+
+    The existing bot can call this from its callback dispatcher. The function
+    does not apply a patch; an approval only changes the persisted decision to
+    ``owner_approved``. Host application remains a separate queued operation.
+    """
+    from development_control.general_controller import DevelopmentChangeController
+
+    query = dict(callback_query)
+    callback = parse_development_callback(str(query.get("data", "")))
+    actor_id = str((query.get("from") or {}).get("id", ""))
+    message = query.get("message") or {}
+    chat_id = str((message.get("chat") or {}).get("id", ""))
+    active_controller = controller or DevelopmentChangeController()
+
+    if callback.action == "info":
+        decision = active_controller.get(callback.short_id)
+        return {"status": "info", "decision": decision.to_dict()}
+
+    approved = callback.action == "approve"
+    decision = active_controller.decide(
+        callback.short_id,
+        approved,
+        actor_id,
+        chat_id,
+        callback.token,
+        "telegram_inline_approve" if approved else "telegram_inline_reject",
+    )
+    return {"status": decision.status, "decision": decision.to_dict()}
+
+
+def _short_id(value: str) -> str:
+    clean = str(value).strip().lower()
+    if len(clean) != 12 or any(character not in "0123456789abcdef" for character in clean):
+        raise ValueError("invalid development decision short id")
+    return clean
+
+
+__all__ = [
+    "DevelopmentCallback",
+    "handle_development_callback",
+    "parse_development_callback",
+    "send_development_approval",
+]
