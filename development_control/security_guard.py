@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+
+from .models import PatchVerdict
 
 PROTECTED_EXACT = {"CONSTITUTION.md", "Dockerfile", "requirements.txt"}
 PROTECTED_PREFIXES = (".github/", "deploy/", "execution/")
@@ -18,12 +19,6 @@ _TEST_WEAKENING = (
 _PATH_RE = re.compile(r"^(?:---|\+\+\+)\s+(?:[ab]/)?(.+)$", re.MULTILINE)
 
 
-@dataclass(slots=True)
-class PatchVerdict:
-    allowed: bool
-    reasons: list[str] = field(default_factory=list)
-
-
 def validate_patch(patch: str) -> PatchVerdict:
     reasons: list[str] = []
     if not patch.strip().startswith("diff --git "):
@@ -36,10 +31,12 @@ def validate_patch(patch: str) -> PatchVerdict:
         reasons.append("symlinks are forbidden")
 
     paths = {path.strip() for path in _PATH_RE.findall(patch) if path.strip() != "/dev/null"}
+    protected_paths: list[str] = []
     for path in sorted(paths):
         normalized = path.removeprefix("a/").removeprefix("b/")
         if normalized in PROTECTED_EXACT or normalized.startswith(PROTECTED_PREFIXES):
             reasons.append(f"protected path: {normalized}")
+            protected_paths.append(normalized)
         if normalized.startswith("/") or ".." in normalized.split("/"):
             reasons.append(f"unsafe path: {normalized}")
 
@@ -56,7 +53,13 @@ def validate_patch(patch: str) -> PatchVerdict:
     if "test_" in removed and "test_" not in added:
         reasons.append("tests removed without replacement")
 
-    return PatchVerdict(allowed=not reasons, reasons=reasons)
+    return PatchVerdict(
+        allowed=not reasons,
+        reasons=reasons,
+        protected_paths=protected_paths,
+        requires_human_approval=bool(protected_paths),
+        required_checks=["project-guardrails"] if protected_paths else [],
+    )
 
 
 class SecurityGuard:
