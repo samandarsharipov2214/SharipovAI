@@ -1,9 +1,11 @@
 """Persistent learning from validated development fixes.
 
-The service stores immutable fix outcomes in the canonical ProjectDatabase,
-builds deterministic local similarity indexes, returns successful fixes as a
-few-shot pack, and creates manual-only weekly process optimization proposals.
-It never edits source code, changes runtime flags, or gains execution authority.
+Source-of-truth fix and decision evidence lives in the canonical agent-learning
+ledger (``agent_fixes``, ``agent_decisions`` and ``agent_decision_events``).
+This service appends verified outcomes, builds deterministic derived indexes,
+returns successful fixes as few-shot examples, and creates manual-only weekly
+process optimization proposals. It never applies patches or changes runtime
+execution flags.
 """
 from __future__ import annotations
 
@@ -19,17 +21,18 @@ from datetime import datetime, timedelta, timezone
 from pathlib import PurePosixPath
 from typing import Any
 
-from storage import ProjectDatabase, list_json_items
+from storage import ProjectDatabase
 
-_OUTCOMES_NAMESPACE = "development_learning_fix_outcomes"
 _PROJECTION_NAMESPACE = "development_learning_memory_projection"
 _PROPOSALS_NAMESPACE = "development_learning_process_proposals"
 _EVENTS_NAMESPACE = "development_learning_events"
 _PROJECTION_KEY = "current"
+_OUTCOME_EVENT_TYPE = "fix_outcome_recorded"
 _SCHEMA_VERSION = 1
 _TOKEN_RE = re.compile(r"[a-zA-Z_][a-zA-Z0-9_./:-]*|[\u0400-\u04ff][\u0400-\u04ff0-9_./:-]*")
 _ERROR_TYPE_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*(?:Error|Exception|Failure|Warning))\b")
 _MODULE_RE = re.compile(r"(?:No module named|module)\s+['\"]?([A-Za-z_][A-Za-z0-9_.-]*)", re.IGNORECASE)
+_GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _SENSITIVE_MARKERS = (
     "api_key",
     "apikey",
@@ -45,7 +48,7 @@ _SENSITIVE_MARKERS = (
 
 
 class DevelopmentLearningService:
-    """Canonical evidence memory for development fixes."""
+    """Learning Engine owner for repair memory and few-shot curation."""
 
     def __init__(
         self,
@@ -77,36 +80,55 @@ class DevelopmentLearningService:
         result_sha: str,
         validation: Mapping[str, Any],
     ) -> dict[str, Any]:
-        """Record one immutable development-fix outcome.
-
-        Search metadata is accepted in ``validation`` using the fields
-        ``error_signature``, ``normalized_error``, ``error_type``, ``module``
-        and ``changed_files``. Nested ``failure`` metadata is also accepted.
-        Sensitive validation fields are redacted before persistence.
-        """
+        """Append one verified, idempotent outcome to the agent decision ledger."""
 
         clean_fix_id = _clean_identifier(fix_id, "fix_id")
         clean_decision_id = _clean_identifier(decision_id, "decision_id")
         if not isinstance(success, bool):
             raise TypeError("success must be a bool")
-        clean_result_sha = _clean_text(result_sha, limit=200)
+        clean_result_sha = _clean_text(result_sha, limit=40).lower()
+        if clean_result_sha and not _GIT_SHA_RE.fullmatch(clean_result_sha):
+            raise ValueError("result_sha must be a 40-character lowercase Git SHA")
         if success and not clean_result_sha:
             raise ValueError("result_sha is required for a successful fix")
         if not isinstance(validation, Mapping):
             raise TypeError("validation must be a mapping")
 
+        fix = self.database.get_agent_fix(clean_fix_id)
+        if fix is None:
+            raise KeyError(f"unknown fix_id: {clean_fix_id}")
+        decision = self.database.get_agent_decision(clean_decision_id)
+        if decision is None:
+            raise KeyError(f"unknown decision_id: {clean_decision_id}")
+        if str(decision.get("fix_id") or "") != clean_fix_id:
+            raise ValueError("decision_id is not linked to fix_id")
+        if bool(fix.get("success")) is not success:
+            raise ValueError("outcome success conflicts with immutable agent_fixes evidence")
+        applied_sha = str(fix.get("applied_sha") or "")
+        if applied_sha and clean_result_sha and applied_sha != clean_result_sha:
+            raise ValueError("result_sha conflicts with immutable agent_fixes applied_sha")
+
         safe_validation = _sanitize(validation)
         if not isinstance(safe_validation, dict):
             raise TypeError("validation must serialize to an object")
-        metadata = _extract_metadata(safe_validation)
+        fix_metadata = fix.get("metadata") if isinstance(fix.get("metadata"), Mapping) else {}
+        metadata = _extract_metadata(
+            {
+                **dict(fix_metadata),
+                **safe_validation,
+                "error_signature": safe_validation.get("error_signature") or fix.get("error_signature"),
+                "error_type": safe_validation.get("error_type") or fix.get("failure_class"),
+            }
+        )
         validation_digest = _digest(safe_validation)
         recorded_at_ms = _validation_timestamp(safe_validation) or _now_ms()
-        record = {
+        payload = {
             "schema_version": _SCHEMA_VERSION,
             "fix_id": clean_fix_id,
             "decision_id": clean_decision_id,
             "success": success,
             "result_sha": clean_result_sha,
+            "patch_sha256": str(fix.get("patch_sha256") or ""),
             "error_signature": metadata["error_signature"],
             "normalized_error": metadata["normalized_error"],
             "error_type": metadata["error_type"],
@@ -115,30 +137,36 @@ class DevelopmentLearningService:
             "validation": safe_validation,
             "validation_sha256": validation_digest,
             "recorded_at_ms": recorded_at_ms,
-            "searchable": bool(metadata["error_signature"] or metadata["normalized_error"]),
             "execution_authority": False,
             "automatic_code_application": False,
             "runtime_flags_changed": False,
         }
+        event_id = "devout_" + _digest(
+            {
+                "fix_id": clean_fix_id,
+                "decision_id": clean_decision_id,
+                "success": success,
+                "result_sha": clean_result_sha,
+                "validation_sha256": validation_digest,
+            }
+        )[:40]
+        events = self.database.list_agent_decision_events(clean_decision_id, limit=2000)
+        for event in events:
+            if event.get("event_type") != _OUTCOME_EVENT_TYPE:
+                continue
+            existing = event.get("payload") if isinstance(event.get("payload"), Mapping) else {}
+            if str(event.get("event_id") or "") == event_id:
+                return {**dict(existing), "event_id": event_id, "idempotent": True}
+            if str(existing.get("fix_id") or "") == clean_fix_id:
+                raise ValueError("a different outcome is already recorded for this fix decision")
 
-        existing = self.database.get_json(_OUTCOMES_NAMESPACE, clean_fix_id)
-        if existing is not None:
-            value = dict(existing["value"])
-            same_identity = (
-                str(value.get("decision_id") or "") == clean_decision_id
-                and value.get("success") is success
-                and str(value.get("result_sha") or "") == clean_result_sha
-                and str(value.get("validation_sha256") or "") == validation_digest
-            )
-            if not same_identity:
-                raise ValueError(f"fix outcome {clean_fix_id!r} already exists with different evidence")
-            return {**value, "version": int(existing["version"]), "idempotent": True}
-
-        version = self.database.put_json(
-            _OUTCOMES_NAMESPACE,
-            clean_fix_id,
-            record,
-            expected_version=0,
+        self.database.append_agent_decision_event(
+            event_id=event_id,
+            decision_id=clean_decision_id,
+            event_type=_OUTCOME_EVENT_TYPE,
+            actor="learning_engine",
+            payload=payload,
+            created_at_ms=recorded_at_ms,
         )
         self.database.append_event(
             _EVENTS_NAMESPACE,
@@ -152,10 +180,11 @@ class DevelopmentLearningService:
                 "error_type": metadata["error_type"],
                 "module": metadata["module"],
                 "validation_sha256": validation_digest,
+                "ledger_event_id": event_id,
             },
             created_at_ms=recorded_at_ms,
         )
-        return {**record, "version": version, "idempotent": False}
+        return {**payload, "event_id": event_id, "idempotent": False}
 
     def build_few_shot_pack(
         self,
@@ -164,7 +193,7 @@ class DevelopmentLearningService:
         changed_files: Sequence[str] | str,
         limit: int = 3,
     ) -> dict[str, Any]:
-        """Return successful fixes using exact, typed-module, then cosine search."""
+        """Find successful fixes by exact, typed-module, then cosine search."""
 
         bounded_limit = _bounded_int(limit, minimum=1, maximum=20, default=3)
         query = _extract_metadata(
@@ -180,24 +209,22 @@ class DevelopmentLearningService:
         exact_index = projection.get("exact_signature") if isinstance(projection.get("exact_signature"), Mapping) else {}
         typed_index = projection.get("error_type_module") if isinstance(projection.get("error_type_module"), Mapping) else {}
         query_vector = _feature_vector(query, self.feature_dimensions)
+        records = {str(record.get("fix_id") or ""): record for record in self._outcome_records(success_only=True)}
 
         selected: list[dict[str, Any]] = []
         seen: set[str] = set()
         trace = {"exact_signature": 0, "error_type_module": 0, "cosine_similarity": 0}
 
-        def add_candidate(fix_id: str, strategy: str, similarity: float) -> None:
-            if len(selected) >= bounded_limit or fix_id in seen:
+        def add_candidate(candidate_fix_id: str, strategy: str, similarity: float) -> None:
+            if len(selected) >= bounded_limit or candidate_fix_id in seen:
                 return
-            item = items.get(fix_id)
-            if not isinstance(item, Mapping):
+            item = items.get(candidate_fix_id)
+            record = records.get(candidate_fix_id)
+            if not isinstance(item, Mapping) or not isinstance(record, Mapping):
                 return
-            stored = self.database.get_json(_OUTCOMES_NAMESPACE, fix_id)
-            if stored is None or stored["value"].get("success") is not True:
-                return
-            record = dict(stored["value"])
             selected.append(
                 {
-                    "fix_id": fix_id,
+                    "fix_id": candidate_fix_id,
                     "decision_id": str(record.get("decision_id") or ""),
                     "match_strategy": strategy,
                     "similarity": round(max(min(float(similarity), 1.0), -1.0), 6),
@@ -210,39 +237,41 @@ class DevelopmentLearningService:
                     },
                     "output": {
                         "result_sha": str(record.get("result_sha") or ""),
-                        "changed_files": list(record.get("changed_files") or []),
+                        "patch": str(record.get("patch") or ""),
+                        "patch_sha256": str(record.get("patch_sha256") or ""),
+                        "test_evidence": record.get("test_evidence") if isinstance(record.get("test_evidence"), Mapping) else {},
                         "validation": record.get("validation") if isinstance(record.get("validation"), Mapping) else {},
                     },
                     "recorded_at_ms": int(record.get("recorded_at_ms") or 0),
                 }
             )
-            seen.add(fix_id)
+            seen.add(candidate_fix_id)
             trace[strategy] += 1
 
         signature = query["error_signature"]
         if signature:
-            for fix_id in _string_list(exact_index.get(signature)):
-                add_candidate(fix_id, "exact_signature", 1.0)
+            for candidate_fix_id in _string_list(exact_index.get(signature)):
+                add_candidate(candidate_fix_id, "exact_signature", 1.0)
 
         typed_key = _type_module_key(query["error_type"], query["module"])
         if len(selected) < bounded_limit and typed_key:
-            for fix_id in _string_list(typed_index.get(typed_key)):
-                vector = vectors.get(fix_id) if isinstance(vectors.get(fix_id), Mapping) else {}
-                add_candidate(fix_id, "error_type_module", _cosine(query_vector, vector))
+            for candidate_fix_id in _string_list(typed_index.get(typed_key)):
+                vector = vectors.get(candidate_fix_id) if isinstance(vectors.get(candidate_fix_id), Mapping) else {}
+                add_candidate(candidate_fix_id, "error_type_module", _cosine(query_vector, vector))
 
         if len(selected) < bounded_limit and query_vector:
             ranked: list[tuple[float, int, str]] = []
-            for fix_id, vector in vectors.items():
-                if fix_id in seen or not isinstance(vector, Mapping):
+            for candidate_fix_id, vector in vectors.items():
+                if candidate_fix_id in seen or not isinstance(vector, Mapping):
                     continue
                 score = _cosine(query_vector, vector)
                 if score <= 0:
                     continue
-                item = items.get(fix_id) if isinstance(items.get(fix_id), Mapping) else {}
-                ranked.append((score, int(item.get("recorded_at_ms") or 0), str(fix_id)))
+                item = items.get(candidate_fix_id) if isinstance(items.get(candidate_fix_id), Mapping) else {}
+                ranked.append((score, int(item.get("recorded_at_ms") or 0), str(candidate_fix_id)))
             ranked.sort(key=lambda row: (row[0], row[1], row[2]), reverse=True)
-            for score, _timestamp, fix_id in ranked:
-                add_candidate(fix_id, "cosine_similarity", score)
+            for score, _timestamp, candidate_fix_id in ranked:
+                add_candidate(candidate_fix_id, "cosine_similarity", score)
 
         return {
             "status": "ok" if selected else "empty",
@@ -260,9 +289,9 @@ class DevelopmentLearningService:
         }
 
     def rebuild_memory_projection(self) -> dict[str, Any]:
-        """Rebuild exact, typed-module and local feature-hashing indexes."""
+        """Rebuild exact, typed-module and feature-hashing indexes."""
 
-        records = self._successful_records()
+        records = self._outcome_records(success_only=True)
         source_digest = _records_digest(records)
         current = self.database.get_json(_PROJECTION_NAMESPACE, _PROJECTION_KEY)
         if current is not None:
@@ -310,6 +339,7 @@ class DevelopmentLearningService:
                 **metadata,
                 "decision_id": str(record.get("decision_id") or ""),
                 "result_sha": str(record.get("result_sha") or ""),
+                "patch_sha256": str(record.get("patch_sha256") or ""),
                 "recorded_at_ms": int(record.get("recorded_at_ms") or 0),
                 "validation_sha256": str(record.get("validation_sha256") or ""),
             }
@@ -372,17 +402,10 @@ class DevelopmentLearningService:
         if existing is not None:
             return {**dict(existing["value"]), "version": int(existing["version"]), "idempotent": True}
 
-        rows = list_json_items(
-            self.database,
-            _OUTCOMES_NAMESPACE,
-            limit=self.memory_limit,
-            newest_first=False,
-        )
         records = [
-            dict(row["value"])
-            for row in rows
-            if isinstance(row.get("value"), Mapping)
-            and week_start_ms <= int(row["value"].get("recorded_at_ms") or 0) < week_end_ms
+            record
+            for record in self._outcome_records(success_only=False)
+            if week_start_ms <= int(record.get("recorded_at_ms") or 0) < week_end_ms
         ]
         successful = [record for record in records if record.get("success") is True]
         failed = [record for record in records if record.get("success") is not True]
@@ -488,21 +511,8 @@ class DevelopmentLearningService:
         )
         return {**proposal, "version": version, "idempotent": False}
 
-    def _successful_records(self) -> list[dict[str, Any]]:
-        rows = list_json_items(
-            self.database,
-            _OUTCOMES_NAMESPACE,
-            limit=self.memory_limit,
-            newest_first=True,
-        )
-        return [
-            dict(row["value"])
-            for row in rows
-            if isinstance(row.get("value"), Mapping) and row["value"].get("success") is True
-        ]
-
     def _ensure_projection(self) -> tuple[dict[str, Any], int]:
-        records = self._successful_records()
+        records = self._outcome_records(success_only=True)
         source_digest = _records_digest(records)
         current = self.database.get_json(_PROJECTION_NAMESPACE, _PROJECTION_KEY)
         if (
@@ -517,15 +527,80 @@ class DevelopmentLearningService:
             raise RuntimeError("development learning projection was not persisted")
         return dict(current["value"]), int(current["version"])
 
+    def _outcome_records(self, *, success_only: bool) -> list[dict[str, Any]]:
+        clauses = ["e.event_type = ?"]
+        params: list[Any] = [_OUTCOME_EVENT_TYPE]
+        if success_only:
+            clauses.append("f.success = ?")
+            params.append(1)
+        params.append(self.memory_limit)
+        query = f"""
+            SELECT e.event_id, e.decision_id, e.payload_json, e.created_at_ms,
+                   f.fix_id, f.error_signature AS fix_error_signature,
+                   f.failure_class, f.patch, f.patch_sha256, f.success AS fix_success,
+                   f.source, f.base_sha, f.applied_sha, f.attempt_count,
+                   f.test_evidence_json, f.metadata_json
+            FROM agent_decision_events e
+            JOIN agent_decisions d ON d.decision_id = e.decision_id
+            JOIN agent_fixes f ON f.fix_id = d.fix_id
+            WHERE {' AND '.join(clauses)}
+            ORDER BY e.created_at_ms DESC, e.event_id DESC
+            LIMIT ?
+        """
+        with self.database.connect() as connection:
+            rows = self.database._fetchall(connection, query, tuple(params))
+        records: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for row in rows:
+            fix_id = str(row["fix_id"])
+            if fix_id in seen:
+                continue
+            payload = json.loads(row["payload_json"])
+            if not isinstance(payload, Mapping):
+                continue
+            validation = payload.get("validation") if isinstance(payload.get("validation"), Mapping) else {}
+            fix_metadata = json.loads(row["metadata_json"])
+            if not isinstance(fix_metadata, Mapping):
+                fix_metadata = {}
+            metadata = _extract_metadata(
+                {
+                    **dict(fix_metadata),
+                    **dict(payload),
+                    "error_signature": payload.get("error_signature") or row["fix_error_signature"],
+                    "error_type": payload.get("error_type") or row["failure_class"],
+                }
+            )
+            records.append(
+                {
+                    **dict(payload),
+                    **metadata,
+                    "fix_id": fix_id,
+                    "decision_id": str(row["decision_id"]),
+                    "success": bool(row["fix_success"]),
+                    "result_sha": str(payload.get("result_sha") or row["applied_sha"] or ""),
+                    "patch": str(row["patch"]),
+                    "patch_sha256": str(row["patch_sha256"]),
+                    "source": str(row["source"]),
+                    "base_sha": str(row["base_sha"] or ""),
+                    "attempt_count": int(row["attempt_count"]),
+                    "test_evidence": json.loads(row["test_evidence_json"]),
+                    "validation": dict(validation),
+                    "recorded_at_ms": int(payload.get("recorded_at_ms") or row["created_at_ms"]),
+                    "ledger_event_id": str(row["event_id"]),
+                }
+            )
+            seen.add(fix_id)
+        return records
+
 
 def _extract_metadata(value: Mapping[str, Any]) -> dict[str, Any]:
     failure = value.get("failure") if isinstance(value.get("failure"), Mapping) else {}
     error_signature = _clean_text(
         value.get("error_signature") or failure.get("error_signature") or value.get("signature"),
-        limit=512,
+        limit=2048,
     )
     normalized_error = _clean_text(
-        value.get("normalized_error") or failure.get("normalized_error") or value.get("error") or failure.get("error"),
+        value.get("normalized_error") or failure.get("normalized_error") or value.get("error") or failure.get("error") or error_signature,
         limit=8000,
     )
     changed_files = _normalize_changed_files(
@@ -574,9 +649,8 @@ def _infer_module(changed_files: Sequence[str], normalized_error: str) -> str:
 def _normalize_changed_files(value: Any) -> list[str]:
     if value is None:
         return []
-    raw_items: Sequence[Any]
     if isinstance(value, str):
-        raw_items = [value]
+        raw_items: Sequence[Any] = [value]
     elif isinstance(value, Mapping):
         raw_items = list(value.keys())
     elif isinstance(value, Sequence):
@@ -640,6 +714,7 @@ def _records_digest(records: Sequence[Mapping[str, Any]]) -> str:
             "fix_id": str(record.get("fix_id") or ""),
             "decision_id": str(record.get("decision_id") or ""),
             "result_sha": str(record.get("result_sha") or ""),
+            "patch_sha256": str(record.get("patch_sha256") or ""),
             "validation_sha256": str(record.get("validation_sha256") or ""),
             "recorded_at_ms": int(record.get("recorded_at_ms") or 0),
         }
@@ -658,12 +733,7 @@ def _type_module_key(error_type: str, module: str) -> str:
 
 def _previous_week_window(now_ms: int) -> tuple[int, int]:
     current = datetime.fromtimestamp(now_ms / 1000, tz=timezone.utc)
-    current_week_start = datetime(
-        current.year,
-        current.month,
-        current.day,
-        tzinfo=timezone.utc,
-    ) - timedelta(days=current.weekday())
+    current_week_start = datetime(current.year, current.month, current.day, tzinfo=timezone.utc) - timedelta(days=current.weekday())
     end_ms = int(current_week_start.timestamp() * 1000)
     start_ms = int((current_week_start - timedelta(days=7)).timestamp() * 1000)
     return start_ms, end_ms
@@ -674,14 +744,13 @@ def _process_findings(
     repeated_signatures: Sequence[Mapping[str, Any]],
     module_hotspots: Sequence[Mapping[str, Any]],
 ) -> list[str]:
-    findings: list[str] = []
     total = int(metrics.get("total_fixes") or 0)
     if total == 0:
         return ["No development-fix outcomes were recorded in the completed review week."]
-    findings.append(
+    findings = [
         f"{int(metrics.get('successful_fixes') or 0)} of {total} fixes succeeded "
         f"({float(metrics.get('success_rate') or 0.0):.1%})."
-    )
+    ]
     if repeated_signatures:
         findings.append(f"{len(repeated_signatures)} error signatures repeated during the week.")
     if module_hotspots:
@@ -702,73 +771,58 @@ def _process_recommendations(
     total = int(metrics.get("total_fixes") or 0)
     success_rate = float(metrics.get("success_rate") or 0.0)
     if total == 0:
-        recommendations.append(
-            {
-                "priority": "normal",
-                "action": "enforce_fix_outcome_recording",
-                "reason": "No weekly development evidence was available for process learning.",
-            }
-        )
+        recommendations.append({
+            "priority": "normal",
+            "action": "enforce_fix_outcome_recording",
+            "reason": "No weekly development evidence was available for process learning.",
+        })
     elif success_rate < 0.7:
-        recommendations.append(
-            {
-                "priority": "high",
-                "action": "strengthen_pre_apply_validation",
-                "reason": f"Weekly fix success rate was {success_rate:.1%}, below the 70% process target.",
-            }
-        )
+        recommendations.append({
+            "priority": "high",
+            "action": "strengthen_pre_apply_validation",
+            "reason": f"Weekly fix success rate was {success_rate:.1%}, below the 70% process target.",
+        })
     if repeated_signatures:
-        recommendations.append(
-            {
-                "priority": "high",
-                "action": "promote_exact_few_shot_reuse",
-                "reason": "Repeated error signatures should reuse validated fixes before generating new patches.",
-                "error_signatures": [str(item.get("error_signature") or "") for item in repeated_signatures[:10]],
-            }
-        )
+        recommendations.append({
+            "priority": "high",
+            "action": "promote_exact_few_shot_reuse",
+            "reason": "Repeated error signatures should reuse validated fixes before generating new patches.",
+            "error_signatures": [str(item.get("error_signature") or "") for item in repeated_signatures[:10]],
+        })
     if module_hotspots:
-        recommendations.append(
-            {
-                "priority": "high",
-                "action": "add_module_targeted_regressions",
-                "reason": "Modules with repeated failed fixes need narrower deterministic regression tests.",
-                "modules": [str(item.get("module") or "") for item in module_hotspots[:10]],
-            }
-        )
+        recommendations.append({
+            "priority": "high",
+            "action": "add_module_targeted_regressions",
+            "reason": "Modules with repeated failed fixes need narrower deterministic regression tests.",
+            "modules": [str(item.get("module") or "") for item in module_hotspots[:10]],
+        })
     missing = int(metrics.get("missing_search_metadata_count") or 0)
     if missing:
-        recommendations.append(
-            {
-                "priority": "normal",
-                "action": "require_structured_error_metadata",
-                "reason": f"{missing} outcomes could not fully participate in exact and typed-module search.",
-            }
-        )
+        recommendations.append({
+            "priority": "normal",
+            "action": "require_structured_error_metadata",
+            "reason": f"{missing} outcomes could not fully participate in exact and typed-module search.",
+        })
     if failed_checks:
-        recommendations.append(
-            {
-                "priority": "high",
-                "action": "prioritize_failed_validation_checks",
-                "reason": "Frequently failing validation checks should run earlier in the repair pipeline.",
-                "checks": [name for name, _count in Counter(failed_checks).most_common(10)],
-            }
-        )
+        recommendations.append({
+            "priority": "high",
+            "action": "prioritize_failed_validation_checks",
+            "reason": "Frequently failing validation checks should run earlier in the repair pipeline.",
+            "checks": [name for name, _count in Counter(failed_checks).most_common(10)],
+        })
     if not recommendations:
-        recommendations.append(
-            {
-                "priority": "normal",
-                "action": "preserve_process_and_refresh_memory",
-                "reason": "The completed week did not reveal a material process regression.",
-            }
-        )
+        recommendations.append({
+            "priority": "normal",
+            "action": "preserve_process_and_refresh_memory",
+            "reason": "The completed week did not reveal a material process regression.",
+        })
     return recommendations
 
 
 def _validation_timestamp(validation: Mapping[str, Any]) -> int:
     for key in ("completed_at_ms", "finished_at_ms", "validated_at_ms", "recorded_at_ms"):
-        value = validation.get(key)
         try:
-            parsed = int(value)
+            parsed = int(validation.get(key))
         except (TypeError, ValueError):
             continue
         if parsed > 0:
@@ -795,10 +849,7 @@ def _sanitize(value: Any, *, depth: int = 0) -> Any:
                 break
             clean_key = _clean_text(key, limit=200) or "unknown"
             normalized_key = clean_key.lower().replace("-", "_")
-            if any(marker in normalized_key for marker in _SENSITIVE_MARKERS):
-                result[clean_key] = "<redacted>"
-            else:
-                result[clean_key] = _sanitize(item, depth=depth + 1)
+            result[clean_key] = "<redacted>" if any(marker in normalized_key for marker in _SENSITIVE_MARKERS) else _sanitize(item, depth=depth + 1)
         return result
     if isinstance(value, Sequence):
         return [_sanitize(item, depth=depth + 1) for item in list(value)[:500]]
@@ -819,9 +870,7 @@ def _clean_identifier(value: Any, name: str) -> str:
 
 
 def _clean_text(value: Any, *, limit: int) -> str:
-    if value is None:
-        return ""
-    return str(value).strip()[:limit]
+    return "" if value is None else str(value).strip()[:limit]
 
 
 def _bounded_int(value: Any, *, minimum: int, maximum: int, default: int) -> int:
@@ -834,13 +883,7 @@ def _bounded_int(value: Any, *, minimum: int, maximum: int, default: int) -> int
 
 def _digest(value: Any) -> str:
     return hashlib.sha256(
-        json.dumps(
-            value,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            allow_nan=False,
-        ).encode("utf-8")
+        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
     ).hexdigest()
 
 
