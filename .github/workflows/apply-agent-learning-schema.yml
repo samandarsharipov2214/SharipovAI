@@ -1,0 +1,161 @@
+name: Apply self-healing agent learning schema
+
+on:
+  push:
+    branches:
+      - feat/self-healing-agent-learning-schema
+    paths:
+      - .github/workflows/apply-agent-learning-schema.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/self-healing-agent-learning-schema
+          fetch-depth: 0
+      - name: Apply migration transaction
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('storage/project_database.py')
+          text = path.read_text(encoding='utf-8')
+          if '_SCHEMA_VERSION = 1' in text:
+              text = text.replace('_SCHEMA_VERSION = 1', '_SCHEMA_VERSION = 2', 1)
+          elif '_SCHEMA_VERSION = 2' not in text:
+              raise SystemExit('unexpected project database schema version')
+
+          marker = '''            CREATE TABLE IF NOT EXISTS ai_organ_state (
+              organ_id TEXT PRIMARY KEY,
+              state_json TEXT NOT NULL,
+              version INTEGER NOT NULL,
+              updated_at_ms BIGINT NOT NULL
+          )
+          """,
+          '''
+          migration = '''            """
+          CREATE TABLE IF NOT EXISTS agent_fixes (
+              fix_id TEXT PRIMARY KEY,
+              error_signature TEXT NOT NULL,
+              patch TEXT NOT NULL,
+              patch_sha256 TEXT NOT NULL,
+              success INTEGER NOT NULL DEFAULT 0 CHECK (success IN (0, 1)),
+              source TEXT NOT NULL,
+              base_sha TEXT NOT NULL DEFAULT '',
+              applied_sha TEXT NOT NULL DEFAULT '',
+              validation_json TEXT NOT NULL DEFAULT '{}',
+              metadata_json TEXT NOT NULL DEFAULT '{}',
+              attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+              created_at_ms BIGINT NOT NULL,
+              updated_at_ms BIGINT NOT NULL
+          )
+          """,
+          """
+          CREATE INDEX IF NOT EXISTS agent_fixes_signature_idx
+          ON agent_fixes(error_signature, success, created_at_ms)
+          """,
+          """
+          CREATE INDEX IF NOT EXISTS agent_fixes_patch_idx
+          ON agent_fixes(patch_sha256, created_at_ms)
+          """,
+          """
+          CREATE TABLE IF NOT EXISTS agent_decisions (
+              decision_id TEXT PRIMARY KEY,
+              fix_id TEXT,
+              kind TEXT NOT NULL,
+              status TEXT NOT NULL,
+              base_sha TEXT NOT NULL,
+              patch_sha256 TEXT NOT NULL,
+              security_verdict TEXT NOT NULL,
+              security_details_json TEXT NOT NULL DEFAULT '{}',
+              proposal_json TEXT NOT NULL DEFAULT '{}',
+              protected_paths_json TEXT NOT NULL DEFAULT '[]',
+              actor TEXT NOT NULL,
+              risk_level TEXT NOT NULL DEFAULT 'unknown',
+              requires_approval INTEGER NOT NULL DEFAULT 1 CHECK (requires_approval IN (0, 1)),
+              created_at_ms BIGINT NOT NULL,
+              updated_at_ms BIGINT NOT NULL,
+              decided_at_ms BIGINT,
+              FOREIGN KEY (fix_id) REFERENCES agent_fixes(fix_id) ON DELETE SET NULL
+          )
+          """,
+          """
+          CREATE INDEX IF NOT EXISTS agent_decisions_fix_idx
+          ON agent_decisions(fix_id, created_at_ms)
+          """,
+          """
+          CREATE INDEX IF NOT EXISTS agent_decisions_status_idx
+          ON agent_decisions(status, kind, created_at_ms)
+          """,
+          """
+          CREATE INDEX IF NOT EXISTS agent_decisions_patch_idx
+          ON agent_decisions(patch_sha256, created_at_ms)
+          """,
+          """
+          CREATE TABLE IF NOT EXISTS agent_decision_events (
+              event_id TEXT PRIMARY KEY,
+              decision_id TEXT NOT NULL,
+              event_type TEXT NOT NULL,
+              actor TEXT NOT NULL,
+              payload_json TEXT NOT NULL,
+              created_at_ms BIGINT NOT NULL,
+              FOREIGN KEY (decision_id) REFERENCES agent_decisions(decision_id) ON DELETE CASCADE
+          )
+          """,
+          """
+          CREATE INDEX IF NOT EXISTS agent_decision_events_decision_idx
+          ON agent_decision_events(decision_id, created_at_ms, event_id)
+          """,
+          """
+          CREATE INDEX IF NOT EXISTS agent_decision_events_type_idx
+          ON agent_decision_events(event_type, created_at_ms)
+          """,
+          '''
+          if 'CREATE TABLE IF NOT EXISTS agent_fixes' not in text:
+              if marker not in text:
+                  raise SystemExit('project database migration marker not found')
+              text = text.replace(marker, marker + migration, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+      - name: Install focused test dependencies
+        run: python -m pip install --disable-pip-version-check 'pydantic>=2.0' 'pytest>=9.1'
+      - name: Verify migration and contracts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python -m compileall -q storage development_control ai_architecture_registry.py
+          python -m pytest -q \
+            tests/test_agent_learning_schema.py \
+            tests/test_development_control_models.py \
+            tests/test_ai_architecture_development_capabilities.py \
+            tests/test_project_database.py \
+            tests/test_ai_architecture_registry.py \
+            tests/test_self_healing_agent.py
+      - name: Remove staging workflows and commit
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -f \
+            .github/workflows/apply-agent-learning-schema.yml \
+            .github/workflows/self-healing-schema-source.yml
+          git config user.name 'SharipovAI Schema Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add \
+            storage/project_database.py \
+            ai_architecture_registry.py \
+            development_control \
+            tests/test_agent_learning_schema.py \
+            tests/test_development_control_models.py \
+            tests/test_ai_architecture_development_capabilities.py \
+            .github/workflows
+          git diff --cached --check
+          git commit -m 'feat(storage): add self-healing agent learning schema'
+          git push origin HEAD:feat/self-healing-agent-learning-schema
