@@ -29,7 +29,14 @@ CANONICAL_AI_ORGANS: tuple[AIOrgan, ...] = (
         "general_controller",
         "General Controller AI",
         "Координация всей системы, health supervision, self-test, recovery orchestration и маршрутизация задач.",
-        ("coordination", "supervision", "health_monitoring", "recovery_orchestration", "task_routing"),
+        (
+            "coordination",
+            "supervision",
+            "health_monitoring",
+            "recovery_orchestration",
+            "task_routing",
+            "development_change_orchestration",
+        ),
         ("system_ai_auditor", "runtime_supervisor", "mission_control"),
         ("supervisor_ai", "system_supervisor"),
         True,
@@ -48,7 +55,22 @@ CANONICAL_AI_ORGANS: tuple[AIOrgan, ...] = (
         "News Intelligence AI",
         "Сбор, классификация, проверка достоверности и маршрутизация реальных новостей.",
         ("news_collection", "source_verification", "credibility", "freshness", "event_routing"),
-        ("news_supervisor", "politics", "world", "economy", "finance", "crypto", "sports", "weather", "security", "technology", "health", "telegram", "x", "youtube"),
+        (
+            "news_supervisor",
+            "politics",
+            "world",
+            "economy",
+            "finance",
+            "crypto",
+            "sports",
+            "weather",
+            "security",
+            "technology",
+            "health",
+            "telegram",
+            "x",
+            "youtube",
+        ),
         ("news_agent", "news_supervisor_ai", "main_news_supervisor_ai"),
         True,
     ),
@@ -92,7 +114,15 @@ CANONICAL_AI_ORGANS: tuple[AIOrgan, ...] = (
         "learning_engine",
         "Learning Engine AI",
         "Преобразование ошибок и результатов в проверяемые уроки, правила и тесты.",
-        ("lessons", "mistakes", "rules", "exams", "improvement_proposals"),
+        (
+            "lessons",
+            "mistakes",
+            "rules",
+            "exams",
+            "improvement_proposals",
+            "repair_memory",
+            "few_shot_curation",
+        ),
         ("learning_os", "autonomous_learning_cycle"),
         (),
         True,
@@ -101,7 +131,15 @@ CANONICAL_AI_ORGANS: tuple[AIOrgan, ...] = (
         "security_guard",
         "Security Guard AI",
         "Доступы, секреты, policy-ограничения, блокировка реальных ордеров и security alerts.",
-        ("access_control", "secret_safety", "policy_guard", "real_order_lock", "security_alerts"),
+        (
+            "access_control",
+            "secret_safety",
+            "policy_guard",
+            "real_order_lock",
+            "security_alerts",
+            "patch_policy",
+            "protected_path_guard",
+        ),
         ("security_cyber", "policy_guard"),
         ("security_cyber_ai",),
         True,
@@ -143,7 +181,11 @@ def architecture_snapshot() -> dict[str, Any]:
 def canonical_id(identifier: str) -> str | None:
     clean = identifier.strip().lower()
     for organ in CANONICAL_AI_ORGANS:
-        aliases = {organ.id, *(alias.lower() for alias in organ.legacy_aliases), *(module.lower() for module in organ.submodules)}
+        aliases = {
+            organ.id,
+            *(alias.lower() for alias in organ.legacy_aliases),
+            *(module.lower() for module in organ.submodules),
+        }
         if clean in aliases:
             return organ.id
     return None
@@ -160,5 +202,11 @@ def responsibility_owner(capability: str) -> dict[str, Any]:
         "status": "ok" if matches else "unowned",
         "capability": capability,
         "owners": matches,
-        "recommendation": "extend_existing" if len(matches) == 1 else "merge_or_disambiguate" if len(matches) > 1 else "candidate_for_new_organ",
+        "recommendation": (
+            "extend_existing"
+            if len(matches) == 1
+            else "merge_or_disambiguate"
+            if len(matches) > 1
+            else "candidate_for_new_organ"
+        ),
     }
