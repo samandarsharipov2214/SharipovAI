@@ -9,6 +9,7 @@ from typing import Any, Mapping
 from meta_ai_persistence import EVENT_NAMESPACE
 from storage import ProjectDatabase, list_json_items
 
+from .development_learning import DevelopmentLearningService
 from .outcome_attribution import OutcomeAttributionService
 from .research_challengers import ResearchChallengerService
 
@@ -24,11 +25,13 @@ class SelfLearningSupervisor:
         *,
         attribution: OutcomeAttributionService | None = None,
         challengers: ResearchChallengerService | None = None,
+        development_learning: DevelopmentLearningService | None = None,
     ) -> None:
         self.database = database or ProjectDatabase()
         self.database.initialize()
         self.attribution = attribution or OutcomeAttributionService(self.database)
         self.challengers = challengers or ResearchChallengerService(self.database)
+        self.development_learning = development_learning or DevelopmentLearningService(self.database)
         self.interval_seconds = _bounded_float("SELF_LEARNING_INTERVAL_SECONDS", 60.0, 5.0, 3600.0)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -103,14 +106,28 @@ class SelfLearningSupervisor:
                     "error": f"{type(exc).__name__}: {exc}",
                 }
 
+        try:
+            development_result = self.development_learning.run_weekly_process_review(timestamp)
+        except (KeyError, RuntimeError, TypeError, ValueError, OSError) as exc:
+            development_result = {
+                "status": "blocked",
+                "proposal_type": "process_optimization",
+                "error": f"{type(exc).__name__}: {exc}",
+                "requires_manual_approval": True,
+                "execution_authority": False,
+                "automatic_code_application": False,
+                "runtime_flags_changed": False,
+            }
+
         state = {
-            "status": "degraded" if failed else "ok",
+            "status": "degraded" if failed or development_result.get("status") in {"blocked", "error"} else "ok",
             "processed_count": processed,
             "skipped_count": skipped,
             "failed_count": failed,
             "errors": errors[-20:],
             "learning_summary": summary,
             "challenger": challenger_result,
+            "development_learning": development_result,
             "updated_at_ms": timestamp,
             "execution_authority": False,
             "automatic_execution_promotion": False,
