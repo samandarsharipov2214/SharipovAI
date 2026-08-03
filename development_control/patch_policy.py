@@ -2,9 +2,9 @@
 
 The parser intentionally uses only the Python standard library so the policy can
 run inside the production Docker image without Git, a compiler, network access or
-additional packages.  It parses enough of Git/unified diff syntax to identify
-paths, content hunks, binary data, copies/renames and file modes.  Ambiguous input
-is rejected instead of guessed.
+additional packages. It parses enough Git/unified diff syntax to identify paths,
+content hunks, binary data, copies/renames and file modes. Ambiguous input is
+rejected instead of guessed.
 """
 from __future__ import annotations
 
@@ -17,11 +17,7 @@ from typing import Final, Iterable
 
 
 PROTECTED_EXACT: Final[frozenset[str]] = frozenset(
-    {
-        "CONSTITUTION.md",
-        "Dockerfile",
-        "requirements.txt",
-    }
+    {"CONSTITUTION.md", "Dockerfile", "requirements.txt"}
 )
 PROTECTED_PREFIXES: Final[tuple[str, ...]] = (
     ".github/",
@@ -30,20 +26,20 @@ PROTECTED_PREFIXES: Final[tuple[str, ...]] = (
 )
 MAX_PATCH_BYTES: Final[int] = 2_000_000
 
-_BINARY_MARKERS: Final[tuple[str, ...]] = (
-    "GIT binary patch",
-    "Binary files ",
+_PROTECTED_EXACT_FOLDED: Final[frozenset[str]] = frozenset(
+    item.casefold() for item in PROTECTED_EXACT
 )
+_PROTECTED_PREFIXES_FOLDED: Final[tuple[str, ...]] = tuple(
+    item.casefold() for item in PROTECTED_PREFIXES
+)
+_BINARY_MARKERS: Final[tuple[str, ...]] = ("GIT binary patch", "Binary files ")
 _RENAME_MARKERS: Final[tuple[str, ...]] = (
     "rename from ",
     "rename to ",
     "similarity index ",
     "dissimilarity index ",
 )
-_COPY_MARKERS: Final[tuple[str, ...]] = (
-    "copy from ",
-    "copy to ",
-)
+_COPY_MARKERS: Final[tuple[str, ...]] = ("copy from ", "copy to ")
 _MODE_RE: Final[re.Pattern[str]] = re.compile(
     r"^(?:(?:old|new|new file|deleted file) mode)\s+(?P<mode>[0-7]{6})$"
 )
@@ -51,9 +47,11 @@ _INDEX_MODE_RE: Final[re.Pattern[str]] = re.compile(
     r"^index\s+[0-9a-fA-F.]+(?:\s+(?P<mode>[0-7]{6}))?$"
 )
 _HUNK_RE: Final[re.Pattern[str]] = re.compile(
-    r"^@@\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@(?:\s.*)?$"
+    r"^@@\s+-(?P<old_start>\d+)(?:,(?P<old_count>\d+))?\s+"
+    r"\+(?P<new_start>\d+)(?:,(?P<new_count>\d+))?\s+@@(?:\s.*)?$"
 )
 _DRIVE_RE: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z]:")
+_NO_NEWLINE_MARKER: Final[str] = r"\ No newline at end of file"
 
 
 class PatchParseError(ValueError):
@@ -122,13 +120,56 @@ class _SectionBuilder:
     binary: bool = False
     rename_or_copy: bool = False
     in_hunk: bool = False
+    old_remaining: int = 0
+    new_remaining: int = 0
+
+    def start_hunk(self, header: str) -> None:
+        match = _HUNK_RE.match(header)
+        if match is None:
+            raise PatchParseError(f"invalid hunk header: {header!r}")
+        if not self.saw_old_header or not self.saw_new_header:
+            raise PatchParseError("hunk appeared before ---/+++ file headers")
+        if self.in_hunk:
+            raise PatchParseError("new hunk started before the previous hunk completed")
+        self.old_remaining = int(match.group("old_count") or "1")
+        self.new_remaining = int(match.group("new_count") or "1")
+        self.hunk_count += 1
+        self.in_hunk = True
+        self._complete_hunk_if_ready()
+
+    def consume_hunk_line(self, line: str) -> None:
+        if not self.in_hunk:
+            raise PatchParseError("hunk content appeared outside a hunk")
+        if line.startswith("+"):
+            self.added_lines.append(line[1:])
+            self.new_remaining -= 1
+        elif line.startswith("-"):
+            self.removed_lines.append(line[1:])
+            self.old_remaining -= 1
+        elif line.startswith(" "):
+            self.old_remaining -= 1
+            self.new_remaining -= 1
+        elif line == _NO_NEWLINE_MARKER:
+            return
+        else:
+            raise PatchParseError(f"invalid hunk line prefix: {line[:40]!r}")
+        if self.old_remaining < 0 or self.new_remaining < 0:
+            raise PatchParseError("hunk contains more lines than declared")
+        self._complete_hunk_if_ready()
+
+    def _complete_hunk_if_ready(self) -> None:
+        if self.old_remaining == 0 and self.new_remaining == 0:
+            self.in_hunk = False
 
     def build(self) -> FilePatch:
+        if self.in_hunk or self.old_remaining or self.new_remaining:
+            raise PatchParseError("file section ended before the hunk completed")
+
         old_path = self.header_old_path if self.saw_old_header else self.diff_old_path
         new_path = self.header_new_path if self.saw_new_header else self.diff_new_path
-
         if old_path is None and new_path is None:
             raise PatchParseError("file section has no usable old or new path")
+
         if self.saw_old_header and self.header_old_path is not None and self.diff_old_path is not None:
             if self.header_old_path != self.diff_old_path:
                 raise PatchParseError(
@@ -142,7 +183,12 @@ class _SectionBuilder:
 
         if old_path is not None and new_path is not None and old_path != new_path:
             self.rename_or_copy = True
-        if not self.binary and self.hunk_count == 0 and not self.modes:
+        if (
+            not self.binary
+            and not self.rename_or_copy
+            and self.hunk_count == 0
+            and not self.modes
+        ):
             raise PatchParseError(f"file section has no hunks or mode change: {new_path or old_path}")
 
         return FilePatch(
@@ -161,7 +207,7 @@ class _SectionBuilder:
 def parse_unified_diff(patch: str) -> tuple[FilePatch, ...]:
     """Parse a Git or plain unified diff into normalized file sections.
 
-    The function does not apply patches.  Invalid or ambiguous syntax raises
+    The function never applies the patch. Invalid or ambiguous syntax raises
     :class:`PatchParseError` so the caller can deny the proposal.
     """
 
@@ -196,14 +242,25 @@ def parse_unified_diff(patch: str) -> tuple[FilePatch, ...]:
             index += 1
             continue
 
-        if current is None and line.startswith("--- "):
+        if line.startswith("--- ") and (
+            current is None
+            or (
+                not current.in_hunk
+                and current.saw_old_header
+                and current.saw_new_header
+                and current.hunk_count > 0
+            )
+        ):
             if index + 1 >= len(lines) or not lines[index + 1].startswith("+++ "):
                 raise PatchParseError("plain unified diff is missing +++ header")
-            current = _SectionBuilder()
-            current.header_old_path = _parse_file_header_path(line[4:])
-            current.header_new_path = _parse_file_header_path(lines[index + 1][4:])
-            current.saw_old_header = True
-            current.saw_new_header = True
+            if current is not None:
+                finish_current()
+            current = _SectionBuilder(
+                header_old_path=_parse_file_header_path(line[4:]),
+                header_new_path=_parse_file_header_path(lines[index + 1][4:]),
+                saw_old_header=True,
+                saw_new_header=True,
+            )
             index += 2
             continue
 
@@ -223,26 +280,15 @@ def parse_unified_diff(patch: str) -> tuple[FilePatch, ...]:
             current.saw_new_header = True
             index += 1
             continue
-
         if line.startswith("@@"):
-            if not _HUNK_RE.match(line):
-                raise PatchParseError(f"invalid hunk header: {line!r}")
-            if not current.saw_old_header or not current.saw_new_header:
-                raise PatchParseError("hunk appeared before ---/+++ file headers")
-            current.hunk_count += 1
-            current.in_hunk = True
+            current.start_hunk(line)
             index += 1
             continue
-
         if current.in_hunk:
-            if line.startswith("+"):
-                current.added_lines.append(line[1:])
-            elif line.startswith("-"):
-                current.removed_lines.append(line[1:])
-            elif line.startswith(" ") or line == r"\ No newline at end of file" or line == "":
-                pass
-            else:
-                raise PatchParseError(f"invalid hunk line prefix: {line[:40]!r}")
+            current.consume_hunk_line(line)
+            index += 1
+            continue
+        if line == _NO_NEWLINE_MARKER:
             index += 1
             continue
 
@@ -297,19 +343,16 @@ def is_protected_path(path: str) -> bool:
     """Check exact and prefix protections after canonical normalization."""
 
     folded = path.casefold()
-    exact = {item.casefold() for item in PROTECTED_EXACT}
-    prefixes = tuple(item.casefold() for item in PROTECTED_PREFIXES)
-    return folded in exact or folded.startswith(prefixes)
+    return folded in _PROTECTED_EXACT_FOLDED or folded.startswith(
+        _PROTECTED_PREFIXES_FOLDED
+    )
 
 
 def is_test_path(path: str) -> bool:
     parts = path.split("/")
     name = parts[-1].casefold()
-    return (
-        "tests" in {part.casefold() for part in parts[:-1]}
-        or name.startswith("test_")
-        or name.endswith("_test.py")
-    )
+    directory_parts = {part.casefold() for part in parts[:-1]}
+    return "tests" in directory_parts or name.startswith("test_") or name.endswith("_test.py")
 
 
 def is_test_policy_path(path: str) -> bool:
@@ -330,6 +373,8 @@ def unique_reasons(reasons: Iterable[str]) -> list[str]:
 
 def _parse_git_diff_header(line: str) -> tuple[str, str]:
     raw = line[len("diff --git ") :]
+    if "\\" in raw:
+        raise PatchParseError("backslash escape/separator is forbidden in diff --git path")
     try:
         tokens = shlex.split(raw, posix=True)
     except ValueError as exc:
