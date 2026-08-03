@@ -1,5 +1,6 @@
 """Learning engine package for SharipovAI OS."""
 
+from .development_learning import DevelopmentLearningService
 from .evidence_policy import AgentEvidence, OutcomeEvidence, SelfLearningPolicy
 from .exceptions import LearningEngineError
 from .learning_engine import LearningEngine
@@ -13,6 +14,7 @@ __all__: tuple[str, ...] = (
     "AgentAttribution",
     "AgentEvidence",
     "ChallengerEvaluation",
+    "DevelopmentLearningService",
     "LearningEngine",
     "LearningEngineError",
     "LearningRecord",
