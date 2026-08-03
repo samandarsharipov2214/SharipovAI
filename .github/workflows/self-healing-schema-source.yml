@@ -1,0 +1,39 @@
+name: Self-healing schema source snapshot
+
+on:
+  push:
+    branches:
+      - feat/self-healing-agent-learning-schema
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build safe source archive
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          tar \
+            --exclude=.git \
+            --exclude='*.db' \
+            --exclude='*.sqlite*' \
+            --exclude='.env*' \
+            --exclude='data' \
+            --exclude='runtime' \
+            --exclude='state' \
+            -czf /tmp/sharipovai-source.tgz .
+          mkdir -p artifacts
+          mv /tmp/sharipovai-source.tgz artifacts/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: self-healing-schema-source
+          path: artifacts/sharipovai-source.tgz
+          retention-days: 1
+          if-no-files-found: error
