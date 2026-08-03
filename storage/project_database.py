@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 _TRUE = {"1", "true", "yes", "on"}
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 
 class DatabaseUnavailable(RuntimeError):
@@ -120,6 +120,83 @@ class ProjectDatabase:
                 version INTEGER NOT NULL,
                 updated_at_ms BIGINT NOT NULL
             )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS agent_fixes (
+                fix_id TEXT PRIMARY KEY,
+                error_signature TEXT NOT NULL,
+                patch TEXT NOT NULL,
+                patch_sha256 TEXT NOT NULL,
+                success INTEGER NOT NULL DEFAULT 0 CHECK (success IN (0, 1)),
+                source TEXT NOT NULL,
+                base_sha TEXT NOT NULL DEFAULT '',
+                applied_sha TEXT NOT NULL DEFAULT '',
+                validation_json TEXT NOT NULL DEFAULT '{}',
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+                created_at_ms BIGINT NOT NULL,
+                updated_at_ms BIGINT NOT NULL
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS agent_fixes_signature_idx
+            ON agent_fixes(error_signature, success, created_at_ms)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS agent_fixes_patch_idx
+            ON agent_fixes(patch_sha256, created_at_ms)
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS agent_decisions (
+                decision_id TEXT PRIMARY KEY,
+                fix_id TEXT,
+                kind TEXT NOT NULL,
+                status TEXT NOT NULL,
+                base_sha TEXT NOT NULL,
+                patch_sha256 TEXT NOT NULL,
+                security_verdict TEXT NOT NULL,
+                security_details_json TEXT NOT NULL DEFAULT '{}',
+                proposal_json TEXT NOT NULL DEFAULT '{}',
+                protected_paths_json TEXT NOT NULL DEFAULT '[]',
+                actor TEXT NOT NULL,
+                risk_level TEXT NOT NULL DEFAULT 'unknown',
+                requires_approval INTEGER NOT NULL DEFAULT 1 CHECK (requires_approval IN (0, 1)),
+                created_at_ms BIGINT NOT NULL,
+                updated_at_ms BIGINT NOT NULL,
+                decided_at_ms BIGINT,
+                FOREIGN KEY (fix_id) REFERENCES agent_fixes(fix_id) ON DELETE SET NULL
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS agent_decisions_fix_idx
+            ON agent_decisions(fix_id, created_at_ms)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS agent_decisions_status_idx
+            ON agent_decisions(status, kind, created_at_ms)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS agent_decisions_patch_idx
+            ON agent_decisions(patch_sha256, created_at_ms)
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS agent_decision_events (
+                event_id TEXT PRIMARY KEY,
+                decision_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at_ms BIGINT NOT NULL,
+                FOREIGN KEY (decision_id) REFERENCES agent_decisions(decision_id) ON DELETE CASCADE
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS agent_decision_events_decision_idx
+            ON agent_decision_events(decision_id, created_at_ms, event_id)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS agent_decision_events_type_idx
+            ON agent_decision_events(event_type, created_at_ms)
             """,
         ]
         with self.connect() as connection:
