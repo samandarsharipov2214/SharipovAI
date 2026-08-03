@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from ai_architecture_registry import CANONICAL_AI_ORGANS
 from dashboard.app import create_app
 
 
@@ -33,22 +34,11 @@ def test_ai_bots_endpoint_returns_canonical_organs(monkeypatch, tmp_path) -> Non
         assert response.status_code == 200
         payload = response.json()
         bots = payload.get("bots", payload.get("agents", []))
-        expected_names = {
-            "General Controller",
-            "Market Agent",
-            "News Agent",
-            "Risk Engine",
-            "Portfolio Engine",
-            "Paper Trading Bot",
-            "Confidence Engine",
-            "Consensus Engine",
-            "Stress Bot",
-            "Learning Engine",
-            "Security Guard",
-        }
+        expected_names = {organ.name for organ in CANONICAL_AI_ORGANS}
         actual_names = {str(item.get("name", "")) for item in bots}
         assert actual_names == expected_names
         assert len(bots) == len(expected_names)
+        assert payload["summary"]["canonical_ai_count"] == len(CANONICAL_AI_ORGANS)
 
 
 def test_legacy_demo_state_mirrors_virtual_account(monkeypatch, tmp_path) -> None:
