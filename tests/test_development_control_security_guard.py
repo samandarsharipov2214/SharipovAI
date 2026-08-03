@@ -269,7 +269,7 @@ def test_assertion_count_cannot_be_reduced() -> None:
 index 1111111..2222222 100644
 --- a/tests/test_state.py
 +++ b/tests/test_state.py
-@@ -1,4 +1,3 @@
+@@ -1,3 +1,2 @@
  def test_state():
 -    assert state.ready is True
 -    assert state.errors == []
@@ -285,7 +285,7 @@ def test_semantic_test_rewrite_with_equal_assertion_count_is_allowed() -> None:
 index 1111111..2222222 100644
 --- a/tests/test_state.py
 +++ b/tests/test_state.py
-@@ -1,3 +1,3 @@
+@@ -1,2 +1,2 @@
  def test_state():
 -    assert state.ready is True
 +    assert state.status == "ready"
