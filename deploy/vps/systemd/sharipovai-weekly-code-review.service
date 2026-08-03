@@ -1,0 +1,26 @@
+[Unit]
+Description=SharipovAI weekly owner-approved code review proposal
+Documentation=https://github.com/samandarsharipov2214/SharipovAI
+Requires=docker.service
+After=docker.service network-online.target sharipovai-self-healing.service
+Wants=network-online.target
+ConditionPathExists=/opt/sharipovai-repo/tools/weekly_code_reviewer.py
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+Environment=SHARIPOVAI_REPO_DIR=/opt/sharipovai-repo
+ExecStart=/usr/local/sbin/sharipovai-weekly-code-review-run
+TimeoutStartSec=10min
+Nice=15
+IOSchedulingClass=idle
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/run
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
