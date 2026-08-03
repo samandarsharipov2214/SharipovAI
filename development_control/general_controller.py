@@ -66,6 +66,10 @@ class DevelopmentChangeController:
         self._save(decision)
         return decision
 
+    def get(self, decision_id: str) -> AgentDecision:
+        """Return a persisted decision by full or unambiguous short ID."""
+        return self._get(decision_id)
+
     def security_review(self, decision_id: str) -> AgentDecision:
         decision = self._get(decision_id)
         self._ensure_mutable(decision)
