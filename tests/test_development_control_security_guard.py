@@ -210,6 +210,22 @@ index 1111111..2222222 100644
     assert "subprocess shell=True" in _reasons(patch)
 
 
+def test_safe_regex_compile_and_disabled_auth_false_are_allowed() -> None:
+    regex_patch = _replace_patch(
+        "src/parser.py",
+        "PATTERN = None",
+        "PATTERN = re.compile(r'^[a-z]+$')",
+    )
+    assert evaluate_patch(regex_patch).allowed is True
+
+    auth_patch = _replace_patch(
+        "src/config.py",
+        "SETTING = 'unset'",
+        "SHARIPOVAI_DISABLE_AUTH = 0",
+    )
+    assert evaluate_patch(auth_patch).allowed is True
+
+
 def test_unsafe_yaml_load_is_denied_but_safe_loader_is_allowed() -> None:
     unsafe = _replace_patch("src/config.py", "value = {}", "value = yaml.load(text)")
     assert evaluate_patch(unsafe).allowed is False
@@ -251,7 +267,7 @@ index 1111111..0000000
 """
     verdict = evaluate_patch(patch)
     assert verdict.allowed is False
-    assert "test file deleted" in _reasons(patch)
+    assert "test contract deleted" in _reasons(patch)
 
 
 def test_skip_xfail_and_suppression_cannot_be_added_to_tests() -> None:
@@ -353,4 +369,4 @@ def test_malformed_unfinished_or_empty_patch_is_denied() -> None:
 +new
 """
     assert evaluate_patch(unfinished).allowed is False
-    assert "hunk completed" in _reasons(unfinished)
+    assert "malformed patch" in _reasons(unfinished)
