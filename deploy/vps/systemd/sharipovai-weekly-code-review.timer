@@ -1,0 +1,12 @@
+[Unit]
+Description=Run SharipovAI weekly code review proposal
+
+[Timer]
+OnCalendar=Mon *-*-* 04:30:00 UTC
+Persistent=true
+AccuracySec=5min
+RandomizedDelaySec=30min
+Unit=sharipovai-weekly-code-review.service
+
+[Install]
+WantedBy=timers.target
