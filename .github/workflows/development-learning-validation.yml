@@ -3,18 +3,25 @@ name: Development Learning Validation
 on:
   push:
     branches: [ci/development-learning-validation]
+  pull_request:
+    branches: [agent/development-learning]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: development-learning-validation
+  group: development-learning-validation-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   focused:
-    if: ${{ vars.SHARIPOVAI_SELF_HOSTED_CI == '1' }}
+    if: >-
+      ${{
+        vars.SHARIPOVAI_SELF_HOSTED_CI == '1' &&
+        (github.event_name != 'pull_request' ||
+         github.event.pull_request.head.repo.full_name == github.repository)
+      }}
     runs-on: [self-hosted, linux, x64, sharipovai-ci]
     timeout-minutes: 20
     env:
