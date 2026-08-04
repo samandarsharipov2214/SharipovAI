@@ -46,6 +46,7 @@ Description=Run SharipovAI verified backup every hour
 [Timer]
 OnBootSec=10min
 OnCalendar=hourly
+OnUnitActiveSec=1h
 AccuracySec=1min
 RandomizedDelaySec=5min
 Persistent=true
