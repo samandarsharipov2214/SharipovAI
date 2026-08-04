@@ -8,18 +8,20 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 WRAPPER = ROOT / "deploy" / "vps" / "self-healing-run.sh"
+HELPER = ROOT / "deploy" / "vps" / "self-healing-approved-patch.sh"
 
 
 def _text() -> str:
-    return WRAPPER.read_text(encoding="utf-8")
+    return WRAPPER.read_text(encoding="utf-8") + "\n" + HELPER.read_text(encoding="utf-8")
 
 
 def test_wrapper_shell_syntax() -> None:
     bash = shutil.which("bash")
     if bash is None:
         pytest.skip("bash is unavailable")
-    result = subprocess.run([bash, "-n", str(WRAPPER)], text=True, capture_output=True)
-    assert result.returncode == 0, result.stderr
+    for script in (WRAPPER, HELPER):
+        result = subprocess.run([bash, "-n", str(script)], text=True, capture_output=True)
+        assert result.returncode == 0, result.stderr
 
 
 def test_apply_approved_patch_manifest_and_integrity_contract() -> None:
