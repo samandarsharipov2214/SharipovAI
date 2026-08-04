@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 _TRUE = {"1", "true", "yes", "on"}
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 
 class DatabaseUnavailable(RuntimeError):
@@ -60,7 +60,9 @@ class ProjectDatabase:
             try:
                 connection = psycopg.connect(self.dsn, autocommit=False)
             except Exception as exc:  # pragma: no cover - external service
-                raise DatabaseUnavailable(f"PostgreSQL connection failed: {type(exc).__name__}: {exc}") from exc
+                raise DatabaseUnavailable(
+                    f"PostgreSQL connection failed: {type(exc).__name__}: {exc}"
+                ) from exc
         try:
             yield connection
         finally:
@@ -121,6 +123,61 @@ class ProjectDatabase:
                 updated_at_ms BIGINT NOT NULL
             )
             """,
+            """
+            CREATE TABLE IF NOT EXISTS agent_fixes (
+                fix_id TEXT PRIMARY KEY,
+                error_signature TEXT NOT NULL,
+                patch TEXT NOT NULL,
+                success INTEGER NOT NULL DEFAULT 0,
+                source TEXT NOT NULL,
+                failure_reason TEXT NOT NULL DEFAULT '',
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at_ms BIGINT NOT NULL,
+                updated_at_ms BIGINT NOT NULL
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS agent_fixes_signature_idx
+            ON agent_fixes(error_signature, success, created_at_ms)
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS agent_decisions (
+                decision_id TEXT PRIMARY KEY,
+                fix_id TEXT,
+                kind TEXT NOT NULL,
+                status TEXT NOT NULL,
+                base_sha TEXT NOT NULL,
+                patch_sha256 TEXT NOT NULL,
+                security_verdict TEXT NOT NULL,
+                proposal_json TEXT NOT NULL DEFAULT '{}',
+                created_at_ms BIGINT NOT NULL,
+                updated_at_ms BIGINT NOT NULL,
+                FOREIGN KEY (fix_id) REFERENCES agent_fixes(fix_id) ON DELETE SET NULL
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS agent_decisions_status_idx
+            ON agent_decisions(status, kind, created_at_ms)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS agent_decisions_fix_idx
+            ON agent_decisions(fix_id, created_at_ms)
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS agent_decision_events (
+                event_id TEXT PRIMARY KEY,
+                decision_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                created_at_ms BIGINT NOT NULL,
+                FOREIGN KEY (decision_id) REFERENCES agent_decisions(decision_id) ON DELETE CASCADE
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS agent_decision_events_lookup_idx
+            ON agent_decision_events(decision_id, created_at_ms, event_id)
+            """,
         ]
         with self.connect() as connection:
             try:
@@ -142,7 +199,10 @@ class ProjectDatabase:
         try:
             self.initialize()
             with self.connect() as connection:
-                row = self._fetchone(connection, "SELECT MAX(version) AS version FROM schema_migrations")
+                row = self._fetchone(
+                    connection,
+                    "SELECT MAX(version) AS version FROM schema_migrations",
+                )
             return {
                 "status": "ok",
                 "backend": self.backend,
@@ -333,7 +393,13 @@ class ProjectDatabase:
                 connection.rollback()
                 raise
 
-    def list_messages(self, *, project_id: str, chat_id: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+    def list_messages(
+        self,
+        *,
+        project_id: str,
+        chat_id: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
         project_id = _identifier(project_id, "project_id")
         limit = min(max(int(limit), 1), 2000)
         if chat_id is None:
@@ -365,7 +431,13 @@ class ProjectDatabase:
             for row in rows
         ]
 
-    def set_ai_state(self, organ_id: str, state: Any, *, expected_version: int | None = None) -> int:
+    def set_ai_state(
+        self,
+        organ_id: str,
+        state: Any,
+        *,
+        expected_version: int | None = None,
+    ) -> int:
         organ_id = _identifier(organ_id, "organ_id")
         now = _now_ms()
         with self.connect() as connection:
@@ -430,7 +502,12 @@ class ProjectDatabase:
                 normalized += " FOR UPDATE"
         return normalized
 
-    def _execute(self, connection: Any, query: str, params: tuple[Any, ...] = ()) -> Any:
+    def _execute(
+        self,
+        connection: Any,
+        query: str,
+        params: tuple[Any, ...] = (),
+    ) -> Any:
         if self.backend == "sqlite":
             return connection.execute(self._sql(query), params)
         cursor = connection.cursor()
@@ -451,17 +528,28 @@ class ProjectDatabase:
             return None
         if isinstance(row, sqlite3.Row):
             return dict(row)
-        columns = [item.name if hasattr(item, "name") else item[0] for item in cursor.description]
+        columns = [
+            item.name if hasattr(item, "name") else item[0]
+            for item in cursor.description
+        ]
         return dict(zip(columns, row, strict=True))
 
-    def _fetchall(self, connection: Any, query: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
+    def _fetchall(
+        self,
+        connection: Any,
+        query: str,
+        params: tuple[Any, ...] = (),
+    ) -> list[dict[str, Any]]:
         cursor = self._execute(connection, query, params)
         rows = cursor.fetchall()
         if not rows:
             return []
         if isinstance(rows[0], sqlite3.Row):
             return [dict(row) for row in rows]
-        columns = [item.name if hasattr(item, "name") else item[0] for item in cursor.description]
+        columns = [
+            item.name if hasattr(item, "name") else item[0]
+            for item in cursor.description
+        ]
         return [dict(zip(columns, row, strict=True)) for row in rows]
 
 
@@ -496,7 +584,13 @@ def _role(value: str) -> str:
 
 
 def _json(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True, allow_nan=False)
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+        allow_nan=False,
+    )
 
 
 __all__ = ["DatabaseUnavailable", "ProjectDatabase", "VersionConflict"]
