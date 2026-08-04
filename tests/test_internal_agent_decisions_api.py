@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import types
 from pathlib import Path
@@ -24,16 +25,28 @@ sys.modules[spec.name] = module
 spec.loader.exec_module(module)
 install_internal_agent_decisions_api = module.install_internal_agent_decisions_api
 
+BASE_SHA = "a" * 40
+PATCH_SHA = "b" * 64
+HEADERS = {"X-SharipovAI-Service-Token": "service-secret"}
 
-def _payload(**overrides):
+
+def _claim(**overrides):
     value = {
         "decision_id": "decision-001",
         "action": "apply_approved_patch",
+        "base_sha": BASE_SHA,
+        "patch_sha256": PATCH_SHA,
+    }
+    value.update(overrides)
+    return value
+
+
+def _result(**overrides):
+    value = {
+        **_claim(),
         "status": "applied",
         "phase": "complete",
         "message": "approved patch applied and health verified",
-        "base_sha": "a" * 40,
-        "patch_sha256": "b" * 64,
         "commit_sha": "c" * 40,
         "health_verified": True,
     }
@@ -41,41 +54,74 @@ def _payload(**overrides):
     return value
 
 
-def _client(tmp_path, monkeypatch) -> TestClient:
+def _client(tmp_path, monkeypatch, *, status: str = "approved", verdict: str = "allow"):
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'project.db'}")
     monkeypatch.setenv("SHARIPOVAI_SERVICE_TOKEN", "service-secret")
+    database = ProjectDatabase()
+    database.initialize()
+    database.record_agent_decision(
+        decision_id="decision-001",
+        kind="approve",
+        status=status,
+        base_sha=BASE_SHA,
+        target_branch="main",
+        patch_sha256=PATCH_SHA,
+        security_verdict=verdict,
+        actor="telegram-owner",
+        rationale="owner approved bounded repair",
+        metadata={"owner_approved": True},
+    )
     app = FastAPI()
     install_internal_agent_decisions_api(app)
     install_internal_agent_decisions_api(app)
-    assert "/internal/agent-decisions" not in app.openapi().get("paths", {})
-    return TestClient(app, client=("127.0.0.1", 50123))
+    paths = app.openapi().get("paths", {})
+    assert "/internal/agent-decisions" not in paths
+    assert "/internal/agent-decisions/claim" not in paths
+    return TestClient(app, client=("127.0.0.1", 50123)), database
 
 
-def test_records_agent_decision_in_canonical_namespace(tmp_path, monkeypatch) -> None:
-    client = _client(tmp_path, monkeypatch)
-    response = client.post(
-        "/internal/agent-decisions",
-        headers={"X-SharipovAI-Service-Token": "service-secret"},
-        json=_payload(),
+def test_claim_requires_existing_owner_and_security_approval(tmp_path, monkeypatch) -> None:
+    client, _ = _client(tmp_path, monkeypatch)
+    response = client.post("/internal/agent-decisions/claim", headers=HEADERS, json=_claim())
+    assert response.status_code == 200
+    assert response.json()["approved"] is True
+
+    wrong = client.post(
+        "/internal/agent-decisions/claim",
+        headers=HEADERS,
+        json=_claim(patch_sha256="d" * 64),
     )
+    assert wrong.status_code == 409
+
+
+def test_records_terminal_result_in_agent_decisions_and_event(tmp_path, monkeypatch) -> None:
+    client, database = _client(tmp_path, monkeypatch)
+    response = client.post("/internal/agent-decisions", headers=HEADERS, json=_result())
     assert response.status_code == 200
     assert response.json()["idempotent"] is False
 
-    record = ProjectDatabase().get_json("agent_decisions", "decision-001")
+    record = database.get_agent_decision("decision-001")
     assert record is not None
-    assert record["value"]["status"] == "applied"
-    assert record["value"]["source"] == "self-healing-run"
+    assert record["status"] == "applied"
+    assert record["metadata"]["host_result"]["status"] == "applied"
+    with database.connect() as connection:
+        row = connection.execute(
+            "SELECT event_type, payload_json FROM agent_decision_events WHERE decision_id = ?",
+            ("decision-001",),
+        ).fetchone()
+    assert row is not None
+    assert row["event_type"] == "host_applied"
+    assert json.loads(row["payload_json"])["health_verified"] is True
 
 
-def test_idempotent_retry_and_conflict(tmp_path, monkeypatch) -> None:
-    client = _client(tmp_path, monkeypatch)
-    headers = {"X-SharipovAI-Service-Token": "service-secret"}
-    first = client.post("/internal/agent-decisions", headers=headers, json=_payload())
-    second = client.post("/internal/agent-decisions", headers=headers, json=_payload())
+def test_exact_retry_is_idempotent_and_conflicting_result_is_rejected(tmp_path, monkeypatch) -> None:
+    client, _ = _client(tmp_path, monkeypatch)
+    first = client.post("/internal/agent-decisions", headers=HEADERS, json=_result())
+    second = client.post("/internal/agent-decisions", headers=HEADERS, json=_result())
     conflict = client.post(
         "/internal/agent-decisions",
-        headers=headers,
-        json=_payload(status="reverted", phase="health", message="reverted"),
+        headers=HEADERS,
+        json=_result(status="reverted", phase="health", message="reverted"),
     )
     assert first.status_code == 200
     assert second.status_code == 200
@@ -83,17 +129,18 @@ def test_idempotent_retry_and_conflict(tmp_path, monkeypatch) -> None:
     assert conflict.status_code == 409
 
 
-def test_requires_loopback_service_auth(tmp_path, monkeypatch) -> None:
-    client = _client(tmp_path, monkeypatch)
-    missing = client.post("/internal/agent-decisions", json=_payload())
+def test_unapproved_or_unauthenticated_decision_fails_closed(tmp_path, monkeypatch) -> None:
+    client, _ = _client(tmp_path, monkeypatch, status="pending")
+    unapproved = client.post("/internal/agent-decisions/claim", headers=HEADERS, json=_claim())
+    assert unapproved.status_code == 409
+    missing = client.post("/internal/agent-decisions/claim", json=_claim())
     assert missing.status_code == 401
 
-    remote_app = FastAPI()
-    install_internal_agent_decisions_api(remote_app)
-    remote = TestClient(remote_app, client=("192.0.2.10", 50123))
-    denied = remote.post(
-        "/internal/agent-decisions",
-        headers={"X-SharipovAI-Service-Token": "service-secret"},
-        json=_payload(),
-    )
+
+def test_remote_client_is_rejected(tmp_path, monkeypatch) -> None:
+    _, _ = _client(tmp_path, monkeypatch)
+    app = FastAPI()
+    install_internal_agent_decisions_api(app)
+    remote = TestClient(app, client=("192.0.2.10", 50123))
+    denied = remote.post("/internal/agent-decisions/claim", headers=HEADERS, json=_claim())
     assert denied.status_code == 403
