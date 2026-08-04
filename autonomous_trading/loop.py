@@ -2,7 +2,7 @@
 
 The canonical ProjectDatabase is the source of truth. The JSON file remains a
 bounded UI/operator backup; immutable trade and event history is never truncated
-from the database.
+from the database. Read-only snapshots never mutate account state.
 """
 from __future__ import annotations
 
@@ -32,6 +32,10 @@ class AutonomousPaperLoop:
         self.database = database or ProjectDatabase()
         self.database.initialize()
         self.tick_seconds = max(_finite_env("AUTONOMOUS_PAPER_TICK_SECONDS", 5.0), 1.0)
+        self.wait_event_min_interval_seconds = max(
+            _finite_env("AUTONOMOUS_PAPER_WAIT_EVENT_MIN_INTERVAL_SECONDS", 300.0),
+            30.0,
+        )
         self.initial_cash = _positive_env("AUTONOMOUS_PAPER_INITIAL_CASH", 10_000.0)
         self.fee_rate = min(max(_finite_env("EXCHANGE_DEFAULT_FEE_RATE", 0.001), 0.0), 0.05)
         self.max_position_percent = min(max(_finite_env("AUTONOMOUS_PAPER_MAX_POSITION_PERCENT", 10.0), 0.1), 25.0)
@@ -57,10 +61,11 @@ class AutonomousPaperLoop:
         self._stop.set()
 
     def snapshot(self) -> dict[str, Any]:
+        """Return a read-only marked-to-market copy of the canonical state."""
         market = self.stream.snapshot()
         with self._lock:
-            self._mark_to_market(market)
             state = json.loads(json.dumps(self._state, ensure_ascii=False, allow_nan=False))
+            self._mark_state_to_market(state, market, update_timestamp=False)
         state["market_stream"] = {
             key: market.get(key)
             for key in ("status", "connected", "verified", "age_seconds", "last_error")
@@ -72,6 +77,11 @@ class AutonomousPaperLoop:
         state["event_history_count"] = len(list_json_items(self.database, self.event_namespace))
         state["backup_status"] = "error" if self._last_backup_error else "ok"
         state["backup_error"] = self._last_backup_error
+        state["worker_running"] = bool(self._thread and self._thread.is_alive())
+        state["source_of_truth"] = "autonomous_paper"
+        state["legacy_virtual_account_deprecated"] = True
+        state["mutation_on_read"] = False
+        state["wait_event_min_interval_seconds"] = self.wait_event_min_interval_seconds
         return state
 
     def trade_history(self, *, limit: int | None = None) -> list[dict[str, Any]]:
@@ -174,26 +184,73 @@ class AutonomousPaperLoop:
 
     def _event(self, action: str, reason: str, symbol: str | None = None) -> None:
         with self._lock:
+            clean_action = str(action)
+            clean_reason = str(reason)
+            clean_symbol = str(symbol).strip().upper() if symbol else None
+            created_at_ms = self._now_ms()
+            if clean_action == "WAIT" and self._suppress_wait_event(
+                clean_reason,
+                clean_symbol,
+                created_at_ms=created_at_ms,
+            ):
+                self._state["last_action"] = clean_action
+                self._state["last_reason"] = clean_reason
+                self._state["updated_at"] = self._now()
+                return
             item = {
                 "event_id": new_event_id(),
-                "created_at_ms": self._now_ms(),
+                "created_at_ms": created_at_ms,
                 "time": self._now(),
-                "action": str(action),
-                "symbol": str(symbol).strip().upper() if symbol else None,
-                "reason": str(reason),
+                "action": clean_action,
+                "symbol": clean_symbol,
+                "reason": clean_reason,
             }
             self._state["events"].append(item)
             self._state["events"] = self._state["events"][-1000:]
-            self._state["last_action"] = str(action)
-            self._state["last_reason"] = str(reason)
+            self._state["last_action"] = clean_action
+            self._state["last_reason"] = clean_reason
             self._state["updated_at"] = self._now()
             self._persist()
 
+    def _suppress_wait_event(
+        self,
+        reason: str,
+        symbol: str | None,
+        *,
+        created_at_ms: int,
+    ) -> bool:
+        signature = f"{symbol or '*'}|{reason}"
+        last_by_signature = self._state.setdefault("wait_event_last_emitted_ms", {})
+        if not isinstance(last_by_signature, dict):
+            last_by_signature = {}
+            self._state["wait_event_last_emitted_ms"] = last_by_signature
+        last = int(last_by_signature.get(signature, 0) or 0)
+        minimum_ms = int(self.wait_event_min_interval_seconds * 1000)
+        if last > 0 and created_at_ms - last < minimum_ms:
+            self._state["suppressed_wait_events"] = int(
+                self._state.get("suppressed_wait_events", 0) or 0
+            ) + 1
+            return True
+        last_by_signature[signature] = created_at_ms
+        if len(last_by_signature) > 200:
+            newest = sorted(last_by_signature.items(), key=lambda item: int(item[1]), reverse=True)[:200]
+            self._state["wait_event_last_emitted_ms"] = dict(newest)
+        return False
+
     def _mark_to_market(self, market: dict[str, Any]) -> None:
+        self._mark_state_to_market(self._state, market, update_timestamp=True)
+
+    def _mark_state_to_market(
+        self,
+        state: dict[str, Any],
+        market: dict[str, Any],
+        *,
+        update_timestamp: bool,
+    ) -> None:
         positions_value = 0.0
         unrealized = 0.0
         quotes = market.get("quotes", {}) if isinstance(market, dict) else {}
-        for symbol, position in self._state["positions"].items():
+        for symbol, position in state["positions"].items():
             quote = quotes.get(symbol)
             current = (
                 _positive(quote["price"], "quote price")
@@ -203,9 +260,10 @@ class AutonomousPaperLoop:
             quantity = _positive(position["quantity"], "position quantity")
             positions_value += current * quantity
             unrealized += (current - _positive(position["entry_price"], "entry_price")) * quantity
-        self._state["unrealized_pnl"] = round(unrealized, 8)
-        self._state["equity"] = round(_nonnegative(self._state["cash"], "cash") + positions_value, 8)
-        self._state["updated_at"] = self._now()
+        state["unrealized_pnl"] = round(unrealized, 8)
+        state["equity"] = round(_nonnegative(state["cash"], "cash") + positions_value, 8)
+        if update_timestamp:
+            state["updated_at"] = self._now()
 
     def _run(self) -> None:
         while not self._stop.wait(self.tick_seconds):
@@ -281,6 +339,15 @@ class AutonomousPaperLoop:
         state["last_action"] = str(state.get("last_action", "START"))
         state["last_reason"] = str(state.get("last_reason", "Autonomous paper account initialized"))
         state["updated_at"] = str(state.get("updated_at") or self._now())
+        raw_wait_index = state.get("wait_event_last_emitted_ms", {})
+        state["wait_event_last_emitted_ms"] = {
+            str(key): max(0, int(value or 0))
+            for key, value in raw_wait_index.items()
+        } if isinstance(raw_wait_index, dict) else {}
+        state["suppressed_wait_events"] = max(
+            0,
+            int(state.get("suppressed_wait_events", 0) or 0),
+        )
         return state
 
     def _default_state(self) -> dict[str, Any]:
@@ -294,6 +361,8 @@ class AutonomousPaperLoop:
             "positions": {},
             "trades": [],
             "events": [],
+            "wait_event_last_emitted_ms": {},
+            "suppressed_wait_events": 0,
             "last_action": "START",
             "last_reason": "Autonomous paper account initialized",
             "updated_at": self._now(),
