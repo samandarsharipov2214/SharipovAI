@@ -18,11 +18,10 @@ jobs:
   focused:
     if: >-
       ${{
-        vars.SHARIPOVAI_SELF_HOSTED_CI == '1' &&
-        (github.event_name != 'pull_request' ||
-         github.event.pull_request.head.repo.full_name == github.repository)
+        github.event_name != 'pull_request' ||
+        github.event.pull_request.head.repo.full_name == github.repository
       }}
-    runs-on: [self-hosted, linux, x64, sharipovai-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
       PYTHONUNBUFFERED: '1'
