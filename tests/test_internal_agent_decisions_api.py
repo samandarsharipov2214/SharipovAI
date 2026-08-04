@@ -114,6 +114,34 @@ def test_records_terminal_result_in_agent_decisions_and_event(tmp_path, monkeypa
     assert json.loads(row["payload_json"])["health_verified"] is True
 
 
+def test_reverted_host_commit_records_failed_decision_and_exact_event(tmp_path, monkeypatch) -> None:
+    client, database = _client(tmp_path, monkeypatch)
+    response = client.post(
+        "/internal/agent-decisions",
+        headers=HEADERS,
+        json=_result(
+            status="reverted",
+            phase="health",
+            message="health verification failed; exact automatic commit reverted",
+            health_verified=True,
+        ),
+    )
+    assert response.status_code == 200
+
+    record = database.get_agent_decision("decision-001")
+    assert record is not None
+    assert record["status"] == "failed"
+    assert record["kind"] == "approve"
+    assert record["metadata"]["host_result"]["status"] == "reverted"
+    with database.connect() as connection:
+        row = connection.execute(
+            "SELECT event_type FROM agent_decision_events WHERE decision_id = ?",
+            ("decision-001",),
+        ).fetchone()
+    assert row is not None
+    assert row["event_type"] == "host_reverted"
+
+
 def test_exact_retry_is_idempotent_and_conflicting_result_is_rejected(tmp_path, monkeypatch) -> None:
     client, _ = _client(tmp_path, monkeypatch)
     first = client.post("/internal/agent-decisions", headers=HEADERS, json=_result())
