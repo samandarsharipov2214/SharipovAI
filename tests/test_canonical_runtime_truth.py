@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import time
-from types import SimpleNamespace
 
 from fastapi import FastAPI
 
@@ -41,6 +40,11 @@ class _Monitor:
                 }
             ],
         }
+
+
+class _FailingMonitor:
+    def snapshot(self):
+        raise RuntimeError("temporary database read failure")
 
 
 class _PaperLoop:
@@ -135,6 +139,17 @@ def test_realtime_status_reads_only_canonical_runtime(monkeypatch) -> None:
     assert result["agents"]["summary"]["working"] == 1
 
 
+def test_agent_health_isolates_monitor_failure() -> None:
+    app = FastAPI()
+    app.state.ai_organ_runtime_monitor = _FailingMonitor()
+
+    result = realtime.canonical_agent_health(app)
+
+    assert result["status"] == "warning"
+    assert result["summary"]["unknown"] == 9
+    assert "temporary database read failure" in result["monitor_error"]
+
+
 def test_telegram_ignores_stale_historical_webhook_error(monkeypatch) -> None:
     monkeypatch.setenv("BOT_TOKEN", "not-printed")
     monkeypatch.setenv("WEBAPP_URL", "https://example.test")
@@ -160,9 +175,10 @@ def test_telegram_ignores_stale_historical_webhook_error(monkeypatch) -> None:
 
     assert result["verdict"] == "working"
     assert result["stale_webhook_error_ignored"] is True
+    assert telegram_module._LAST_SUCCESSFUL_WEBHOOK_PROBE_AT > old_error
 
 
-def test_telegram_keeps_recent_webhook_error_visible(monkeypatch) -> None:
+def test_telegram_keeps_recent_webhook_error_visible_across_probes(monkeypatch) -> None:
     monkeypatch.setenv("BOT_TOKEN", "not-printed")
     monkeypatch.setenv("WEBAPP_URL", "https://example.test")
     monkeypatch.setattr(telegram_module, "_LAST_SUCCESSFUL_WEBHOOK_PROBE_AT", 0)
@@ -182,7 +198,11 @@ def test_telegram_keeps_recent_webhook_error_visible(monkeypatch) -> None:
 
     monkeypatch.setattr(telegram_module, "_telegram", fake_call)
 
-    result = telegram_module.telegram_health()
+    first = telegram_module.telegram_health()
+    second = telegram_module.telegram_health()
 
-    assert result["verdict"] == "webhook_error"
-    assert result["stale_webhook_error_ignored"] is False
+    assert first["verdict"] == "webhook_error"
+    assert second["verdict"] == "webhook_error"
+    assert first["stale_webhook_error_ignored"] is False
+    assert second["stale_webhook_error_ignored"] is False
+    assert telegram_module._LAST_SUCCESSFUL_WEBHOOK_PROBE_AT == 0
