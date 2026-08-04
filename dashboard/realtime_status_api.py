@@ -20,6 +20,13 @@ from telegram_health import telegram_health
 from .news_agent_network_api import bridge_status, network_status
 
 STARTED_AT = int(time.time())
+_TRUTH_POLICY = (
+    "No decorative score is allowed; only /api/system/ai-organs runtime "
+    "evidence determines agent health."
+)
+_TRUTH_POLICY_UNAVAILABLE = (
+    "No decorative score is allowed; canonical runtime evidence is unavailable."
+)
 
 
 def install_realtime_status_api(app: FastAPI) -> None:
@@ -65,7 +72,7 @@ def canonical_agent_health(app: FastAPI) -> dict[str, Any]:
             },
             "agents": [],
             "bots": [],
-            "truth_policy": "Canonical AI organ runtime monitor is unavailable.",
+            "truth_policy": _TRUTH_POLICY_UNAVAILABLE,
         }
     snapshot = monitor.snapshot()
     agents: list[dict[str, Any]] = []
@@ -119,7 +126,7 @@ def canonical_agent_health(app: FastAPI) -> dict[str, Any]:
         "agents": agents,
         "bots": agents,
         "canonical_status": snapshot.get("status"),
-        "truth_policy": "Only /api/system/ai-organs runtime evidence determines agent health.",
+        "truth_policy": _TRUTH_POLICY,
     }
     return result
 
@@ -265,6 +272,7 @@ def canonical_agent_health_unavailable() -> dict[str, Any]:
         },
         "agents": [],
         "bots": [],
+        "truth_policy": _TRUTH_POLICY_UNAVAILABLE,
     }
 
 
