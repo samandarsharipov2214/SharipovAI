@@ -3,9 +3,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .models import PatchVerdict
 from .patch_policy import (
     BINARY_MARKERS,
     DANGEROUS_ADDITION_PATTERNS,
+    PROTECTED_EXACT,
+    PROTECTED_PREFIXES,
     RENAME_OR_COPY_MARKERS,
     SYMLINK_MODE,
     TEST_WEAKENING_ADDITION_PATTERNS,
@@ -14,12 +17,6 @@ from .patch_policy import (
     is_test_path,
     normalize_patch_path,
 )
-
-
-@dataclass(slots=True)
-class PatchVerdict:
-    allowed: bool
-    reasons: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -41,25 +38,39 @@ class _FilePatch:
 class SecurityGuard:
     def validate(self, patch: str) -> PatchVerdict:
         reasons: list[str] = []
+        protected_paths: list[str] = []
         if not isinstance(patch, str):
-            return PatchVerdict(False, ["patch must be text"])
+            return self._verdict(["patch must be text"], protected_paths)
         if not patch.strip():
-            return PatchVerdict(False, ["patch is empty"])
+            return self._verdict(["patch is empty"], protected_paths)
         if "\x00" in patch:
-            return PatchVerdict(False, ["binary or NUL-containing patch is forbidden"])
+            return self._verdict(["binary or NUL-containing patch is forbidden"], protected_paths)
         self._check_global_metadata(patch, reasons)
         files = self._parse_files(patch, reasons)
         if not files:
             reasons.append("patch contains no valid file changes")
         for file_patch in files:
-            self._check_file(file_patch, reasons)
-        return PatchVerdict(allowed=not reasons, reasons=list(dict.fromkeys(reasons)))
+            self._check_file(file_patch, reasons, protected_paths)
+        return self._verdict(reasons, protected_paths)
 
     def check(self, patch: str) -> PatchVerdict:
         return self.validate(patch)
 
     def __call__(self, patch: str) -> PatchVerdict:
         return self.validate(patch)
+
+    @staticmethod
+    def _verdict(reasons: list[str], protected_paths: list[str]) -> PatchVerdict:
+        unique_reasons = list(dict.fromkeys(reasons))
+        unique_protected = list(dict.fromkeys(protected_paths))
+        return PatchVerdict(
+            allowed=not unique_reasons,
+            reasons=unique_reasons,
+            policy_version="development-v2",
+            protected_paths=unique_protected,
+            required_checks=["security-guard", "targeted-tests", "full-regression"],
+            requires_human_approval=False,
+        )
 
     @staticmethod
     def _check_global_metadata(patch: str, reasons: list[str]) -> None:
@@ -137,10 +148,15 @@ class SecurityGuard:
         return files
 
     @staticmethod
-    def _check_file(file_patch: _FilePatch, reasons: list[str]) -> None:
+    def _check_file(
+        file_patch: _FilePatch,
+        reasons: list[str],
+        protected_paths: list[str],
+    ) -> None:
         for path in file_patch.paths:
             if is_protected_path(path):
                 reasons.append(f"protected path cannot be modified: {path}")
+                protected_paths.append(path)
         if file_patch.is_test_change:
             if file_patch.new_path == "/dev/null":
                 reasons.append(f"test file deletion is forbidden: {file_patch.old_path}")
@@ -162,4 +178,10 @@ def validate_patch(patch: str) -> PatchVerdict:
     return SecurityGuard().validate(patch)
 
 
-__all__ = ["PatchVerdict", "SecurityGuard", "validate_patch"]
+__all__ = [
+    "PROTECTED_EXACT",
+    "PROTECTED_PREFIXES",
+    "PatchVerdict",
+    "SecurityGuard",
+    "validate_patch",
+]
