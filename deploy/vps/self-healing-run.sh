@@ -236,10 +236,17 @@ revert_automatic_commit() {
 }
 
 APPROVED_PATCH_HELPER="$REPO_DIR/deploy/vps/self-healing-approved-patch.sh"
-if [ -r "$APPROVED_PATCH_HELPER" ]; then
+APPROVED_PATCH_CLAIM_HELPER="$REPO_DIR/deploy/vps/self-healing-approved-claim.sh"
+if [ -r "$APPROVED_PATCH_HELPER" ] && [ -r "$APPROVED_PATCH_CLAIM_HELPER" ]; then
     # shellcheck source=deploy/vps/self-healing-approved-patch.sh
     . "$APPROVED_PATCH_HELPER"
+    # shellcheck source=deploy/vps/self-healing-approved-claim.sh
+    . "$APPROVED_PATCH_CLAIM_HELPER"
 else
+    claim_approved_patch() {
+        log "Approved patch claim helper is missing: $APPROVED_PATCH_CLAIM_HELPER"
+        return 1
+    }
     apply_approved_patch() {
         log "Approved patch helper is missing: $APPROVED_PATCH_HELPER"
         return 1
@@ -276,7 +283,7 @@ execute_action() {
             ;;
         apply_approved_patch)
             log "Executing allow-listed action: apply_approved_patch"
-            apply_approved_patch
+            claim_approved_patch && apply_approved_patch
             ;;
         *)
             log "Refusing unknown self-healing action: $action"
