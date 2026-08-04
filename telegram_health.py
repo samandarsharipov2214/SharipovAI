@@ -1,20 +1,26 @@
 """Telegram health/self-test helpers for SharipovAI."""
-
 from __future__ import annotations
 
+import json
 import os
+import time
+import urllib.error
+import urllib.request
 from typing import Any
 
-import httpx
-
 TELEGRAM_API_TIMEOUT = 20.0
+_LAST_SUCCESSFUL_WEBHOOK_PROBE_AT = 0
 
 
 def telegram_health() -> dict[str, Any]:
-    """Return honest Telegram bot health without exposing secrets."""
+    """Return honest Telegram health without exposing or logging the bot token."""
+    global _LAST_SUCCESSFUL_WEBHOOK_PROBE_AT
 
     token = os.getenv("BOT_TOKEN", "").strip()
-    webapp_url = os.getenv("WEBAPP_URL", "").strip().rstrip("/")
+    webapp_url = (
+        os.getenv("WEBAPP_URL", "").strip()
+        or os.getenv("TELEGRAM_WEBAPP_URL", "").strip()
+    ).rstrip("/")
     checks: dict[str, Any] = {
         "bot_token_configured": bool(token),
         "webapp_url_configured": bool(webapp_url),
@@ -24,44 +30,70 @@ def telegram_health() -> dict[str, Any]:
         "mode": "webhook",
     }
     if not token:
-        return _with_verdict(checks, "waiting_env", "BOT_TOKEN не настроен в Render Environment Variables.")
+        return _with_verdict(checks, "waiting_env", "BOT_TOKEN не настроен.")
+
     get_me = _telegram(token, "getMe")
     webhook_info = _telegram(token, "getWebhookInfo")
     checks["telegram_get_me"] = get_me
     checks["webhook_info"] = webhook_info
     bot_ok = bool(get_me.get("ok"))
+    webhook_api_ok = bool(webhook_info.get("ok"))
     webhook_result = webhook_info.get("result", {}) if isinstance(webhook_info, dict) else {}
     current_url = str(webhook_result.get("url") or "")
     expected_url = str(checks.get("expected_webhook_url") or "")
-    webhook_ok = bool(expected_url and current_url == expected_url)
+    webhook_ok = bool(webhook_api_ok and expected_url and current_url == expected_url)
     last_error = str(webhook_result.get("last_error_message") or "")
+    last_error_date = _positive_int_or_zero(webhook_result.get("last_error_date"))
+    now = int(time.time())
+    last_error_age = max(0, now - last_error_date) if last_error_date else None
+    grace_seconds = _bounded_int(
+        "TELEGRAM_WEBHOOK_ERROR_MAX_AGE_SECONDS",
+        default=300,
+        minimum=30,
+        maximum=86_400,
+    )
+    previous_success = _LAST_SUCCESSFUL_WEBHOOK_PROBE_AT
+    stale_error = bool(
+        last_error
+        and last_error_date
+        and webhook_ok
+        and bot_ok
+        and (
+            last_error_age is not None and last_error_age > grace_seconds
+            or previous_success > last_error_date
+        )
+    )
+    checks.update(
+        {
+            "webhook_api_ok": webhook_api_ok,
+            "webhook_url_matches": webhook_ok,
+            "last_error_date": last_error_date or None,
+            "last_error_age_seconds": last_error_age,
+            "webhook_error_grace_seconds": grace_seconds,
+            "stale_webhook_error_ignored": stale_error,
+            "successful_probe_at": now if bot_ok and webhook_ok else previous_success or None,
+        }
+    )
+
     if not bot_ok:
         return _with_verdict(checks, "telegram_error", "BOT_TOKEN есть, но Telegram getMe не отвечает успешно.")
     if not webapp_url:
-        return _with_verdict(checks, "waiting_env", "WEBAPP_URL не настроен в Render Environment Variables.")
-    if last_error:
-        return _with_verdict(checks, "webhook_error", f"Telegram сообщает ошибку webhook: {last_error}")
+        return _with_verdict(checks, "waiting_env", "WEBAPP_URL не настроен.")
     if not webhook_ok:
-        return _with_verdict(checks, "webhook_not_set", "Webhook ещё не установлен на текущий WEBAPP_URL.")
-    return _with_verdict(checks, "working", "Telegram bot работает через webhook.")
+        return _with_verdict(checks, "webhook_not_set", "Webhook не установлен на текущий WEBAPP_URL.")
+
+    _LAST_SUCCESSFUL_WEBHOOK_PROBE_AT = now
+    if last_error and not stale_error:
+        return _with_verdict(checks, "webhook_error", f"Telegram сообщает свежую ошибку webhook: {last_error}")
+    if stale_error:
+        checks["historical_last_error_message"] = last_error
+    return _with_verdict(checks, "working", "Telegram bot работает через текущий webhook.")
 
 
 def telegram_health_score(health: dict[str, Any] | None = None) -> int:
     """Return a compact health score for audits."""
-
     health = health or telegram_health()
-    verdict = str(health.get("verdict", "unknown"))
-    if verdict == "working":
-        return 95
-    if verdict == "webhook_not_set":
-        return 70
-    if verdict == "waiting_env":
-        return 35
-    if verdict == "webhook_error":
-        return 45
-    if verdict == "telegram_error":
-        return 25
-    return 20
+    return telegram_health_score_no_recursion(str(health.get("verdict", "unknown")))
 
 
 def _with_verdict(checks: dict[str, Any], verdict: str, explanation: str) -> dict[str, Any]:
@@ -80,19 +112,47 @@ def telegram_health_score_no_recursion(verdict: str) -> int:
 def _next_fix(verdict: str) -> str:
     fixes = {
         "working": "Ничего не делать: бот принимает сообщения через webhook.",
-        "webhook_not_set": "После деплоя открыть /api/telegram/set-webhook один раз.",
-        "waiting_env": "Проверить Render Environment Variables: BOT_TOKEN и WEBAPP_URL.",
-        "webhook_error": "Открыть /telegram-check и посмотреть last_error_message от Telegram.",
-        "telegram_error": "Проверить BOT_TOKEN в Render ENV и что токен принадлежит текущему боту.",
+        "webhook_not_set": "Проверить текущий webhook URL и повторно установить его безопасным операторским действием.",
+        "waiting_env": "Проверить BOT_TOKEN и WEBAPP_URL в защищённой runtime-конфигурации.",
+        "webhook_error": "Проверить last_error_date и обработку webhook в журнале без вывода токена.",
+        "telegram_error": "Проверить BOT_TOKEN без его публикации и убедиться, что токен принадлежит текущему боту.",
     }
-    return fixes.get(verdict, "Открыть /telegram-check и выполнить checklist.")
+    return fixes.get(verdict, "Проверить Telegram health evidence.")
 
 
 def _telegram(token: str, method: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Call Telegram without third-party request logging that may expose tokens."""
+    body = json.dumps(payload or {}, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        f"https://api.telegram.org/bot{token}/{method}",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
     try:
-        with httpx.Client(timeout=TELEGRAM_API_TIMEOUT) as client:
-            response = client.post(f"https://api.telegram.org/bot{token}/{method}", json=payload or {})
-            data = response.json()
+        with urllib.request.urlopen(request, timeout=TELEGRAM_API_TIMEOUT) as response:
+            data = json.loads(response.read().decode("utf-8"))
             return data if isinstance(data, dict) else {"ok": False, "raw": data}
-    except Exception as exc:  # pragma: no cover
+    except urllib.error.HTTPError as exc:
+        return {"ok": False, "error": f"HTTPError: {exc.code}"}
+    except Exception as exc:  # pragma: no cover - external service
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+def _positive_int_or_zero(value: Any) -> int:
+    try:
+        parsed = int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    return parsed if parsed > 0 else 0
+
+
+def _bounded_int(name: str, *, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return min(max(value, minimum), maximum)
+
+
+__all__ = ["telegram_health", "telegram_health_score"]
