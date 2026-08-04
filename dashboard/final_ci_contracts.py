@@ -14,6 +14,7 @@ This module fixes route-precedence problems without weakening authentication:
 from __future__ import annotations
 
 import hmac
+import json
 import importlib
 import os
 from functools import wraps
@@ -21,7 +22,7 @@ from typing import Any, Callable
 from urllib.parse import parse_qs
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 
 _FACTORY_MARKER = "_sharipovai_final_ci_factory"
 _APP_LAYER_COUNTER = "final_ci_contract_layers"
@@ -174,7 +175,75 @@ def _install_app_middleware(app: FastAPI, *, force_outer: bool = False) -> None:
         if path in {"/api/paper-activity/catch-up", "/api/virtual-account/catch-up"} and method == "POST":
             return JSONResponse(await _paper_catch_up(request))
 
-        return await call_next(request)
+        response = await call_next(request)
+        if (
+            method == "GET"
+            and path == "/api/ai-bots"
+            and response.status_code == 200
+        ):
+            return await _normalize_ai_bots_response(response)
+        return response
+
+
+async def _normalize_ai_bots_response(response: Response) -> Response:
+    """Guarantee the canonical summary contract after all legacy middleware."""
+
+    body = getattr(response, "body", None)
+
+    if body is None:
+        chunks: list[bytes] = []
+        async for chunk in response.body_iterator:
+            if isinstance(chunk, str):
+                chunks.append(chunk.encode("utf-8"))
+            else:
+                chunks.append(bytes(chunk))
+        body = b"".join(chunks)
+
+    try:
+        payload = json.loads(body)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        headers = {
+            key: value
+            for key, value in response.headers.items()
+            if key.lower() != "content-length"
+        }
+        return Response(
+            content=body,
+            status_code=response.status_code,
+            headers=headers,
+            background=response.background,
+        )
+
+    if not isinstance(payload, dict):
+        return JSONResponse(
+            content=payload,
+            status_code=response.status_code,
+            background=response.background,
+        )
+
+    bots = payload.get("bots", payload.get("agents", []))
+    canonical_count = len(bots) if isinstance(bots, list) else 0
+
+    summary = payload.get("summary")
+    if not isinstance(summary, dict):
+        summary = {}
+
+    summary["canonical_ai_count"] = canonical_count
+    summary.setdefault("total_bots", canonical_count)
+    payload["summary"] = summary
+
+    headers = {
+        key: value
+        for key, value in response.headers.items()
+        if key.lower() not in {"content-length", "content-type"}
+    }
+
+    return JSONResponse(
+        content=payload,
+        status_code=response.status_code,
+        headers=headers,
+        background=response.background,
+    )
 
 
 async def _configured_admin_login(request: Request):

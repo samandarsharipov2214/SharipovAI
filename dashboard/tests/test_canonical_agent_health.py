@@ -23,6 +23,7 @@ def test_agent_health_never_invents_score_without_evidence(monkeypatch):
 
     assert snapshot["summary"] == {
         "total_bots": 1,
+        "canonical_ai_count": 1,
         "active": 0,
         "warnings": 1,
         "working": 0,

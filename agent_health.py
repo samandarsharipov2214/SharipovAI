@@ -130,4 +130,4 @@ def build_agent_health_snapshot() -> dict[str, Any]:
     working = sum(agent["status"] == "working" for agent in agents)
     degraded = sum(agent["status"] == "degraded" for agent in agents)
     unknown = sum(agent["status"] == "unknown" for agent in agents)
-    return {"status": "ok" if degraded == 0 and unknown == 0 else "warning", "generated_at": generated_at, "summary": {"total_bots": len(agents), "active": working, "warnings": degraded + unknown, "working": working, "degraded": degraded, "unknown": unknown}, "agents": agents, "bots": agents, "truth_policy": "No decorative score: missing evidence is shown as unknown."}
+    return {"status": "ok" if degraded == 0 and unknown == 0 else "warning", "generated_at": generated_at, "summary": {"total_bots": len(agents), "canonical_ai_count": len(agents), "active": working, "warnings": degraded + unknown, "working": working, "degraded": degraded, "unknown": unknown}, "agents": agents, "bots": agents, "truth_policy": "No decorative score: missing evidence is shown as unknown."}

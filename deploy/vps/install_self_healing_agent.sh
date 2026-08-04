@@ -23,6 +23,22 @@ do
     }
 done
 
+# Only Git-tracked source code is made readable by the unprivileged
+# in-container agent. Untracked .env files, databases and backups are untouched.
+chmod a+rx "$REPO_DIR"
+while IFS= read -r -d '' relative; do
+    path="$REPO_DIR/$relative"
+    if [ ! -L "$path" ]; then
+        chmod a+r "$path"
+    fi
+
+    parent="$(dirname "$relative")"
+    while [ "$parent" != "." ] && [ "$parent" != "/" ]; do
+        chmod a+rx "$REPO_DIR/$parent"
+        parent="$(dirname "$parent")"
+    done
+done < <(git -C "$REPO_DIR" ls-files -z)
+
 python_check_image="$(
     docker compose \
         --env-file "$COMPOSE_DIR/.env.vps" \
