@@ -14,6 +14,7 @@ from typing import Any
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 
+from ai_architecture_registry import CANONICAL_AI_ORGANS
 from sharipovai_constitution import constitution_snapshot, now_iso
 from telegram_health import telegram_health
 
@@ -58,22 +59,7 @@ def canonical_agent_health(app: FastAPI) -> dict[str, Any]:
     """Compatibility projection sourced only from the canonical organ monitor."""
     monitor = getattr(app.state, "ai_organ_runtime_monitor", None)
     if monitor is None:
-        return {
-            "status": "warning",
-            "generated_at": int(time.time()),
-            "summary": {
-                "total_bots": 0,
-                "canonical_ai_count": 0,
-                "active": 0,
-                "warnings": 1,
-                "working": 0,
-                "degraded": 0,
-                "unknown": 1,
-            },
-            "agents": [],
-            "bots": [],
-            "truth_policy": _TRUTH_POLICY_UNAVAILABLE,
-        }
+        return _unavailable_agent_health()
     snapshot = monitor.snapshot()
     agents: list[dict[str, Any]] = []
     for organ in snapshot.get("organs", []):
@@ -165,7 +151,7 @@ def build_realtime_status(app: FastAPI | None = None) -> dict[str, Any]:
     if telegram.get("verdict") != "working":
         warnings.append(f"Telegram не полностью working: {telegram.get('verdict')}")
 
-    agents = canonical_agent_health(app) if app is not None else canonical_agent_health_unavailable()
+    agents = canonical_agent_health(app) if app is not None else _unavailable_agent_health()
     if agents.get("status") != "ok":
         summary = agents.get("summary", {})
         warnings.append(
@@ -258,22 +244,50 @@ def build_realtime_status(app: FastAPI | None = None) -> dict[str, Any]:
     }
 
 
-def canonical_agent_health_unavailable() -> dict[str, Any]:
+def _unavailable_agent_health() -> dict[str, Any]:
+    now = int(time.time())
+    agents = [
+        {
+            "id": organ.id,
+            "name": organ.name,
+            "responsibility": organ.responsibility,
+            "status": "unknown",
+            "runtime_status": "unknown",
+            "quality_score": None,
+            "health_score": None,
+            "checked_at": now,
+            "changed_at": now,
+            "last_seen": None,
+            "last_action": None,
+            "last_error": "canonical runtime monitor unavailable",
+            "evidence": [],
+            "evidence_count": 0,
+            "stale": True,
+            "details": {"blockers": ["canonical runtime monitor unavailable"]},
+        }
+        for organ in CANONICAL_AI_ORGANS
+    ]
     return {
         "status": "warning",
+        "generated_at": now,
         "summary": {
-            "total_bots": 0,
-            "canonical_ai_count": 0,
+            "total_bots": len(agents),
+            "canonical_ai_count": len(agents),
             "active": 0,
-            "warnings": 1,
+            "warnings": len(agents),
             "working": 0,
             "degraded": 0,
-            "unknown": 1,
+            "unknown": len(agents),
         },
-        "agents": [],
-        "bots": [],
+        "agents": agents,
+        "bots": agents,
         "truth_policy": _TRUTH_POLICY_UNAVAILABLE,
     }
+
+
+def canonical_agent_health_unavailable() -> dict[str, Any]:
+    """Backward-compatible alias for callers without a FastAPI runtime."""
+    return _unavailable_agent_health()
 
 
 def _canonical_paper_snapshot(app: FastAPI | None) -> dict[str, Any]:
