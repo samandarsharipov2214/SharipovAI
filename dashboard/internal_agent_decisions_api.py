@@ -214,7 +214,7 @@ def install_internal_agent_decisions_api(app: FastAPI) -> None:
             "rejected": "rejected",
             "failed_precommit": "failed",
             "applied": "applied",
-            "reverted": "rolled_back",
+            "reverted": "failed",
             "rollback_failed": "failed",
         }[payload.status]
         result = {
