@@ -65,8 +65,8 @@ systemctl is-active --quiet sharipovai-backup.timer
 systemctl is-failed --quiet sharipovai-backup.service && fail 'first backup service run failed'
 
 latest=$(readlink -f "$APP_DIR/deploy/vps/backups/latest.tar.gz")
-[[ -n "$latest" && -s "$latest" ]] || fail 'latest backup archive is missing or empty'
-[[ -s "$latest.sha256" ]] || fail 'latest backup checksum is missing'
+test -s "$latest" || fail 'latest backup archive is missing or empty'
+test -s "$latest.sha256" || fail 'latest backup checksum is missing'
 (
   cd "$(dirname "$latest")"
   sha256sum -c "$(basename "$latest.sha256")" >/dev/null
