@@ -60,7 +60,15 @@ def canonical_agent_health(app: FastAPI) -> dict[str, Any]:
     monitor = getattr(app.state, "ai_organ_runtime_monitor", None)
     if monitor is None:
         return _unavailable_agent_health()
-    snapshot = monitor.snapshot()
+    try:
+        snapshot = monitor.snapshot()
+    except Exception as exc:
+        payload = _unavailable_agent_health()
+        payload["monitor_error"] = f"{type(exc).__name__}: {exc}"
+        payload["truth_policy"] = (
+            "No decorative score is allowed; canonical runtime monitor failed."
+        )
+        return payload
     agents: list[dict[str, Any]] = []
     for organ in snapshot.get("organs", []):
         raw_status = str(organ.get("status", "blocked"))
