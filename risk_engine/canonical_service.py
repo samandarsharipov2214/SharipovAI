@@ -2,11 +2,12 @@
 
 The deterministic :class:`RiskEngine` remains the typed low-level calculator.
 This service owns the production policy that combines verified market evidence,
-portfolio drawdown, liquidity, consensus, news quality and execution locks.  It
+portfolio drawdown, liquidity, consensus, news quality and execution locks. It
 never places orders and always keeps real execution disabled.
 """
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import asdict, dataclass
 from typing import Any, Mapping
@@ -30,7 +31,16 @@ class CanonicalRiskAssessment:
     inputs: dict[str, Any]
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        """Return a JSON-canonical payload suitable for idempotent persistence."""
+        return json.loads(
+            json.dumps(
+                asdict(self),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+        )
 
 
 class CanonicalRiskService:
@@ -50,15 +60,18 @@ class CanonicalRiskService:
         values = dict(payload or {})
 
         market_verified = bool(values.get("market_data_verified", False))
-        exchange_ok = bool(values.get("exchange_ok", market_verified))
+        # Exchange health is independent evidence. Never infer it from a market
+        # verification flag supplied by a caller.
+        exchange_ok = bool(values.get("exchange_ok", False))
         change = _finite(values.get("price_change_24h_percent", values.get("change_24h_percent", 0.0)))
         volatility = _finite(values.get("volatility_percent", abs(change)))
         trend_score = _finite(values.get("trend_score", max(-1.0, min(1.0, change / 10.0))))
         spread = _finite(values.get("spread_percent", 0.05))
-        liquidity_score = _bounded(values.get("liquidity_score", 75.0))
+        liquidity_score = _bounded(values.get("liquidity_score", 0.0 if clean_profile == "trade_gate" else 75.0))
         news_shock = _bounded(values.get("news_shock_score", 0.0))
-        news_credibility = _bounded(values.get("news_credibility_percent", 100.0))
-        ai_consensus = _bounded(values.get("ai_consensus_score", 100.0))
+        news_credibility = _bounded(values.get("news_credibility_percent", 0.0 if clean_profile == "trade_gate" else 100.0))
+        # Missing Decision Quality evidence must fail closed in the trade gate.
+        ai_consensus = _bounded(values.get("ai_consensus_score", 0.0 if clean_profile == "trade_gate" else 100.0))
         risk_per_trade = max(0.0, _finite(values.get("risk_per_trade_percent", 1.0)))
         drawdown = max(0.0, _finite(values.get("portfolio_drawdown_percent", values.get("drawdown_percent", 0.0))))
         deviation = max(0.0, _finite(values.get("ws_consensus_deviation_percent", 0.0)))
@@ -91,7 +104,7 @@ class CanonicalRiskService:
                 hard_blocks,
                 blockers,
                 "exchange_unavailable",
-                "Exchange/API нестабилен или не подтверждён.",
+                "Exchange/API нестабилен, отсутствует или не подтверждён.",
             )
 
         if clean_profile in {"council", "health_probe"}:
@@ -101,7 +114,9 @@ class CanonicalRiskService:
             max_deviation = max(0.0, _finite(values.get("max_consensus_deviation_percent", 0.75)))
             if abs(change) > max_abs_change:
                 _add(hard_blocks, blockers, "extreme_24h_volatility", "Суточная волатильность превышает канонический лимит риска.")
-            if turnover is not None and turnover < min_turnover:
+            if clean_profile == "council" and turnover is None:
+                _add(hard_blocks, blockers, "missing_verified_liquidity", "Подтверждённые данные ликвидности отсутствуют.")
+            elif turnover is not None and turnover < min_turnover:
                 _add(hard_blocks, blockers, "insufficient_verified_liquidity", "Подтверждённая ликвидность ниже канонического минимума.")
             if drawdown > max_drawdown:
                 _add(hard_blocks, blockers, "paper_portfolio_drawdown_limit", "Просадка виртуального портфеля превышает канонический лимит.")
@@ -124,9 +139,9 @@ class CanonicalRiskService:
                     f"Market Regime AI говорит {regime['recommended_action']}: {regime['explanation']}",
                 )
             if ai_consensus < 70.0:
-                _add(hard_blocks, blockers, "low_ai_consensus", "AI consensus ниже 70%. Сделка не подтверждена.")
+                _add(hard_blocks, blockers, "low_ai_consensus", "AI consensus ниже 70% или отсутствует. Сделка не подтверждена.")
             if news_credibility < 65.0:
-                _add(hard_blocks, blockers, "low_news_credibility", "Достоверность новостей ниже 65%. Нужна перепроверка.")
+                _add(hard_blocks, blockers, "low_news_credibility", "Достоверность новостей ниже 65% или отсутствует. Нужна перепроверка.")
             if risk_per_trade > 1.0:
                 _add(hard_blocks, blockers, "risk_per_trade_limit", "Риск на сделку выше 1%. Для текущей версии это запрещено.")
             if not strategy_approved:
@@ -139,7 +154,7 @@ class CanonicalRiskService:
             hard_blocks=hard_blocks,
         )
         decision = "BLOCK" if blockers else "VIRTUAL_ONLY" if warnings else "VIRTUAL_ALLOWED"
-        status = "blocked" if not market_verified else "ok"
+        status = "blocked" if blockers else "ok"
         normalized_inputs = {
             "market_data_verified": market_verified,
             "exchange_ok": exchange_ok,
