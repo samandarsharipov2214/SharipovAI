@@ -59,15 +59,16 @@ def test_denied_verdict_requires_reason() -> None:
         PatchVerdict(allowed=False, created_at_ms=1)
     verdict = PatchVerdict(
         allowed=False,
-        reasons=("protected path",),
-        checked_paths=("CONSTITUTION.md",),
+        reasons=["protected path"],
+        checked_paths=["CONSTITUTION.md"],
         created_at_ms=1,
     )
     assert verdict.allowed is False
+    assert verdict.reasons == ["protected path"]
 
 
 def test_agent_decision_cannot_approve_denied_patch() -> None:
-    denied = PatchVerdict(allowed=False, reasons=("dangerous construct",), created_at_ms=1)
+    denied = PatchVerdict(allowed=False, reasons=["dangerous construct"], created_at_ms=1)
     with pytest.raises(ValidationError, match="cannot be approved or applied"):
         AgentDecision(
             decision_id="decision-1",
@@ -87,7 +88,21 @@ def test_security_guard_returns_shared_pydantic_verdict() -> None:
     verdict = validate_patch(_patch())
     assert isinstance(verdict, PatchVerdict)
     assert verdict.allowed is True
-    assert verdict.checked_paths == ("app/example.py",)
+    assert verdict.checked_paths == ["app/example.py"]
+
+
+def test_security_guard_returns_denial_for_unsafe_path_instead_of_raising() -> None:
+    patch = (
+        "diff --git a/../escape.py b/../escape.py\n"
+        "--- a/../escape.py\n"
+        "+++ b/../escape.py\n"
+        "@@ -0,0 +1 @@\n"
+        "+VALUE = 1\n"
+    )
+    verdict = validate_patch(patch)
+    assert verdict.allowed is False
+    assert verdict.checked_paths == ["../escape.py"]
+    assert "unsafe path: ../escape.py" in verdict.reasons
 
 
 def test_self_healing_capabilities_have_canonical_owners() -> None:
@@ -100,10 +115,5 @@ def test_self_healing_capabilities_have_canonical_owners() -> None:
     }
     for capability, owner in expected.items():
         result = responsibility_owner(capability)
-        assert result["owners"] == [
-            {
-                "id": owner,
-                "name": next(item["name"] for item in result["owners"] if item["id"] == owner),
-            }
-        ]
+        assert [item["id"] for item in result["owners"]] == [owner]
         assert result["recommendation"] == "extend_existing"
