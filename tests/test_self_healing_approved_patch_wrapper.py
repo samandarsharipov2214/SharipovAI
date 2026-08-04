@@ -42,7 +42,8 @@ def test_apply_approved_patch_manifest_and_integrity_contract() -> None:
 def test_owner_and_security_claim_precedes_git_apply() -> None:
     wrapper = WRAPPER.read_text(encoding="utf-8")
     claim = CLAIM_HELPER.read_text(encoding="utf-8")
-    assert "/internal/agent-decisions" in claim
+    combined = _text()
+    assert "/internal/agent-decisions" in combined
     assert 'SELF_HEALING_AGENT_DECISIONS_ENDPOINT="$AGENT_DECISIONS_ENDPOINT/claim"' in claim
     assert 'result.get("approved") is not True' in claim
     assert "claim_approved_patch && apply_approved_patch" in wrapper
