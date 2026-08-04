@@ -2,26 +2,38 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+
+from .models import PatchVerdict
 
 PROTECTED_EXACT = {"CONSTITUTION.md", "Dockerfile", "requirements.txt"}
 PROTECTED_PREFIXES = (".github/", "deploy/", "execution/")
 _DANGEROUS = (
-    "os.system(", "subprocess.Popen(", "subprocess.run(", "shell=True", "eval(", "exec(",
-    "pickle.loads(", "yaml.load(", "chmod 777", "curl ", "wget ", "docker.sock",
-    "SHARIPOVAI_DISABLE_AUTH", "real_orders_blocked = False", "live_execution_enabled = True",
+    "os.system(",
+    "subprocess.Popen(",
+    "subprocess.run(",
+    "shell=True",
+    "eval(",
+    "exec(",
+    "pickle.loads(",
+    "yaml.load(",
+    "chmod 777",
+    "curl ",
+    "wget ",
+    "docker.sock",
+    "SHARIPOVAI_DISABLE_AUTH",
+    "real_orders_blocked = False",
+    "live_execution_enabled = True",
 )
 _TEST_WEAKENING = (
-    "@pytest.mark.skip", "pytest.skip(", "unittest.skip", "xfail", "assert True",
-    "# noqa", "# type: ignore",
+    "@pytest.mark.skip",
+    "pytest.skip(",
+    "unittest.skip",
+    "xfail",
+    "assert True",
+    "# noqa",
+    "# type: ignore",
 )
 _PATH_RE = re.compile(r"^(?:---|\+\+\+)\s+(?:[ab]/)?(.+)$", re.MULTILINE)
-
-
-@dataclass(slots=True)
-class PatchVerdict:
-    allowed: bool
-    reasons: list[str] = field(default_factory=list)
 
 
 def validate_patch(patch: str) -> PatchVerdict:
@@ -35,16 +47,30 @@ def validate_patch(patch: str) -> PatchVerdict:
     if "new file mode 120000" in patch or "old mode 120000" in patch:
         reasons.append("symlinks are forbidden")
 
-    paths = {path.strip() for path in _PATH_RE.findall(patch) if path.strip() != "/dev/null"}
+    paths = {
+        path.strip()
+        for path in _PATH_RE.findall(patch)
+        if path.strip() != "/dev/null"
+    }
+    checked_files: list[str] = []
     for path in sorted(paths):
         normalized = path.removeprefix("a/").removeprefix("b/")
+        checked_files.append(normalized)
         if normalized in PROTECTED_EXACT or normalized.startswith(PROTECTED_PREFIXES):
             reasons.append(f"protected path: {normalized}")
         if normalized.startswith("/") or ".." in normalized.split("/"):
             reasons.append(f"unsafe path: {normalized}")
 
-    added = "\n".join(line[1:] for line in patch.splitlines() if line.startswith("+") and not line.startswith("+++"))
-    removed = "\n".join(line[1:] for line in patch.splitlines() if line.startswith("-") and not line.startswith("---"))
+    added = "\n".join(
+        line[1:]
+        for line in patch.splitlines()
+        if line.startswith("+") and not line.startswith("+++")
+    )
+    removed = "\n".join(
+        line[1:]
+        for line in patch.splitlines()
+        if line.startswith("-") and not line.startswith("---")
+    )
     for marker in _DANGEROUS:
         if marker in added:
             reasons.append(f"dangerous construct added: {marker}")
@@ -56,7 +82,13 @@ def validate_patch(patch: str) -> PatchVerdict:
     if "test_" in removed and "test_" not in added:
         reasons.append("tests removed without replacement")
 
-    return PatchVerdict(allowed=not reasons, reasons=reasons)
+    risk_level = "critical" if reasons else "low"
+    return PatchVerdict(
+        allowed=not reasons,
+        reasons=reasons,
+        checked_files=checked_files,
+        risk_level=risk_level,
+    )
 
 
 class SecurityGuard:
@@ -64,4 +96,10 @@ class SecurityGuard:
         return validate_patch(patch)
 
 
-__all__ = ["PROTECTED_EXACT", "PROTECTED_PREFIXES", "PatchVerdict", "SecurityGuard", "validate_patch"]
+__all__ = [
+    "PROTECTED_EXACT",
+    "PROTECTED_PREFIXES",
+    "PatchVerdict",
+    "SecurityGuard",
+    "validate_patch",
+]
