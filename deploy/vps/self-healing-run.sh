@@ -210,7 +210,7 @@ revert_automatic_commit() {
     cd "$REPO_DIR" || return 1
     current_sha="$(git rev-parse HEAD 2>/dev/null || true)"
     subject="$(git log -1 --pretty=%s 2>/dev/null || true)"
-    status="$(git status --porcelain --untracked-files=no 2>/dev/null || true)"
+    status="$(git status --porcelain 2>/dev/null || true)"
 
     if [ "$current_sha" != "$expected_sha" ]; then
         log "Refusing git revert: HEAD changed (expected=$expected_sha actual=$current_sha)."
@@ -224,7 +224,7 @@ revert_automatic_commit() {
             ;;
     esac
     if [ -n "$status" ]; then
-        log "Refusing git revert: tracked worktree is not clean."
+        log "Refusing git revert: worktree is not clean."
         return 1
     fi
 
@@ -234,6 +234,17 @@ revert_automatic_commit() {
     compose up -d sharipovai caddy || return 1
     wait_for_health
 }
+
+APPROVED_PATCH_HELPER="$REPO_DIR/deploy/vps/self-healing-approved-patch.sh"
+if [ -r "$APPROVED_PATCH_HELPER" ]; then
+    # shellcheck source=deploy/vps/self-healing-approved-patch.sh
+    . "$APPROVED_PATCH_HELPER"
+else
+    apply_approved_patch() {
+        log "Approved patch helper is missing: $APPROVED_PATCH_HELPER"
+        return 1
+    }
+fi
 
 execute_action() {
     local action="$1" expected_sha="$2"
@@ -262,6 +273,10 @@ execute_action() {
         git_revert)
             log "Executing allow-listed action: git_revert"
             revert_automatic_commit "$expected_sha"
+            ;;
+        apply_approved_patch)
+            log "Executing allow-listed action: apply_approved_patch"
+            apply_approved_patch
             ;;
         *)
             log "Refusing unknown self-healing action: $action"
