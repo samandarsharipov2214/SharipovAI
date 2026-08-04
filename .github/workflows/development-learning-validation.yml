@@ -59,7 +59,17 @@ jobs:
             learning_engine/__init__.py \
             learning_engine/self_learning_supervisor.py \
             storage/project_database.py \
+            development_control/models.py \
+            tests/test_agent_learning_schema.py \
+            tests/test_ai_architecture_development_capabilities.py \
+            tests/test_development_control_models.py \
             tests/test_development_learning.py
 
-      - name: Run development learning contracts
-        run: python -m pytest tests/test_development_learning.py -q --tb=short
+      - name: Run ledger and development learning contracts
+        run: |
+          python -m pytest \
+            tests/test_agent_learning_schema.py \
+            tests/test_ai_architecture_development_capabilities.py \
+            tests/test_development_control_models.py \
+            tests/test_development_learning.py \
+            -q --tb=short
