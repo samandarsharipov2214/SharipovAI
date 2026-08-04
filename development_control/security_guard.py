@@ -7,6 +7,8 @@ from .models import PatchVerdict
 
 PROTECTED_EXACT = {"CONSTITUTION.md", "Dockerfile", "requirements.txt"}
 PROTECTED_PREFIXES = (".github/", "deploy/", "execution/")
+_MAX_CHECKED_FILES = 500
+_MAX_REASONS = 200
 _DANGEROUS = (
     "os.system(",
     "subprocess.Popen(",
@@ -38,6 +40,13 @@ _PATH_RE = re.compile(r"^(?:---|\+\+\+)\s+(?:[ab]/)?(.+)$", re.MULTILINE)
 
 def validate_patch(patch: str) -> PatchVerdict:
     reasons: list[str] = []
+    if not isinstance(patch, str):
+        return PatchVerdict(
+            allowed=False,
+            reasons=("patch must be text",),
+            checked_files=(),
+            risk_level="critical",
+        )
     if not patch.strip().startswith("diff --git "):
         reasons.append("patch is not a unified git diff")
     if "GIT binary patch" in patch or "Binary files " in patch:
@@ -47,13 +56,19 @@ def validate_patch(patch: str) -> PatchVerdict:
     if "new file mode 120000" in patch or "old mode 120000" in patch:
         reasons.append("symlinks are forbidden")
 
-    paths = {
-        path.strip()
-        for path in _PATH_RE.findall(patch)
-        if path.strip() != "/dev/null"
-    }
+    paths = sorted(
+        {
+            path.strip()
+            for path in _PATH_RE.findall(patch)
+            if path.strip() != "/dev/null"
+        }
+    )
+    if len(paths) > _MAX_CHECKED_FILES:
+        reasons.append(
+            f"patch changes too many files: {len(paths)} > {_MAX_CHECKED_FILES}"
+        )
     checked_files: list[str] = []
-    for path in sorted(paths):
+    for path in paths[:_MAX_CHECKED_FILES]:
         normalized = path.removeprefix("a/").removeprefix("b/")
         checked_files.append(normalized)
         if normalized in PROTECTED_EXACT or normalized.startswith(PROTECTED_PREFIXES):
@@ -82,13 +97,24 @@ def validate_patch(patch: str) -> PatchVerdict:
     if "test_" in removed and "test_" not in added:
         reasons.append("tests removed without replacement")
 
-    risk_level = "critical" if reasons else "low"
+    normalized_reasons = _bounded_unique(reasons, _MAX_REASONS)
     return PatchVerdict(
-        allowed=not reasons,
-        reasons=reasons,
-        checked_files=checked_files,
-        risk_level=risk_level,
+        allowed=not normalized_reasons,
+        reasons=normalized_reasons,
+        checked_files=tuple(checked_files),
+        risk_level="critical" if normalized_reasons else "low",
     )
+
+
+def _bounded_unique(values: list[str], limit: int) -> tuple[str, ...]:
+    unique: list[str] = []
+    for value in values:
+        if value not in unique:
+            unique.append(value)
+    if len(unique) <= limit:
+        return tuple(unique)
+    omitted = len(unique) - (limit - 1)
+    return tuple([*unique[: limit - 1], f"{omitted} additional blocking reasons omitted"])
 
 
 class SecurityGuard:
