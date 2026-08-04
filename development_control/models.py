@@ -21,11 +21,15 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
-def _identifier(value: str, field_name: str) -> str:
+def _text(value: str, field_name: str, *, maximum: int) -> str:
     clean = str(value).strip()
-    if not clean or len(clean) > 200:
-        raise ValueError(f"{field_name} must contain 1..200 characters")
+    if not clean or len(clean) > maximum:
+        raise ValueError(f"{field_name} must contain 1..{maximum} characters")
     return clean
+
+
+def _identifier(value: str, field_name: str) -> str:
+    return _text(value, field_name, maximum=200)
 
 
 def _safe_path(value: str) -> str:
@@ -38,8 +42,8 @@ def _safe_path(value: str) -> str:
 
 def _observed_path(value: str) -> str:
     clean = str(value).strip().replace("\\", "/")
-    if not clean or len(clean) > 1000:
-        raise ValueError("checked path must contain 1..1000 characters")
+    if not clean or len(clean) > 4000:
+        raise ValueError("checked path must contain 1..4000 characters")
     return clean
 
 
@@ -57,7 +61,7 @@ class PatchVerdict(BaseModel):
     @field_validator("reasons")
     @classmethod
     def _normalize_reasons(cls, value: list[str]) -> list[str]:
-        return [_identifier(item, "reason") for item in value]
+        return [_text(item, "reason", maximum=4000) for item in value]
 
     @field_validator("checked_paths")
     @classmethod
@@ -91,6 +95,16 @@ class CodeChangeProposal(BaseModel):
     @classmethod
     def _normalize_identifiers(cls, value: str, info: Any) -> str:
         return _identifier(value, info.field_name)
+
+    @field_validator("error_signature")
+    @classmethod
+    def _normalize_error_signature(cls, value: str) -> str:
+        return _text(value, "error_signature", maximum=4000)
+
+    @field_validator("rationale")
+    @classmethod
+    def _normalize_rationale(cls, value: str) -> str:
+        return str(value).strip()
 
     @field_validator("base_sha")
     @classmethod
