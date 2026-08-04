@@ -36,26 +36,33 @@ def _safe_path(value: str) -> str:
     return clean
 
 
+def _observed_path(value: str) -> str:
+    clean = str(value).strip().replace("\\", "/")
+    if not clean or len(clean) > 1000:
+        raise ValueError("checked path must contain 1..1000 characters")
+    return clean
+
+
 class PatchVerdict(BaseModel):
     """Fail-closed security verdict for one patch."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     allowed: bool
-    reasons: tuple[str, ...] = ()
-    checked_paths: tuple[str, ...] = ()
+    reasons: list[str] = Field(default_factory=list)
+    checked_paths: list[str] = Field(default_factory=list)
     policy_version: str = Field(default="1", min_length=1, max_length=64)
     created_at_ms: int = Field(default_factory=_now_ms, gt=0)
 
     @field_validator("reasons")
     @classmethod
-    def _normalize_reasons(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        return tuple(_identifier(item, "reason") for item in value)
+    def _normalize_reasons(cls, value: list[str]) -> list[str]:
+        return [_identifier(item, "reason") for item in value]
 
     @field_validator("checked_paths")
     @classmethod
-    def _normalize_paths(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        return tuple(_safe_path(item) for item in value)
+    def _normalize_paths(cls, value: list[str]) -> list[str]:
+        return [_observed_path(item) for item in value]
 
     @model_validator(mode="after")
     def _denial_requires_reason(self) -> "PatchVerdict":
