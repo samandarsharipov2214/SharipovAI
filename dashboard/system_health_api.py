@@ -1,8 +1,8 @@
 """Unified read-only health center for the existing SharipovAI runtime.
 
 The health center aggregates evidence from components already present in the
-application. It does not create another AI organ, mutate persistent state, restart
-components or activate financial execution. Recovery actions are recommendations only.
+application. It does not create another AI organ, mutate persistent state,
+restart components or activate financial execution.
 """
 from __future__ import annotations
 
@@ -106,8 +106,12 @@ class SystemHealthCenter:
             evidence.append("database_backed_quotes")
         else:
             blockers.append("market quotes are not confirmed database-backed")
-        if _truthy("MARKET_STREAM_ENABLED") and status.get("verified") is not True:
+        if _truthy_default("MARKET_STREAM_ENABLED", True) and status.get("verified") is not True:
             blockers.append("configured market stream is not verified")
+        if status.get("worker_running") is True:
+            evidence.append("worker_running")
+        elif _truthy_default("MARKET_STREAM_ENABLED", True):
+            blockers.append("canonical market worker is not running")
         return _component("market", evidence, blockers, ["reconnect public market stream"] if blockers else [])
 
     def _news(self) -> ComponentHealth:
@@ -116,8 +120,25 @@ class SystemHealthCenter:
             return _component("news", [], ["News Intelligence network is absent"], ["restart news runtime"])
         agents = len(getattr(network, "agents", []))
         database = getattr(self.app.state, "project_database", None)
-        blockers = [] if getattr(network, "database", None) is database else ["news memory is not using canonical database"]
-        return _component("news", [f"source_agents={agents}"], blockers, ["rebind NewsHub to ProjectDatabase"] if blockers else [])
+        evidence = [f"source_agents={agents}"]
+        blockers: list[str] = []
+        if _same_database(getattr(network, "database", None), database):
+            evidence.append("canonical_database_dsn")
+        else:
+            blockers.append("news memory is not using canonical database")
+        try:
+            snapshot = network.snapshot()
+        except Exception as exc:
+            blockers.append(f"news runtime status failed: {type(exc).__name__}: {exc}")
+        else:
+            if snapshot.get("status") == "running":
+                evidence.append("worker_running")
+            else:
+                blockers.append("News Intelligence worker is not running")
+            last_error = str(snapshot.get("last_error") or "")
+            if last_error:
+                blockers.append(f"News Intelligence last cycle error: {last_error}")
+        return _component("news", evidence, blockers, ["rebind NewsHub to ProjectDatabase", "inspect canonical news cycle"] if blockers else [])
 
     def _telegram(self) -> ComponentHealth:
         token = bool(os.getenv("BOT_TOKEN", "").strip())
@@ -178,13 +199,13 @@ class SystemHealthCenter:
         ]
         existing = [path for path in candidates if path.exists()]
         if not existing:
-            return _component("backup", [], ["verified backup evidence is not visible to this runtime"], ["run configured VPS backup job"])
+            return _component("backup", ["timer_scope=host_systemd"], ["verified backup evidence is not visible to this runtime"], ["inspect host backup timer", "run configured VPS backup job"])
         newest = max(existing, key=lambda item: item.stat().st_mtime)
         age = max(0.0, self.clock() - newest.stat().st_mtime)
         max_age = _bounded_float("SYSTEM_BACKUP_MAX_AGE_SECONDS", 7200.0, 300.0, 604800.0)
-        evidence = [f"latest={newest}", f"age_seconds={int(age)}"]
+        evidence = [f"latest={newest}", f"age_seconds={int(age)}", "timer_scope=host_systemd"]
         if age > max_age:
-            return _component("backup", evidence, ["backup evidence is stale"], ["run verified backup immediately"])
+            return _component("backup", evidence, ["backup evidence is stale"], ["inspect host backup timer", "run verified backup immediately"])
         return _component("backup", evidence, [], [])
 
 
@@ -221,8 +242,19 @@ def _component(name: str, evidence: list[str], blockers: list[str], recovery: li
     return ComponentHealth(name, status, tuple(evidence), tuple(blockers), tuple(recovery))
 
 
+def _same_database(left: Any, right: Any) -> bool:
+    left_dsn = str(getattr(left, "dsn", "") or "")
+    right_dsn = str(getattr(right, "dsn", "") or "")
+    return bool(left_dsn and right_dsn and left_dsn == right_dsn)
+
+
 def _truthy(name: str) -> bool:
     return os.getenv(name, "0").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _truthy_default(name: str, default: bool) -> bool:
+    fallback = "1" if default else "0"
+    return os.getenv(name, fallback).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _bounded_float(name: str, default: float, minimum: float, maximum: float) -> float:
