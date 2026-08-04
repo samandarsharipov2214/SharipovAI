@@ -9,17 +9,20 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 WRAPPER = ROOT / "deploy" / "vps" / "self-healing-run.sh"
 HELPER = ROOT / "deploy" / "vps" / "self-healing-approved-patch.sh"
+CLAIM_HELPER = ROOT / "deploy" / "vps" / "self-healing-approved-claim.sh"
 
 
 def _text() -> str:
-    return WRAPPER.read_text(encoding="utf-8") + "\n" + HELPER.read_text(encoding="utf-8")
+    return "\n".join(
+        path.read_text(encoding="utf-8") for path in (WRAPPER, HELPER, CLAIM_HELPER)
+    )
 
 
 def test_wrapper_shell_syntax() -> None:
     bash = shutil.which("bash")
     if bash is None:
         pytest.skip("bash is unavailable")
-    for script in (WRAPPER, HELPER):
+    for script in (WRAPPER, HELPER, CLAIM_HELPER):
         result = subprocess.run([bash, "-n", str(script)], text=True, capture_output=True)
         assert result.returncode == 0, result.stderr
 
@@ -34,6 +37,15 @@ def test_apply_approved_patch_manifest_and_integrity_contract() -> None:
     assert 'sha256sum "$patch_dir/candidate.patch"' in text
     assert "git apply --check --whitespace=error" in text
     assert "git apply --index --whitespace=error" in text
+
+
+def test_owner_and_security_claim_precedes_git_apply() -> None:
+    wrapper = WRAPPER.read_text(encoding="utf-8")
+    claim = CLAIM_HELPER.read_text(encoding="utf-8")
+    assert "/internal/agent-decisions" in claim
+    assert 'SELF_HEALING_AGENT_DECISIONS_ENDPOINT="$AGENT_DECISIONS_ENDPOINT/claim"' in claim
+    assert 'result.get("approved") is not True' in claim
+    assert "claim_approved_patch && apply_approved_patch" in wrapper
 
 
 def test_security_guard_is_repeated_in_read_only_docker() -> None:
