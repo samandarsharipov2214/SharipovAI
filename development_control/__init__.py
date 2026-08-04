@@ -1,5 +1,24 @@
-"""SharipovAI development-control guardrails."""
+"""SharipovAI development-control guardrails and typed change contracts."""
 
-from .security_guard import PatchVerdict, SecurityGuard, validate_patch
+from .models import (
+    AgentDecision,
+    CodeChangeProposal,
+    DecisionKind,
+    DecisionStatus,
+    PatchVerdict,
+    SecurityVerdict,
+    Verdict,
+)
+from .security_guard import SecurityGuard, validate_patch
 
-__all__ = ["PatchVerdict", "SecurityGuard", "validate_patch"]
+__all__ = [
+    "AgentDecision",
+    "CodeChangeProposal",
+    "DecisionKind",
+    "DecisionStatus",
+    "PatchVerdict",
+    "SecurityGuard",
+    "SecurityVerdict",
+    "Verdict",
+    "validate_patch",
+]
