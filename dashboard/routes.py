@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 import config.settings as config_settings
+from ai_architecture_registry import CANONICAL_AI_ORGANS
 from ai_chat_orchestrator import answer_chat
 from learning_engine import LearningSummary
 from runner import SharipovAIRunner
@@ -508,35 +509,86 @@ def _decision_journal() -> list[dict[str, Any]]:
 
 
 def _ai_bots() -> list[dict[str, Any]]:
-    data = [
-        ("General Controller", "главный контроль", 97, "сверил цель дня, риск и конфликт решений"),
-        ("Market Agent", "рынок", 96, "обновил сценарий BTC/ETH/SOL и не дал одиночному BUY пройти без подтверждения"),
-        ("News Agent", "новости", 92, "проверил источники и снизил доверие неподтверждённому сигналу"),
-        ("Risk Engine", "риск", 98, "пересчитал риск как при реальном капитале и оставил LIVE заблокированным"),
-        ("Portfolio Engine", "портфель", 95, "пересчитал equity, комиссии и net PnL"),
-        ("Paper Trading Bot", "paper-realism торговля", 93, "симулировал сделку как реальную: с комиссиями, риском и уроком"),
-        ("Confidence Engine", "уверенность", 91, "снизил confidence при конфликте Market/News/Risk"),
-        ("Consensus Engine", "согласие", 92, "собрал голоса агентов и оставил итог WATCH"),
-        ("Stress Bot", "стресс", 91, "посчитал потерю капитала и предотвращённый ущерб"),
-        ("Learning Engine", "обучение", 88, "принял ошибку ETH и усилил правило подтверждения объёма"),
-        ("Security Guard", "защита", 100, "подтвердил: реальные ордера запрещены без ручного разрешения"),
-    ]
+    runtime = {
+        "general_controller": (
+            "главный контроль",
+            97,
+            "сверил цель дня, риск и конфликт решений",
+        ),
+        "market_intelligence": (
+            "рынок",
+            96,
+            "обновил сценарий рынка и проверил качество котировок",
+        ),
+        "news_intelligence": (
+            "новости",
+            92,
+            "проверил источники и достоверность новостей",
+        ),
+        "risk_engine": (
+            "риск",
+            98,
+            "пересчитал лимиты и оставил LIVE заблокированным",
+        ),
+        "portfolio_engine": (
+            "портфель и отчёты",
+            95,
+            "пересчитал позиции, комиссии и net PnL",
+        ),
+        "virtual_execution": (
+            "виртуальное исполнение",
+            93,
+            "проверил виртуальные fills и качество исполнения",
+        ),
+        "decision_quality": (
+            "качество решений",
+            92,
+            "объединил confidence, consensus и конфликты агентов",
+        ),
+        "learning_engine": (
+            "обучение",
+            88,
+            "преобразовал ошибки в проверяемые уроки и правила",
+        ),
+        "security_guard": (
+            "защита",
+            100,
+            "подтвердил блокировку реальных ордеров и безопасность секретов",
+        ),
+    }
+
     bots: list[dict[str, Any]] = []
-    for index, (name, kind, quality, action) in enumerate(data):
+    for index, organ in enumerate(CANONICAL_AI_ORGANS):
+        kind, quality, action = runtime[organ.id]
         base = {
-            "name": name,
+            "id": organ.id,
+            "name": organ.name,
             "kind": kind,
-            "responsibility": "Рабочий модуль SharipovAI: контроль своей зоны, отчётность, риск-дисциплина и снижение ошибок.",
-            "reports_to": "General Controller" if name != "General Controller" else "Самандар",
+            "responsibility": organ.responsibility,
+            "owns": list(organ.owns),
+            "submodules": list(organ.submodules),
+            "legacy_aliases": list(organ.legacy_aliases),
+            "critical": organ.critical,
+            "reports_to": (
+                "Самандар"
+                if organ.id == "general_controller"
+                else "General Controller AI"
+            ),
             "status": "Работает",
             "health_score": quality,
             "quality_score": quality,
             "error_rate": round((100 - quality) / 4, 1),
             "activity_status": "Активен",
-            "daily_goal": "Работать как с реальным капиталом, даже в paper/demo, и не скрывать ошибки.",
-            "supervisor_action": "Контроль качества, риск-дисциплины и отправка ошибок в Learning/Evidence.",
+            "daily_goal": (
+                "Работать как с реальным капиталом и не скрывать ошибки."
+            ),
+            "supervisor_action": (
+                "Контроль качества, риска и передача ошибок в Learning/Evidence."
+            ),
             "short": kind,
-            "last_report": "Активен. Отчёт содержит last_seen, last_action и capital_mode.",
+            "last_report": (
+                "Активен. Отчёт содержит last_seen, last_action и capital_mode."
+            ),
         }
         bots.append(apply_agent_discipline(base, index=index, action=action))
     return bots

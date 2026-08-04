@@ -907,12 +907,24 @@ class SelfHealingAgent:
             env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"},
             text=True,
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
+            stderr=subprocess.PIPE,
             timeout=60,
             check=False,
         )
+        stderr = result.stderr.strip()
         if result.returncode != 0:
-            raise RuntimeError(f"git {' '.join(arguments)} failed: {result.stdout.strip()}")
+            details = result.stdout.strip()
+            if stderr:
+                details = f"{details}\n{stderr}".strip()
+            raise RuntimeError(
+                f"git {' '.join(arguments)} failed: {details}"
+            )
+        if stderr:
+            self.logger.warning(
+                "Git diagnostic for %s: %s",
+                " ".join(arguments),
+                stderr[:2000],
+            )
         return result.stdout
 
     def _git_ok(self, *arguments: str) -> bool:
@@ -930,13 +942,15 @@ class SelfHealingAgent:
         for relative in sorted(changed):
             digest.update(relative.encode("utf-8"))
             path = self.config.repo_dir / relative
-            if path.is_file():
-                try:
+            try:
+                if path.is_file():
                     digest.update(path.read_bytes())
-                except OSError:
-                    digest.update(b"<unreadable>")
-            else:
-                digest.update(b"<deleted>")
+                else:
+                    digest.update(b"<deleted>")
+            except OSError as exc:
+                digest.update(
+                    f"<unreadable:{type(exc).__name__}>".encode("utf-8")
+                )
         return digest.hexdigest()
 
     def _test_environment(self, snapshot: Path) -> dict[str, str]:

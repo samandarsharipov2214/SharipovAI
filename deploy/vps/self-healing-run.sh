@@ -103,11 +103,11 @@ write_runtime_input() {
     fi
     generated_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 
-    docker exec --user 0 sharipovai sh -ec \
+    docker exec --user 10001:10001 sharipovai sh -ec \
         "install -d -m 0700 '$RUNTIME_DIR'; : > '$RUNTIME_DIR/container_status.json'" \
         >/dev/null
 
-    cat <<JSON | docker exec -i --user 0 sharipovai sh -ec \
+    cat <<JSON | docker exec -i --user 10001:10001 sharipovai sh -ec \
         "cat > '$RUNTIME_DIR/container_status.json'; chmod 0600 '$RUNTIME_DIR/container_status.json'"
 {
   "generated_at": "$generated_at",
@@ -128,13 +128,13 @@ JSON
 
     docker logs --since 15m sharipovai 2>&1 |
         tail -c "${SELF_HEALING_MAX_HOST_LOG_BYTES:-2097152}" |
-        docker exec -i --user 0 sharipovai sh -ec \
+        docker exec -i --user 10001:10001 sharipovai sh -ec \
             "cat > '$RUNTIME_DIR/docker_logs_15m.log'; chmod 0600 '$RUNTIME_DIR/docker_logs_15m.log'"
 }
 
 run_agent() {
     docker exec \
-        --user 0 \
+        --user 10001:10001 \
         -e SELF_HEALING_REPO_DIR=/workspace \
         -e SELF_HEALING_BACKUP_PATH=/workspace/deploy/vps/backups/latest.tar.gz \
         -e SELF_HEALING_DATABASE_PATH=/var/lib/sharipovai/sharipovai_shared.db \
@@ -144,17 +144,17 @@ run_agent() {
 }
 
 read_agent_file() {
-    docker exec --user 0 sharipovai sh -ec \
+    docker exec --user 10001:10001 sharipovai sh -ec \
         "test -f '$1' && cat '$1' || true" 2>/dev/null
 }
 
 clear_agent_action() {
     if container_running sharipovai; then
-        docker exec --user 0 sharipovai sh -ec \
+        docker exec --user 10001:10001 sharipovai sh -ec \
             "rm -f '$RUNTIME_DIR/action' '$RUNTIME_DIR/action.json' '$RUNTIME_DIR/expected_sha'" \
             >/dev/null 2>&1 || true
     else
-        compose run --rm --no-deps --user 0 --entrypoint sh sharipovai -ec \
+        compose run --rm --no-deps --user 10001:10001 --entrypoint sh sharipovai -ec \
             "rm -f '$RUNTIME_DIR/action' '$RUNTIME_DIR/action.json' '$RUNTIME_DIR/expected_sha'" \
             >/dev/null 2>&1 || true
     fi
@@ -166,7 +166,7 @@ restore_database() {
     log "Stopping sharipovai for verified SQLite restore."
     compose stop sharipovai || return 1
 
-    if ! compose run --rm --no-deps --user 0 --entrypoint sh sharipovai -ec "
+    if ! compose run --rm --no-deps --user 10001:10001 --entrypoint sh sharipovai -ec "
         set -u
         db='/var/lib/sharipovai/sharipovai_shared.db'
         candidate='$RUNTIME_DIR/restore_candidate.db'
@@ -315,7 +315,7 @@ main() {
     if [ "$action_ok" -eq 1 ] && [ "${action:-none}" != "none" ] && container_running sharipovai; then
         write_runtime_input || true
         docker exec \
-            --user 0 \
+            --user 10001:10001 \
             -e SELF_HEALING_REPO_DIR=/workspace \
             -e SELF_HEALING_BACKUP_PATH=/workspace/deploy/vps/backups/latest.tar.gz \
             -e SELF_HEALING_DATABASE_PATH=/var/lib/sharipovai/sharipovai_shared.db \

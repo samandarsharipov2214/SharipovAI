@@ -1,6 +1,7 @@
 """Fail-closed global authentication middleware for the SharipovAI dashboard."""
 from __future__ import annotations
 
+import ipaddress
 import os
 from collections.abc import Callable
 from typing import Any
@@ -31,7 +32,22 @@ _PUBLIC_EXACT = {
     "/telegram/webhook",
 }
 _PUBLIC_PREFIXES = ("/static/", "/docs", "/openapi.json")
+_LOCAL_READONLY_EXACT = {"/api/market/bybit-websocket/status"}
 _TRUE_VALUES = {"1", "true", "yes", "on"}
+
+
+
+def _is_loopback_request(request: Request) -> bool:
+    host = request.client.host if request.client else None
+    if not host:
+        return False
+    value = host.strip().split("%", 1)[0]
+    if value.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(value).is_loopback
+    except ValueError:
+        return False
 
 
 def auth_disabled() -> bool:
@@ -85,6 +101,9 @@ def install_global_auth_guard(app: FastAPI) -> None:
                 )
             return await call_next(request)
 
+        if path in _LOCAL_READONLY_EXACT and _is_loopback_request(request):
+            return await call_next(request)
+
         if auth_disabled():
             return await call_next(request)
 
@@ -108,4 +127,4 @@ def install_global_auth_guard(app: FastAPI) -> None:
         )
 
 
-__all__ = ["auth_disabled", "install_global_auth_guard"]
+__all__ = ["_is_loopback_request", "auth_disabled", "install_global_auth_guard"]
