@@ -7,8 +7,10 @@ of truth for cross-chat memory and system state.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import sqlite3
 import time
 import uuid
@@ -17,7 +19,134 @@ from pathlib import Path
 from typing import Any, Iterator
 
 _TRUE = {"1", "true", "yes", "on"}
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
+_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+_SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+
+_BASE_SCHEMA_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TABLE IF NOT EXISTS project_kv (
+        namespace TEXT NOT NULL,
+        item_key TEXT NOT NULL,
+        value_json TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        updated_at_ms BIGINT NOT NULL,
+        PRIMARY KEY (namespace, item_key)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS project_events (
+        event_id TEXT PRIMARY KEY,
+        namespace TEXT NOT NULL,
+        entity_type TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        created_at_ms BIGINT NOT NULL
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS project_events_lookup_idx
+    ON project_events(namespace, entity_type, entity_id, created_at_ms)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS project_messages (
+        project_id TEXT NOT NULL,
+        chat_id TEXT NOT NULL,
+        message_id TEXT PRIMARY KEY,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        metadata_json TEXT NOT NULL,
+        created_at_ms BIGINT NOT NULL
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS project_messages_chat_idx
+    ON project_messages(project_id, chat_id, created_at_ms)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ai_organ_state (
+        organ_id TEXT PRIMARY KEY,
+        state_json TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        updated_at_ms BIGINT NOT NULL
+    )
+    """,
+)
+
+_AGENT_LEARNING_SCHEMA_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TABLE IF NOT EXISTS agent_fixes (
+        fix_id TEXT PRIMARY KEY,
+        error_signature TEXT NOT NULL,
+        failure_class TEXT,
+        patch TEXT NOT NULL,
+        patch_sha256 TEXT NOT NULL,
+        success INTEGER NOT NULL CHECK (success IN (0, 1)),
+        source TEXT NOT NULL,
+        base_sha TEXT,
+        applied_sha TEXT,
+        attempt_count INTEGER NOT NULL DEFAULT 1 CHECK (attempt_count > 0),
+        test_evidence_json TEXT NOT NULL,
+        metadata_json TEXT NOT NULL,
+        created_at_ms BIGINT NOT NULL,
+        updated_at_ms BIGINT NOT NULL
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS agent_fixes_signature_idx
+    ON agent_fixes(error_signature, success, created_at_ms)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS agent_fixes_patch_idx
+    ON agent_fixes(patch_sha256, created_at_ms)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS agent_decisions (
+        decision_id TEXT PRIMARY KEY,
+        fix_id TEXT,
+        kind TEXT NOT NULL,
+        status TEXT NOT NULL,
+        base_sha TEXT NOT NULL,
+        target_branch TEXT NOT NULL,
+        patch_sha256 TEXT NOT NULL,
+        security_verdict TEXT NOT NULL,
+        actor TEXT NOT NULL,
+        rationale TEXT NOT NULL,
+        metadata_json TEXT NOT NULL,
+        created_at_ms BIGINT NOT NULL,
+        updated_at_ms BIGINT NOT NULL,
+        FOREIGN KEY (fix_id) REFERENCES agent_fixes(fix_id) ON DELETE SET NULL
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS agent_decisions_fix_idx
+    ON agent_decisions(fix_id, created_at_ms)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS agent_decisions_status_idx
+    ON agent_decisions(status, kind, created_at_ms)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS agent_decision_events (
+        event_id TEXT PRIMARY KEY,
+        decision_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        actor TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        created_at_ms BIGINT NOT NULL,
+        FOREIGN KEY (decision_id) REFERENCES agent_decisions(decision_id) ON DELETE CASCADE
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS agent_decision_events_lookup_idx
+    ON agent_decision_events(decision_id, created_at_ms, event_id)
+    """,
+)
+
+_MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
+    (1, _BASE_SCHEMA_STATEMENTS),
+    (2, _AGENT_LEARNING_SCHEMA_STATEMENTS),
+)
 
 
 class DatabaseUnavailable(RuntimeError):
@@ -67,72 +196,37 @@ class ProjectDatabase:
             connection.close()
 
     def initialize(self) -> None:
-        statements = [
-            """
-            CREATE TABLE IF NOT EXISTS schema_migrations (
-                version INTEGER PRIMARY KEY,
-                applied_at_ms BIGINT NOT NULL
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS project_kv (
-                namespace TEXT NOT NULL,
-                item_key TEXT NOT NULL,
-                value_json TEXT NOT NULL,
-                version INTEGER NOT NULL,
-                updated_at_ms BIGINT NOT NULL,
-                PRIMARY KEY (namespace, item_key)
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS project_events (
-                event_id TEXT PRIMARY KEY,
-                namespace TEXT NOT NULL,
-                entity_type TEXT NOT NULL,
-                entity_id TEXT NOT NULL,
-                payload_json TEXT NOT NULL,
-                created_at_ms BIGINT NOT NULL
-            )
-            """,
-            """
-            CREATE INDEX IF NOT EXISTS project_events_lookup_idx
-            ON project_events(namespace, entity_type, entity_id, created_at_ms)
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS project_messages (
-                project_id TEXT NOT NULL,
-                chat_id TEXT NOT NULL,
-                message_id TEXT PRIMARY KEY,
-                role TEXT NOT NULL,
-                content TEXT NOT NULL,
-                metadata_json TEXT NOT NULL,
-                created_at_ms BIGINT NOT NULL
-            )
-            """,
-            """
-            CREATE INDEX IF NOT EXISTS project_messages_chat_idx
-            ON project_messages(project_id, chat_id, created_at_ms)
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS ai_organ_state (
-                organ_id TEXT PRIMARY KEY,
-                state_json TEXT NOT NULL,
-                version INTEGER NOT NULL,
-                updated_at_ms BIGINT NOT NULL
-            )
-            """,
-        ]
+        """Apply every missing schema migration atomically and in version order."""
+
         with self.connect() as connection:
             try:
                 self._begin(connection, immediate=True)
-                for statement in statements:
-                    self._execute(connection, statement)
                 self._execute(
                     connection,
-                    "INSERT INTO schema_migrations(version, applied_at_ms) VALUES (?, ?) "
-                    "ON CONFLICT(version) DO NOTHING",
-                    (_SCHEMA_VERSION, _now_ms()),
+                    """
+                    CREATE TABLE IF NOT EXISTS schema_migrations (
+                        version INTEGER PRIMARY KEY,
+                        applied_at_ms BIGINT NOT NULL
+                    )
+                    """,
                 )
+                rows = self._fetchall(connection, "SELECT version FROM schema_migrations ORDER BY version")
+                applied = {int(row["version"]) for row in rows}
+                unsupported = sorted(version for version in applied if version > _SCHEMA_VERSION)
+                if unsupported:
+                    raise DatabaseUnavailable(
+                        f"database schema is newer than this build: unsupported versions {unsupported}"
+                    )
+                for version, statements in _MIGRATIONS:
+                    if version in applied:
+                        continue
+                    for statement in statements:
+                        self._execute(connection, statement)
+                    self._execute(
+                        connection,
+                        "INSERT INTO schema_migrations(version, applied_at_ms) VALUES (?, ?)",
+                        (version, _now_ms()),
+                    )
                 connection.commit()
             except Exception:
                 connection.rollback()
@@ -418,6 +512,255 @@ class ProjectDatabase:
             "updated_at_ms": int(row["updated_at_ms"]),
         }
 
+    def record_agent_fix(
+        self,
+        *,
+        error_signature: str,
+        patch: str,
+        success: bool,
+        source: str,
+        fix_id: str | None = None,
+        failure_class: str | None = None,
+        base_sha: str | None = None,
+        applied_sha: str | None = None,
+        attempt_count: int = 1,
+        test_evidence: Any | None = None,
+        metadata: Any | None = None,
+        created_at_ms: int | None = None,
+    ) -> str:
+        """Persist one immutable repair attempt for future repair-memory retrieval."""
+
+        fix_id = _identifier(fix_id or str(uuid.uuid4()), "fix_id")
+        error_signature = _nonempty_text(error_signature, "error_signature")
+        patch = _nonempty_text(patch, "patch")
+        source = _identifier(source, "source")
+        failure_class = _optional_text(failure_class, "failure_class")
+        base_sha = _optional_sha(base_sha, "base_sha")
+        applied_sha = _optional_sha(applied_sha, "applied_sha")
+        attempts = int(attempt_count)
+        if attempts <= 0:
+            raise ValueError("attempt_count must be positive")
+        timestamp = _timestamp(created_at_ms)
+        patch_sha256 = hashlib.sha256(patch.encode("utf-8")).hexdigest()
+        with self.connect() as connection:
+            try:
+                self._begin(connection)
+                self._execute(
+                    connection,
+                    """
+                    INSERT INTO agent_fixes(
+                        fix_id, error_signature, failure_class, patch, patch_sha256,
+                        success, source, base_sha, applied_sha, attempt_count,
+                        test_evidence_json, metadata_json, created_at_ms, updated_at_ms
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        fix_id,
+                        error_signature,
+                        failure_class,
+                        patch,
+                        patch_sha256,
+                        1 if success else 0,
+                        source,
+                        base_sha,
+                        applied_sha,
+                        attempts,
+                        _json(test_evidence or {}),
+                        _json(metadata or {}),
+                        timestamp,
+                        timestamp,
+                    ),
+                )
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+        return fix_id
+
+    def get_agent_fix(self, fix_id: str) -> dict[str, Any] | None:
+        fix_id = _identifier(fix_id, "fix_id")
+        with self.connect() as connection:
+            row = self._fetchone(
+                connection,
+                """
+                SELECT fix_id, error_signature, failure_class, patch, patch_sha256,
+                       success, source, base_sha, applied_sha, attempt_count,
+                       test_evidence_json, metadata_json, created_at_ms, updated_at_ms
+                FROM agent_fixes WHERE fix_id = ?
+                """,
+                (fix_id,),
+            )
+        if not row:
+            return None
+        return {
+            "fix_id": row["fix_id"],
+            "error_signature": row["error_signature"],
+            "failure_class": row["failure_class"],
+            "patch": row["patch"],
+            "patch_sha256": row["patch_sha256"],
+            "success": bool(row["success"]),
+            "source": row["source"],
+            "base_sha": row["base_sha"],
+            "applied_sha": row["applied_sha"],
+            "attempt_count": int(row["attempt_count"]),
+            "test_evidence": json.loads(row["test_evidence_json"]),
+            "metadata": json.loads(row["metadata_json"]),
+            "created_at_ms": int(row["created_at_ms"]),
+            "updated_at_ms": int(row["updated_at_ms"]),
+        }
+
+    def record_agent_decision(
+        self,
+        *,
+        kind: str,
+        status: str,
+        base_sha: str,
+        target_branch: str,
+        patch_sha256: str,
+        security_verdict: str,
+        actor: str,
+        rationale: str,
+        decision_id: str | None = None,
+        fix_id: str | None = None,
+        metadata: Any | None = None,
+        created_at_ms: int | None = None,
+    ) -> str:
+        decision_id = _identifier(decision_id or str(uuid.uuid4()), "decision_id")
+        fix_id = _identifier(fix_id, "fix_id") if fix_id is not None else None
+        kind = _identifier(kind, "kind")
+        status = _identifier(status, "status")
+        base_sha = _sha(base_sha, "base_sha")
+        target_branch = _identifier(target_branch, "target_branch")
+        patch_sha256 = _sha256(patch_sha256, "patch_sha256")
+        security_verdict = _identifier(security_verdict, "security_verdict")
+        actor = _identifier(actor, "actor")
+        rationale = _nonempty_text(rationale, "rationale")
+        timestamp = _timestamp(created_at_ms)
+        with self.connect() as connection:
+            try:
+                self._begin(connection)
+                self._execute(
+                    connection,
+                    """
+                    INSERT INTO agent_decisions(
+                        decision_id, fix_id, kind, status, base_sha, target_branch,
+                        patch_sha256, security_verdict, actor, rationale,
+                        metadata_json, created_at_ms, updated_at_ms
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        decision_id,
+                        fix_id,
+                        kind,
+                        status,
+                        base_sha,
+                        target_branch,
+                        patch_sha256,
+                        security_verdict,
+                        actor,
+                        rationale,
+                        _json(metadata or {}),
+                        timestamp,
+                        timestamp,
+                    ),
+                )
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+        return decision_id
+
+    def get_agent_decision(self, decision_id: str) -> dict[str, Any] | None:
+        decision_id = _identifier(decision_id, "decision_id")
+        with self.connect() as connection:
+            row = self._fetchone(
+                connection,
+                """
+                SELECT decision_id, fix_id, kind, status, base_sha, target_branch,
+                       patch_sha256, security_verdict, actor, rationale,
+                       metadata_json, created_at_ms, updated_at_ms
+                FROM agent_decisions WHERE decision_id = ?
+                """,
+                (decision_id,),
+            )
+        if not row:
+            return None
+        return {
+            "decision_id": row["decision_id"],
+            "fix_id": row["fix_id"],
+            "kind": row["kind"],
+            "status": row["status"],
+            "base_sha": row["base_sha"],
+            "target_branch": row["target_branch"],
+            "patch_sha256": row["patch_sha256"],
+            "security_verdict": row["security_verdict"],
+            "actor": row["actor"],
+            "rationale": row["rationale"],
+            "metadata": json.loads(row["metadata_json"]),
+            "created_at_ms": int(row["created_at_ms"]),
+            "updated_at_ms": int(row["updated_at_ms"]),
+        }
+
+    def append_agent_decision_event(
+        self,
+        *,
+        decision_id: str,
+        event_type: str,
+        actor: str,
+        payload: Any,
+        event_id: str | None = None,
+        created_at_ms: int | None = None,
+    ) -> str:
+        event_id = _identifier(event_id or str(uuid.uuid4()), "event_id")
+        decision_id = _identifier(decision_id, "decision_id")
+        event_type = _identifier(event_type, "event_type")
+        actor = _identifier(actor, "actor")
+        timestamp = _timestamp(created_at_ms)
+        with self.connect() as connection:
+            try:
+                self._begin(connection)
+                self._execute(
+                    connection,
+                    """
+                    INSERT INTO agent_decision_events(
+                        event_id, decision_id, event_type, actor, payload_json, created_at_ms
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (event_id, decision_id, event_type, actor, _json(payload), timestamp),
+                )
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+        return event_id
+
+    def list_agent_decision_events(self, decision_id: str, *, limit: int = 200) -> list[dict[str, Any]]:
+        decision_id = _identifier(decision_id, "decision_id")
+        limit = min(max(int(limit), 1), 2000)
+        with self.connect() as connection:
+            rows = self._fetchall(
+                connection,
+                """
+                SELECT event_id, decision_id, event_type, actor, payload_json, created_at_ms
+                FROM agent_decision_events
+                WHERE decision_id = ?
+                ORDER BY created_at_ms ASC, event_id ASC
+                LIMIT ?
+                """,
+                (decision_id, limit),
+            )
+        return [
+            {
+                "event_id": row["event_id"],
+                "decision_id": row["decision_id"],
+                "event_type": row["event_type"],
+                "actor": row["actor"],
+                "payload": json.loads(row["payload_json"]),
+                "created_at_ms": int(row["created_at_ms"]),
+            }
+            for row in rows
+        ]
+
     def _begin(self, connection: Any, *, immediate: bool = False) -> None:
         if self.backend == "sqlite":
             connection.execute("BEGIN IMMEDIATE" if immediate else "BEGIN")
@@ -488,6 +831,39 @@ def _identifier(value: str, name: str) -> str:
     return clean
 
 
+def _nonempty_text(value: str, name: str) -> str:
+    clean = str(value)
+    if not clean.strip():
+        raise ValueError(f"{name} must not be empty")
+    if "\x00" in clean:
+        raise ValueError(f"{name} must not contain NUL bytes")
+    return clean
+
+
+def _optional_text(value: str | None, name: str) -> str | None:
+    if value is None:
+        return None
+    return _nonempty_text(value, name)
+
+
+def _sha(value: str, name: str) -> str:
+    clean = str(value).strip().lower()
+    if not _SHA_PATTERN.fullmatch(clean):
+        raise ValueError(f"{name} must be a 40-character lowercase Git SHA")
+    return clean
+
+
+def _optional_sha(value: str | None, name: str) -> str | None:
+    return None if value is None else _sha(value, name)
+
+
+def _sha256(value: str, name: str) -> str:
+    clean = str(value).strip().lower()
+    if not _SHA256_PATTERN.fullmatch(clean):
+        raise ValueError(f"{name} must be a 64-character lowercase SHA-256")
+    return clean
+
+
 def _role(value: str) -> str:
     clean = str(value).strip().lower()
     if clean not in {"system", "user", "assistant", "tool"}:
@@ -497,6 +873,3 @@ def _role(value: str) -> str:
 
 def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True, allow_nan=False)
-
-
-__all__ = ["DatabaseUnavailable", "ProjectDatabase", "VersionConflict"]

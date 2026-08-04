@@ -30,7 +30,7 @@ def test_migration_script_runs_directly_from_repository_root(tmp_path: Path) -> 
     assert status == {
         "backend": "sqlite",
         "required": False,
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "ok",
     }
     assert (data_dir / "sharipovai_shared.db").is_file()

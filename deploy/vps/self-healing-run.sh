@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
-# Host-side supervisor for the in-container SharipovAI Self-Healing Agent.
-#
-# The host needs only Docker, Docker Compose, Git, curl and standard shell tools.
-# Python executes exclusively inside the sharipovai image.
+# Host-side supervisor for the bounded SharipovAI Self-Healing Agent.
 set -u
 set -o pipefail
 
@@ -14,6 +11,7 @@ LOCK_FILE="/run/sharipovai-self-healing.lock"
 HOST_LOG="/var/log/sharipovai-self-healing-host.log"
 AGENT_PATH="/workspace/tools/self_healing_agent.py"
 RUNTIME_DIR="/var/lib/sharipovai/.self_healing"
+CONTAINER_USER="${SELF_HEALING_CONTAINER_USER:-10001:10001}"
 
 mkdir -p "$(dirname "$HOST_LOG")"
 touch "$HOST_LOG"
@@ -73,14 +71,9 @@ ensure_stack() {
         log "Stack is incomplete; running docker compose up -d."
         compose up -d || return 1
     fi
-
-    # Do not require the HTTP health check here. An unhealthy but running
-    # application container is exactly the state the Python agent must inspect.
     deadline=$((SECONDS + ${SELF_HEALING_CONTAINER_START_TIMEOUT_SECONDS:-90}))
     while [ "$SECONDS" -lt "$deadline" ]; do
-        if container_running sharipovai; then
-            return 0
-        fi
+        container_running sharipovai && return 0
         sleep 3
     done
     return 1
@@ -103,12 +96,12 @@ write_runtime_input() {
     fi
     generated_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 
-    docker exec --user 10001:10001 sharipovai sh -ec \
+    docker exec --user "$CONTAINER_USER" sharipovai sh -ec \
         "install -d -m 0700 '$RUNTIME_DIR'; : > '$RUNTIME_DIR/container_status.json'" \
-        >/dev/null
+        >/dev/null || return 1
 
-    cat <<JSON | docker exec -i --user 10001:10001 sharipovai sh -ec \
-        "cat > '$RUNTIME_DIR/container_status.json'; chmod 0600 '$RUNTIME_DIR/container_status.json'"
+    cat <<JSON | docker exec -i --user "$CONTAINER_USER" sharipovai sh -ec \
+        "cat > '$RUNTIME_DIR/container_status.json'; chmod 0600 '$RUNTIME_DIR/container_status.json'" || return 1
 {
   "generated_at": "$generated_at",
   "containers": {
@@ -128,33 +121,32 @@ JSON
 
     docker logs --since 15m sharipovai 2>&1 |
         tail -c "${SELF_HEALING_MAX_HOST_LOG_BYTES:-2097152}" |
-        docker exec -i --user 10001:10001 sharipovai sh -ec \
+        docker exec -i --user "$CONTAINER_USER" sharipovai sh -ec \
             "cat > '$RUNTIME_DIR/docker_logs_15m.log'; chmod 0600 '$RUNTIME_DIR/docker_logs_15m.log'"
 }
 
 run_agent() {
     docker exec \
-        --user 10001:10001 \
+        --user "$CONTAINER_USER" \
         -e SELF_HEALING_REPO_DIR=/workspace \
         -e SELF_HEALING_BACKUP_PATH=/workspace/deploy/vps/backups/latest.tar.gz \
         -e SELF_HEALING_DATABASE_PATH=/var/lib/sharipovai/sharipovai_shared.db \
         -e SELF_HEALING_STDERR=0 \
-        sharipovai \
-        python "$AGENT_PATH"
+        sharipovai python "$AGENT_PATH"
 }
 
 read_agent_file() {
-    docker exec --user 10001:10001 sharipovai sh -ec \
+    docker exec --user "$CONTAINER_USER" sharipovai sh -ec \
         "test -f '$1' && cat '$1' || true" 2>/dev/null
 }
 
 clear_agent_action() {
     if container_running sharipovai; then
-        docker exec --user 10001:10001 sharipovai sh -ec \
+        docker exec --user "$CONTAINER_USER" sharipovai sh -ec \
             "rm -f '$RUNTIME_DIR/action' '$RUNTIME_DIR/action.json' '$RUNTIME_DIR/expected_sha'" \
             >/dev/null 2>&1 || true
     else
-        compose run --rm --no-deps --user 10001:10001 --entrypoint sh sharipovai -ec \
+        compose run --rm --no-deps --user "$CONTAINER_USER" --entrypoint sh sharipovai -ec \
             "rm -f '$RUNTIME_DIR/action' '$RUNTIME_DIR/action.json' '$RUNTIME_DIR/expected_sha'" \
             >/dev/null 2>&1 || true
     fi
@@ -166,7 +158,7 @@ restore_database() {
     log "Stopping sharipovai for verified SQLite restore."
     compose stop sharipovai || return 1
 
-    if ! compose run --rm --no-deps --user 10001:10001 --entrypoint sh sharipovai -ec "
+    if ! compose run --rm --no-deps --user "$CONTAINER_USER" --entrypoint sh sharipovai -ec "
         set -u
         db='/var/lib/sharipovai/sharipovai_shared.db'
         candidate='$RUNTIME_DIR/restore_candidate.db'
@@ -184,12 +176,11 @@ PY
         fi
         rm -f \"\$db-wal\" \"\$db-shm\" \"\$db.new\"
         cp \"\$candidate\" \"\$db.new\"
-        chown 10001:10001 \"\$db.new\"
         chmod 0600 \"\$db.new\"
         mv \"\$db.new\" \"\$db\"
         rm -f \"\$candidate\"
     "; then
-        log "Database restore command failed; attempting to start the original stack."
+        log "Database restore failed; attempting to restart the original stack."
         compose up -d sharipovai caddy || true
         return 1
     fi
@@ -201,33 +192,26 @@ PY
 revert_automatic_commit() {
     local expected_sha="$1"
     local current_sha subject status
-
-    if ! [[ "$expected_sha" =~ ^[0-9a-f]{40}$ ]]; then
-        log "Refusing git revert: expected SHA is invalid: $expected_sha"
+    [[ "$expected_sha" =~ ^[0-9a-f]{40}$ ]] || {
+        log "Refusing git revert: invalid expected SHA: $expected_sha"
         return 1
-    fi
-
+    }
     cd "$REPO_DIR" || return 1
     current_sha="$(git rev-parse HEAD 2>/dev/null || true)"
     subject="$(git log -1 --pretty=%s 2>/dev/null || true)"
-    status="$(git status --porcelain --untracked-files=no 2>/dev/null || true)"
-
-    if [ "$current_sha" != "$expected_sha" ]; then
+    status="$(git status --porcelain 2>/dev/null || true)"
+    [ "$current_sha" = "$expected_sha" ] || {
         log "Refusing git revert: HEAD changed (expected=$expected_sha actual=$current_sha)."
         return 1
-    fi
+    }
     case "$subject" in
         "[self-healing]"*) ;;
-        *)
-            log "Refusing git revert: commit is not marked [self-healing]: $subject"
-            return 1
-            ;;
+        *) log "Refusing git revert: commit is not marked [self-healing]: $subject"; return 1 ;;
     esac
-    if [ -n "$status" ]; then
-        log "Refusing git revert: tracked worktree is not clean."
+    [ -z "$status" ] || {
+        log "Refusing git revert: worktree is not clean."
         return 1
-    fi
-
+    }
     git revert --no-edit "$expected_sha" || return 1
     log "Automatic commit reverted: $expected_sha"
     compose build sharipovai || return 1
@@ -235,21 +219,35 @@ revert_automatic_commit() {
     wait_for_health
 }
 
+APPROVED_PATCH_HELPER="$REPO_DIR/deploy/vps/self-healing-approved-patch.sh"
+APPROVED_PATCH_CLAIM_HELPER="$REPO_DIR/deploy/vps/self-healing-approved-claim.sh"
+if [ -r "$APPROVED_PATCH_HELPER" ] && [ -r "$APPROVED_PATCH_CLAIM_HELPER" ]; then
+    # shellcheck source=deploy/vps/self-healing-approved-patch.sh
+    . "$APPROVED_PATCH_HELPER"
+    # shellcheck source=deploy/vps/self-healing-approved-claim.sh
+    . "$APPROVED_PATCH_CLAIM_HELPER"
+else
+    claim_approved_patch() {
+        log "Approved patch claim helper is missing: $APPROVED_PATCH_CLAIM_HELPER"
+        return 1
+    }
+    apply_approved_patch() {
+        log "Approved patch helper is missing: $APPROVED_PATCH_HELPER"
+        return 1
+    }
+fi
+
 execute_action() {
     local action="$1" expected_sha="$2"
     case "$action" in
-        ""|none)
-            return 0
-            ;;
+        ""|none) return 0 ;;
         compose_up)
             log "Executing allow-listed action: compose_up"
             compose up -d && wait_for_health
             ;;
         restart_sharipovai)
             log "Executing allow-listed action: restart_sharipovai"
-            compose restart sharipovai &&
-                compose up -d caddy &&
-                wait_for_health
+            compose restart sharipovai && compose up -d caddy && wait_for_health
             ;;
         restart_caddy)
             log "Executing allow-listed action: restart_caddy"
@@ -263,6 +261,10 @@ execute_action() {
             log "Executing allow-listed action: git_revert"
             revert_automatic_commit "$expected_sha"
             ;;
+        apply_approved_patch)
+            log "Executing allow-listed action: apply_approved_patch"
+            claim_approved_patch && apply_approved_patch
+            ;;
         *)
             log "Refusing unknown self-healing action: $action"
             return 1
@@ -272,37 +274,31 @@ execute_action() {
 
 main() {
     local agent_code=0 action=none expected_sha="" action_ok=0
-
     exec 9>"$LOCK_FILE"
     if ! flock -n 9; then
         log "Another self-healing run is active; skipping."
         exit 0
     fi
-
     cd "$COMPOSE_DIR" || {
         log "Compose directory is missing: $COMPOSE_DIR"
         exit 1
     }
-
     if [ ! -f "$ENV_FILE" ] || [ ! -f "$COMPOSE_FILE" ]; then
         log "Deployment files are missing."
         exit 1
     fi
-
-    if ! ensure_stack; then
+    ensure_stack || {
         log "Unable to bring SharipovAI stack to a running state."
         exit 1
-    fi
-
-    if ! write_runtime_input; then
+    }
+    write_runtime_input || {
         log "Unable to provide runtime input to the in-container agent."
         exit 1
-    fi
+    }
 
     run_agent || agent_code=$?
     action="$(read_agent_file "$RUNTIME_DIR/action" | tr -d '\r\n[:space:]')"
     expected_sha="$(read_agent_file "$RUNTIME_DIR/expected_sha" | tr -d '\r\n[:space:]')"
-
     log "Agent finished: code=$agent_code action=${action:-none}"
 
     if execute_action "${action:-none}" "$expected_sha"; then
@@ -315,17 +311,13 @@ main() {
     if [ "$action_ok" -eq 1 ] && [ "${action:-none}" != "none" ] && container_running sharipovai; then
         write_runtime_input || true
         docker exec \
-            --user 10001:10001 \
+            --user "$CONTAINER_USER" \
             -e SELF_HEALING_REPO_DIR=/workspace \
             -e SELF_HEALING_BACKUP_PATH=/workspace/deploy/vps/backups/latest.tar.gz \
             -e SELF_HEALING_DATABASE_PATH=/var/lib/sharipovai/sharipovai_shared.db \
-            sharipovai \
-            python "$AGENT_PATH" --verify-only \
+            sharipovai python "$AGENT_PATH" --verify-only \
             >/dev/null 2>&1 || true
     fi
-
-    # The systemd unit remains successful if the agent reported an issue but
-    # the wrapper completed its bounded workflow. Detailed state is in logs.
     exit 0
 }
 

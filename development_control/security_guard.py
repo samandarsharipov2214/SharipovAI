@@ -1,67 +1,85 @@
-"""Fail-closed validation for AI-generated unified diffs."""
+"""Typed adapter over the parser-based development patch Security Guard."""
 from __future__ import annotations
 
-import re
-from dataclasses import dataclass, field
-
-PROTECTED_EXACT = {"CONSTITUTION.md", "Dockerfile", "requirements.txt"}
-PROTECTED_PREFIXES = (".github/", "deploy/", "execution/")
-_DANGEROUS = (
-    "os.system(", "subprocess.Popen(", "subprocess.run(", "shell=True", "eval(", "exec(",
-    "pickle.loads(", "yaml.load(", "chmod 777", "curl ", "wget ", "docker.sock",
-    "SHARIPOVAI_DISABLE_AUTH", "real_orders_blocked = False", "live_execution_enabled = True",
+from .patch_policy import (
+    PROTECTED_EXACT,
+    PROTECTED_PREFIXES,
+    PatchParseError,
+    is_protected_path,
+    parse_unified_diff,
 )
-_TEST_WEAKENING = (
-    "@pytest.mark.skip", "pytest.skip(", "unittest.skip", "xfail", "assert True",
-    "# noqa", "# type: ignore",
-)
-_PATH_RE = re.compile(r"^(?:---|\+\+\+)\s+(?:[ab]/)?(.+)$", re.MULTILINE)
-
-
-@dataclass(slots=True)
-class PatchVerdict:
-    allowed: bool
-    reasons: list[str] = field(default_factory=list)
-
-
-def validate_patch(patch: str) -> PatchVerdict:
-    reasons: list[str] = []
-    if not patch.strip().startswith("diff --git "):
-        reasons.append("patch is not a unified git diff")
-    if "GIT binary patch" in patch or "Binary files " in patch:
-        reasons.append("binary patches are forbidden")
-    if "rename from " in patch or "rename to " in patch or "similarity index " in patch:
-        reasons.append("renames are forbidden")
-    if "new file mode 120000" in patch or "old mode 120000" in patch:
-        reasons.append("symlinks are forbidden")
-
-    paths = {path.strip() for path in _PATH_RE.findall(patch) if path.strip() != "/dev/null"}
-    for path in sorted(paths):
-        normalized = path.removeprefix("a/").removeprefix("b/")
-        if normalized in PROTECTED_EXACT or normalized.startswith(PROTECTED_PREFIXES):
-            reasons.append(f"protected path: {normalized}")
-        if normalized.startswith("/") or ".." in normalized.split("/"):
-            reasons.append(f"unsafe path: {normalized}")
-
-    added = "\n".join(line[1:] for line in patch.splitlines() if line.startswith("+") and not line.startswith("+++"))
-    removed = "\n".join(line[1:] for line in patch.splitlines() if line.startswith("-") and not line.startswith("---"))
-    for marker in _DANGEROUS:
-        if marker in added:
-            reasons.append(f"dangerous construct added: {marker}")
-    for marker in _TEST_WEAKENING:
-        if marker in added:
-            reasons.append(f"test weakening added: {marker}")
-    if "assert " in removed and "assert " not in added:
-        reasons.append("assertions removed without replacement")
-    if "test_" in removed and "test_" not in added:
-        reasons.append("tests removed without replacement")
-
-    return PatchVerdict(allowed=not reasons, reasons=reasons)
+from .patch_verdict import PatchVerdict
+from .security_guard_engine import SecurityGuard as _ParserSecurityGuard
 
 
 class SecurityGuard:
-    def check(self, patch: str) -> PatchVerdict:
-        return validate_patch(patch)
+    """Return the canonical typed verdict while using the strict parser engine."""
+
+    def __init__(self) -> None:
+        self._engine = _ParserSecurityGuard()
+
+    def evaluate(self, patch: str | bytes) -> PatchVerdict:
+        raw = self._engine.evaluate(patch)
+        protected_paths = _protected_paths(patch)
+        return PatchVerdict(
+            allowed=bool(raw.allowed),
+            reasons=list(raw.reasons),
+            policy_version="development-v2",
+            protected_paths=protected_paths,
+            required_checks=["security-guard", "targeted-tests", "full-regression"],
+            requires_human_approval=bool(protected_paths and not raw.allowed),
+        )
+
+    def check(self, patch: str | bytes) -> PatchVerdict:
+        return self.evaluate(patch)
+
+    def validate(self, patch: str | bytes) -> PatchVerdict:
+        return self.evaluate(patch)
+
+    def __call__(self, patch: str | bytes) -> PatchVerdict:
+        return self.evaluate(patch)
 
 
-__all__ = ["PROTECTED_EXACT", "PROTECTED_PREFIXES", "PatchVerdict", "SecurityGuard", "validate_patch"]
+_DEFAULT_GUARD = SecurityGuard()
+
+
+def evaluate_patch(patch: str | bytes) -> PatchVerdict:
+    return _DEFAULT_GUARD.evaluate(patch)
+
+
+def validate_patch(patch: str | bytes) -> PatchVerdict:
+    return evaluate_patch(patch)
+
+
+def _protected_paths(patch: str | bytes) -> list[str]:
+    if isinstance(patch, bytes):
+        try:
+            text = patch.decode("utf-8", errors="strict")
+        except UnicodeDecodeError:
+            return []
+    elif isinstance(patch, str):
+        text = patch
+    else:
+        return []
+    try:
+        sections = parse_unified_diff(text)
+    except PatchParseError:
+        return []
+    return list(
+        dict.fromkeys(
+            candidate
+            for section in sections
+            for candidate in section.paths
+            if is_protected_path(candidate)
+        )
+    )
+
+
+__all__ = [
+    "PROTECTED_EXACT",
+    "PROTECTED_PREFIXES",
+    "PatchVerdict",
+    "SecurityGuard",
+    "evaluate_patch",
+    "validate_patch",
+]
