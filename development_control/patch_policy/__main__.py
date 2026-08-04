@@ -17,8 +17,8 @@ def _verify(path: Path, max_bytes: int) -> tuple[int, dict[str, object]]:
             raise ValueError("patch path must be a regular non-symlink file")
         if stat.st_size <= 0 or stat.st_size > max_bytes:
             raise ValueError(f"patch size must be 1..{max_bytes} bytes")
-        patch = path.read_bytes()
-    except (OSError, ValueError) as exc:
+        patch = path.read_bytes().decode("utf-8", errors="strict")
+    except (OSError, UnicodeError, ValueError) as exc:
         return 1, {"allowed": False, "reasons": [f"patch read failed: {exc}"]}
 
     verdict = validate_patch(patch)
