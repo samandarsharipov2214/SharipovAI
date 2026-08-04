@@ -51,7 +51,10 @@ def test_rejects_path_bypasses(header: str) -> None:
     patch = f"{header}\n--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n-x=1\n+x=2\n"
     verdict = validate_patch(patch)
     assert verdict.allowed is False
-    assert any("unsafe diff path" in reason for reason in verdict.reasons)
+    assert any(
+        "malformed patch" in reason or "protected path" in reason
+        for reason in verdict.reasons
+    )
 
 
 def test_rejects_binary_rename_and_symlink() -> None:
