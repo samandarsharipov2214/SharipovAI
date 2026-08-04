@@ -75,11 +75,11 @@ def network_status(*, run_due: bool = False, app: FastAPI | None = None) -> dict
     network = _network_for(app)
     if run_due:
         network.cycle()
-    return _status(network, _database_for(app))
+    return _status(network, _database_for(app), app=app)
 
 
 def bridge_status(*, app: FastAPI | None = None) -> dict[str, Any]:
-    return _bridge_status(_database_for(app))
+    return _bridge_status(_database_for(app), app=app)
 
 
 def start_agent_network(*, app: FastAPI | None = None) -> dict[str, Any]:
@@ -118,7 +118,7 @@ def run_due_agents(*, force: bool = False, app: FastAPI | None = None) -> dict[s
 def bridge_events(*, app: FastAPI | None = None) -> dict[str, Any]:
     payload = bridge_status(app=app)
     return {
-        "status": payload.get("status", "ok"),
+        "status": payload.get("status", "warning"),
         "delivery_mode": "shared_database",
         "consumer_active": bool(payload.get("consumer_active")),
         "sent": None,
@@ -193,30 +193,69 @@ def _register_event(app: FastAPI, event: str, handler: Callable[[], None]) -> No
         handlers.append(handler)
 
 
-def _status(network: NewsAgentNetwork, database: ProjectDatabase) -> dict[str, Any]:
+def _status(
+    network: NewsAgentNetwork,
+    database: ProjectDatabase,
+    *,
+    app: FastAPI | None = None,
+) -> dict[str, Any]:
     snapshot = network.snapshot()
     runtime_status = str(snapshot.get("status", "stopped"))
     worker_running = runtime_status == "running"
     canonical_database = _same_database(getattr(network, "database", None), database)
     last_error = str(snapshot.get("last_error") or "")
+    agents = [item for item in snapshot.get("agents", []) if isinstance(item, dict)]
+    degraded_agents = [
+        str(item.get("source_id") or item.get("id") or "unknown")
+        for item in agents
+        if str(item.get("status", "unknown")).lower() not in {"active", "ok", "healthy"}
+    ]
     snapshot["runtime_status"] = runtime_status
     snapshot["worker_running"] = worker_running
-    snapshot["status"] = "ok" if worker_running and canonical_database and not last_error else "warning"
+    snapshot["healthy_agent_count"] = len(agents) - len(degraded_agents)
+    snapshot["degraded_agent_count"] = len(degraded_agents)
+    snapshot["degraded_agents"] = degraded_agents
+    snapshot["status"] = (
+        "ok"
+        if worker_running and canonical_database and not last_error and not degraded_agents
+        else "warning"
+    )
     snapshot["database_backed"] = canonical_database
-    snapshot["bridge"] = _bridge_status(database)
+    snapshot["bridge"] = _bridge_status(database, app=app)
     snapshot["canonical_owner"] = "news_intelligence"
     snapshot["synthetic_fallback_used"] = False
     return snapshot
 
 
-def _bridge_status(database: ProjectDatabase) -> dict[str, Any]:
+def _consumer_states(app: FastAPI | None) -> dict[str, bool]:
+    state = getattr(app, "state", None)
+    if state is None:
+        return {
+            "decision_quality": False,
+            "risk_engine": False,
+            "portfolio_engine": False,
+            "learning_engine": False,
+        }
+    provider = getattr(state, "autonomous_council_provider", None)
+    return {
+        "decision_quality": getattr(state, "canonical_paper_decision_runtime", None) is not None,
+        "risk_engine": provider is not None and getattr(provider, "risk_service", None) is not None,
+        "portfolio_engine": getattr(state, "autonomous_paper_loop", None) is not None,
+        "learning_engine": getattr(state, "self_learning_supervisor", None) is not None,
+    }
+
+
+def _bridge_status(database: ProjectDatabase, *, app: FastAPI | None = None) -> dict[str, Any]:
     memory_records = len(list_json_items(database, "news_memory"))
     event_records = len(list_json_items(database, "news_events"))
+    consumers = _consumer_states(app)
+    consumer_active = bool(consumers) and all(consumers.values())
     return {
-        "status": "ok",
+        "status": "ok" if consumer_active else "warning",
         "database_backed": True,
         "delivery_mode": "shared_database",
-        "consumer_active": True,
+        "consumer_active": consumer_active,
+        "consumer_components": consumers,
         "memory_records": memory_records,
         "event_records": event_records,
         "sent_count": None,
