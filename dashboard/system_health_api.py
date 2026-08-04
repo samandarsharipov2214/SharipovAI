@@ -88,7 +88,7 @@ class SystemHealthCenter:
             return _component("ai_organs", [], [f"AI organ monitor failed: {type(exc).__name__}: {exc}"], ["refresh AI organ monitor"])
         status = str(snapshot.get("status", "blocked"))
         blockers = [] if status == "healthy" else [f"AI organs status={status}"]
-        if snapshot.get("monitor_running") is False:
+        if "monitor_running" in snapshot and snapshot.get("monitor_running") is False:
             blockers.append("AI organ heartbeat thread is not running")
         return _component("ai_organs", [f"organ_count={snapshot.get('organ_count', 0)}", f"status={status}"], blockers, ["inspect /api/system/ai-organs"] if blockers else [])
 
@@ -110,7 +110,7 @@ class SystemHealthCenter:
             blockers.append("configured market stream is not verified")
         if status.get("worker_running") is True:
             evidence.append("worker_running")
-        elif _truthy_default("MARKET_STREAM_ENABLED", True):
+        elif "worker_running" in status and _truthy_default("MARKET_STREAM_ENABLED", True):
             blockers.append("canonical market worker is not running")
         return _component("market", evidence, blockers, ["reconnect public market stream"] if blockers else [])
 
@@ -126,18 +126,20 @@ class SystemHealthCenter:
             evidence.append("canonical_database_dsn")
         else:
             blockers.append("news memory is not using canonical database")
-        try:
-            snapshot = network.snapshot()
-        except Exception as exc:
-            blockers.append(f"news runtime status failed: {type(exc).__name__}: {exc}")
-        else:
-            if snapshot.get("status") == "running":
-                evidence.append("worker_running")
+        snapshot_method = getattr(network, "snapshot", None)
+        if callable(snapshot_method):
+            try:
+                snapshot = snapshot_method()
+            except Exception as exc:
+                blockers.append(f"news runtime status failed: {type(exc).__name__}: {exc}")
             else:
-                blockers.append("News Intelligence worker is not running")
-            last_error = str(snapshot.get("last_error") or "")
-            if last_error:
-                blockers.append(f"News Intelligence last cycle error: {last_error}")
+                if snapshot.get("status") == "running":
+                    evidence.append("worker_running")
+                else:
+                    blockers.append("News Intelligence worker is not running")
+                last_error = str(snapshot.get("last_error") or "")
+                if last_error:
+                    blockers.append(f"News Intelligence last cycle error: {last_error}")
         return _component("news", evidence, blockers, ["rebind NewsHub to ProjectDatabase", "inspect canonical news cycle"] if blockers else [])
 
     def _telegram(self) -> ComponentHealth:
@@ -243,6 +245,8 @@ def _component(name: str, evidence: list[str], blockers: list[str], recovery: li
 
 
 def _same_database(left: Any, right: Any) -> bool:
+    if left is not None and left is right:
+        return True
     left_dsn = str(getattr(left, "dsn", "") or "")
     right_dsn = str(getattr(right, "dsn", "") or "")
     return bool(left_dsn and right_dsn and left_dsn == right_dsn)
