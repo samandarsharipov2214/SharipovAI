@@ -14,28 +14,34 @@ _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,200}$")
 
 
 class _StrictModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
 
 class PatchVerdict(_StrictModel):
     """Fail-closed result produced by Security Guard patch validation."""
 
     allowed: bool
-    reasons: list[str] = Field(default_factory=list, max_length=200)
-    checked_files: list[str] = Field(default_factory=list, max_length=500)
+    reasons: tuple[str, ...] = Field(default_factory=tuple, max_length=200)
+    checked_files: tuple[str, ...] = Field(default_factory=tuple, max_length=500)
     risk_level: Literal["low", "medium", "high", "critical"] = "low"
 
-    @field_validator("reasons", "checked_files")
+    @field_validator("reasons", "checked_files", mode="before")
     @classmethod
-    def _clean_text_items(cls, values: list[str]) -> list[str]:
+    def _immutable_clean_text_items(cls, values: object) -> tuple[str, ...]:
+        if values is None:
+            return ()
+        if not isinstance(values, (list, tuple)):
+            raise TypeError("verdict collections must be lists or tuples")
         result: list[str] = []
         for value in values:
-            clean = str(value).strip()
+            if not isinstance(value, str):
+                raise TypeError("verdict collection items must be strings")
+            clean = value.strip()
             if not clean:
                 raise ValueError("list items must not be empty")
             if clean not in result:
                 result.append(clean)
-        return result
+        return tuple(result)
 
     @model_validator(mode="after")
     def _fail_closed_consistency(self) -> "PatchVerdict":
@@ -69,6 +75,14 @@ class CodeChangeProposal(_StrictModel):
             raise ValueError("identifier contains unsafe characters")
         return clean
 
+    @field_validator("title", "description")
+    @classmethod
+    def _required_text(cls, value: str) -> str:
+        clean = value.strip()
+        if not clean:
+            raise ValueError("text must not be empty")
+        return clean
+
     @field_validator("base_sha")
     @classmethod
     def _base_sha(cls, value: str) -> str:
@@ -80,9 +94,11 @@ class CodeChangeProposal(_StrictModel):
     @field_validator("patch")
     @classmethod
     def _unified_diff(cls, value: str) -> str:
+        # Patch bytes are evidence. Never trim or normalize whitespace here because
+        # doing so changes its SHA-256 and can make a valid unified diff corrupt.
         if "\x00" in value:
             raise ValueError("patch must not contain NUL bytes")
-        if not value.lstrip().startswith("diff --git "):
+        if not value.startswith("diff --git "):
             raise ValueError("patch must be a unified git diff")
         return value
 
