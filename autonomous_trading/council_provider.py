@@ -1,9 +1,9 @@
 """Autonomous, fail-closed council proposal provider.
 
-The provider does not receive trading tasks from a human.  It continuously turns
-verified market, news, liquidity, portfolio and risk evidence into independent
-agent opinions.  Missing or weak evidence produces WAIT; Risk Engine remains the
-only financial veto owner in this layer.
+The provider continuously turns verified market, news, liquidity, portfolio and
+canonical risk evidence into independent agent opinions. Missing or weak
+evidence produces WAIT; the canonical Risk Engine remains the only financial
+veto owner in this layer.
 """
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from news_monitor.agent_network import agent_detail
+from risk_engine import CanonicalRiskService
 from storage import ProjectDatabase, ProjectDomainStore
 from trading_candidate import (
     MarketRegime,
@@ -30,6 +31,7 @@ from .council_loop import CouncilEntryProposal
 _NEWS_AGENTS = ("crypto_ai", "finance_ai", "economy_ai", "security_ai", "world_ai")
 _POSITIVE = {"positive", "bullish", "up", "growth", "supportive", "risk_on"}
 _NEGATIVE = {"negative", "bearish", "down", "decline", "adverse", "risk_off"}
+_DEFAULT_RISK_SERVICE = CanonicalRiskService()
 
 
 class AutonomousCouncilProposalProvider:
@@ -41,12 +43,14 @@ class AutonomousCouncilProposalProvider:
         stream: Any,
         *,
         news_reader: Callable[..., Mapping[str, Any]] | None = None,
+        risk_service: CanonicalRiskService | None = None,
     ) -> None:
         self.database = database
         self.database.initialize()
         self.store = ProjectDomainStore(database)
         self.stream = stream
         self.news_reader = news_reader or agent_detail
+        self.risk_service = risk_service or CanonicalRiskService()
         self.proposal_interval_ms = int(
             min(max(float(os.getenv("COUNCIL_PROPOSAL_INTERVAL_SECONDS", "60")), 10.0), 900.0) * 1000
         )
@@ -103,16 +107,26 @@ class AutonomousCouncilProposalProvider:
         market_action = _direction(change, self.entry_change_percent)
         regime = _market_regime(change, turnover, self.min_turnover_usdt)
         drawdown_percent = _drawdown_percent(state)
-        risk_blocks = _risk_blocks(
-            change=change,
-            turnover=turnover,
-            drawdown_percent=drawdown_percent,
-            max_abs_change=self.max_abs_change_percent,
-            min_turnover=self.min_turnover_usdt,
-            max_drawdown=self.max_drawdown_percent,
-            deviation=float(market.get("ws_consensus_deviation_percent") or 0.0),
+        risk_assessment = self.risk_service.evaluate(
+            {
+                "market_data_verified": True,
+                "exchange_ok": True,
+                "price_change_24h_percent": change,
+                "volatility_percent": abs(change),
+                "turnover_usdt": turnover,
+                "liquidity_score": 80.0 if turnover >= self.min_turnover_usdt else 0.0,
+                "portfolio_drawdown_percent": drawdown_percent,
+                "ws_consensus_deviation_percent": float(market.get("ws_consensus_deviation_percent") or 0.0),
+                "max_abs_change_percent": self.max_abs_change_percent,
+                "min_turnover_usdt": self.min_turnover_usdt,
+                "max_drawdown_percent": self.max_drawdown_percent,
+                "max_consensus_deviation_percent": 0.75,
+                "live_requested": False,
+            },
+            profile="council",
         )
-        risk_score = _risk_score(change, drawdown_percent, market, risk_blocks)
+        risk_blocks = tuple(risk_assessment.hard_blocks)
+        risk_score = float(risk_assessment.risk_score)
 
         opinions: list[dict[str, Any]] = [
             _opinion(
@@ -169,7 +183,7 @@ class AutonomousCouncilProposalProvider:
                     35.0,
                     98.0,
                     risk_score,
-                    "risk checks passed; Risk Engine does not create direction",
+                    "canonical risk checks passed; Risk Engine does not create direction",
                 )
             )
 
@@ -223,9 +237,12 @@ class AutonomousCouncilProposalProvider:
             {
                 "decision_id": decision_id,
                 "risk_score": risk_score,
+                "risk_level": risk_assessment.risk_level,
                 "blocks": list(risk_blocks),
                 "drawdown_percent": drawdown_percent,
                 "captured_at_ms": now_ms,
+                "canonical_service": self.risk_service.service_id,
+                "assessment": risk_assessment.to_dict(),
             },
         )
 
@@ -262,6 +279,7 @@ class AutonomousCouncilProposalProvider:
                 "agent_count": len(eligible),
                 "news_evidence_count": len(set(news_evidence)),
                 "risk_blocks": list(risk_blocks),
+                "canonical_risk_service": self.risk_service.service_id,
             },
         )
         return CouncilEntryProposal(
@@ -405,24 +423,38 @@ def _risk_blocks(
     max_drawdown: float,
     deviation: float,
 ) -> tuple[str, ...]:
-    result: list[str] = []
-    if abs(change) > max_abs_change:
-        result.append("extreme_24h_volatility")
-    if turnover < min_turnover:
-        result.append("insufficient_verified_liquidity")
-    if drawdown_percent > max_drawdown:
-        result.append("paper_portfolio_drawdown_limit")
-    if deviation > 0.75:
-        result.append("websocket_consensus_price_divergence")
-    return tuple(result)
+    """Backward-compatible wrapper over the canonical Risk Engine service."""
+    assessment = _DEFAULT_RISK_SERVICE.evaluate(
+        {
+            "market_data_verified": True,
+            "exchange_ok": True,
+            "price_change_24h_percent": change,
+            "turnover_usdt": turnover,
+            "portfolio_drawdown_percent": drawdown_percent,
+            "ws_consensus_deviation_percent": deviation,
+            "max_abs_change_percent": max_abs_change,
+            "min_turnover_usdt": min_turnover,
+            "max_drawdown_percent": max_drawdown,
+        },
+        profile="council",
+    )
+    return tuple(assessment.hard_blocks)
 
 
 def _risk_score(change: float, drawdown: float, market: Mapping[str, Any], blocks: tuple[str, ...]) -> float:
-    if blocks:
-        return 100.0
-    deviation = float(market.get("ws_consensus_deviation_percent") or 0.0)
-    score = 15.0 + min(abs(change) * 3.0, 35.0) + min(drawdown * 4.0, 35.0) + min(deviation * 20.0, 15.0)
-    return _bounded(score)
+    """Backward-compatible score wrapper; ``blocks`` cannot weaken the service."""
+    assessment = _DEFAULT_RISK_SERVICE.evaluate(
+        {
+            "market_data_verified": True,
+            "exchange_ok": True,
+            "price_change_24h_percent": change,
+            "portfolio_drawdown_percent": drawdown,
+            "ws_consensus_deviation_percent": float(market.get("ws_consensus_deviation_percent") or 0.0),
+            "max_abs_change_percent": 0.0 if blocks else 1_000_000.0,
+        },
+        profile="council",
+    )
+    return 100.0 if blocks else float(assessment.risk_score)
 
 
 def _market_regime(change: float, turnover: float, min_turnover: float) -> MarketRegime:
