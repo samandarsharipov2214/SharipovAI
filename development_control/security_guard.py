@@ -55,8 +55,8 @@ def validate_patch(patch: str) -> PatchVerdict:
 
     return PatchVerdict(
         allowed=not reasons,
-        reasons=tuple(reasons),
-        checked_paths=tuple(checked_paths),
+        reasons=reasons,
+        checked_paths=checked_paths,
     )
 
 
