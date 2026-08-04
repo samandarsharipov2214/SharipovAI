@@ -6,6 +6,8 @@ canonical monitor so production and tests use one runtime truth.
 """
 from __future__ import annotations
 
+import importlib
+import importlib.util
 import threading
 from typing import Any
 
@@ -84,4 +86,26 @@ def install_ai_organ_state_api(app: FastAPI) -> None:
         return monitor.refresh()
 
 
-__all__ = ["SafeAIOrganRuntimeMonitor", "install_ai_organ_state_api"]
+def _module_available(name: str) -> bool:
+    """Compatibility helper retained for existing runtime contract tests."""
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (AttributeError, ImportError, ModuleNotFoundError, ValueError):
+        return False
+
+
+def _module_has_callable(module_name: str, attribute: str) -> bool:
+    """Compatibility helper; canonical probes no longer rely on module presence."""
+    try:
+        module = importlib.import_module(module_name)
+    except Exception:
+        return False
+    return callable(getattr(module, attribute, None))
+
+
+__all__ = [
+    "SafeAIOrganRuntimeMonitor",
+    "_module_available",
+    "_module_has_callable",
+    "install_ai_organ_state_api",
+]
