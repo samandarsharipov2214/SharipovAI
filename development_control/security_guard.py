@@ -1,7 +1,6 @@
 """Typed adapter over the parser-based development patch Security Guard."""
 from __future__ import annotations
 
-from .models import PatchVerdict
 from .patch_policy import (
     PROTECTED_EXACT,
     PROTECTED_PREFIXES,
@@ -9,6 +8,7 @@ from .patch_policy import (
     is_protected_path,
     parse_unified_diff,
 )
+from .patch_verdict import PatchVerdict
 from .security_guard_engine import SecurityGuard as _ParserSecurityGuard
 
 
