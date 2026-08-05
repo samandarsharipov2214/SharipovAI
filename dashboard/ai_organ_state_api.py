@@ -2,7 +2,7 @@
 
 This monitor does not create new AI components. It observes the existing
 runtime, records evidence in the shared database and reports degraded/blocked
-states honestly when a dependency is absent or unsafe.
+states honestly when a dependency is absent, stale or unsafe.
 """
 from __future__ import annotations
 
@@ -17,7 +17,8 @@ from typing import Any, Callable
 from fastapi import FastAPI
 
 from ai_architecture_registry import CANONICAL_AI_ORGANS
-from storage import ProjectDatabase
+from risk_engine import CanonicalRiskService
+from storage import ProjectDatabase, list_json_items
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +47,10 @@ class AIOrganRuntimeMonitor:
         self.database.initialize()
         self.clock_ms = clock_ms or (lambda: int(time.time() * 1000))
         self.interval_seconds = _bounded_float("AI_ORGAN_HEARTBEAT_SECONDS", 30.0, 10.0, 300.0)
+        self.evidence_max_age_seconds = _bounded_float(
+            "AI_ORGAN_EVIDENCE_MAX_AGE_SECONDS", 300.0, 30.0, 3600.0
+        )
+        self.risk_service = CanonicalRiskService()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._lock = threading.RLock()
@@ -76,7 +81,6 @@ class AIOrganRuntimeMonitor:
                 try:
                     setter(state.organ_id, payload)
                 except TypeError:
-                    # Older ProjectDatabase signatures may accept status and payload separately.
                     try:
                         setter(state.organ_id, state.status, payload)
                     except TypeError:
@@ -101,6 +105,7 @@ class AIOrganRuntimeMonitor:
             **_summary([_state_from_dict(item) for item in rows], now_ms=self.clock_ms()),
             "monitor_running": bool(self._thread and self._thread.is_alive()),
             "last_error": last_error,
+            "evidence_max_age_seconds": self.evidence_max_age_seconds,
         }
 
     def _run(self) -> None:
@@ -112,7 +117,9 @@ class AIOrganRuntimeMonitor:
                     self._last_error = f"{type(exc).__name__}: {exc}"
                 try:
                     self.database.append_event(
-                        "ai_organ_monitor_error",
+                        "system_runtime",
+                        "ai_organ_monitor",
+                        "refresh_error",
                         {"error": self._last_error, "checked_at_ms": self.clock_ms()},
                     )
                 except Exception:
@@ -162,7 +169,8 @@ class AIOrganRuntimeMonitor:
             evidence.append("control_plane_api_installed")
         else:
             blockers.append("control plane API is not installed")
-        if getattr(self.app.state, "project_database", None) is self.database:
+        runtime_database = getattr(self.app.state, "project_database", None)
+        if _same_database(runtime_database, self.database):
             evidence.append("shared_project_database")
         else:
             blockers.append("critical: runtime components do not share the canonical database")
@@ -184,8 +192,12 @@ class AIOrganRuntimeMonitor:
             evidence.append("verified_quotes_persisted")
         else:
             blockers.append("market quotes are not confirmed database-backed")
-        if _truthy("MARKET_STREAM_ENABLED") and status.get("verified") is not True:
+        if _truthy_default("MARKET_STREAM_ENABLED", True) and status.get("verified") is not True:
             blockers.append("configured market stream is not currently verified")
+        if status.get("worker_running") is True:
+            evidence.append("market_worker_running")
+        elif _truthy_default("MARKET_STREAM_ENABLED", True):
+            blockers.append("canonical market worker thread is not running")
         return evidence, blockers
 
     def _news_intelligence(self) -> tuple[list[str], list[str]]:
@@ -195,20 +207,39 @@ class AIOrganRuntimeMonitor:
             blockers.append("critical: News Intelligence network is absent")
             return evidence, blockers
         evidence.append(f"source_agents={len(getattr(network, 'agents', []))}")
-        if getattr(network, "database", None) is self.database:
+        if _same_database(getattr(network, "database", None), self.database):
             evidence.append("news_memory_database_backed")
         else:
             blockers.append("News Intelligence is not using the canonical database")
+        try:
+            snapshot = network.snapshot()
+        except Exception as exc:
+            blockers.append(f"news runtime status failed: {type(exc).__name__}: {exc}")
+            return evidence, blockers
+        if snapshot.get("status") == "running":
+            evidence.append("news_worker_running")
+        else:
+            blockers.append("News Intelligence worker is not running")
+        last_cycle = int(snapshot.get("last_cycle_at_ms") or 0)
+        self._append_freshness(evidence, blockers, "news_cycle", last_cycle)
+        if snapshot.get("last_error"):
+            blockers.append(f"News Intelligence last cycle error: {snapshot.get('last_error')}")
         return evidence, blockers
 
     def _risk_engine(self) -> tuple[list[str], list[str]]:
         evidence, blockers = [], []
-        if importlib.util.find_spec("trading_intelligence.trade_gate") is not None:
-            evidence.append("trade_gate_module")
-        elif importlib.util.find_spec("trading_candidate") is not None:
-            evidence.append("canonical_trading_candidate_validator")
+        try:
+            probe = self.risk_service.evaluate(
+                {"market_data_verified": False, "exchange_ok": False},
+                profile="health_probe",
+            )
+        except Exception as exc:
+            blockers.append(f"critical: canonical risk service failed: {type(exc).__name__}: {exc}")
+            return evidence, blockers
+        if not probe.allowed_virtual and "market_data_unverified" in probe.hard_blocks:
+            evidence.append("canonical_risk_service_fail_closed")
         else:
-            blockers.append("critical: no canonical trade validation module found")
+            blockers.append("critical: canonical risk service did not fail closed")
         try:
             max_notional = float(os.getenv("EXECUTION_MAX_NOTIONAL_USDT", "25"))
             if math.isfinite(max_notional) and 0 < max_notional <= 1000:
@@ -217,6 +248,7 @@ class AIOrganRuntimeMonitor:
                 blockers.append("critical: execution notional cap is invalid")
         except ValueError:
             blockers.append("critical: execution notional cap is invalid")
+        self._append_latest_json(evidence, blockers, "risk_assessments", "risk_assessment")
         return evidence, blockers
 
     def _portfolio_engine(self) -> tuple[list[str], list[str]]:
@@ -225,22 +257,42 @@ class AIOrganRuntimeMonitor:
         if loop is None:
             blockers.append("portfolio/paper account runtime is absent")
             return evidence, blockers
-        if getattr(loop, "database", None) is self.database:
+        if _same_database(getattr(loop, "database", None), self.database):
             evidence.append("paper_portfolio_database_backed")
         else:
             blockers.append("portfolio state is not using the canonical database")
+        self._append_latest_json(evidence, blockers, "portfolio_snapshots", "portfolio_snapshot")
         return evidence, blockers
 
     def _virtual_execution(self) -> tuple[list[str], list[str]]:
         evidence, blockers = [], []
-        if getattr(self.app.state, "autonomous_paper_loop", None) is not None:
-            evidence.append("paper_execution_runtime")
-        else:
+        loop = getattr(self.app.state, "autonomous_paper_loop", None)
+        if loop is None:
             blockers.append("virtual execution runtime is absent")
-        if _truthy("AUTONOMOUS_PAPER_ENABLED"):
-            evidence.append("paper_mode_enabled")
+            return evidence, blockers
+        evidence.append("canonical_council_paper_runtime")
+        thread = getattr(loop, "_thread", None)
+        configured = _truthy_default("AUTONOMOUS_PAPER_ENABLED", True)
+        running = bool(thread and thread.is_alive())
+        if configured and running:
+            evidence.append("paper_execution_worker_running")
+        elif configured:
+            blockers.append("canonical paper execution worker is not running")
         else:
-            blockers.append("paper mode is disabled")
+            evidence.append("paper_execution_disabled_by_policy")
+        try:
+            snapshot = loop.snapshot()
+        except Exception as exc:
+            blockers.append(f"virtual execution snapshot failed: {type(exc).__name__}: {exc}")
+            return evidence, blockers
+        if snapshot.get("database_backed") is True:
+            evidence.append("paper_execution_database_backed")
+        else:
+            blockers.append("virtual execution state is not database-backed")
+        if snapshot.get("decision_mode") == "CANONICAL_COUNCIL_REQUIRED":
+            evidence.append("canonical_council_authorization_required")
+        else:
+            blockers.append("virtual execution does not require canonical council authorization")
         return evidence, blockers
 
     def _decision_quality(self) -> tuple[list[str], list[str]]:
@@ -250,16 +302,54 @@ class AIOrganRuntimeMonitor:
                 evidence.append(module_name)
             else:
                 blockers.append(f"critical: decision evidence module missing: {module_name}")
+        try:
+            events = self.database.list_events(
+                "decision_quality", entity_type="decision_assessment", limit=1
+            )
+        except Exception as exc:
+            blockers.append(f"decision evidence query failed: {type(exc).__name__}: {exc}")
+        else:
+            if not events:
+                blockers.append("no persisted Decision Quality assessment evidence")
+            else:
+                self._append_freshness(
+                    evidence,
+                    blockers,
+                    "decision_assessment",
+                    int(events[0].get("created_at_ms") or 0),
+                )
         return evidence, blockers
 
     def _learning_engine(self) -> tuple[list[str], list[str]]:
         evidence, blockers = [], []
-        candidates = ("learning_engine", "decision_quality", "trading_intelligence")
-        available = [name for name in candidates if importlib.util.find_spec(name) is not None]
-        if available:
-            evidence.extend(f"module={name}" for name in available)
+        supervisor = getattr(self.app.state, "self_learning_supervisor", None)
+        if supervisor is not None:
+            try:
+                status = supervisor.status()
+            except Exception as exc:
+                blockers.append(f"learning supervisor status failed: {type(exc).__name__}: {exc}")
+            else:
+                if status.get("enabled") is True and status.get("worker_running") is True:
+                    evidence.append("self_learning_worker_running")
+                elif status.get("enabled") is True:
+                    blockers.append("self-learning supervisor is enabled but not running")
+                else:
+                    evidence.append("self_learning_disabled_by_policy")
+        current = self.database.get_json("self_learning_supervisor_state", "current")
+        if current is None:
+            blockers.append("no persisted self-learning supervisor evidence")
         else:
-            blockers.append("learning runtime module is not installed; organ remains registered only")
+            self._append_freshness(
+                evidence,
+                blockers,
+                "self_learning_state",
+                int(current.get("updated_at_ms") or 0),
+                maximum=max(self.evidence_max_age_seconds, 180.0),
+            )
+            value = current.get("value") if isinstance(current.get("value"), dict) else {}
+            evidence.append(f"verified_outcomes={value.get('learning_summary', {}).get('verified_outcome_count', 0)}")
+            if value.get("status") in {"error", "blocked"}:
+                blockers.append(f"self-learning supervisor status={value.get('status')}")
         return evidence, blockers
 
     def _security_guard(self) -> tuple[list[str], list[str]]:
@@ -281,6 +371,46 @@ class AIOrganRuntimeMonitor:
         else:
             evidence.append("legacy_exchange_credentials_blocked")
         return evidence, blockers
+
+    def _append_latest_json(
+        self,
+        evidence: list[str],
+        blockers: list[str],
+        namespace: str,
+        label: str,
+    ) -> None:
+        try:
+            rows = list_json_items(self.database, namespace, limit=1, newest_first=True)
+        except Exception as exc:
+            blockers.append(f"{label} evidence query failed: {type(exc).__name__}: {exc}")
+            return
+        if not rows:
+            blockers.append(f"no persisted {label} evidence")
+            return
+        self._append_freshness(
+            evidence,
+            blockers,
+            label,
+            int(rows[0].get("updated_at_ms") or 0),
+        )
+
+    def _append_freshness(
+        self,
+        evidence: list[str],
+        blockers: list[str],
+        label: str,
+        timestamp_ms: int,
+        *,
+        maximum: float | None = None,
+    ) -> None:
+        if timestamp_ms <= 0:
+            blockers.append(f"{label} timestamp is missing")
+            return
+        age = max(0.0, (self.clock_ms() - timestamp_ms) / 1000.0)
+        limit = self.evidence_max_age_seconds if maximum is None else float(maximum)
+        evidence.append(f"{label}_age_seconds={age:.3f}")
+        if age > limit:
+            blockers.append(f"{label} evidence is stale ({age:.1f}s > {limit:.1f}s)")
 
 
 def install_ai_organ_state_api(app: FastAPI) -> None:
@@ -329,8 +459,19 @@ def _state_from_dict(value: dict[str, Any]) -> OrganRuntimeState:
     )
 
 
+def _same_database(left: Any, right: Any) -> bool:
+    left_dsn = str(getattr(left, "dsn", "") or "")
+    right_dsn = str(getattr(right, "dsn", "") or "")
+    return bool(left_dsn and right_dsn and left_dsn == right_dsn)
+
+
 def _truthy(name: str) -> bool:
     return os.getenv(name, "0").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _truthy_default(name: str, default: bool) -> bool:
+    fallback = "1" if default else "0"
+    return os.getenv(name, fallback).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _bounded_float(name: str, default: float, minimum: float, maximum: float) -> float:

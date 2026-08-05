@@ -11,7 +11,7 @@ import time
 import uuid
 from collections import Counter, deque
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Mapping
 
 from storage import ProjectDatabase, VersionConflict, list_json_items
 
@@ -66,8 +66,11 @@ class NewsHub:
                     self.database.put_json(self.memory_namespace, article.article_id, payload, expected_version=0)
                 except VersionConflict:
                     existing = self.database.get_json(self.memory_namespace, article.article_id)
-                    if existing is None or existing["value"] != payload:
+                    if existing is None or not _same_article_evidence(existing.get("value"), payload):
                         raise RuntimeError(f"news article evidence conflict: {article.article_id}")
+                    # Fetch timestamps and detection time are observations, not the
+                    # immutable article identity. A repeated verified fetch is a
+                    # duplicate, not an evidence collision.
                     duplicates += 1
                     continue
             self._memory.append(envelope)
@@ -136,6 +139,27 @@ class NewsHub:
             if not isinstance(value, dict):
                 raise RuntimeError("persisted news event must be an object")
             self._events.append(dict(value))
+
+
+def _same_article_evidence(existing: Any, candidate: Any) -> bool:
+    if not isinstance(existing, Mapping) or not isinstance(candidate, Mapping):
+        return False
+    existing_article = existing.get("article")
+    candidate_article = candidate.get("article")
+    if not isinstance(existing_article, Mapping) or not isinstance(candidate_article, Mapping):
+        return False
+    immutable_fields = (
+        "article_id",
+        "title",
+        "source",
+        "category",
+        "published_at",
+        "link",
+        "summary",
+        "language",
+        "source_type",
+    )
+    return all(str(existing_article.get(field, "")) == str(candidate_article.get(field, "")) for field in immutable_fields)
 
 
 def _envelope_from_dict(value: Any) -> NewsEnvelope:

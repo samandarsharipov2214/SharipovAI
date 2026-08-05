@@ -1,8 +1,8 @@
 """Dashboard API for the canonical DB-backed News Intelligence network.
 
-The module keeps a narrow compatibility surface for older dashboard factories and
-restore tests. All compatibility functions route to the same canonical
-``NewsAgentNetwork`` and ``ProjectDatabase``; no synthetic news is introduced.
+All compatibility functions route to the same ``NewsAgentNetwork`` and
+``ProjectDatabase``. News delivery to Decision Quality, Risk, Portfolio and
+Learning is a shared-database contract, not a separate message-bus thread.
 """
 from __future__ import annotations
 
@@ -32,83 +32,97 @@ def _database_for(app: FastAPI | None = None) -> ProjectDatabase:
     return database
 
 
+def _same_database(left: Any, right: Any) -> bool:
+    left_dsn = str(getattr(left, "dsn", "") or "")
+    right_dsn = str(getattr(right, "dsn", "") or "")
+    return bool(left_dsn and right_dsn and left_dsn == right_dsn)
+
+
 def _network_for(app: FastAPI | None = None) -> NewsAgentNetwork:
     global _NETWORK
     database = _database_for(app)
     attached = getattr(getattr(app, "state", None), "news_agent_network", None)
-    if isinstance(attached, NewsAgentNetwork):
+    if isinstance(attached, NewsAgentNetwork) and _same_database(attached.database, database):
         _NETWORK = attached
         return attached
-    if _NETWORK is None or getattr(_NETWORK, "database", None) is not database:
+
+    if isinstance(attached, NewsAgentNetwork):
+        try:
+            attached.stop()
+        except Exception:
+            pass
+
+    if _NETWORK is None or not _same_database(getattr(_NETWORK, "database", None), database):
         _NETWORK = NewsAgentNetwork(database=database)
     if app is not None:
         app.state.news_agent_network = _NETWORK
     return _NETWORK
 
 
-def refresh_news_if_stale(**_: Any) -> dict[str, Any]:
-    """Compatibility alias: report canonical network freshness without fabrication."""
+def refresh_news_if_stale(*, app: FastAPI | None = None, **_: Any) -> dict[str, Any]:
+    """Compatibility alias that observes canonical freshness without a GET mutation."""
 
-    snapshot = network_status(run_due=False)
+    snapshot = network_status(run_due=False, app=app)
     return {
         "status": "fresh" if snapshot.get("status") == "ok" else "degraded",
         "canonical_owner": "news_intelligence",
         "synthetic_fallback_used": False,
+        "mutation_performed": False,
     }
 
 
-def network_status(*, run_due: bool = False) -> dict[str, Any]:
-    network = _network_for()
+def network_status(*, run_due: bool = False, app: FastAPI | None = None) -> dict[str, Any]:
+    network = _network_for(app)
     if run_due:
         network.cycle()
-    return _status(network, _database_for())
+    return _status(network, _database_for(app), app=app)
 
 
-def bridge_status() -> dict[str, Any]:
-    payload = _bridge_status(_database_for())
-    payload.setdefault("thread_alive", False)
-    payload.setdefault("last_sent_count", int(payload.get("event_records", 0)))
-    return payload
+def bridge_status(*, app: FastAPI | None = None) -> dict[str, Any]:
+    return _bridge_status(_database_for(app), app=app)
 
 
-def start_agent_network() -> dict[str, Any]:
-    _network_for().start()
+def start_agent_network(*, app: FastAPI | None = None) -> dict[str, Any]:
+    _network_for(app).start()
     return {"status": "started", "canonical_owner": "news_intelligence"}
 
 
-def start_agent_bridge() -> dict[str, Any]:
-    return {"status": "started", **bridge_status()}
+def start_agent_bridge(*, app: FastAPI | None = None) -> dict[str, Any]:
+    return {"status": "ready", **bridge_status(app=app)}
 
 
-def agent_detail(agent_id: str, *, run_now: bool = False) -> dict[str, Any]:
-    network = _network_for()
+def agent_detail(agent_id: str, *, run_now: bool = False, app: FastAPI | None = None) -> dict[str, Any]:
+    network = _network_for(app)
     if run_now:
         network.cycle(source_id=agent_id)
     return {"status": "ok", "agent": network.agent_snapshot(agent_id)}
 
 
-def run_agent(agent_id: str) -> dict[str, Any]:
-    network = _network_for()
+def run_agent(agent_id: str, *, app: FastAPI | None = None) -> dict[str, Any]:
+    network = _network_for(app)
     cycle = network.cycle(source_id=agent_id)
     return {
         "status": "ok",
         "cycle": cycle,
         "agent": network.agent_snapshot(agent_id),
-        "bridge": bridge_events(),
+        "bridge": bridge_events(app=app),
     }
 
 
-def run_due_agents(*, force: bool = False) -> dict[str, Any]:
-    cycle = _network_for().cycle()
-    ran = int(cycle.get("ran", cycle.get("source_count", 0)) or 0) if isinstance(cycle, dict) else 0
+def run_due_agents(*, force: bool = False, app: FastAPI | None = None) -> dict[str, Any]:
+    cycle = _network_for(app).cycle()
+    ran = int(cycle.get("ran", cycle.get("fetched_sources", 0)) or 0) if isinstance(cycle, dict) else 0
     return {"status": "ok", "ran": ran, "force": bool(force), "cycle": cycle}
 
 
-def bridge_events() -> dict[str, Any]:
-    payload = bridge_status()
+def bridge_events(*, app: FastAPI | None = None) -> dict[str, Any]:
+    payload = bridge_status(app=app)
     return {
-        "status": payload.get("status", "ok"),
-        "sent": int(payload.get("event_records", 0)),
+        "status": payload.get("status", "warning"),
+        "delivery_mode": "shared_database",
+        "consumer_active": bool(payload.get("consumer_active")),
+        "sent": None,
+        "sent_count_semantics": "not_applicable_shared_database",
         **payload,
     }
 
@@ -124,9 +138,9 @@ def install_news_agent_network_api(app: FastAPI) -> None:
 
     @app.get("/api/news-agents/status")
     def news_agents_status() -> dict[str, Any]:
-        refresh_news_if_stale(reason="api_news_agents_status")
-        payload = network_status(run_due=False)
-        payload["bridge"] = bridge_status()
+        refresh_news_if_stale(app=app, reason="api_news_agents_status")
+        payload = network_status(run_due=False, app=app)
+        payload["bridge"] = bridge_status(app=app)
         return payload
 
     @app.get("/api/news-agents")
@@ -136,18 +150,18 @@ def install_news_agent_network_api(app: FastAPI) -> None:
     @app.get("/api/news-agents/{agent_id}")
     def news_agent(agent_id: str) -> dict[str, Any]:
         try:
-            return agent_detail(agent_id, run_now=False)
+            return agent_detail(agent_id, run_now=False, app=app)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.post("/api/news-agents/{agent_id}/run")
     def news_agent_run(agent_id: str) -> dict[str, Any]:
         try:
-            result = run_agent(agent_id)
+            result = run_agent(agent_id, app=app)
             if not isinstance(result, dict):
                 raise TypeError("run_agent must return a mapping")
             if "bridge" not in result:
-                result = {**result, "bridge": bridge_events()}
+                result = {**result, "bridge": bridge_events(app=app)}
             return result
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -155,11 +169,14 @@ def install_news_agent_network_api(app: FastAPI) -> None:
     @app.post("/api/news-agents/run-all")
     def news_agents_run_all(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
         force = bool((payload or {}).get("force", False))
-        return {**run_due_agents(force=force), "network": network_status(run_due=False)}
+        return {
+            **run_due_agents(force=force, app=app),
+            "network": network_status(run_due=False, app=app),
+        }
 
     @app.post("/api/news-agents/bridge")
     def news_agents_bridge() -> dict[str, Any]:
-        return bridge_events()
+        return bridge_events(app=app)
 
     @app.get("/news-agents", response_class=HTMLResponse)
     def news_agents_page() -> HTMLResponse:
@@ -174,29 +191,75 @@ def _register_event(app: FastAPI, event: str, handler: Callable[[], None]) -> No
     handlers = getattr(getattr(app, "router", None), f"on_{event}", None)
     if isinstance(handlers, list):
         handlers.append(handler)
-        return
-    # Lifecycle support is optional for standalone contract tests; routes remain installed.
 
 
-def _status(network: NewsAgentNetwork, database: ProjectDatabase) -> dict[str, Any]:
+def _status(
+    network: NewsAgentNetwork,
+    database: ProjectDatabase,
+    *,
+    app: FastAPI | None = None,
+) -> dict[str, Any]:
     snapshot = network.snapshot()
-    snapshot["status"] = "ok" if snapshot.get("database_backed") else "warning"
-    snapshot["bridge"] = _bridge_status(database)
+    runtime_status = str(snapshot.get("status", "stopped"))
+    worker_running = runtime_status == "running"
+    canonical_database = _same_database(getattr(network, "database", None), database)
+    last_error = str(snapshot.get("last_error") or "")
+    agents = [item for item in snapshot.get("agents", []) if isinstance(item, dict)]
+    degraded_agents = [
+        str(item.get("source_id") or item.get("id") or "unknown")
+        for item in agents
+        if str(item.get("status", "unknown")).lower() not in {"active", "ok", "healthy"}
+    ]
+    snapshot["runtime_status"] = runtime_status
+    snapshot["worker_running"] = worker_running
+    snapshot["healthy_agent_count"] = len(agents) - len(degraded_agents)
+    snapshot["degraded_agent_count"] = len(degraded_agents)
+    snapshot["degraded_agents"] = degraded_agents
+    snapshot["status"] = (
+        "ok"
+        if worker_running and canonical_database and not last_error and not degraded_agents
+        else "warning"
+    )
+    snapshot["database_backed"] = canonical_database
+    snapshot["bridge"] = _bridge_status(database, app=app)
     snapshot["canonical_owner"] = "news_intelligence"
     snapshot["synthetic_fallback_used"] = False
     return snapshot
 
 
-def _bridge_status(database: ProjectDatabase) -> dict[str, Any]:
+def _consumer_states(app: FastAPI | None) -> dict[str, bool]:
+    state = getattr(app, "state", None)
+    if state is None:
+        return {
+            "decision_quality": False,
+            "risk_engine": False,
+            "portfolio_engine": False,
+            "learning_engine": False,
+        }
+    provider = getattr(state, "autonomous_council_provider", None)
+    return {
+        "decision_quality": getattr(state, "canonical_paper_decision_runtime", None) is not None,
+        "risk_engine": provider is not None and getattr(provider, "risk_service", None) is not None,
+        "portfolio_engine": getattr(state, "autonomous_paper_loop", None) is not None,
+        "learning_engine": getattr(state, "self_learning_supervisor", None) is not None,
+    }
+
+
+def _bridge_status(database: ProjectDatabase, *, app: FastAPI | None = None) -> dict[str, Any]:
     memory_records = len(list_json_items(database, "news_memory"))
     event_records = len(list_json_items(database, "news_events"))
+    consumers = _consumer_states(app)
+    consumer_active = bool(consumers) and all(consumers.values())
     return {
-        "status": "ok",
+        "status": "ok" if consumer_active else "warning",
         "database_backed": True,
+        "delivery_mode": "shared_database",
+        "consumer_active": consumer_active,
+        "consumer_components": consumers,
         "memory_records": memory_records,
         "event_records": event_records,
-        "thread_alive": False,
-        "last_sent_count": event_records,
+        "sent_count": None,
+        "sent_count_semantics": "not_applicable_shared_database",
         "routes_to": ["decision_quality", "risk_engine", "portfolio_engine", "learning_engine"],
     }
 
@@ -206,7 +269,7 @@ def _render(payload: dict[str, Any]) -> str:
     cards = "".join(_agent_card(agent) for agent in agents)
     hub = payload.get("hub", {})
     bridge = payload.get("bridge", {})
-    return f"""<!doctype html><html lang='ru'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>SharipovAI · Specialized News AI Network</title><style>{_css()}</style></head><body><main><section class='hero'><span class='pill'>{escape(str(payload.get('status')))}</span><h1>Specialized News AI Network</h1><p>Источники, память и события используют общую ProjectDatabase. Синтетические новости запрещены.</p><p><a href='/api/news-agents/status'>JSON status</a> · <a href='/realtime-status'>Realtime Status</a></p></section><section class='panel'><h2>Общая память</h2><p>Материалы: <b>{escape(str(bridge.get('memory_records', 0)))}</b> · события: <b>{escape(str(bridge.get('event_records', 0)))}</b> · DB-backed: <b>{escape(str(bridge.get('database_backed')))}</b></p><pre>{escape(str(hub))}</pre></section><section class='grid'>{cards}</section><script>setTimeout(()=>location.reload(),30000)</script></main></body></html>"""
+    return f"""<!doctype html><html lang='ru'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>SharipovAI · Specialized News AI Network</title><style>{_css()}</style></head><body><main><section class='hero'><span class='pill'>{escape(str(payload.get('status')))}</span><h1>Specialized News AI Network</h1><p>Источники, память и события используют общую ProjectDatabase. Синтетические новости запрещены.</p><p><a href='/api/news-agents/status'>JSON status</a> · <a href='/realtime-status'>Realtime Status</a></p></section><section class='panel'><h2>Общая память</h2><p>Материалы: <b>{escape(str(bridge.get('memory_records', 0)))}</b> · события: <b>{escape(str(bridge.get('event_records', 0)))}</b> · delivery: <b>{escape(str(bridge.get('delivery_mode')))}</b></p><pre>{escape(str(hub))}</pre></section><section class='grid'>{cards}</section><script>setTimeout(()=>location.reload(),30000)</script></main></body></html>"""
 
 
 def _agent_card(agent: dict[str, Any]) -> str:
