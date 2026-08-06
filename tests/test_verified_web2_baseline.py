@@ -12,30 +12,34 @@ def test_verified_web2_shell_remains_primary_interface() -> None:
     host = (ROOT / "dashboard" / "web2_host.py").read_text(encoding="utf-8")
 
     assert "SharipovAI OS" in index
-    assert "overview_runtime_v25.js" in index
-    assert "navigation_coordinator_v23.js" in index
+    assert "overview_runtime_v44.js" in index
+    assert "navigation_coordinator_v44.js" in index
+    assert "web2_shell_v44.js" in index
     assert "runtime_render_guard_v24.js" in index
     assert "interface_v30.css" in index
     assert "tradingview_market_v32.js" in index
     assert "tradingview_widget_height_fix_v34.js" in index
+    assert "overview_runtime_v25.js" not in index
     assert "sections_v10.js" not in index
     assert '"/control"' in host
     assert "no-store, no-cache, must-revalidate" in host
 
 
-def test_verified_overview_keeps_user_requested_trade_explanations() -> None:
-    overview = (WEB2 / "overview_runtime_v25.js").read_text(encoding="utf-8")
+def test_verified_overview_keeps_trade_explanations_on_canonical_state() -> None:
+    overview = (WEB2 / "overview_runtime_v44.js").read_text(encoding="utf-8")
     interface = (WEB2 / "interface_v30.css").read_text(encoding="utf-8")
 
     for marker in (
-        "Размер позиции",
-        "Результат движения цены",
+        "CouncilAuthorizedPaperLoop",
+        "Размер",
         "Комиссии",
-        "Чистый результат",
+        "Net PnL",
         "entry_reason_ru",
-        "signal_change_24h_percent",
+        "/api/system/runtime-truth",
+        "/api/currency/usd-rub",
     ):
         assert marker in overview
+    assert "/api/virtual-account/state" not in overview
     assert ".trade-card" in interface
     assert ".trade-breakdown" in interface
 
