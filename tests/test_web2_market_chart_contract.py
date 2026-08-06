@@ -12,13 +12,15 @@ def test_market_api_has_verified_candles_and_orderbook() -> None:
     assert "https://api.bybit.com/v5/market" in text
 
 
-def test_web2_uses_tradingview_chart_with_verified_project_evidence() -> None:
+def test_web2_uses_tradingview_with_verified_project_evidence() -> None:
     terminal = (WEB2 / "tradingview_market_v32.js").read_text(encoding="utf-8")
     intelligence = (WEB2 / "market_intelligence_v33.js").read_text(encoding="utf-8")
     assert "embed-widget-advanced-chart.js" in terminal
-    assert "/api/market/bybit-websocket/quote/" in terminal
+    assert "/api/market/quote/" in terminal
     assert "/api/market/orderbook/" in terminal
     assert "/api/market/trades/" in terminal
+    assert "/api/system/runtime-truth" in terminal
+    assert "/api/market/bybit-websocket/quote/" not in terminal
     assert "/api/market-intelligence/replay" in intelligence
     assert "Math.random" not in terminal
     assert "Math.random" not in intelligence
