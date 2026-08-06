@@ -245,6 +245,58 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         self._state["trades"] = self._state["trades"][-500:]
         self._event(side, reason, symbol)
 
+    def _suppress_wait_event(
+        self,
+        reason: str,
+        symbol: str | None,
+        *,
+        created_at_ms: int,
+    ) -> bool:
+        """Emit WAIT at most every five minutes unless its reason changes.
+
+        The previous base implementation keyed timestamps by ``symbol|reason``.
+        That suppressed an A→B→A reason transition if the second A happened
+        within five minutes. Canonical runtime evidence must show every reason
+        transition immediately, while repeated identical WAIT noise is bounded.
+        """
+        scope = symbol or "*"
+        last_reason = self._state.setdefault("wait_event_last_reason_by_symbol", {})
+        last_emitted = self._state.setdefault("wait_event_last_emitted_ms_by_symbol", {})
+        if not isinstance(last_reason, dict):
+            last_reason = {}
+            self._state["wait_event_last_reason_by_symbol"] = last_reason
+        if not isinstance(last_emitted, dict):
+            last_emitted = {}
+            self._state["wait_event_last_emitted_ms_by_symbol"] = last_emitted
+
+        previous_reason = str(last_reason.get(scope, ""))
+        previous_ms = int(last_emitted.get(scope, 0) or 0)
+        minimum_ms = int(self.wait_event_min_interval_seconds * 1000)
+        if previous_reason == reason and previous_ms > 0 and created_at_ms - previous_ms < minimum_ms:
+            self._state["suppressed_wait_events"] = int(
+                self._state.get("suppressed_wait_events", 0) or 0
+            ) + 1
+            return True
+
+        last_reason[scope] = reason
+        last_emitted[scope] = created_at_ms
+        if len(last_emitted) > 200:
+            newest_scopes = {
+                key
+                for key, _ in sorted(
+                    last_emitted.items(),
+                    key=lambda item: int(item[1]),
+                    reverse=True,
+                )[:200]
+            }
+            self._state["wait_event_last_emitted_ms_by_symbol"] = {
+                key: value for key, value in last_emitted.items() if key in newest_scopes
+            }
+            self._state["wait_event_last_reason_by_symbol"] = {
+                key: value for key, value in last_reason.items() if key in newest_scopes
+            }
+        return False
+
     def _proposal_state_snapshot(self) -> dict[str, Any]:
         return {
             "cash": float(self._state.get("cash", 0.0)),
