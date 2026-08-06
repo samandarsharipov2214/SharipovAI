@@ -7,24 +7,29 @@ WEB2 = ROOT / "dashboard" / "static" / "web2"
 
 def test_navigation_coordinator_is_loaded_before_renderers() -> None:
     index = (WEB2 / "index.html").read_text(encoding="utf-8")
-    coordinator = "/static/web2/navigation_coordinator_v23.js?v=36"
+    coordinator = "/static/web2/navigation_coordinator_v44.js?v=44"
     assert coordinator in index
-    assert index.index(coordinator) < index.index("/static/web2/web2.js")
-    assert index.index(coordinator) < index.index("/static/web2/system_status_v11.js")
-    assert index.index(coordinator) < index.index("/static/web2/tradingview_market_v32.js")
-    assert index.index(coordinator) < index.index("/static/web2/campaign_operations_v36.js")
+    for renderer in (
+        "/static/web2/web2_shell_v44.js",
+        "/static/web2/overview_runtime_v44.js",
+        "/static/web2/ai_center_v44.js",
+        "/static/web2/system_status_v44.js",
+        "/static/web2/tradingview_market_v32.js",
+        "/static/web2/campaign_operations_v36.js",
+    ):
+        assert index.index(coordinator) < index.index(renderer)
 
 
 def test_every_visible_page_has_one_current_content_owner() -> None:
-    source = (WEB2 / "navigation_coordinator_v23.js").read_text(encoding="utf-8")
+    source = (WEB2 / "navigation_coordinator_v44.js").read_text(encoding="utf-8")
     expected = {
-        "overview": "overview_runtime_v25.js",
+        "overview": "overview_runtime_v44.js",
         "market": "tradingview_market_v32.js",
         "decision": "decision_runtime_v25.js",
         "portfolio": "portfolio_risk_v16.js",
         "trades": "exchange_execution_settings_v18.js",
-        "bots": "ai_center_v14.js",
-        "chat": "web2.js",
+        "bots": "ai_center_v44.js",
+        "chat": "web2_shell_v44.js",
         "news": "news_center_v12.js",
         "risk": "portfolio_risk_v16.js",
         "bybit": "exchange_execution_settings_v18.js",
@@ -35,12 +40,12 @@ def test_every_visible_page_has_one_current_content_owner() -> None:
         "campaigns": "campaign_operations_v36.js",
         "reports": "learning_evidence_reports_v17.js",
         "settings": "exchange_execution_settings_v18.js",
-        "system-status": "system_status_v11.js",
+        "system-status": "system_status_v44.js",
         "operations": "operations_center_v20.js",
     }
     for page, owner in expected.items():
         assert f"['{page}', '{owner}']" in source
-    assert "const VERSION = 36" in source
+    assert "const VERSION = 44" in source
     assert "Object.defineProperty(content, 'innerHTML'" in source
     assert "callerOwner === activeOwner" in source
     assert "return !callerOwner" in source
@@ -49,7 +54,7 @@ def test_every_visible_page_has_one_current_content_owner() -> None:
 
 
 def test_navigation_preserves_labels_hash_and_accessibility() -> None:
-    source = (WEB2 / "navigation_coordinator_v23.js").read_text(encoding="utf-8")
+    source = (WEB2 / "navigation_coordinator_v44.js").read_text(encoding="utf-8")
     assert "PAGE_LABELS" in source
     assert "campaigns: 'Кампании'" in source
     assert "aria-current" in source
@@ -59,13 +64,7 @@ def test_navigation_preserves_labels_hash_and_accessibility() -> None:
 
 
 def test_navigation_fix_does_not_enable_trading_or_send_requests() -> None:
-    source = (WEB2 / "navigation_coordinator_v23.js").read_text(encoding="utf-8")
-    forbidden = (
-        "fetch(",
-        "XMLHttpRequest",
-        "WebSocket(",
-        "method: 'POST'",
-        'method: "POST"',
-    )
+    source = (WEB2 / "navigation_coordinator_v44.js").read_text(encoding="utf-8")
+    forbidden = ("fetch(", "XMLHttpRequest", "WebSocket(", "method: 'POST'", 'method: "POST"')
     for fragment in forbidden:
         assert fragment not in source
