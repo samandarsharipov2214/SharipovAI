@@ -55,11 +55,12 @@ def test_canonical_pages_and_campaign_monitor_are_current_owners() -> None:
         "CouncilAuthorizedPaperLoop",
         "Комиссии",
         "Цена выхода",
-        "Real orders",
         "real_orders_blocked",
+        "execution_kill_switch",
         "risk_engine.canonical_service",
     ):
         assert marker in canonical
+    assert "/v5/order/create" not in canonical
     for marker in (
         "10–25 USDT",
         "20 matched fills",
