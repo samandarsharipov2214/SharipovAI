@@ -35,7 +35,6 @@ def test_active_ui_does_not_call_legacy_runtime_endpoints() -> None:
 def test_ui_reports_verdicts_instead_of_false_endpoint_scoreboard() -> None:
     source = _text("canonical_runtime_ui_v44.js") + _text("web2.js")
 
-    assert "9/9" not in source
     assert "основных API" not in source
     assert "core APIs" not in source
     assert "ИИ онлайн" not in source
@@ -43,6 +42,7 @@ def test_ui_reports_verdicts_instead_of_false_endpoint_scoreboard() -> None:
     assert "counts.degraded" in source
     assert "counts.blocked" in source
     assert "не подменяется формулой 9/9" in source
+    assert "Девять зарегистрированных органов — это реестр архитектуры" in source
 
 
 def test_ui_names_the_canonical_execution_owner() -> None:
