@@ -26,7 +26,8 @@ def test_portfolio_risk_use_real_endpoints_only() -> None:
     assert "Math.random" not in js
     assert "Синтетические котировки" in js
     assert "запрещены" in js
-    assert "Реальные ордера" in js
+    assert "Real orders" in js
+    assert "real_orders_blocked" in js
 
 
 def test_portfolio_and_risk_views_are_substantive() -> None:
