@@ -23,12 +23,14 @@ def test_current_site_contains_every_visible_page_and_no_legacy_script() -> None
     )
     for page in required_pages:
         assert f'data-page="{page}"' in index
-    assert "mini-app-live.js" not in index
-    assert "sections_v10.js" not in index
-    assert "market_terminal_v13.js" not in index
-    assert "overview_runtime_v25.js" not in index
-    assert "ai_center_v14.js" not in index
-    assert "system_status_v11.js" not in index
+    for legacy in (
+        "mini-app-live.js", "sections_v10.js", "market_terminal_v13.js",
+        "overview_runtime_v25.js", "decision_runtime_v25.js", "ai_center_v14.js",
+        "system_status_v11.js", "general_control_v15.js", "portfolio_risk_v16.js",
+        "learning_runtime_v25.js", "learning_evidence_reports_v17.js",
+        "exchange_execution_settings_v18.js",
+    ):
+        assert legacy not in index
 
 
 def test_current_site_keeps_verified_modules_and_canonical_truth_owners() -> None:
@@ -37,16 +39,13 @@ def test_current_site_keeps_verified_modules_and_canonical_truth_owners() -> Non
         "navigation_coordinator_v44.js",
         "web2_shell_v44.js",
         "overview_runtime_v44.js",
+        "canonical_pages_v45.js",
         "ai_center_v44.js",
         "system_status_v44.js",
         "news_center_v12.js",
         "tradingview_market_v32.js",
         "market_intelligence_v33.js",
         "campaign_operations_v36.js",
-        "general_control_v15.js",
-        "portfolio_risk_v16.js",
-        "learning_evidence_reports_v17.js",
-        "exchange_execution_settings_v18.js",
     )
     for asset in expected_assets:
         assert asset in index
