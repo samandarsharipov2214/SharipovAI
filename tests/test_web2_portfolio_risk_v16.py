@@ -26,8 +26,8 @@ def test_portfolio_risk_use_real_endpoints_only() -> None:
     assert "Math.random" not in js
     assert "Синтетические котировки" in js
     assert "запрещены" in js
-    assert "Real orders" in js
     assert "real_orders_blocked" in js
+    assert "/v5/order/create" not in js
 
 
 def test_portfolio_and_risk_views_are_substantive() -> None:
@@ -37,10 +37,10 @@ def test_portfolio_and_risk_views_are_substantive() -> None:
         "Канонические позиции",
         "Центр рисков",
         "risk_engine.canonical_service",
-        "Kill switch",
-        "Testnet",
-        "Live",
-        "Real orders",
+        "execution_kill_switch",
+        "testnet_execution_enabled",
+        "live_execution_enabled",
+        "real_orders_blocked",
     )
     for text in required:
         assert text in js
