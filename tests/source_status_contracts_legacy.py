@@ -98,11 +98,12 @@ def test_web2_uses_one_canonical_runtime_truth_instead_of_url_scoreboard():
     assert "real orders blocked" in active or "real_orders_blocked" in active
 
 
-def test_optional_private_account_does_not_define_global_health():
-    runtime_api = (ROOT / "dashboard" / "canonical_runtime_compat_api.py").read_text(encoding="utf-8")
+def test_optional_private_account_is_transport_only_not_global_health_owner():
     status = (WEB2 / "system_status_v44.js").read_text(encoding="utf-8")
+    runtime_api = (ROOT / "dashboard" / "canonical_runtime_compat_api.py").read_text(encoding="utf-8")
 
-    assert '"account": "read_only_optional"' in runtime_api
-    assert '"account_required_for_paper": False' in runtime_api
-    assert "account_required_for_paper" in status
-    assert "/api/exchange/account/status" not in status
+    assert "account: { label:'Личный Bybit read-only'" in status
+    assert "required:false" in status
+    assert "не влияет на canonical paper runtime" in status
+    assert "/api/exchange/account/status" in status
+    assert '"account"' not in runtime_api.split('"source_of_truth"', 1)[1].split('"legacy"', 1)[0]
