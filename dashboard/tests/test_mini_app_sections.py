@@ -55,7 +55,8 @@ def test_canonical_pages_and_campaign_monitor_are_current_owners() -> None:
         "CouncilAuthorizedPaperLoop",
         "Комиссии",
         "Цена выхода",
-        "Реальные ордера",
+        "Real orders",
+        "real_orders_blocked",
         "risk_engine.canonical_service",
     ):
         assert marker in canonical
