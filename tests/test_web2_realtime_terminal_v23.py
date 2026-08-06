@@ -1,29 +1,29 @@
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 WEB2 = ROOT / "dashboard" / "static" / "web2"
 
 
-def test_terminal_refreshes_verified_quote_with_rest_fallback() -> None:
+def test_terminal_refreshes_verified_quote_and_runtime_truth() -> None:
     source = (WEB2 / "tradingview_market_v32.js").read_text(encoding="utf-8")
-    assert "/api/market/bybit-websocket/quote/" in source
     assert "/api/market/quote/" in source
-    assert "setInterval(loadQuote, 2000)" in source
-    assert "age <= 3 ? 'LIVE'" in source
+    assert "/api/market/orderbook/" in source
+    assert "/api/market/trades/" in source
+    assert "/api/system/runtime-truth" in source
+    assert "/api/market/bybit-websocket/quote/" not in source
     assert "document.hidden" in source
-    assert "quoteBusy" in source
+    assert "state.busy" in source
 
 
-def test_terminal_uses_bounded_incremental_native_updates() -> None:
+def test_terminal_uses_bounded_atomic_updates() -> None:
     source = (WEB2 / "tradingview_market_v32.js").read_text(encoding="utf-8")
-    assert "setInterval(loadBookAndTrades, 5000)" in source
-    assert "setInterval(loadContext, 15000)" in source
     assert "Promise.allSettled" in source
-    assert "bookBusy" in source
-    assert "contextBusy" in source
-    assert "renderLive" in source
-    assert "Keep the last confirmed virtual-account state visible" in source
+    assert "setInterval" in source
+    assert "10000" in source
+    assert "if (!active() || state.busy) return" in source
+    assert "state.busy = true" in source
+    assert "state.busy = false" in source
+    assert "render()" in source
 
 
 def test_public_websocket_is_enabled_without_live_trading() -> None:
@@ -37,8 +37,8 @@ def test_public_websocket_is_enabled_without_live_trading() -> None:
 def test_current_polish_height_fix_and_cache_busting_are_connected() -> None:
     index = (WEB2 / "index.html").read_text(encoding="utf-8")
     assert "/static/web2/site_polish_v23.css?" in index
-    assert "/static/web2/tradingview_market_v32.css?v=32" in index
-    assert "/static/web2/tradingview_market_v32.js?v=32" in index
+    assert "/static/web2/tradingview_market_v32.css?v=45" in index
+    assert "/static/web2/tradingview_market_v32.js?v=45" in index
     assert "/static/web2/tradingview_widget_height_fix_v34.css?v=34" in index
     assert "/static/web2/tradingview_widget_height_fix_v34.js?v=34" in index
     assert (WEB2 / "site_polish_v23.css").is_file()
