@@ -34,6 +34,7 @@ def create_app(*args: Any, **kwargs: Any):
     install_internal_ai_code_fix_api(instance)
     install_internal_agent_decisions_api(instance)
     install_memory_api(instance)
+    install_canonical_runtime_compat_api(instance)
     install_security_headers(instance)
     return instance
 
