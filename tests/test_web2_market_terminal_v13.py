@@ -17,12 +17,14 @@ def test_current_market_terminal_assets_are_connected() -> None:
 def test_tradingview_terminal_uses_verified_market_routes() -> None:
     js = (WEB2 / "tradingview_market_v32.js").read_text(encoding="utf-8")
     for route in (
-        "/api/market/bybit-websocket/quote/",
+        "/api/market/quote/",
         "/api/market/orderbook/",
         "/api/market/trades/",
-        "/api/virtual-account/state",
+        "/api/system/runtime-truth",
     ):
         assert route in js
+    assert "/api/virtual-account/state" not in js
+    assert "/api/market/bybit-websocket/quote/" not in js
     for widget in (
         "embed-widget-advanced-chart.js",
         "embed-widget-technical-analysis.js",
