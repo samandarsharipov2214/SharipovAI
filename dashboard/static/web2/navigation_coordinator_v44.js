@@ -3,13 +3,13 @@
 
   const VERSION = 44;
   const PAGE_OWNERS = new Map([
-    ['overview', 'canonical_runtime_ui_v44.js'],
+    ['overview', 'overview_runtime_v44.js'],
     ['market', 'tradingview_market_v32.js'],
     ['decision', 'decision_runtime_v25.js'],
     ['portfolio', 'portfolio_risk_v16.js'],
     ['trades', 'exchange_execution_settings_v18.js'],
-    ['bots', 'canonical_runtime_ui_v44.js'],
-    ['chat', 'web2.js'],
+    ['bots', 'ai_center_v44.js'],
+    ['chat', 'web2_shell_v44.js'],
     ['news', 'news_center_v12.js'],
     ['risk', 'portfolio_risk_v16.js'],
     ['bybit', 'exchange_execution_settings_v18.js'],
@@ -20,7 +20,7 @@
     ['campaigns', 'campaign_operations_v36.js'],
     ['reports', 'learning_evidence_reports_v17.js'],
     ['settings', 'exchange_execution_settings_v18.js'],
-    ['system-status', 'canonical_runtime_ui_v44.js'],
+    ['system-status', 'system_status_v44.js'],
     ['operations', 'operations_center_v20.js'],
     ['incidents', 'incident_center_v21.js'],
   ]);
