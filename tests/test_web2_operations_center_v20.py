@@ -26,10 +26,13 @@ def test_operations_center_uses_existing_read_only_health_apis() -> None:
 def test_operations_center_does_not_replace_current_sections() -> None:
     index = (WEB2 / "index.html").read_text(encoding="utf-8")
     required = [
+        "navigation_coordinator_v44.js",
+        "overview_runtime_v44.js",
+        "ai_center_v44.js",
+        "system_status_v44.js",
         "tradingview_market_v32.js",
         "market_intelligence_v33.js",
         "campaign_operations_v36.js",
-        "ai_center_v14.js",
         "general_control_v15.js",
         "portfolio_risk_v16.js",
         "learning_evidence_reports_v17.js",
@@ -38,3 +41,4 @@ def test_operations_center_does_not_replace_current_sections() -> None:
     for asset in required:
         assert asset in index
     assert "market_terminal_v13.js" not in index
+    assert "ai_center_v14.js" not in index
