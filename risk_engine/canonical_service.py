@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import asdict, dataclass
-from typing import Any, Mapping
+from typing import Any, ClassVar, Mapping
 
 _PROFILES = {"council", "market_regime", "trade_gate", "health_probe"}
 
@@ -44,9 +44,21 @@ class CanonicalRiskAssessment:
 
 
 class CanonicalRiskService:
-    """Evaluate one normalized risk context through the canonical policy."""
+    """Evaluate one normalized risk context through the canonical policy.
+
+    The service is stateless, so all constructors intentionally resolve to the
+    same process-local instance. Existing call sites can keep constructing
+    ``CanonicalRiskService()`` while Council, Trade Gate and health probes share
+    one policy owner rather than silently drifting into separate services.
+    """
 
     service_id = "risk_engine.canonical_service"
+    _shared_instance: ClassVar["CanonicalRiskService | None"] = None
+
+    def __new__(cls) -> "CanonicalRiskService":
+        if cls._shared_instance is None:
+            cls._shared_instance = super().__new__(cls)
+        return cls._shared_instance
 
     def evaluate(
         self,
