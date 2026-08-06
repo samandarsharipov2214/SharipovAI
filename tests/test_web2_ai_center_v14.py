@@ -26,11 +26,12 @@ def test_ai_center_uses_canonical_runtime_truth_only() -> None:
 def test_ai_center_distinguishes_registry_from_health() -> None:
     js = (WEB / "ai_center_v44.js").read_text(encoding="utf-8")
     required = (
-        "Архитектурный реестр",
-        "не является health-оценкой",
-        "Evidence",
+        "Канонический центр ИИ",
+        "HTTP-ответ не считается доказательством здоровья",
+        "CANONICAL ORGAN",
+        "Runtime evidence",
         "Blockers",
-        "Recovery",
+        "AIOrganRuntimeMonitor",
         "organ_count",
     )
     for marker in required:
