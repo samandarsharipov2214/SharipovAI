@@ -3,13 +3,13 @@
 
   const VERSION = 44;
   const PAGE_OWNERS = new Map([
-    ['overview', 'overview_runtime_v44.js'],
+    ['overview', 'canonical_runtime_ui_v44.js'],
     ['market', 'tradingview_market_v32.js'],
     ['decision', 'decision_runtime_v25.js'],
     ['portfolio', 'portfolio_risk_v16.js'],
     ['trades', 'exchange_execution_settings_v18.js'],
-    ['bots', 'ai_center_v44.js'],
-    ['chat', 'web2_shell_v44.js'],
+    ['bots', 'canonical_runtime_ui_v44.js'],
+    ['chat', 'web2.js'],
     ['news', 'news_center_v12.js'],
     ['risk', 'portfolio_risk_v16.js'],
     ['bybit', 'exchange_execution_settings_v18.js'],
@@ -20,7 +20,7 @@
     ['campaigns', 'campaign_operations_v36.js'],
     ['reports', 'learning_evidence_reports_v17.js'],
     ['settings', 'exchange_execution_settings_v18.js'],
-    ['system-status', 'system_status_v44.js'],
+    ['system-status', 'canonical_runtime_ui_v44.js'],
     ['operations', 'operations_center_v20.js'],
     ['incidents', 'incident_center_v21.js'],
   ]);
@@ -78,10 +78,13 @@
     if (!content || content.dataset.navigationOwnership === `v${VERSION}`) return;
     const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML');
     if (!descriptor?.get || !descriptor?.set) return;
+
     Object.defineProperty(content, 'innerHTML', {
       configurable: true,
       enumerable: descriptor.enumerable,
-      get() { return descriptor.get.call(this); },
+      get() {
+        return descriptor.get.call(this);
+      },
       set(value) {
         if (writeAllowed(new Error().stack || '')) descriptor.set.call(this, value);
       },
@@ -111,8 +114,14 @@
     const nav = document.getElementById('nav');
     if (!nav || nav.dataset.labelGuard === `v${VERSION}`) return;
     const observer = new MutationObserver(restoreLabelsAndAria);
-    observer.observe(nav, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['class', 'data-page'] });
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['lang'] });
+    observer.observe(nav, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      attributes: true,
+      attributeFilter: ['class', 'data-page'],
+    });
+    observer.observe(document.documentElement, {attributes: true, attributeFilter: ['lang']});
     nav.dataset.labelGuard = `v${VERSION}`;
     restoreLabelsAndAria();
   }
@@ -121,6 +130,7 @@
     const nav = document.getElementById('nav');
     if (!nav || nav.dataset.hashNavigation === `v${VERSION}`) return;
     nav.dataset.hashNavigation = `v${VERSION}`;
+
     nav.addEventListener('click', (event) => {
       const button = event.target.closest('button[data-page]');
       if (!button) return;
@@ -128,10 +138,12 @@
       if (location.hash !== nextHash) history.replaceState(null, '', nextHash);
       queueMicrotask(restoreLabelsAndAria);
     }, true);
+
     const restoreHash = () => {
       const page = decodeURIComponent(location.hash.slice(1));
       if (!page) return;
-      const button = nav.querySelector(`button[data-page="${CSS.escape(page)}"]`);
+      const escaped = globalThis.CSS?.escape ? CSS.escape(page) : page.replace(/[^a-z0-9-]/gi, '');
+      const button = nav.querySelector(`button[data-page="${escaped}"]`);
       if (button && !button.classList.contains('active')) button.click();
     };
     window.addEventListener('hashchange', restoreHash);
@@ -152,5 +164,5 @@
   });
 
   install();
-  window.addEventListener('DOMContentLoaded', install, { once: true });
+  window.addEventListener('DOMContentLoaded', install, {once: true});
 })();
