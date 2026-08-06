@@ -14,10 +14,23 @@ def _text(name: str) -> str:
 def test_web2_loads_single_canonical_truth_renderer() -> None:
     index = _text("index.html")
 
+    assert "navigation_coordinator_v44.js" in index
+    assert "navigation_coordinator_v23.js" not in index
     assert "canonical_runtime_ui_v44.js" in index
     assert "overview_runtime_v25.js" not in index
     assert "system_status_v11.js" not in index
     assert "ai_center_v14.js" not in index
+
+
+def test_canonical_renderer_owns_all_truth_pages() -> None:
+    coordinator = _text("navigation_coordinator_v44.js")
+
+    assert "['overview', 'canonical_runtime_ui_v44.js']" in coordinator
+    assert "['bots', 'canonical_runtime_ui_v44.js']" in coordinator
+    assert "['system-status', 'canonical_runtime_ui_v44.js']" in coordinator
+    assert "overview_runtime_v44.js" not in coordinator
+    assert "ai_center_v44.js" not in coordinator
+    assert "system_status_v44.js" not in coordinator
 
 
 def test_active_ui_does_not_call_legacy_runtime_endpoints() -> None:
