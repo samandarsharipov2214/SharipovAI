@@ -11,57 +11,73 @@ def _text(name: str) -> str:
     return (WEB2 / name).read_text(encoding="utf-8")
 
 
-def test_web2_loads_single_canonical_truth_renderer() -> None:
+def test_web2_loads_only_canonical_truth_page_owners() -> None:
     index = _text("index.html")
 
-    assert "navigation_coordinator_v44.js" in index
-    assert "navigation_coordinator_v23.js" not in index
-    assert "canonical_runtime_ui_v44.js" in index
-    assert "overview_runtime_v25.js" not in index
-    assert "system_status_v11.js" not in index
-    assert "ai_center_v14.js" not in index
+    for script in (
+        "navigation_coordinator_v44.js",
+        "web2_shell_v44.js",
+        "overview_runtime_v44.js",
+        "ai_center_v44.js",
+        "system_status_v44.js",
+    ):
+        assert script in index
+
+    for legacy in (
+        "navigation_coordinator_v23.js",
+        "web2.js?v=44",
+        "canonical_runtime_ui_v44.js",
+        "overview_runtime_v25.js",
+        "system_status_v11.js",
+        "ai_center_v14.js",
+    ):
+        assert legacy not in index
 
 
-def test_canonical_renderer_owns_all_truth_pages() -> None:
+def test_navigation_coordinator_assigns_one_owner_per_truth_page() -> None:
     coordinator = _text("navigation_coordinator_v44.js")
 
-    assert "['overview', 'canonical_runtime_ui_v44.js']" in coordinator
-    assert "['bots', 'canonical_runtime_ui_v44.js']" in coordinator
-    assert "['system-status', 'canonical_runtime_ui_v44.js']" in coordinator
-    assert "overview_runtime_v44.js" not in coordinator
-    assert "ai_center_v44.js" not in coordinator
-    assert "system_status_v44.js" not in coordinator
+    assert "['overview', 'overview_runtime_v44.js']" in coordinator
+    assert "['bots', 'ai_center_v44.js']" in coordinator
+    assert "['system-status', 'system_status_v44.js']" in coordinator
+    assert "['chat', 'web2_shell_v44.js']" in coordinator
 
 
 def test_active_ui_does_not_call_legacy_runtime_endpoints() -> None:
-    active_sources = _text("web2.js") + _text("canonical_runtime_ui_v44.js")
+    active_sources = "\n".join(
+        _text(name)
+        for name in (
+            "web2_shell_v44.js",
+            "overview_runtime_v44.js",
+            "ai_center_v44.js",
+            "system_status_v44.js",
+        )
+    )
 
     assert "/api/run" not in active_sources
     assert "/api/ai-bots" not in active_sources
     assert "/api/virtual-account/state" not in active_sources
-    assert "/api/system/health" in active_sources
-    assert "/api/system/ai-organs" in active_sources
-    assert "/api/autonomous-paper/status" in active_sources
-    assert "/api/autonomous-paper/decision-runtime" in active_sources
+    assert "/api/system/runtime-truth" in active_sources
+    assert "CouncilAuthorizedPaperLoop" in active_sources
 
 
-def test_ui_reports_verdicts_instead_of_false_endpoint_scoreboard() -> None:
-    source = _text("canonical_runtime_ui_v44.js") + _text("web2.js")
+def test_ui_separates_transport_availability_from_runtime_verdict() -> None:
+    shell = _text("web2_shell_v44.js")
+    status = _text("system_status_v44.js")
+    overview = _text("overview_runtime_v44.js")
 
-    assert "основных API" not in source
-    assert "core APIs" not in source
-    assert "ИИ онлайн" not in source
-    assert "counts.healthy" in source
-    assert "counts.degraded" in source
-    assert "counts.blocked" in source
-    assert "не подменяется формулой 9/9" in source
-    assert "Девять зарегистрированных органов — это реестр архитектуры" in source
+    assert "основных API" not in shell
+    assert "core APIs" not in shell
+    assert "9/9" not in shell + status + overview
+    assert "только транспорт, не здоровье" in status
+    assert "не равен доступности HTTP" in overview
+    assert "HTTP-ответ не считается доказательством здоровья" in _text("ai_center_v44.js")
 
 
-def test_ui_names_the_canonical_execution_owner() -> None:
-    source = _text("canonical_runtime_ui_v44.js")
+def test_ui_names_canonical_owners_and_execution_lock() -> None:
+    source = _text("overview_runtime_v44.js") + _text("web2_shell_v44.js")
 
     assert "CouncilAuthorizedPaperLoop" in source
-    assert "CANONICAL_COUNCIL_REQUIRED" in source
-    assert "Legacy PaperActivityEngine" in source
-    assert "real_execution_enabled" in source
+    assert "RiskService" in source
+    assert "real orders blocked" in source
+    assert "Legacy PaperActivityEngine не используется" in source
