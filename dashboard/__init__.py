@@ -34,6 +34,8 @@ def create_app(*args: Any, **kwargs: Any):
     install_internal_ai_code_fix_api(instance)
     install_internal_agent_decisions_api(instance)
     install_memory_api(instance)
+    if getattr(instance.state, "autonomous_paper_loop", None) is not None:
+        install_canonical_runtime_compat_api(instance)
     install_security_headers(instance)
     return instance
 
@@ -42,6 +44,7 @@ from .ai_organ_state_safe_api import install_ai_organ_state_api
 from .autonomous_trading_api import install_autonomous_trading_api
 from .bybit_account_api import install_bybit_account_api
 from .campaign_api import install_campaign_api
+from .canonical_runtime_compat_api import install_canonical_runtime_compat_api
 from .control_plane_api import install_control_plane_api
 from .currency_api import install_currency_api
 from .dashboard2_api import install_dashboard2_api
@@ -74,6 +77,7 @@ install_database_api(app)
 install_news_agent_network_api(app)
 install_market_data_api(app)
 install_autonomous_trading_api(app)
+install_canonical_runtime_compat_api(app)
 install_execution_stages_api(app)
 install_bybit_account_api(app)
 install_currency_api(app)

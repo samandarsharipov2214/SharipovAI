@@ -80,26 +80,30 @@ def test_currency_route_installs_once():
     assert paths.count("/api/currency/usd-rub") == 1
 
 
-def test_web2_counts_core_services_and_marks_private_bybit_optional():
-    core = (WEB2 / "web2.js").read_text(encoding="utf-8")
-    system = (WEB2 / "system_status_v11.js").read_text(encoding="utf-8")
-    overview = (WEB2 / "overview_runtime_v25.js").read_text(encoding="utf-8")
+def test_web2_uses_one_canonical_runtime_truth_instead_of_url_scoreboard():
+    shell = (WEB2 / "web2_shell_v44.js").read_text(encoding="utf-8")
+    overview = (WEB2 / "overview_runtime_v44.js").read_text(encoding="utf-8")
+    status = (WEB2 / "system_status_v44.js").read_text(encoding="utf-8")
+    ai = (WEB2 / "ai_center_v44.js").read_text(encoding="utf-8")
+    active = "\n".join((shell, overview, status, ai))
 
-    assert "/api/learning-os/status" in core
-    assert "/api/evidence-vault/recent" in core
-    assert "/api/market/bybit-websocket/status" in core
-    assert "/api/exchange/account/status" in core
-    assert "required: false" in core
-    assert "основных API" in core
-    assert "Часть источников недоступна (" not in core
+    assert "/api/system/runtime-truth" in shell
+    assert "/api/system/runtime-truth" in overview
+    assert "/api/system/runtime-truth" in status
+    assert "/api/system/runtime-truth" in ai
+    assert "/api/run" not in active
+    assert "/api/ai-bots" not in active
+    assert "основных API" not in active
+    assert "CouncilAuthorizedPaperLoop" in active
+    assert "real orders blocked" in active or "real_orders_blocked" in active
 
-    assert "/api/exchange/account/status" in system
-    assert "НЕ НАСТРОЕН" in system
-    assert "Не влияет на виртуальную торговлю" in system
-    assert "Автоматическая проверка каждые 15 секунд" in system
-    assert "Записей:" not in system
-    assert "Состояние:" not in system
 
-    assert "/api/currency/usd-rub" in overview
-    assert "Рубли ₽" in overview
-    assert "sharipovai-display-currency" in overview
+def test_optional_private_account_is_transport_only_not_global_health_owner():
+    status = (WEB2 / "system_status_v44.js").read_text(encoding="utf-8")
+    runtime_api = (ROOT / "dashboard" / "canonical_runtime_compat_api.py").read_text(encoding="utf-8")
+
+    assert "account: { label:'Личный Bybit read-only'" in status
+    assert "required:false" in status
+    assert "не влияет на canonical paper runtime" in status
+    assert "/api/exchange/account/status" in status
+    assert '"account"' not in runtime_api.split('"source_of_truth"', 1)[1].split('"legacy"', 1)[0]

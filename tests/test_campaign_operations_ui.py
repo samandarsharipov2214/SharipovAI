@@ -8,14 +8,14 @@ WEB2 = ROOT / "dashboard" / "static" / "web2"
 
 def test_campaign_operations_assets_are_loaded_and_owned_by_coordinator() -> None:
     index = (WEB2 / "index.html").read_text(encoding="utf-8")
-    coordinator = (WEB2 / "navigation_coordinator_v23.js").read_text(encoding="utf-8")
+    coordinator = (WEB2 / "navigation_coordinator_v44.js").read_text(encoding="utf-8")
 
     assert 'data-page="campaigns"' in index
     assert "campaign_operations_v36.css" in index
     assert "campaign_operations_v36.js" in index
     assert "campaign_decision_v37.css" in index
     assert "campaign_decision_v37.js" in index
-    assert "navigation_coordinator_v23.js" in index
+    assert "navigation_coordinator_v44.js" in index
     assert "['campaigns', 'campaign_operations_v36.js']" in coordinator
 
 
