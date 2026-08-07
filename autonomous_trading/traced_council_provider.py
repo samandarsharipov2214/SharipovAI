@@ -13,7 +13,7 @@ from typing import Any
 
 from trading_candidate import TradingDecision
 
-from .council_provider import AutonomousCouncilProposalProvider as _BaseProvider
+from .council_provider import AutonomousCouncilProposalProvider as _BaseProvider, _symbol
 from .decision_trace import persist_decision_trace, read_decision_trace
 
 _NEWS_AGENTS = {"crypto_ai", "finance_ai", "economy_ai", "security_ai", "world_ai"}
