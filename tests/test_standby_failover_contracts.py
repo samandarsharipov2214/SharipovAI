@@ -31,12 +31,15 @@ def test_windows_sync_is_scheduled_without_parallel_runs() -> None:
     assert r"remote_backups\current\manifest.json" in script
 
 
-def test_vps_backup_timer_is_persistent_and_hourly() -> None:
+def test_vps_backup_timer_is_persistent_and_verified_within_one_hour() -> None:
     script = read("deploy/vps/install_backup_timer.sh")
-    assert "OnUnitActiveSec=1h" in script
+    assert "OnCalendar=hourly" in script
+    assert "OnUnitActiveSec=45min" in script
+    assert "RandomizedDelaySec=0" in script
     assert "Persistent=true" in script
     assert "systemctl start sharipovai-backup.service" in script
     assert 'test -s "$latest"' in script
+    assert 'BACKUP_MAX_AGE_SECONDS=3600 bash "$VERIFY"' in script
 
 
 def test_failover_requires_explicit_operator_confirmation() -> None:
