@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from storage import ProjectDatabase
@@ -26,6 +27,12 @@ class NewsAgentNetwork:
         self.hub = NewsHub(database=database)
         self.agents = [SourceAgent(definition=definition) for definition in definitions]
         self.refresh_seconds = _bounded_int("NEWS_AGENT_REFRESH_SECONDS", default=60, minimum=15, maximum=3600)
+        self.collection_workers = _bounded_int(
+            "NEWS_AGENT_COLLECTION_WORKERS",
+            default=min(max(len(self.agents), 1), 8),
+            minimum=1,
+            maximum=8,
+        )
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
@@ -62,8 +69,8 @@ class NewsAgentNetwork:
             raise KeyError(f"Unknown source agent: {source_id}")
         self.hub.event("cycle_started", "News agent cycle started", data={"source_id": source_id})
         try:
-            for agent in selected_agents:
-                articles, fetched = self.collector.collect(agent.definition)
+            fetched_results = self._collect_sources(selected_agents)
+            for agent, (articles, fetched) in fetched_results:
                 fetched_sources += 1
                 result = self.hub.ingest(agent, articles, fetched)
                 accepted += result.accepted
@@ -95,9 +102,21 @@ class NewsAgentNetwork:
             "fetched_sources": fetched_sources,
             "failures": failures,
             "duration_ms": self._last_cycle_duration_ms,
+            "collection_workers": self.collection_workers,
         }
         self.hub.event("cycle_completed", "News agent cycle completed", data=summary)
         return summary
+
+    def _collect_sources(
+        self,
+        agents: list[SourceAgent],
+    ) -> list[tuple[SourceAgent, tuple[list[Any], Any]]]:
+        if len(agents) <= 1 or self.collection_workers <= 1:
+            return [(agent, self.collector.collect(agent.definition)) for agent in agents]
+        worker_count = min(self.collection_workers, len(agents))
+        with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="news-source") as executor:
+            results = list(executor.map(lambda agent: self.collector.collect(agent.definition), agents))
+        return list(zip(agents, results, strict=True))
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
@@ -106,6 +125,7 @@ class NewsAgentNetwork:
             "status": "running" if self._thread and self._thread.is_alive() else "stopped",
             "running_cycle": running_cycle,
             "refresh_seconds": self.refresh_seconds,
+            "collection_workers": self.collection_workers,
             "cycle_count": self._cycle_count,
             "last_cycle_at_ms": self._last_cycle_at_ms,
             "last_cycle_duration_ms": self._last_cycle_duration_ms,
