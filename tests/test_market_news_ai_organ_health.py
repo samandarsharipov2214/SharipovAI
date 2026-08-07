@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import threading
 import time
 
@@ -11,12 +12,12 @@ def test_public_market_stream_defaults_to_enabled_but_explicit_disable_wins(monk
     monkeypatch.delenv("FEATURE_BYBIT_WEBSOCKET", raising=False)
     monkeypatch.delenv("MARKET_STREAM_ENABLED", raising=False)
     _configure_public_stream_feature()
-    assert monkeypatch.getenv("FEATURE_BYBIT_WEBSOCKET") == "1"
+    assert os.getenv("FEATURE_BYBIT_WEBSOCKET") == "1"
 
     monkeypatch.delenv("FEATURE_BYBIT_WEBSOCKET", raising=False)
     monkeypatch.setenv("MARKET_STREAM_ENABLED", "0")
     _configure_public_stream_feature()
-    assert "FEATURE_BYBIT_WEBSOCKET" not in __import__("os").environ
+    assert "FEATURE_BYBIT_WEBSOCKET" not in os.environ
 
 
 def test_news_collection_workers_can_collect_sources_concurrently() -> None:
