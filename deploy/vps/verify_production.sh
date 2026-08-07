@@ -5,6 +5,9 @@ APP_DIR="${APP_DIR:-/opt/sharipovai-repo}"
 COMPOSE_DIR="${COMPOSE_DIR:-${APP_DIR}/deploy/vps}"
 ENV_FILE="${ENV_FILE:-${COMPOSE_DIR}/.env.vps}"
 BACKUP_DIR="${BACKUP_DIR:-${COMPOSE_DIR}/backups}"
+CADDYFILE="${CADDYFILE:-${COMPOSE_DIR}/Caddyfile}"
+PUBLIC_URL_RESOLVER="${PUBLIC_URL_RESOLVER:-${COMPOSE_DIR}/resolve_public_base_url.py}"
+PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-}"
 REPOSITORY="${GITHUB_REPOSITORY:-samandarsharipov2214/SharipovAI}"
 ORIGIN_REF="${ORIGIN_REF:-origin/main}"
 LOCAL_BASE_URL="${LOCAL_BASE_URL:-http://127.0.0.1:8000}"
@@ -221,29 +224,25 @@ check_endpoint system_health "${LOCAL_BASE_URL}/api/system/health"
 check_endpoint paper_decision_runtime "${LOCAL_BASE_URL}/api/autonomous-paper/decision-runtime" canonical-runtime
 check_endpoint paper_status "${LOCAL_BASE_URL}/api/autonomous-paper/status"
 
-public_domain=''
-if [[ -f "${ENV_FILE}" ]]; then
-  public_domain="$(python3 - "${ENV_FILE}" <<'PY'
-import sys
-from pathlib import Path
-for raw in Path(sys.argv[1]).read_text(encoding="utf-8-sig").splitlines():
-    line = raw.strip()
-    if line.startswith("DOMAIN="):
-        print(line.split("=", 1)[1].strip())
-        break
-PY
-)"
+public_base_url=''
+: >"${http_body}"
+if [[ -f "${PUBLIC_URL_RESOLVER}" ]]; then
+  public_base_url="$(python3 "${PUBLIC_URL_RESOLVER}" "${PUBLIC_BASE_URL}" "${CADDYFILE}" 2>"${http_body}" || true)"
 fi
-if [[ -n "${public_domain}" && "${public_domain}" != 'sharipovai.example.com' ]]; then
-  public_status="$(curl --silent --show-error --max-time 15 --output /dev/null --write-out '%{http_code}' "https://${public_domain}/health" 2>/dev/null || true)"
+if [[ -n "${public_base_url}" ]]; then
+  public_status="$(curl --silent --show-error --max-time 15 --output /dev/null --write-out '%{http_code}' "${public_base_url}/health" 2>/dev/null || true)"
   public_status="${public_status:-000}"
   if [[ "${public_status}" == '200' ]]; then
-    record PASS public_https "https://${public_domain}/health returned HTTP 200"
+    record PASS public_https "${public_base_url}/health returned HTTP 200"
   else
-    record FAIL public_https "https://${public_domain}/health returned HTTP ${public_status}"
+    record FAIL public_https "${public_base_url}/health returned HTTP ${public_status}"
   fi
 else
-  record WARN public_https 'DOMAIN is missing or still uses the example placeholder'
+  resolver_detail="$(cat "${http_body}" 2>/dev/null || true)"
+  if [[ ! -f "${PUBLIC_URL_RESOLVER}" ]]; then
+    resolver_detail="public URL resolver is missing: ${PUBLIC_URL_RESOLVER}"
+  fi
+  record FAIL public_https_target "${resolver_detail:-could not derive a safe public HTTPS target from Caddyfile}"
 fi
 
 latest_archive="${BACKUP_DIR}/latest.tar.gz"
