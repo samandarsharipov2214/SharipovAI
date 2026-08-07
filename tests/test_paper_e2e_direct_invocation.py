@@ -2,20 +2,19 @@ from __future__ import annotations
 
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERIFIER = ROOT / "tools" / "paper_e2e_verifier.py"
+LAUNCHER = ROOT / "tools" / "run_paper_e2e_verifier.sh"
 
 
-def test_verifier_direct_script_invocation_resolves_repo_modules(tmp_path: Path) -> None:
-    """Match production: `python /app/tools/paper_e2e_verifier.py --help` from any cwd."""
+def test_verifier_launcher_resolves_repo_modules_from_any_cwd(tmp_path: Path) -> None:
+    """Match production launcher use from a host/container working directory."""
     env = os.environ.copy()
     env.pop("PYTHONPATH", None)
     completed = subprocess.run(
-        [sys.executable, str(VERIFIER), "--help"],
+        ["bash", str(LAUNCHER), "--help"],
         cwd=tmp_path,
         env=env,
         capture_output=True,
