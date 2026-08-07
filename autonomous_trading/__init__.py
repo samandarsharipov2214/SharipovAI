@@ -5,7 +5,7 @@ from .canonical_runtime import (
     PaperDecisionAuthorization,
 )
 from .council_loop import CouncilAuthorizedPaperLoop, CouncilEntryProposal, ProposalProvider
-from .council_provider import AutonomousCouncilProposalProvider
+from .traced_council_provider import AutonomousCouncilProposalProvider
 from .execution_journal import ExecutionJournal
 from .loop import AutonomousPaperLoop
 from .market_stream import MarketStream, StreamQuote
