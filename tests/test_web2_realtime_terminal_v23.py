@@ -34,14 +34,15 @@ def test_public_websocket_is_enabled_without_live_trading() -> None:
     assert 'EXECUTION_KILL_SWITCH: "1"' in compose
 
 
-def test_current_polish_height_fix_and_cache_busting_are_connected() -> None:
+def test_current_unified_interface_height_fix_and_cache_busting_are_connected() -> None:
     index = (WEB2 / "index.html").read_text(encoding="utf-8")
-    assert "/static/web2/site_polish_v23.css?" in index
+    assert "/static/web2/interface_v30.css?v=47" in index
+    assert "/static/web2/site_polish_v23.css?" not in index
     assert "/static/web2/tradingview_market_v32.css?v=45" in index
     assert "/static/web2/tradingview_market_v32.js?v=45" in index
     assert "/static/web2/tradingview_widget_height_fix_v34.css?v=34" in index
     assert "/static/web2/tradingview_widget_height_fix_v34.js?v=34" in index
-    assert (WEB2 / "site_polish_v23.css").is_file()
+    assert (WEB2 / "interface_v30.css").is_file()
 
 
 def test_realtime_terminal_is_read_only() -> None:
