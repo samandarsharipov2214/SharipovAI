@@ -24,6 +24,9 @@
     en: { hello:'Hello, Samandar 👋', sub:'SharipovAI — one canonical runtime', refresh:'Refresh', chat:'AI chat', assistant:'Assistant', prompt:'Ask about market, decisions, risk, or the canonical paper runtime.', send:'Send', unavailable:'AI is temporarily unavailable' },
     uz: { hello:'Salom, Samandar 👋', sub:'SharipovAI — yagona canonical runtime', refresh:'Yangilash', chat:'AI chat', assistant:'Yordamchi', prompt:'Bozor, qarorlar, xavf yoki canonical paper runtime haqida so‘rang.', send:'Yuborish', unavailable:'AI vaqtincha mavjud emas' },
   };
+  const uiMeta = {
+    overview:['⌂','ОСНОВНОЕ'], market:['⌁',''], decision:['◇',''], portfolio:['◫',''], trades:['⇄',''], risk:['△',''], bots:['◎','ИИ'], chat:['✦',''], news:['≋',''], learning:['↗',''], evidence:['▣',''], control:['⌘','СИСТЕМА'], bybit:['B',''], virtual:['V',''], campaigns:['◌',''], reports:['▤',''], settings:['⚙',''],
+  };
 
   const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
   const get = async (url) => {
@@ -35,6 +38,59 @@
   function saveSettings() {
     settings.lang = lang;
     localStorage.setItem('sharipovai-settings', JSON.stringify(settings));
+  }
+
+  function decorateNavigation() {
+    nav.querySelectorAll('button[data-page]').forEach((button) => {
+      const meta = uiMeta[button.dataset.page] || ['·',''];
+      button.dataset.uiIcon = meta[0];
+      if (meta[1]) {
+        button.dataset.uiSectionStart = 'true';
+        button.dataset.uiSection = meta[1];
+      }
+    });
+    const aside = nav.closest('aside');
+    if (!aside || aside.querySelector('.ui-mobile-nav-toggle')) return;
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'ui-mobile-nav-toggle';
+    toggle.setAttribute('aria-controls', 'nav');
+    toggle.setAttribute('aria-expanded', 'false');
+    toggle.textContent = '☰ Меню';
+    toggle.addEventListener('click', () => {
+      const open = aside.dataset.mobileOpen !== 'true';
+      aside.dataset.mobileOpen = String(open);
+      toggle.setAttribute('aria-expanded', String(open));
+    });
+    nav.before(toggle);
+  }
+
+  function ensurePageStatus() {
+    let status = $('uiPageStatus');
+    if (status) return status;
+    status = document.createElement('div');
+    status.id = 'uiPageStatus';
+    status.className = 'ui-page-status';
+    status.innerHTML = '<i></i><span></span>';
+    content.before(status);
+    return status;
+  }
+
+  function updatePageStatus() {
+    const status = ensurePageStatus();
+    const text = content.textContent || '';
+    const noticeVisible = notice && !notice.classList.contains('hidden');
+    let state = 'ready';
+    let message = '';
+    if (/загрузка|loading/i.test(text) && content.querySelectorAll('.card,.panel,.trade-card').length === 0) {
+      state = 'loading'; message = 'Загрузка канонических данных…';
+    } else if (noticeVisible && /не удалось|недоступ|error|failed/i.test(notice.textContent || '')) {
+      state = 'error'; message = 'Канонический runtime недоступен. Данные не подменяются.';
+    } else if (noticeVisible) {
+      state = 'degraded'; message = 'Runtime сообщает о деградации. Показаны только подтверждённые данные.';
+    }
+    status.dataset.state = state;
+    status.querySelector('span').textContent = message;
   }
 
   function applyLanguage() {
@@ -50,6 +106,7 @@
     document.querySelectorAll('[data-lang]').forEach((button) => button.classList.toggle('active', button.dataset.lang === lang));
     document.body.classList.toggle('compact', Boolean(settings.compact));
     document.body.classList.toggle('no-animations', !settings.animations);
+    decorateNavigation();
     if (page === 'chat') renderChat();
   }
 
@@ -68,11 +125,7 @@
       messages.insertAdjacentHTML('beforeend', `<div class="bubble user">${esc(message)}</div>`);
       input.value = '';
       try {
-        const response = await fetch('/api/chat/message', {
-          method:'POST', credentials:'same-origin',
-          headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({ message }),
-        });
+        const response = await fetch('/api/chat/message', { method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ message }) });
         if (!response.ok) throw new Error(String(response.status));
         const payload = await response.json();
         messages.insertAdjacentHTML('beforeend', `<div class="bubble">${esc(payload.reply || '—')}</div>`);
@@ -96,14 +149,11 @@
       if ($('systemLabel')) $('systemLabel').textContent = statusLabel(status);
       if ($('modeText')) {
         $('modeText').dataset.dynamic = '1';
-        $('modeText').textContent = safety.real_orders_blocked
-          ? `CouncilAuthorizedPaperLoop · RiskService · real orders blocked`
-          : `UNSAFE: execution lock mismatch`;
+        $('modeText').textContent = safety.real_orders_blocked ? 'CouncilAuthorizedPaperLoop · RiskService · real orders blocked' : 'UNSAFE: execution lock mismatch';
       }
       if (notice) {
-        if (status === 'healthy') {
-          notice.classList.add('hidden');
-        } else {
+        if (status === 'healthy') notice.classList.add('hidden');
+        else {
           notice.textContent = `Runtime ${status}. Paper worker: ${paper.worker_running ? 'running' : 'stopped'}. Откройте «Состояние системы».`;
           notice.classList.remove('hidden');
         }
@@ -115,6 +165,8 @@
         notice.textContent = `Не удалось получить canonical runtime truth: ${String(error?.message || error)}`;
         notice.classList.remove('hidden');
       }
+    } finally {
+      updatePageStatus();
     }
   }
 
@@ -124,7 +176,10 @@
     nav.querySelectorAll('button[data-page]').forEach((item) => item.classList.remove('active'));
     button.classList.add('active');
     page = button.dataset.page;
+    nav.closest('aside')?.removeAttribute('data-mobile-open');
+    nav.previousElementSibling?.classList.contains('ui-mobile-nav-toggle') && nav.previousElementSibling.setAttribute('aria-expanded', 'false');
     if (page === 'chat') renderChat();
+    setTimeout(updatePageStatus, 80);
   });
 
   document.querySelectorAll('[data-lang]').forEach((button) => {
@@ -135,8 +190,10 @@
     });
   });
 
+  new MutationObserver(() => updatePageStatus()).observe(content, { childList:true, subtree:true });
   refresh.addEventListener('click', () => { loadHeaderStatus().catch(() => {}); });
   applyLanguage();
+  updatePageStatus();
   loadHeaderStatus().catch(() => {});
   setInterval(() => { if (!document.hidden) loadHeaderStatus().catch(() => {}); }, 30000);
 })();

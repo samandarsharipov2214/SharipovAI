@@ -21,9 +21,10 @@ def test_page_runtime_coordinator_precedes_every_current_renderer():
     html = INDEX.read_text(encoding="utf-8")
     coordinator = html.index("navigation_coordinator_v44.js?v=45")
     for asset in (
-        "web2_shell_v44.js?v=45",
+        "web2_shell_v44.js?v=47",
         "overview_runtime_v44.js?v=45",
         "canonical_pages_v45.js?v=45",
+        "runtime_trace_v46.js?v=46",
         "ai_center_v44.js?v=45",
         "system_status_v44.js?v=45",
         "news_center_v12.js?v=25",
@@ -33,7 +34,7 @@ def test_page_runtime_coordinator_precedes_every_current_renderer():
     ):
         assert coordinator < html.index(asset)
     assert "runtime_render_guard_v24.js?v=31" in html
-    assert "interface_v30.css?v=30" in html
+    assert "interface_v30.css?v=47" in html
     assert "tradingview_market_v32.css?v=45" in html
     assert "campaign_operations_v36.css?v=36" in html
 
