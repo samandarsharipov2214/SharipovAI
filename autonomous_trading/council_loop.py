@@ -13,6 +13,7 @@ from decision_quality import CandidateEvidencePacket
 from trading_candidate import TradingDecision
 
 from .canonical_runtime import CanonicalPaperDecisionRuntime, PaperDecisionAuthorization
+from .decision_trace import persist_decision_trace, read_decision_trace, read_decision_traces
 from .loop import AutonomousPaperLoop
 from .trade_identity import new_trade_id
 
@@ -52,10 +53,31 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
             float(self._state.get("equity", 0.0) or 0.0),
         )
 
+    def _trace(self, symbol: str, status: str, reason: str, **extra: Any) -> dict[str, Any]:
+        return persist_decision_trace(
+            self.database,
+            symbol,
+            {
+                "status": status,
+                "reason": reason,
+                **extra,
+            },
+            now_ms=self._now_ms(),
+        )
+
     def tick(self) -> None:
         market = self.stream.snapshot()
         if not market.get("verified"):
-            self._event("BLOCK", "Market stream is unavailable or stale; no paper order created")
+            reason = "Market stream is unavailable or stale; no paper order created"
+            for symbol in self.stream.symbols:
+                self._trace(
+                    symbol,
+                    "BLOCK",
+                    reason,
+                    phase="market_stream",
+                    market_verified=False,
+                )
+            self._event("BLOCK", reason)
             return
 
         with self._lock:
@@ -63,7 +85,9 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                 try:
                     quote = self.stream.quote(symbol)
                 except Exception as exc:
-                    self._event("BLOCK", f"verified_quote_error:{type(exc).__name__}: {exc}", symbol)
+                    reason = f"verified_quote_error:{type(exc).__name__}: {exc}"
+                    self._trace(symbol, "BLOCK", reason, phase="quote")
+                    self._event("BLOCK", reason, symbol)
                     continue
 
                 position = self._state["positions"].get(symbol)
@@ -78,11 +102,16 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                         self._proposal_state_snapshot(),
                     )
                 except Exception as exc:
-                    self._event("BLOCK", f"proposal_provider_error:{type(exc).__name__}: {exc}", symbol)
+                    reason = f"proposal_provider_error:{type(exc).__name__}: {exc}"
+                    self._trace(symbol, "BLOCK", reason, phase="proposal_provider")
+                    self._event("BLOCK", reason, symbol)
                     continue
 
                 if proposal is None:
-                    self._event("WAIT", "no fresh canonical council proposal", symbol)
+                    trace = read_decision_trace(self.database, symbol) or {}
+                    reason = str(trace.get("reason") or "no fresh canonical council proposal")
+                    action = "BLOCK" if str(trace.get("status") or "").upper() == "BLOCK" else "WAIT"
+                    self._event(action, reason, symbol)
                     continue
 
                 try:
@@ -95,8 +124,37 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                         regime=proposal.regime,
                     )
                 except Exception as exc:
-                    self._event("BLOCK", f"canonical_decision_error:{type(exc).__name__}: {exc}", symbol)
+                    reason = f"canonical_decision_error:{type(exc).__name__}: {exc}"
+                    self._trace(
+                        symbol,
+                        "BLOCK",
+                        reason,
+                        phase="decision_quality",
+                        decision_id=proposal.decision_id,
+                    )
+                    self._event("BLOCK", reason, symbol)
                     continue
+
+                validation = authorization.candidate_result.validation
+                assessment = authorization.assessment
+                decision_action = "BUY" if authorization.authorized else (
+                    "BLOCK" if authorization.decision is TradingDecision.BLOCK else "WAIT"
+                )
+                self._trace(
+                    symbol,
+                    decision_action,
+                    authorization.reason,
+                    phase="decision_quality",
+                    decision_id=authorization.decision_id,
+                    decision_quality_action=assessment.action,
+                    decision_quality_confidence=assessment.confidence,
+                    decision_quality_agreement=assessment.agreement,
+                    decision_quality_blocked=assessment.blocked,
+                    candidate_validation_valid=validation.valid,
+                    candidate_validation_errors=list(validation.errors),
+                    final_decision=authorization.decision.value,
+                    authorized=authorization.authorized,
+                )
 
                 if not authorization.authorized:
                     action = "BLOCK" if authorization.decision is TradingDecision.BLOCK else "WAIT"
@@ -104,11 +162,15 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                     continue
 
                 if authorization.candidate_result.candidate.symbol != symbol:
-                    self._event("BLOCK", "authorized candidate symbol does not match loop symbol", symbol)
+                    reason = "authorized candidate symbol does not match loop symbol"
+                    self._trace(symbol, "BLOCK", reason, phase="candidate_validation")
+                    self._event("BLOCK", reason, symbol)
                     continue
 
                 if authorization.candidate_result.candidate.side.value != "Buy":
-                    self._event("WAIT", "spot paper loop does not open a short position", symbol)
+                    reason = "spot paper loop does not open a short position"
+                    self._trace(symbol, "WAIT", reason, phase="execution_gate")
+                    self._event("WAIT", reason, symbol)
                     continue
 
                 try:
@@ -117,7 +179,9 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                         consumed_at_ms=self._now_ms(),
                     )
                 except Exception as exc:
-                    self._event("BLOCK", f"authorization_consumption_error:{type(exc).__name__}: {exc}", symbol)
+                    reason = f"authorization_consumption_error:{type(exc).__name__}: {exc}"
+                    self._trace(symbol, "BLOCK", reason, phase="authorization_consumption")
+                    self._event("BLOCK", reason, symbol)
                     continue
 
                 self._pending_authorization = authorization
@@ -129,13 +193,23 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                     )
                     position = self._state["positions"].get(symbol)
                     if position is None:
-                        self._event("BLOCK", "authorized entry could not allocate a safe paper budget", symbol)
+                        reason = "authorized entry could not allocate a safe paper budget"
+                        self._trace(symbol, "BLOCK", reason, phase="virtual_execution")
+                        self._event("BLOCK", reason, symbol)
                         continue
                     position["decision_id"] = authorization.decision_id
                     position["candidate_id"] = authorization.candidate_result.candidate.candidate_id
                     position["evidence_class"] = "verified_market"
                     position["verified_market_data"] = True
                     position["regime"] = authorization.assessment.regime
+                    self._trace(
+                        symbol,
+                        "BUY",
+                        f"canonical council authorization consumed and paper BUY opened: {authorization.decision_id}",
+                        phase="virtual_execution",
+                        decision_id=authorization.decision_id,
+                        authorized=True,
+                    )
                 finally:
                     self._pending_authorization = None
 
@@ -168,6 +242,13 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         }
         try:
             super()._close(symbol, price, reason)
+            self._trace(
+                symbol,
+                "SELL",
+                reason,
+                phase="protective_exit",
+                decision_id=self._pending_exit_context.get("decision_id") or None,
+            )
         finally:
             self._pending_exit_context = None
 
@@ -312,12 +393,15 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
 
     def snapshot(self) -> dict[str, Any]:
         state = super().snapshot()
+        traces = read_decision_traces(self.database, self.stream.symbols)
         state["decision_mode"] = "CANONICAL_COUNCIL_REQUIRED"
         state["entry_without_authorization_allowed"] = False
         state["protective_exit_without_new_council_allowed"] = True
         state["authorization_single_use"] = True
         state["verified_exit_learning"] = True
         state["decision_runtime"] = self.decision_runtime.status()
+        state["decision_traces"] = traces
+        state["latest_decision_trace"] = traces[0] if traces else None
         return state
 
 
