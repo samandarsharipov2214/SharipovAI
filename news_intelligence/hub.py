@@ -1,7 +1,9 @@
 """Central memory, events and summaries for the existing News Intelligence network.
 
 ProjectDatabase is the source of truth. RAM deques remain bounded read caches so
-restarts no longer erase article evidence or AI events.
+restarts no longer erase article evidence or AI events. Immutable article
+identity is stored separately from append-only source fetch observations so a
+later fetch timestamp can never masquerade as an article evidence conflict.
 """
 from __future__ import annotations
 
@@ -46,7 +48,12 @@ class NewsHub:
         event_limit = _bounded_int("NEWS_AGENT_EVENT_LIMIT", default=1000, minimum=100, maximum=10000)
         self._memory: deque[NewsEnvelope] = deque(maxlen=memory_limit)
         self._events: deque[dict[str, Any]] = deque(maxlen=event_limit)
+        # ``news_memory`` is retained as a backward-compatible analyzed-envelope
+        # store. New immutable identity checks use ``news_article_evidence``;
+        # every source retrieval is written separately to project_events.
         self.memory_namespace = "news_memory"
+        self.article_namespace = "news_article_evidence"
+        self.fetch_observation_namespace = "news_fetch_observations"
         self.event_namespace = "news_events"
         self._restore()
 
@@ -56,10 +63,15 @@ class NewsHub:
         critical = 0
         high = 0
         for article in articles:
+            if self.database is not None:
+                self._persist_article_evidence(article)
+                self._record_fetch_observation(agent, article, fetched)
+
             envelope = agent.register(article, fetched)
             if envelope is None:
                 duplicates += 1
                 continue
+
             if self.database is not None:
                 payload = envelope.to_dict()
                 try:
@@ -68,9 +80,9 @@ class NewsHub:
                     existing = self.database.get_json(self.memory_namespace, article.article_id)
                     if existing is None or not _same_article_evidence(existing.get("value"), payload):
                         raise RuntimeError(f"news article evidence conflict: {article.article_id}")
-                    # Fetch timestamps and detection time are observations, not the
-                    # immutable article identity. A repeated verified fetch is a
-                    # duplicate, not an evidence collision.
+                    # The legacy envelope contains one historical fetch snapshot.
+                    # A later fetch is now preserved independently as an
+                    # observation and therefore does not rewrite the envelope.
                     duplicates += 1
                     continue
             self._memory.append(envelope)
@@ -108,6 +120,17 @@ class NewsHub:
     def events(self, limit: int = 100) -> list[dict[str, Any]]:
         return list(self._events)[-max(1, min(int(limit), 1000)) :][::-1]
 
+    def fetch_observations(self, *, article_id: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+        """Return append-only fetch evidence without mutating article identity."""
+        if self.database is None:
+            return []
+        return self.database.list_events(
+            self.fetch_observation_namespace,
+            entity_type="source_fetch",
+            entity_id=article_id,
+            limit=max(1, min(int(limit), 1000)),
+        )
+
     def latest(self) -> dict[str, Any] | None:
         return self._memory[-1].to_dict() if self._memory else None
 
@@ -115,11 +138,15 @@ class NewsHub:
         impacts = Counter(item.impact for item in self._memory)
         urgencies = Counter(item.urgency for item in self._memory)
         article_total = len(list_json_items(self.database, self.memory_namespace)) if self.database is not None else len(self._memory)
+        immutable_article_total = len(list_json_items(self.database, self.article_namespace)) if self.database is not None else 0
         event_total = len(list_json_items(self.database, self.event_namespace)) if self.database is not None else len(self._events)
         return {
             "memory_size": len(self._memory),
             "event_size": len(self._events),
             "article_history_count": article_total,
+            "immutable_article_evidence_count": immutable_article_total,
+            "fetch_observation_storage": "project_events" if self.database is not None else "unavailable",
+            "article_fetch_evidence_separated": self.database is not None,
             "event_history_count": event_total,
             "database_backed": self.database is not None,
             "impact_counts": dict(impacts),
@@ -127,13 +154,52 @@ class NewsHub:
             "latest": self.latest(),
         }
 
+    def _persist_article_evidence(self, article: NewsArticle) -> None:
+        if self.database is None:
+            return
+        payload = article.to_dict()
+        existing = self.database.get_json(self.article_namespace, article.article_id)
+        if existing is None:
+            try:
+                self.database.put_json(self.article_namespace, article.article_id, payload, expected_version=0)
+                return
+            except VersionConflict:
+                existing = self.database.get_json(self.article_namespace, article.article_id)
+        if existing is None or not _same_article_evidence(existing.get("value"), payload):
+            raise RuntimeError(f"news article evidence conflict: {article.article_id}")
+
+    def _record_fetch_observation(self, agent: SourceAgent, article: NewsArticle, fetched: SourceFetch) -> None:
+        if self.database is None:
+            return
+        payload = {
+            "article_id": article.article_id,
+            "agent_id": agent.definition.source_id,
+            "source_id": fetched.source_id,
+            "fetch": fetched.to_dict(),
+            "observed_at_ms": int(fetched.received_at_ms),
+            "article_evidence_namespace": self.article_namespace,
+        }
+        self.database.append_event(
+            self.fetch_observation_namespace,
+            "source_fetch",
+            article.article_id,
+            payload,
+            created_at_ms=max(int(fetched.received_at_ms), 1),
+        )
+
     def _restore(self) -> None:
         if self.database is None:
             return
         memory_rows = list_json_items(self.database, self.memory_namespace, limit=self._memory.maxlen, newest_first=True)
         event_rows = list_json_items(self.database, self.event_namespace, limit=self._events.maxlen, newest_first=True)
         for row in reversed(memory_rows):
-            self._memory.append(_envelope_from_dict(row["value"]))
+            value = row["value"]
+            envelope = _envelope_from_dict(value)
+            # Backward-compatible migration: old ``news_memory`` rows remain
+            # readable, while immutable article identity is copied once into the
+            # dedicated namespace. Existing data is never deleted or rewritten.
+            self._persist_article_evidence(envelope.article)
+            self._memory.append(envelope)
         for row in reversed(event_rows):
             value = row["value"]
             if not isinstance(value, dict):
@@ -144,8 +210,8 @@ class NewsHub:
 def _same_article_evidence(existing: Any, candidate: Any) -> bool:
     if not isinstance(existing, Mapping) or not isinstance(candidate, Mapping):
         return False
-    existing_article = existing.get("article")
-    candidate_article = candidate.get("article")
+    existing_article = existing.get("article") if isinstance(existing.get("article"), Mapping) else existing
+    candidate_article = candidate.get("article") if isinstance(candidate.get("article"), Mapping) else candidate
     if not isinstance(existing_article, Mapping) or not isinstance(candidate_article, Mapping):
         return False
     immutable_fields = (

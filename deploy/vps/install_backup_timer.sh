@@ -4,6 +4,7 @@ umask 077
 
 APP_DIR=${APP_DIR:-/opt/sharipovai-repo}
 SCRIPT="$APP_DIR/deploy/vps/export_backup.sh"
+VERIFY="$APP_DIR/deploy/vps/verify_backup_timer.sh"
 SERVICE=/etc/systemd/system/sharipovai-backup.service
 TIMER=/etc/systemd/system/sharipovai-backup.timer
 
@@ -16,7 +17,8 @@ fi
 [[ "$APP_DIR" == /* && "$APP_DIR" != *$'\n'* && "$APP_DIR" != *'/../'* ]] \
   || fail 'APP_DIR must be a safe absolute path'
 [[ -f "$SCRIPT" ]] || fail "backup exporter is missing: $SCRIPT"
-chmod 750 "$SCRIPT"
+[[ -f "$VERIFY" ]] || fail "backup verifier is missing: $VERIFY"
+chmod 750 "$SCRIPT" "$VERIFY"
 
 cat > "$SERVICE" <<EOF
 [Unit]
@@ -41,14 +43,14 @@ EOF
 
 cat > "$TIMER" <<'EOF'
 [Unit]
-Description=Run SharipovAI verified backup every hour
+Description=Run SharipovAI verified backup at least once per hour
 
 [Timer]
-OnBootSec=10min
+OnBootSec=5min
 OnCalendar=hourly
-OnUnitActiveSec=1h
-AccuracySec=1min
-RandomizedDelaySec=5min
+OnUnitActiveSec=45min
+AccuracySec=30s
+RandomizedDelaySec=0
 Persistent=true
 Unit=sharipovai-backup.service
 
@@ -74,4 +76,5 @@ test -s "$latest.sha256" || fail 'latest backup checksum is missing'
 
 next_run=$(systemctl show sharipovai-backup.timer --property=NextElapseUSecRealtime --value)
 [[ -n "$next_run" ]] || fail 'backup timer has no next scheduled run'
+APP_DIR="$APP_DIR" BACKUP_MAX_AGE_SECONDS=3600 bash "$VERIFY"
 log "timer active; first verified backup: $latest; next run: $next_run"

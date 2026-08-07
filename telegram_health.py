@@ -53,16 +53,20 @@ def telegram_health() -> dict[str, Any]:
         maximum=86_400,
     )
     previous_success = _LAST_SUCCESSFUL_WEBHOOK_PROBE_AT
+    error_old_by_age = bool(
+        last_error_date
+        and last_error_age is not None
+        and last_error_age > grace_seconds
+    )
+    error_predates_success = bool(last_error_date and previous_success > last_error_date)
     stale_error = bool(
         last_error
         and last_error_date
         and webhook_ok
         and bot_ok
-        and (
-            last_error_age is not None and last_error_age > grace_seconds
-            or previous_success > last_error_date
-        )
+        and (error_old_by_age or error_predates_success)
     )
+    current_error = bool(last_error and not stale_error)
     checks.update(
         {
             "webhook_api_ok": webhook_api_ok,
@@ -70,7 +74,9 @@ def telegram_health() -> dict[str, Any]:
             "last_error_date": last_error_date or None,
             "last_error_age_seconds": last_error_age,
             "webhook_error_grace_seconds": grace_seconds,
+            "last_error_predates_success": error_predates_success,
             "stale_webhook_error_ignored": stale_error,
+            "last_error_is_current": current_error,
             # A matching URL is not yet a successful health probe when Telegram
             # still reports a fresh delivery error.
             "successful_probe_at": previous_success or None,
@@ -83,7 +89,7 @@ def telegram_health() -> dict[str, Any]:
         return _with_verdict(checks, "waiting_env", "WEBAPP_URL не настроен.")
     if not webhook_ok:
         return _with_verdict(checks, "webhook_not_set", "Webhook не установлен на текущий WEBAPP_URL.")
-    if last_error and not stale_error:
+    if current_error:
         return _with_verdict(checks, "webhook_error", f"Telegram сообщает свежую ошибку webhook: {last_error}")
 
     # Record success only after all current failure conditions have been cleared
