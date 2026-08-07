@@ -24,15 +24,16 @@ _ALLOWED_CATEGORIES = {"spot", "linear", "inverse"}
 
 
 def _configure_public_stream_feature() -> None:
-    """Map the legacy runtime switch to the guarded public websocket feature.
+    """Activate the canonical read-only public stream unless explicitly disabled.
 
-    An explicit ``FEATURE_BYBIT_WEBSOCKET`` value always wins. The helper only
-    enables public market reads; it cannot enable Testnet or Mainnet writes.
+    ``MARKET_STREAM_ENABLED`` is the operator-facing compatibility switch. The
+    stream is market-data-only: it cannot authenticate, access accounts, or
+    submit orders. An explicit ``FEATURE_BYBIT_WEBSOCKET`` value still wins.
     """
 
     if "FEATURE_BYBIT_WEBSOCKET" in os.environ:
         return
-    if os.getenv("MARKET_STREAM_ENABLED", "0").strip().lower() in {
+    if os.getenv("MARKET_STREAM_ENABLED", "1").strip().lower() in {
         "1",
         "true",
         "yes",
