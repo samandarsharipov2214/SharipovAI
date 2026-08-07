@@ -108,3 +108,41 @@ def test_ui_separates_transport_availability_from_runtime_verdict() -> None:
     assert "только транспорт, не здоровье" in status
     assert "не равен доступности HTTP" in overview
     assert "HTTP-ответ не считается доказательством здоровья" in ai_center
+
+
+def test_frontend_unification_has_one_active_generic_design_layer() -> None:
+    index = _text("index.html")
+    assert 'interface_v30.css?v=47' in index
+    assert 'site_polish_v23.css' not in index
+    interface = _text("interface_v30.css")
+    for contract in (
+        "--ui-accent",
+        ".v10-grid",
+        ".runtime-trace-grid",
+        ".ui-mobile-nav-toggle",
+        "@media(max-width:820px)",
+        ".empty,.trade-empty",
+    ):
+        assert contract in interface
+
+
+def test_frontend_unification_has_mobile_and_explicit_runtime_states() -> None:
+    shell = _text("web2_shell_v44.js")
+    assert "decorateNavigation" in shell
+    assert "ui-mobile-nav-toggle" in shell
+    assert "aria-expanded" in shell
+    assert "updatePageStatus" in shell
+    assert "data-mobile-open" in _text("interface_v30.css")
+    assert "Канонический runtime недоступен" in shell
+    assert "Данные не подменяются" in shell
+    assert "Runtime сообщает о деградации" in shell
+
+
+def test_frontend_unification_keeps_decision_trace_canonical_and_read_only() -> None:
+    index = _text("index.html")
+    trace = _text("runtime_trace_v46.js")
+    assert "runtime_trace_v46.js" in index
+    assert "/api/system/runtime-truth" in trace
+    assert "Decision trace" in trace
+    assert "fetch('/api/system/runtime-truth'" in trace
+    assert "method:'POST'" not in trace and 'method: "POST"' not in trace
