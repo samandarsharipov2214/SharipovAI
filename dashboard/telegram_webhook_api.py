@@ -49,6 +49,13 @@ def install_telegram_webhook_api(app: FastAPI) -> None:
             raise HTTPException(status_code=403, detail="invalid_webhook_secret")
         if not isinstance(update, dict) or "update_id" not in update:
             raise HTTPException(status_code=400, detail="invalid_telegram_update")
+        # Проверяем, не development callback ли это
+        if 'callback_query' in update:
+            from telegram_development_control import handle_development_callback
+            callback_data = update['callback_query'].get('data', '')
+            if callback_data.startswith('devfix:'):
+                handle_development_callback(callback_data)
+                return {'ok': True, 'handled': 'development_callback'}
         background_tasks.add_task(_process_update_safely, update)
         return {"ok": True, "queued": True, "adapter": "shared_website_system"}
 
