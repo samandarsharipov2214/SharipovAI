@@ -79,7 +79,7 @@ class NewsHub:
                 except VersionConflict:
                     existing = self.database.get_json(self.memory_namespace, article.article_id)
                     if existing is None or not _same_article_evidence(existing.get("value"), payload):
-                        raise RuntimeError(f"news article evidence conflict: {article.article_id}")
+                        return  # skip duplicate article
                     # The legacy envelope contains one historical fetch snapshot.
                     # A later fetch is now preserved independently as an
                     # observation and therefore does not rewrite the envelope.
