@@ -54,7 +54,7 @@ def install_telegram_webhook_api(app: FastAPI) -> None:
             from telegram_development_control import handle_development_callback
             callback_data = update['callback_query'].get('data', '')
             if callback_data.startswith('devfix:'):
-                handle_development_callback(callback_data)
+                handle_development_callback(update['callback_query'])
                 return {'ok': True, 'handled': 'development_callback'}
         background_tasks.add_task(_process_update_safely, update)
         return {"ok": True, "queued": True, "adapter": "shared_website_system"}
