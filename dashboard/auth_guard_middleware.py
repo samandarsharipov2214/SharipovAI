@@ -28,6 +28,7 @@ _PUBLIC_EXACT = {
     "/api/telegram/set-webhook",
     "/api/telegram/delete-webhook",
     "/api/telegram/test-message",
+    "/api/market/bybit-websocket/status",
     "/check-ai",
     "/news-live",
     "/ai-audit",
