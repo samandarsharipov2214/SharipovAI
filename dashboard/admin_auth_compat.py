@@ -24,7 +24,7 @@ _SESSION_SEPARATOR = b"."
 def _configured_admin(app_module: Any) -> tuple[str, str]:
     return (
         app_module._clean_username(os.getenv("ADMIN_USERNAME", "admin")),
-        os.getenv("ADMIN_PASSWORD", ""),
+        _get_admin_password(),
     )
 
 
