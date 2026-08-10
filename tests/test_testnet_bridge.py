@@ -4,10 +4,14 @@ import json
 
 from autonomous_trading.execution_journal import ExecutionJournal
 from autonomous_trading.testnet_bridge import AutonomousTestnetBridge
+from storage import ProjectDatabase
 
 
 def test_execution_journal_counts_verified_modes(tmp_path) -> None:
-    journal = ExecutionJournal(str(tmp_path / "journal.json"))
+    journal = ExecutionJournal(
+        str(tmp_path / "journal.json"),
+        database=ProjectDatabase(f"sqlite:///{tmp_path / 'journal.db'}"),
+    )
     journal.append({"status": "accepted", "mode": "sandbox", "order_id": "t1"})
     journal.append({"status": "accepted", "mode": "live", "order_id": "l1"})
     journal.append({"status": "blocked_or_error", "mode": "sandbox"})
@@ -57,7 +61,10 @@ def test_stage_controller_rejects_untrusted_paper_rows_even_with_testnet_history
     for index in range(30):
         trades.append({"side": "SELL", "net_pnl": 2.0 if index < 20 else -1.0})
     paper.write_text(json.dumps({"trades": trades, "equity": 10030}), encoding="utf-8")
-    journal = ExecutionJournal(str(tmp_path / "journal.json"))
+    journal = ExecutionJournal(
+        str(tmp_path / "journal.json"),
+        database=ProjectDatabase(f"sqlite:///{tmp_path / 'journal.db'}"),
+    )
     for index in range(50):
         journal.append({"status": "accepted", "mode": "sandbox", "order_id": str(index)})
     monkeypatch.setenv("AUTONOMOUS_PAPER_STATE_FILE", str(paper))
