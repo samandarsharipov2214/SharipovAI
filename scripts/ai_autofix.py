@@ -14,14 +14,16 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import textwrap
 import urllib.error
 import urllib.request
 from pathlib import Path
 
+from development_control.security_guard import validate_patch
+
 ROOT = Path.cwd()
 PYTEST_LOG = ROOT / "pytest-autofix.log"
-PATCH_FILE = ROOT / "ai-autofix.patch"
 MAX_LOG_CHARS = int(os.getenv("AI_AUTOFIX_MAX_LOG_CHARS", "60000"))
 MAX_ATTEMPTS = int(os.getenv("AI_AUTOFIX_ATTEMPTS", "2"))
 MODEL = os.getenv("OPENAI_MODEL", "gpt-5.5")
@@ -37,8 +39,17 @@ Preserve backwards compatibility for /api/paper-activity/* when possible.
 """
 
 
-def run(cmd: list[str], *, timeout: int = 300) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
+def run(
+    cmd: list[str], *, timeout: int = 300, cwd: Path | None = None
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        cmd,
+        cwd=cwd or ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=timeout,
+    )
 
 
 def run_pytest() -> tuple[int, str]:
@@ -140,16 +151,58 @@ def apply_patch(patch: str) -> bool:
         print("Model did not return a unified diff; skipping apply.")
         print(patch[:2000])
         return False
-    PATCH_FILE.write_text(patch, encoding="utf-8")
-    check = run(["git", "apply", "--check", str(PATCH_FILE)], timeout=120)
-    if check.returncode != 0:
-        print("Patch did not apply cleanly:")
-        print(check.stdout)
-        print(patch[:4000])
+    verdict = validate_patch(patch)
+    if not verdict.allowed:
+        print("Security Guard rejected AI patch:")
+        for reason in verdict.reasons:
+            print(f"  - {reason}")
         return False
-    applied = run(["git", "apply", str(PATCH_FILE)], timeout=120)
-    print(applied.stdout)
-    return applied.returncode == 0
+
+    # Do not write or apply an untrusted patch in the main checkout.  The patch is
+    # first checked and tested from an isolated worktree, then applied only when
+    # its complete test run succeeds.
+    with tempfile.TemporaryDirectory(prefix="ai-autofix-", dir=ROOT.parent) as temp_dir:
+        sandbox = Path(temp_dir) / "worktree"
+        patch_file = Path(temp_dir) / "candidate.patch"
+        patch_file.write_text(patch, encoding="utf-8")
+
+        check = run(["git", "apply", "--check", str(patch_file)], timeout=120)
+        if check.returncode != 0:
+            print("Patch did not apply cleanly:")
+            print(check.stdout)
+            print(patch[:4000])
+            return False
+
+        created = run(["git", "worktree", "add", "--detach", str(sandbox), "HEAD"], timeout=120)
+        if created.returncode != 0:
+            print("Could not create isolated patch sandbox:")
+            print(created.stdout)
+            return False
+        try:
+            sandbox_check = run(["git", "apply", "--check", str(patch_file)], timeout=120, cwd=sandbox)
+            if sandbox_check.returncode != 0:
+                print("Patch did not apply cleanly in sandbox:")
+                print(sandbox_check.stdout)
+                return False
+            sandbox_apply = run(["git", "apply", str(patch_file)], timeout=120, cwd=sandbox)
+            if sandbox_apply.returncode != 0:
+                print("Patch could not be applied in sandbox:")
+                print(sandbox_apply.stdout)
+                return False
+            sandbox_tests = run([sys.executable, "-m", "pytest"], timeout=900, cwd=sandbox)
+            print(sandbox_tests.stdout)
+            if sandbox_tests.returncode != 0:
+                print("Sandbox tests failed; refusing to apply AI patch.")
+                return False
+        finally:
+            cleanup = run(["git", "worktree", "remove", "--force", str(sandbox)], timeout=120)
+            if cleanup.returncode != 0:
+                print("Could not remove isolated patch sandbox:")
+                print(cleanup.stdout)
+
+        applied = run(["git", "apply", str(patch_file)], timeout=120)
+        print(applied.stdout)
+        return applied.returncode == 0
 
 
 def main() -> int:
