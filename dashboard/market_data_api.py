@@ -24,16 +24,17 @@ _ALLOWED_CATEGORIES = {"spot", "linear", "inverse"}
 
 
 def _configure_public_stream_feature() -> None:
-    """Activate the canonical read-only public stream unless explicitly disabled.
+    """Activate the canonical read-only public stream only when explicitly enabled.
 
     ``MARKET_STREAM_ENABLED`` is the operator-facing compatibility switch. The
     stream is market-data-only: it cannot authenticate, access accounts, or
-    submit orders. An explicit ``FEATURE_BYBIT_WEBSOCKET`` value still wins.
+    submit orders. An explicit ``FEATURE_BYBIT_WEBSOCKET`` value still wins. If
+    neither switch is set, the stream remains disabled (fail closed).
     """
 
     if "FEATURE_BYBIT_WEBSOCKET" in os.environ:
         return
-    if os.getenv("MARKET_STREAM_ENABLED", "1").strip().lower() in {
+    if os.getenv("MARKET_STREAM_ENABLED", "").strip().lower() in {
         "1",
         "true",
         "yes",
