@@ -95,6 +95,7 @@ def test_action_priority_and_persistence(tmp_path: Path) -> None:
     assert config.action_file.read_text().strip() == "restore_database"
     payload = json.loads(config.action_meta_file.read_text())
     assert payload["reason"] == "db"
+    assert payload["approval_decision_id"] == ""
 
 
 def test_extract_error_excerpts() -> None:

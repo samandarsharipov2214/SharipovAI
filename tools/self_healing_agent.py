@@ -48,6 +48,7 @@ ACTION_PRIORITY = {
     "git_revert": 40,
     "restore_database": 50,
 }
+CRITICAL_ACTIONS = frozenset({"git_revert", "restore_database"})
 
 AUTO_COMMIT_PREFIX = "[self-healing]"
 EXPECTED_CONTAINERS = ("sharipovai", "sharipovai-caddy")
@@ -294,15 +295,22 @@ class ActionRequest:
 
         atomic_write_text(self.config.action_file, self.action + "\n")
         atomic_write_text(self.config.expected_sha_file, self.expected_sha + "\n")
+        metadata = {
+            "action": self.action,
+            "reason": self.reason,
+            "expected_sha": self.expected_sha,
+            "details": self.details,
+            "created_at": utc_now_iso(),
+        }
+        if self.action in CRITICAL_ACTIONS:
+            # The host wrapper verifies this decision against the canonical
+            # DevelopmentChangeController ledger before it can execute a
+            # destructive action. Empty is intentional: fail closed until the
+            # Telegram owner approval flow supplies a matching decision id.
+            metadata["approval_decision_id"] = ""
         atomic_write_json(
             self.config.action_meta_file,
-            {
-                "action": self.action,
-                "reason": self.reason,
-                "expected_sha": self.expected_sha,
-                "details": self.details,
-                "created_at": utc_now_iso(),
-            },
+            metadata,
         )
 
 
@@ -494,8 +502,8 @@ class SelfHealingAgent:
                 (
                     f"{message}\n"
                     f"Проверенный кандидат восстановления подготовлен: "
-                    f"{candidate_info['candidate_path']}. Хост остановит сервис, "
-                    "атомарно заменит БД и запустит его снова."
+                    f"{candidate_info['candidate_path']}. Восстановление не будет "
+                    "выполнено без явного одобрения владельца в Telegram."
                 ),
                 fingerprint="database_restore_requested",
                 force=True,
@@ -782,7 +790,8 @@ class SelfHealingAgent:
             title = "Автоматический коммит не прошёл тесты"
             body = (
                 f"HEAD={head}\nsubject={subject}\n"
-                "Запрошен безопасный git revert с проверкой точного SHA.\n\n"
+                "Git revert ожидает явного одобрения владельца в Telegram "
+                "и проверки точного SHA.\n\n"
                 f"{excerpt}"
             )
             self.notifier.send(
