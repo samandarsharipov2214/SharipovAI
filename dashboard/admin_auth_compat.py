@@ -21,6 +21,12 @@ _SHA256_DIGEST_BYTES = 32
 _SESSION_SEPARATOR = b"."
 
 
+def _get_admin_password() -> str:
+    """Read the configured break-glass password without introducing a default."""
+
+    return os.getenv("ADMIN_PASSWORD", "").strip()
+
+
 def _configured_admin(app_module: Any) -> tuple[str, str]:
     return (
         app_module._clean_username(os.getenv("ADMIN_USERNAME", "admin")),
