@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 from dashboard.app import create_app
 from operations_ai import cto_report, diagnose_system, heal_system
+
+
+@pytest.fixture(autouse=True)
+def _public_dashboard_test_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "1")
 
 
 def test_doctor_returns_evidence_based_incidents():

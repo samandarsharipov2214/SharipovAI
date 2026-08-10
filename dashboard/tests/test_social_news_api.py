@@ -5,9 +5,15 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from dashboard import create_app
+
+
+@pytest.fixture(autouse=True)
+def _public_dashboard_test_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "1")
 
 
 def test_social_news_api_returns_seeded_state(monkeypatch, tmp_path: Path) -> None:
