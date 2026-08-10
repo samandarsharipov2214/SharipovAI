@@ -81,7 +81,7 @@ def test_prepare_restore_candidate(tmp_path: Path) -> None:
     assert len(info["candidate_sha256"]) == 64
 
 
-def test_action_priority_and_persistence(tmp_path: Path) -> None:
+def test_action_priority_and_persistence(tmp_path: Path, monkeypatch) -> None:
     config = make_config(tmp_path)
     logger = agent.build_logger(config.log_file)
     action = agent.ActionRequest(config, logger)
@@ -90,12 +90,10 @@ def test_action_priority_and_persistence(tmp_path: Path) -> None:
     action.request("restart_sharipovai", "app")
     assert action.action == "restart_sharipovai"
     action.request("restore_database", "db")
+    monkeypatch.setattr(action, "_request_critical_owner_approval", lambda: None)
     action.persist()
 
-    assert config.action_file.read_text().strip() == "restore_database"
-    payload = json.loads(config.action_meta_file.read_text())
-    assert payload["reason"] == "db"
-    assert payload["approval_decision_id"] == ""
+    assert not config.action_file.exists()
 
 
 def test_extract_error_excerpts() -> None:

@@ -143,11 +143,11 @@ read_agent_file() {
 clear_agent_action() {
     if container_running sharipovai; then
         docker exec --user "$CONTAINER_USER" sharipovai sh -ec \
-            "rm -f '$RUNTIME_DIR/action' '$RUNTIME_DIR/action.json' '$RUNTIME_DIR/expected_sha'" \
+            "rm -f '$RUNTIME_DIR/action' '$RUNTIME_DIR/action.json' '$RUNTIME_DIR/expected_sha' '$RUNTIME_DIR/critical_action_request.json'" \
             >/dev/null 2>&1 || true
     else
         compose run --rm --no-deps --user "$CONTAINER_USER" --entrypoint sh sharipovai -ec \
-            "rm -f '$RUNTIME_DIR/action' '$RUNTIME_DIR/action.json' '$RUNTIME_DIR/expected_sha'" \
+            "rm -f '$RUNTIME_DIR/action' '$RUNTIME_DIR/action.json' '$RUNTIME_DIR/expected_sha' '$RUNTIME_DIR/critical_action_request.json'" \
             >/dev/null 2>&1 || true
     fi
 }
@@ -234,18 +234,8 @@ meta_path = Path("/var/lib/sharipovai/.self_healing/action.json")
 try:
     metadata = json.loads(meta_path.read_text(encoding="utf-8"))
     decision_id = str(metadata.get("approval_decision_id", "")).strip()
-    decision = DevelopmentChangeController().get(decision_id)
+    DevelopmentChangeController().claim_critical_action(decision_id, action)
 except Exception:
-    raise SystemExit(1)
-
-owner_id = os.getenv("TELEGRAM_OWNER_ID", "").strip()
-if (
-    not owner_id
-    or decision.status != "approved"
-    or decision.proposal.get("critical_action") != action
-    or decision.owner_actor_id != owner_id
-    or decision.owner_chat_id != owner_id
-):
     raise SystemExit(1)
 PY
 }

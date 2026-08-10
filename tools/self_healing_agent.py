@@ -293,6 +293,10 @@ class ActionRequest:
             # after the allow-listed recovery command succeeds.
             return
 
+        if self.action in CRITICAL_ACTIONS:
+            self._request_critical_owner_approval()
+            return
+
         atomic_write_text(self.config.action_file, self.action + "\n")
         atomic_write_text(self.config.expected_sha_file, self.expected_sha + "\n")
         metadata = {
@@ -302,16 +306,45 @@ class ActionRequest:
             "details": self.details,
             "created_at": utc_now_iso(),
         }
-        if self.action in CRITICAL_ACTIONS:
-            # The host wrapper verifies this decision against the canonical
-            # DevelopmentChangeController ledger before it can execute a
-            # destructive action. Empty is intentional: fail closed until the
-            # Telegram owner approval flow supplies a matching decision id.
-            metadata["approval_decision_id"] = ""
         atomic_write_json(
             self.config.action_meta_file,
             metadata,
         )
+
+    def _request_critical_owner_approval(self) -> None:
+        """Create one canonical DCC request; never expose a host action early."""
+
+        pending_path = self.config.work_dir / "critical_action_request.json"
+        pending = load_json(pending_path)
+        if pending.get("action") == self.action and pending.get("decision_id"):
+            self.logger.info("Critical action already awaits owner decision: %s", self.action)
+            return
+        try:
+            head = self.expected_sha or subprocess.run(
+                ["git", "-C", str(self.config.repo_dir), "rev-parse", "HEAD"],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                check=True,
+                timeout=15,
+            ).stdout.strip().lower()
+            from development_control.general_controller import DevelopmentChangeController
+
+            controller = DevelopmentChangeController()
+            decision = controller.submit_critical_action(
+                self.action,
+                reason=self.reason,
+                base_sha=head,
+                details=self.details,
+            )
+            decision = controller.security_review(decision.decision_id)
+            decision = controller.request_owner_approval(decision.decision_id)
+            atomic_write_json(
+                pending_path,
+                {"action": self.action, "decision_id": decision.decision_id, "created_at": utc_now_iso()},
+            )
+        except Exception as exc:  # noqa: BLE001 - destructive action must fail closed
+            self.logger.error("Critical self-healing approval was not requested: %s", type(exc).__name__)
 
 
 class SelfHealingAgent:

@@ -165,3 +165,41 @@ def test_rejection_is_terminal_and_never_queues(
     assert rejected.status == "rejected"
     with pytest.raises(RuntimeError, match="explicit owner approval"):
         service.queue_host_application(rejected.decision_id)
+
+
+def test_critical_action_requires_matching_owner_approval_and_is_one_shot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TELEGRAM_OWNER_ID", "12345")
+    monkeypatch.setattr(
+        module,
+        "send_development_approval",
+        lambda decision: {"ok": True, "result": {"chat": {"id": 12345}}},
+    )
+    service = controller(tmp_path)
+    submitted = service.submit_critical_action(
+        "restore_database",
+        reason="integrity check failed",
+        base_sha=BASE_SHA,
+        details={"candidate": "verified"},
+    )
+    reviewed = service.security_review(submitted.decision_id)
+    awaiting = service.request_owner_approval(reviewed.decision_id)
+
+    with pytest.raises(PermissionError, match="configured Telegram owner"):
+        service.decide(awaiting.decision_id, True, "999", "12345", awaiting.approval_token, "no")
+    approved = service.decide(
+        awaiting.decision_id, True, "12345", "12345", awaiting.approval_token, "approved"
+    )
+    queued = service.queue_host_application(approved.decision_id)
+    payload = json.loads((tmp_path / ".self_healing" / "action.json").read_text(encoding="utf-8"))
+    assert payload["action"] == "restore_database"
+    assert payload["approval_decision_id"] == queued.decision_id
+
+    with pytest.raises(PermissionError, match="does not match"):
+        service.claim_critical_action(queued.decision_id, "git_revert")
+    claimed = service.claim_critical_action(queued.decision_id, "restore_database")
+    assert claimed.status == "executing"
+    with pytest.raises(RuntimeError, match="one-shot"):
+        service.claim_critical_action(queued.decision_id, "restore_database")

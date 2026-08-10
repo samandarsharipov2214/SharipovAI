@@ -13,10 +13,7 @@ def test_critical_self_healing_actions_fail_closed_without_owner_approval() -> N
     execution = script.index('restore_database)\n            log "Executing allow-listed action: restore_database"')
     assert guard < execution
     assert "critical_action_is_owner_approved" in script
-    assert 'decision.status != "approved"' in script
-    assert 'decision.proposal.get("critical_action") != action' in script
-    assert 'decision.owner_actor_id != owner_id' in script
-    assert 'decision.owner_chat_id != owner_id' in script
+    assert "claim_critical_action(decision_id, action)" in script
 
 
 def test_restart_and_compose_actions_remain_automatic() -> None:
