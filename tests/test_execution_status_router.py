@@ -34,32 +34,31 @@ class FakeJournal:
         return {"status": "ok", "record_count": 7, "database_backed": True}
 
 
-class FakePaperEngine:
-    def state(self, *, catch_up: bool = False):
-        assert catch_up is False
+class FakeCanonicalPaperLoop:
+    def snapshot(self):
         return {
-            "status": "ok",
-            "summary": {
-                "equity": 10_000.0,
-                "cash": 8_000.0,
-                "net_pnl": 125.0,
-                "deployed_notional": 2_000.0,
-                "reserve_amount": 2_000.0,
-                "open_positions": 1,
-            },
+            "source_of_truth": "CouncilAuthorizedPaperLoop",
+            "equity": 10_000.0,
+            "cash": 8_000.0,
+            "realized_pnl": 125.0,
+            "unrealized_pnl": 0.0,
+            "deployed_notional": 2_000.0,
+            "reserve_amount": 2_000.0,
+            "positions": {"BTCUSDT": {"quantity": 0.01}},
+            "trades": [],
+            "market_stream": {"verified": True},
+            "worker_running": True,
+            "database_backed": True,
         }
 
 
 def _app(monkeypatch) -> FastAPI:
-    monkeypatch.setattr(
-        execution_status_module,
-        "PaperActivityEngine",
-        FakePaperEngine,
-    )
+    del monkeypatch
     app = FastAPI()
     app.state.execution_client = FakeExecutionClient()
     app.state.stage_controller = FakeStageController()
     app.state.execution_journal = FakeJournal()
+    app.state.autonomous_paper_loop = FakeCanonicalPaperLoop()
     app.include_router(router)
     app.dependency_overrides[admin_principal] = lambda: AdminPrincipal("admin")
     return app
