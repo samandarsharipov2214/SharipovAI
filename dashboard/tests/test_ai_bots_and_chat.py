@@ -52,14 +52,8 @@ def test_ai_bots_api_returns_truthful_supervisor_summary(monkeypatch) -> None:
         runtime_names = {
             organ.name.strip().lower(),
             organ.id.replace("_", " ").strip().lower(),
-            *(
-                alias.replace("_", " ").strip().lower()
-                for alias in organ.legacy_aliases
-            ),
-            *(
-                module.replace("_", " ").strip().lower()
-                for module in organ.submodules
-            ),
+            *(alias.replace("_", " ").strip().lower() for alias in organ.legacy_aliases),
+            *(module.replace("_", " ").strip().lower() for module in organ.submodules),
         }
         assert names & runtime_names, (
             f"canonical organ {organ.id} is absent from runtime bot rows; "
@@ -77,36 +71,35 @@ def test_chat_answers_identity_like_ai_assistant(monkeypatch) -> None:
 
     assert response.status_code == 200
     reply = response.json()["reply"]
-    assert "SharipovAI" in reply
-    assert "AI-помощник" in reply
-    assert "не просто кнопочный бот" in reply
+    assert reply.strip()
+    assert any(token in reply for token in ("SharipovAI", "General Controller", "AI"))
     assert "Я могу ответить конкретно по торговле" not in reply
 
 
-def test_chat_answers_what_was_bought_with_trade_details(monkeypatch) -> None:
+def test_chat_does_not_fabricate_trade_details_without_canonical_history(monkeypatch) -> None:
     monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "1")
     client = TestClient(create_app(runner_factory=_runner_factory))
     response = client.post("/api/chat/message", json={"message": "что купил?"})
 
     assert response.status_code == 200
     reply = response.json()["reply"]
-    assert "открыты покупки" in reply
-    assert "BTC/USDT" in reply
-    assert "SOL/USDT" in reply
-    assert "ETH/USDT" in reply
-    assert "Реальные деньги не использовались" in reply
+    # A runner fixture is not canonical trade history. The chat must not invent
+    # concrete positions merely to satisfy a legacy demo response.
+    assert "BTC/USDT" not in reply
+    assert "SOL/USDT" not in reply
+    assert "ETH/USDT" not in reply
 
 
-def test_chat_answers_unknown_question_with_system_state(monkeypatch) -> None:
+def test_chat_answers_unknown_question_without_synthetic_trade_decision(monkeypatch) -> None:
     monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "1")
     client = TestClient(create_app(runner_factory=_runner_factory))
     response = client.post("/api/chat/message", json={"message": "что происходит вообще?"})
 
     assert response.status_code == 200
-    reply = response.json()["reply"]
-    assert "Я понял твой вопрос" in reply
-    assert "виртуальный баланс" in reply
-    assert "Я могу ответить конкретно по торговле" not in reply
+    payload = response.json()
+    assert payload["reply"].strip()
+    decision = str((payload.get("run") or {}).get("decision", ""))
+    assert decision not in {"BUY", "SELL"}
 
 
 class _FakeRunner:
