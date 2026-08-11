@@ -68,31 +68,50 @@ def _git(root: Path, *args: str) -> str:
 
 def scan_history(root: Path, *, max_commits: int | None = None) -> list[Finding]:
     root = root.resolve()
-    commits = [line.strip() for line in _git(root, "rev-list", "--all").splitlines() if line.strip()]
+    command = [
+        "git", "-C", str(root), "log", "--all", "-G", _COARSE_PATTERN,
+        "--format=__SHARIPOVAI_SCAN_COMMIT__%H", "--patch", "--no-ext-diff",
+    ]
     if max_commits is not None:
-        commits = commits[: max(0, max_commits)]
+        command.extend(["--max-count", str(max(0, max_commits))])
+    result = subprocess.run(
+        command,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("git history diff scan failed")
+
     findings: list[Finding] = []
-    for commit in commits:
-        # Git performs binary exclusion and tree traversal internally.  One
-        # coarse grep per commit avoids one ``git show`` subprocess per file.
-        result = subprocess.run(
-            ["git", "-C", str(root), "grep", "-n", "-E", _COARSE_PATTERN, commit],
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
-        if result.returncode not in {0, 1}:
-            raise RuntimeError(f"git grep failed for {commit}")
-        for row in result.stdout.splitlines():
-            _tree, path, line_no, line = row.split(":", 3)
+    commit = ""
+    path = ""
+    line_no = 0
+    for row in result.stdout.splitlines():
+        if row.startswith("__SHARIPOVAI_SCAN_COMMIT__"):
+            commit = row.removeprefix("__SHARIPOVAI_SCAN_COMMIT__").strip()
+            path = ""
+            line_no = 0
+        elif row.startswith("+++ b/"):
+            path = row[6:]
+            line_no = 0
+        elif row.startswith("@@"):
+            # Added-side hunk position, e.g. ``@@ -1 +5,3 @@``.
+            marker = row.split("+", 1)[1].split(" ", 1)[0]
+            line_no = int(marker.split(",", 1)[0])
+        elif row.startswith("+") and not row.startswith("+++") and commit and path:
+            line = row[1:]
             for rule, pattern in RULES:
                 for match in pattern.finditer(line):
                     fingerprint = _fingerprint(match.group(0))
                     if not _allowlisted(rule=rule, path=path, fingerprint=fingerprint):
                         findings.append(Finding(commit, path, int(line_no), rule, fingerprint))
+            line_no += 1
+        elif row.startswith(" ") and line_no:
+            line_no += 1
     return findings
 
 
