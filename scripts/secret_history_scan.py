@@ -7,6 +7,7 @@ commit, path, line and rule only.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import subprocess
@@ -19,6 +20,8 @@ RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("github_token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{30,}\b")),
     ("aws_access_key", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
     ("telegram_bot_token", re.compile(r"\b\d{6,12}:[A-Za-z0-9_-]{30,}\b")),
+    ("openai_api_key", re.compile(r"\bsk-[A-Za-z0-9]{20,}\b")),
+    ("google_api_key", re.compile(r"\bAIza[A-Za-z0-9_-]{35}\b")),
 )
 
 
@@ -28,10 +31,23 @@ class Finding:
     path: str
     line: int
     rule: str
+    fingerprint: str
+
+
+def _fingerprint(value: str) -> str:
+    """Provide reviewable correlation metadata without emitting a secret."""
+
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
 
 
 def _git(root: Path, *args: str) -> str:
-    return subprocess.check_output(["git", "-C", str(root), *args], text=True, stderr=subprocess.DEVNULL)
+    return subprocess.check_output(
+        ["git", "-C", str(root), *args],
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        stderr=subprocess.DEVNULL,
+    )
 
 
 def scan_history(root: Path, *, max_commits: int | None = None) -> list[Finding]:
@@ -51,8 +67,10 @@ def scan_history(root: Path, *, max_commits: int | None = None) -> list[Finding]
                 continue
             for line_no, line in enumerate(content.splitlines(), 1):
                 for rule, pattern in RULES:
-                    if pattern.search(line):
-                        findings.append(Finding(commit, path, line_no, rule))
+                    for match in pattern.finditer(line):
+                        findings.append(
+                            Finding(commit, path, line_no, rule, _fingerprint(match.group(0)))
+                        )
     return findings
 
 

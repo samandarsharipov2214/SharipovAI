@@ -33,6 +33,7 @@ def test_secret_history_scan_finds_old_secret_after_file_is_cleaned(tmp_path: Pa
     assert len(findings) == 1
     assert findings[0].path == "config.txt"
     assert findings[0].rule == "github_token"
+    assert len(findings[0].fingerprint) == 16
     assert not hasattr(findings[0], "secret")
 
 
@@ -41,4 +42,13 @@ def test_secret_history_scan_accepts_clean_history(tmp_path: Path) -> None:
     (root / "README.md").write_text("no credentials here\n", encoding="utf-8")
     _git(root, "add", "README.md")
     _git(root, "commit", "-m", "clean")
+    assert scan_history(root) == []
+
+
+def test_secret_history_scan_skips_or_safely_decodes_binary_history(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    (root / "logo.bin").write_bytes(b"\x89PNG\r\n\x1a\n\xff\xfe")
+    _git(root, "add", "logo.bin")
+    _git(root, "commit", "-m", "binary")
+
     assert scan_history(root) == []
