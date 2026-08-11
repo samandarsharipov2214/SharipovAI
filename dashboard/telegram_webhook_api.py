@@ -13,6 +13,7 @@ import httpx
 from fastapi import BackgroundTasks, Body, FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
 
+from canonical_surface_state import load_canonical_paper_state
 from telegram_system_adapter import CANONICAL_WEBAPP_URL, handle_callback, handle_message, main_keyboard, send_message, setup_bot_commands
 from telegram_health import telegram_health
 
@@ -33,7 +34,15 @@ def install_telegram_webhook_api(app: FastAPI) -> None:
     def telegram_status() -> dict[str, Any]:
         result = _telegram_status()
         result["auto_configure"] = getattr(app.state, "telegram_webhook_autoconfigure", None)
-        result["integration"] = {"website_core": True, "shared_demo_state": True, "shared_ai_chat_orchestrator": True, "shared_bot_network": True, "adapter": "telegram_system_adapter"}
+        state = load_canonical_paper_state()
+        result["integration"] = {
+            "paper_state_status": state.get("status", "unknown"),
+            "paper_state_source": state.get("source_of_truth", "unknown"),
+            "paper_state_database_backed": bool(state.get("database_backed", False)),
+            "shared_demo_state": False,
+            "shared_ai_chat_orchestrator": True,
+            "adapter": "telegram_system_adapter",
+        }
         return result
 
     @app.get("/api/telegram/self-test")
@@ -49,13 +58,12 @@ def install_telegram_webhook_api(app: FastAPI) -> None:
             raise HTTPException(status_code=403, detail="invalid_webhook_secret")
         if not isinstance(update, dict) or "update_id" not in update:
             raise HTTPException(status_code=400, detail="invalid_telegram_update")
-        # Проверяем, не development callback ли это
-        if 'callback_query' in update:
+        if "callback_query" in update:
             from telegram_development_control import handle_development_callback
-            callback_data = update['callback_query'].get('data', '')
-            if callback_data.startswith('devfix:'):
-                handle_development_callback(update['callback_query'])
-                return {'ok': True, 'handled': 'development_callback'}
+            callback_data = update["callback_query"].get("data", "")
+            if callback_data.startswith("devfix:"):
+                handle_development_callback(update["callback_query"])
+                return {"ok": True, "handled": "development_callback"}
         background_tasks.add_task(_process_update_safely, update)
         return {"ok": True, "queued": True, "adapter": "shared_website_system"}
 
@@ -153,10 +161,13 @@ def _auto_configure_webhook() -> dict[str, Any]:
 
 
 def _set_webhook() -> dict[str, Any]:
+    secret = _webhook_secret()
+    if not secret:
+        return {"status": "error", "reason": "webhook_secret_unavailable"}
     webhook_url = f"{_webapp_url()}/telegram/webhook"
     commands = _safe_setup_commands()
     menu_button = _set_canonical_webapp_menu()
-    payload = {"url": webhook_url, "secret_token": _webhook_secret(), "drop_pending_updates": False, "allowed_updates": ["message", "callback_query"], "max_connections": 20}
+    payload = {"url": webhook_url, "secret_token": secret, "drop_pending_updates": False, "allowed_updates": ["message", "callback_query"], "max_connections": 20}
     result = _telegram("setWebhook", payload)
     return {"status": "ok" if result.get("ok") and menu_button.get("ok") else "error", "webhook_url": webhook_url, "webapp_url": _webapp_url(), "secret_token_configured": True, "set_webhook": result, "commands": commands, "menu_button": menu_button, "adapter": "shared_website_system"}
 
@@ -225,6 +236,8 @@ def _webhook_secret() -> str:
     if configured:
         return configured
     source = os.getenv("AUTH_SECRET", "").strip() or _bot_token()
+    if not source:
+        return ""
     return hashlib.sha256(f"sharipovai-webhook:{source}".encode("utf-8")).hexdigest()
 
 
