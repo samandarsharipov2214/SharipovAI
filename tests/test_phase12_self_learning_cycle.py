@@ -29,8 +29,8 @@ def _outcome() -> dict[str, object]:
         "evidence_class": "verified_market",
         "verified_market_data": True,
         "agents": [
-            {"agent_id": "market-agent", "action": "BUY", "confidence": 80.0, "evidence_score": 0.9},
-            {"agent_id": "risk-agent", "action": "BUY", "confidence": 60.0, "evidence_score": 0.8},
+            {"agent_id": "market-agent", "action": "BUY", "confidence": 80.0, "evidence_score": 0.9, "evidence_class": "verified_market", "verified_market_data": True},
+            {"agent_id": "risk-agent", "action": "BUY", "confidence": 60.0, "evidence_score": 0.8, "evidence_class": "verified_market", "verified_market_data": True},
         ],
     }
 
@@ -91,6 +91,14 @@ def test_policy_rejects_synthetic_and_non_finite_evidence() -> None:
     invalid = _outcome()
     invalid["net_pnl"] = float("nan")
     with pytest.raises(ValueError, match="finite"):
+        OutcomeEvidence.from_mapping(invalid)
+
+
+def test_policy_rejects_unverified_agent_inside_verified_outcome() -> None:
+    invalid = _outcome()
+    invalid["agents"] = [dict(invalid["agents"][0])]
+    invalid["agents"][0].pop("verified_market_data")
+    with pytest.raises(ValueError, match="unverified market evidence"):
         OutcomeEvidence.from_mapping(invalid)
 
 
