@@ -27,6 +27,10 @@ class FakeRunner:
 
 
 def test_secure_app_blocks_login_after_repeated_failures(tmp_path: Path, monkeypatch) -> None:
+    # This test verifies the default-secure production contract. CI jobs may set
+    # SHARIPOVAI_DISABLE_AUTH=1 globally for unrelated public/dashboard tests,
+    # so remove that test-mode override explicitly before constructing the app.
+    monkeypatch.delenv("SHARIPOVAI_DISABLE_AUTH", raising=False)
     monkeypatch.setenv("ADMIN_USERNAME", "Samandar2212")
     monkeypatch.setenv("ADMIN_PASSWORD", "CorrectPassword2026!")
     monkeypatch.setenv("AUTH_SECRET", "test-secret")
