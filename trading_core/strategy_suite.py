@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 from .backtest import EventDrivenBacktester
 from .models import BacktestConfig, BacktestResult, MarketEvent, Side
@@ -89,6 +89,7 @@ def evaluate_strategy_suite(
     ordered_events = tuple(events)
     if not ordered_events:
         raise ValueError("strategy suite requires market events")
+    _validate_market_event_execution_semantics(ordered_events)
     config = suite_config or StrategySuiteConfig()
     backtester_config = backtest_config or BacktestConfig()
 
@@ -150,6 +151,34 @@ def evaluate_strategy_suite(
         recommended_for_paper_review=recommended,
         automatic_promotion=False,
     )
+
+
+def _validate_market_event_execution_semantics(
+    events: Sequence[MarketEvent],
+) -> None:
+    """Fail closed when historical price provenance cannot support same-event fills.
+
+    `EventDrivenBacktester` currently executes a returned signal on the same market
+    observation. Native bid/ask observations can represent executable quotes at that
+    timestamp. Close-only historical bars are different: `HistoricalDataLoader`
+    synthesizes bid/ask around the already observed close. Treating a signal derived
+    from that close as if it were executable at the same close can introduce an
+    optimistic timing bias. Until an explicit next-event/bar execution model is used,
+    those datasets cannot produce a Paper-review recommendation.
+    """
+
+    for event in events:
+        metadata = event.metadata
+        price_source = str(metadata.get("price_source") or "").strip()
+        if metadata.get("dataset_id") and not price_source:
+            raise ValueError(
+                "historical strategy review requires explicit market-event price provenance"
+            )
+        if price_source == "synthetic_from_close":
+            raise ValueError(
+                "close-derived historical bars require next-event execution timing; "
+                "same-event strategy review is blocked"
+            )
 
 
 def _comparison(
