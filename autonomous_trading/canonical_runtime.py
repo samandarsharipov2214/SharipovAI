@@ -17,7 +17,7 @@ from decision_quality import (
     DecisionQualityAssessment,
     DecisionQualityService,
 )
-from meta_ai_persistence import EVENT_NAMESPACE
+from meta_ai_persistence import EVENT_NAMESPACE, VERIFIED_EVIDENCE_CLASSES
 from storage import ProjectDatabase, VersionConflict
 from trading_candidate import TradingDecision, TradingEnvironment
 
@@ -186,7 +186,8 @@ class CanonicalPaperDecisionRuntime:
             raise CanonicalPaperRuntimeError("cannot settle a decision without an assessment")
         payloads = self._stored_opinions(clean_id)
         if not payloads:
-            raise CanonicalPaperRuntimeError("stored assessment contains no eligible opinions")
+            raise CanonicalPaperRuntimeError("stored assessment contains no verified eligible opinions")
+        evidence_class = _settlement_evidence_class(payloads)
         allocation = pnl / len(payloads)
         drawdown_allocation = drawdown / len(payloads)
         pnl_by_agent = {str(item.get("agent_id")): allocation for item in payloads}
@@ -201,14 +202,14 @@ class CanonicalPaperDecisionRuntime:
             pnl_by_agent=pnl_by_agent,
             drawdown_by_agent=drawdown_by_agent,
             regime=assessment.regime,
-            evidence_class="verified_market",
+            evidence_class=evidence_class,
             verified_market_data=True,
         )
         result = {
             **settlement.to_dict(),
             "net_pnl": pnl,
             "drawdown_contribution": drawdown,
-            "evidence_class": "verified_market",
+            "evidence_class": evidence_class,
             "verified_market_data": True,
         }
         try:
@@ -245,13 +246,17 @@ class CanonicalPaperDecisionRuntime:
             if not isinstance(item, Mapping):
                 continue
             normalized = dict(item)
-            normalized.update(
-                evidence_class="verified_market",
-                verified_market_data=True,
-                learning_eligible=True,
-                evidence_eligible=True,
-                reputation_eligible=True,
+            evidence_class = str(normalized.get("evidence_class") or "").strip().lower()
+            verified = (
+                normalized.get("verified_market_data") is True
+                or normalized.get("data_verified") is True
             )
+            eligible = all(
+                normalized.get(field) is not False
+                for field in ("learning_eligible", "evidence_eligible", "reputation_eligible")
+            )
+            if not verified or not eligible or evidence_class not in VERIFIED_EVIDENCE_CLASSES:
+                continue
             result.append(normalized)
         return result
 
@@ -267,6 +272,19 @@ class CanonicalPaperDecisionRuntime:
             "database": self.database.health(),
             "decision_quality": self.quality.status(),
         }
+
+
+def _settlement_evidence_class(payloads: Sequence[Mapping[str, Any]]) -> str:
+    classes = {
+        str(item.get("evidence_class") or "").strip().lower()
+        for item in payloads
+    }
+    if len(classes) != 1:
+        raise CanonicalPaperRuntimeError("settlement opinions have inconsistent evidence classes")
+    evidence_class = next(iter(classes))
+    if evidence_class not in VERIFIED_EVIDENCE_CLASSES:
+        raise CanonicalPaperRuntimeError("settlement evidence class is not verified")
+    return evidence_class
 
 
 def _authorization_reason(
