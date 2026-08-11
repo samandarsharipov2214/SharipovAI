@@ -82,7 +82,11 @@ CANONICAL_AI_ORGANS: tuple[AIOrgan, ...] = (
         "Virtual Account Execution AI",
         "Исполнение только на виртуальном счёте, учёт комиссий и качества исполнения.",
         ("virtual_orders", "fills", "execution_quality", "fees", "trade_history"),
-        ("paper_activity_engine", "virtual_account"),
+        (
+            "canonical_paper_runtime",
+            "council_authorized_paper_loop",
+            "shared_verified_market_stream",
+        ),
         ("virtual_trader", "paper_trading_bot", "demo_trader"),
         True,
     ),

@@ -1,4 +1,4 @@
-from ai_architecture_registry import architecture_snapshot, canonical_id, responsibility_owner
+from ai_architecture_registry import CANONICAL_AI_ORGANS, architecture_snapshot, canonical_id, responsibility_owner
 from ai_evidence import REAL_DATA_VIRTUAL_EXECUTION, enrich_ai_status, system_scoreboard
 
 
@@ -55,6 +55,16 @@ def test_legacy_execution_alias_does_not_create_extra_ai() -> None:
     enriched = enrich_ai_status({"id": "demo_trader", "verdict": "работает"})
     assert enriched["id"] == "virtual_execution"
     assert enriched["real_data_status"] == REAL_DATA_VIRTUAL_EXECUTION
+
+
+def test_virtual_execution_registry_names_the_canonical_council_runtime() -> None:
+    organ = next(item for item in CANONICAL_AI_ORGANS if item.id == "virtual_execution")
+    assert set(organ.submodules) >= {
+        "canonical_paper_runtime",
+        "council_authorized_paper_loop",
+        "shared_verified_market_stream",
+    }
+    assert "paper_activity_engine" not in organ.submodules
 
 
 def test_runtime_rows_override_defaults_without_duplication() -> None:
