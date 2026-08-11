@@ -34,6 +34,9 @@ def test_secure_app_blocks_login_after_repeated_failures(tmp_path: Path, monkeyp
     monkeypatch.setenv("AUTH_SECURITY_EVENTS_FILE", str(tmp_path / "security_events.json"))
     monkeypatch.setenv("AUTH_MAX_FAILED_ATTEMPTS", "3")
     monkeypatch.setenv("AUTH_LOCK_SECONDS", "60")
+    # CI enables the public dashboard test mode globally. This test specifically
+    # verifies the default-secure contract, so isolate it from that CI setting.
+    monkeypatch.delenv("SHARIPOVAI_DISABLE_AUTH", raising=False)
 
     app = create_secure_app(runner_factory=FakeRunner)
     client = TestClient(app)
