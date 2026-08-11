@@ -15,7 +15,7 @@ from collections import Counter, deque
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from storage import ProjectDatabase, VersionConflict, list_json_items
+from storage import ProjectDatabase, VersionConflict, count_json_items, list_json_items
 
 from .agents import SourceAgent
 from .models import NewsArticle, NewsEnvelope, SourceFetch
@@ -48,9 +48,6 @@ class NewsHub:
         event_limit = _bounded_int("NEWS_AGENT_EVENT_LIMIT", default=1000, minimum=100, maximum=10000)
         self._memory: deque[NewsEnvelope] = deque(maxlen=memory_limit)
         self._events: deque[dict[str, Any]] = deque(maxlen=event_limit)
-        # ``news_memory`` is retained as a backward-compatible analyzed-envelope
-        # store. New immutable identity checks use ``news_article_evidence``;
-        # every source retrieval is written separately to project_events.
         self.memory_namespace = "news_memory"
         self.article_namespace = "news_article_evidence"
         self.fetch_observation_namespace = "news_fetch_observations"
@@ -78,11 +75,12 @@ class NewsHub:
                     self.database.put_json(self.memory_namespace, article.article_id, payload, expected_version=0)
                 except VersionConflict:
                     existing = self.database.get_json(self.memory_namespace, article.article_id)
-                    if existing is None or not _same_article_evidence(existing.get("value"), payload):
-                        return  # skip duplicate article
-                    # The legacy envelope contains one historical fetch snapshot.
-                    # A later fetch is now preserved independently as an
-                    # observation and therefore does not rewrite the envelope.
+                    if existing is None:
+                        raise RuntimeError(f"news memory collision disappeared: {article.article_id}")
+                    if not _same_article_evidence(existing.get("value"), payload):
+                        raise RuntimeError(f"news envelope evidence conflict: {article.article_id}")
+                    # The same immutable article was already accepted. The new
+                    # source retrieval remains preserved in project_events.
                     duplicates += 1
                     continue
             self._memory.append(envelope)
@@ -121,7 +119,6 @@ class NewsHub:
         return list(self._events)[-max(1, min(int(limit), 1000)) :][::-1]
 
     def fetch_observations(self, *, article_id: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
-        """Return append-only fetch evidence without mutating article identity."""
         if self.database is None:
             return []
         return self.database.list_events(
@@ -137,9 +134,9 @@ class NewsHub:
     def state(self) -> dict[str, Any]:
         impacts = Counter(item.impact for item in self._memory)
         urgencies = Counter(item.urgency for item in self._memory)
-        article_total = len(list_json_items(self.database, self.memory_namespace)) if self.database is not None else len(self._memory)
-        immutable_article_total = len(list_json_items(self.database, self.article_namespace)) if self.database is not None else 0
-        event_total = len(list_json_items(self.database, self.event_namespace)) if self.database is not None else len(self._events)
+        article_total = count_json_items(self.database, self.memory_namespace) if self.database is not None else len(self._memory)
+        immutable_article_total = count_json_items(self.database, self.article_namespace) if self.database is not None else 0
+        event_total = count_json_items(self.database, self.event_namespace) if self.database is not None else len(self._events)
         return {
             "memory_size": len(self._memory),
             "event_size": len(self._events),
@@ -195,9 +192,6 @@ class NewsHub:
         for row in reversed(memory_rows):
             value = row["value"]
             envelope = _envelope_from_dict(value)
-            # Backward-compatible migration: old ``news_memory`` rows remain
-            # readable, while immutable article identity is copied once into the
-            # dedicated namespace. Existing data is never deleted or rewritten.
             self._persist_article_evidence(envelope.article)
             self._memory.append(envelope)
         for row in reversed(event_rows):
