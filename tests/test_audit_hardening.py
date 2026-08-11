@@ -8,7 +8,7 @@ import pytest
 
 from scripts.db_restore_drill import validate_sqlite_backup
 from scripts.execution_path_guard import scan_file, scan_repository
-from scripts.project_db_retention import run_retention
+from scripts.project_db_retention import _valid_backup_evidence, run_retention
 from storage.project_database import ProjectDatabase
 
 
@@ -17,6 +17,23 @@ def test_execution_path_guard_blocks_noncanonical_order_call(tmp_path: Path) -> 
     module.write_text("def run(client):\n    return client.place_order(symbol='BTCUSDT')\n", encoding="utf-8")
     violations = scan_file(module, root=tmp_path)
     assert [(item.path, item.call) for item in violations] == [("rogue.py", "place_order")]
+
+
+def test_execution_path_guard_blocks_import_alias_assignment_and_private_endpoint(tmp_path: Path) -> None:
+    module = tmp_path / "rogue.py"
+    module.write_text(
+        "from client import create_order as submit\n"
+        "wrapped = submit\n"
+        "def run(client):\n"
+        "    wrapped(symbol='BTCUSDT')\n"
+        "    return client.post('/v5/order/create', json={})\n",
+        encoding="utf-8",
+    )
+
+    assert [(item.line, item.call) for item in scan_file(module, root=tmp_path)] == [
+        (4, "wrapped"),
+        (5, "private_order_endpoint"),
+    ]
 
 
 def test_execution_path_guard_allows_canonical_execution_file(tmp_path: Path) -> None:
@@ -86,6 +103,14 @@ def test_retention_rejects_dangerously_short_window(tmp_path: Path) -> None:
     db = ProjectDatabase(f"sqlite:///{tmp_path / 'retention.db'}")
     with pytest.raises(ValueError, match="at least 7"):
         run_retention(db=db, retain_days=1, batch_size=100, apply=False)
+
+
+def test_retention_apply_backup_evidence_must_be_a_real_nonempty_file(tmp_path: Path) -> None:
+    evidence = tmp_path / "backup-evidence.json"
+    assert _valid_backup_evidence(None) is False
+    assert _valid_backup_evidence(evidence) is False
+    evidence.write_text("{}", encoding="utf-8")
+    assert _valid_backup_evidence(evidence) is True
 
 
 def test_restore_drill_validates_copy_without_mutating_source(tmp_path: Path) -> None:

@@ -12,6 +12,7 @@ import json
 import os
 import time
 from dataclasses import asdict, dataclass
+from pathlib import Path
 
 from storage.project_database import ProjectDatabase
 
@@ -138,9 +139,16 @@ def main() -> int:
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--confirm", default="")
+    parser.add_argument(
+        "--backup-evidence",
+        type=Path,
+        help="machine-readable evidence of a successful backup created before destructive retention",
+    )
     args = parser.parse_args()
     if args.apply and args.confirm != APPLY_CONFIRMATION:
         parser.error(f"--apply requires --confirm {APPLY_CONFIRMATION}")
+    if args.apply and not _valid_backup_evidence(args.backup_evidence):
+        parser.error("--apply requires a non-empty --backup-evidence file")
     result = run_retention(
         db=ProjectDatabase(),
         retain_days=args.retain_days,
@@ -149,6 +157,17 @@ def main() -> int:
     )
     print(json.dumps(asdict(result), sort_keys=True))
     return 0
+
+
+def _valid_backup_evidence(path: Path | None) -> bool:
+    """Do not infer a backup from environment or a stale filename."""
+
+    if path is None:
+        return False
+    try:
+        return path.is_file() and path.stat().st_size > 0
+    except OSError:
+        return False
 
 
 if __name__ == "__main__":

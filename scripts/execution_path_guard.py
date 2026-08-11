@@ -28,6 +28,15 @@ FORBIDDEN_CALL_NAMES = {
     "batch_cancel_order",
 }
 
+FORBIDDEN_ORDER_ENDPOINT_PARTS = (
+    "/v5/order/create",
+    "/v5/order/amend",
+    "/v5/order/cancel",
+    "/v5/order/cancel-all",
+    "/v5/order/create-batch",
+    "/v5/order/cancel-batch",
+)
+
 SKIP_DIRS = {".git", ".venv", "venv", "node_modules", "__pycache__", "artifacts"}
 
 
@@ -55,14 +64,54 @@ def scan_file(path: Path, *, root: Path) -> list[Violation]:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=relative)
     except (UnicodeDecodeError, SyntaxError):
         return []
-    violations: list[Violation] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
+    return _ExecutionCallVisitor(relative).scan(tree)
+
+
+class _ExecutionCallVisitor(ast.NodeVisitor):
+    """Track the lightweight aliases that hide a direct order primitive."""
+
+    def __init__(self, relative: str) -> None:
+        self.relative = relative
+        self.aliases: set[str] = set()
+        self.violations: list[Violation] = []
+
+    def scan(self, tree: ast.AST) -> list[Violation]:
+        self.visit(tree)
+        return self.violations
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:  # noqa: N802
+        for imported in node.names:
+            if imported.name in FORBIDDEN_CALL_NAMES:
+                self.aliases.add(imported.asname or imported.name)
+        self.generic_visit(node)
+
+    def visit_Assign(self, node: ast.Assign) -> None:  # noqa: N802
+        name = _call_name(node.value) if isinstance(node.value, ast.Call) else _attribute_name(node.value)
+        if name in FORBIDDEN_CALL_NAMES or (isinstance(node.value, ast.Name) and node.value.id in self.aliases):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    self.aliases.add(target.id)
+        self.generic_visit(node)
+
+    def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
         name = _call_name(node)
-        if name in FORBIDDEN_CALL_NAMES:
-            violations.append(Violation(relative, int(getattr(node, "lineno", 0)), name))
-    return violations
+        if name in FORBIDDEN_CALL_NAMES or (isinstance(node.func, ast.Name) and node.func.id in self.aliases):
+            self._add(node, name or node.func.id)
+        for value in ast.walk(node):
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                endpoint = value.value.lower()
+                if any(part in endpoint for part in FORBIDDEN_ORDER_ENDPOINT_PARTS):
+                    self._add(value, "private_order_endpoint")
+        self.generic_visit(node)
+
+    def _add(self, node: ast.AST, call: str) -> None:
+        violation = Violation(self.relative, int(getattr(node, "lineno", 0)), call)
+        if violation not in self.violations:
+            self.violations.append(violation)
+
+
+def _attribute_name(node: ast.AST) -> str | None:
+    return node.attr if isinstance(node, ast.Attribute) else None
 
 
 def iter_python_files(root: Path) -> Iterable[Path]:
