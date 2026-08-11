@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from math import sqrt
+from math import isfinite, sqrt
 from statistics import mean
 from typing import Iterable, Mapping, Sequence
 
@@ -26,7 +26,20 @@ _VETO_AGENT_IDS = {
 
 
 def _clip(value: float, low: float = 0.0, high: float = 1.0) -> float:
-    return max(low, min(high, float(value)))
+    parsed = _finite(value, "ratio")
+    return max(low, min(high, parsed))
+
+
+def _finite(value: object, name: str) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be a finite number")
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a finite number") from exc
+    if not isfinite(parsed):
+        raise ValueError(f"{name} must be a finite number")
+    return parsed
 
 
 def _agent_key(agent_id: str) -> str:
@@ -51,6 +64,8 @@ class AgentOpinion:
     rationale: str = ""
 
     def __post_init__(self) -> None:
+        if not str(self.agent_id).strip():
+            raise ValueError("agent_id must not be empty")
         action = self.action.upper()
         if action not in VALID_ACTIONS:
             raise ValueError(f"Unsupported action: {self.action}")
@@ -73,9 +88,32 @@ class PredictionOutcome:
     regime: str = "unknown"
     timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
 
+    def __post_init__(self) -> None:
+        if not str(self.agent_id).strip():
+            raise ValueError("agent_id must not be empty")
+        predicted = str(self.predicted_action).upper()
+        realized = str(self.realized_action).upper()
+        if predicted not in VALID_ACTIONS:
+            raise ValueError(f"Unsupported predicted action: {self.predicted_action}")
+        if realized not in VALID_ACTIONS:
+            raise ValueError(f"Unsupported realized action: {self.realized_action}")
+        if self.regime not in VALID_REGIMES:
+            raise ValueError(f"Unsupported regime: {self.regime}")
+        if self.timestamp.tzinfo is None:
+            raise ValueError("outcome timestamp must be timezone-aware")
+        object.__setattr__(self, "predicted_action", predicted)
+        object.__setattr__(self, "realized_action", realized)
+        object.__setattr__(self, "confidence", _clip(self.confidence))
+        object.__setattr__(self, "pnl_contribution", _finite(self.pnl_contribution, "pnl_contribution"))
+        object.__setattr__(
+            self,
+            "drawdown_contribution",
+            max(0.0, _finite(self.drawdown_contribution, "drawdown_contribution")),
+        )
+
     @property
     def correct(self) -> bool:
-        return self.predicted_action.upper() == self.realized_action.upper()
+        return self.predicted_action == self.realized_action
 
 
 @dataclass(slots=True)
@@ -93,9 +131,9 @@ class AgentReputation:
         self.total_predictions += 1
         self.correct_predictions += int(outcome.correct)
         target = 1.0 if outcome.correct else 0.0
-        self.confidence_error_sum += abs(_clip(outcome.confidence) - target)
+        self.confidence_error_sum += abs(outcome.confidence - target)
         self.pnl_contribution += outcome.pnl_contribution
-        self.drawdown_contribution += max(0.0, outcome.drawdown_contribution)
+        self.drawdown_contribution += outcome.drawdown_contribution
         self.regime_total[outcome.regime] = self.regime_total.get(outcome.regime, 0) + 1
         self.regime_correct[outcome.regime] = self.regime_correct.get(outcome.regime, 0) + int(outcome.correct)
 
@@ -163,16 +201,21 @@ class MetaAI:
         self._history: list[PredictionOutcome] = []
 
     def reputation(self, agent_id: str) -> AgentReputation:
-        return self._reputations.setdefault(agent_id, AgentReputation(agent_id=agent_id))
+        clean = str(agent_id).strip()
+        if not clean:
+            raise ValueError("agent_id must not be empty")
+        return self._reputations.setdefault(clean, AgentReputation(agent_id=clean))
 
     def record_outcomes(self, outcomes: Iterable[PredictionOutcome]) -> None:
         for outcome in outcomes:
-            if outcome.regime not in VALID_REGIMES:
-                raise ValueError(f"Unsupported regime: {outcome.regime}")
+            if not isinstance(outcome, PredictionOutcome):
+                raise TypeError("outcomes must contain PredictionOutcome instances")
             self.reputation(outcome.agent_id).record(outcome)
             self._history.append(outcome)
 
     def reputations_snapshot(self, regime: str = "unknown") -> dict[str, dict[str, float | int]]:
+        if regime not in VALID_REGIMES:
+            raise ValueError(f"Unsupported regime: {regime}")
         return {
             agent_id: {
                 "total_predictions": rep.total_predictions,
@@ -195,6 +238,11 @@ class MetaAI:
         max_risk: float = 0.80,
         min_agreement: float = 0.55,
     ) -> ConsensusResult:
+        if regime not in VALID_REGIMES:
+            raise ValueError(f"Unsupported regime: {regime}")
+        min_evidence = _clip(min_evidence)
+        max_risk = _clip(max_risk)
+        min_agreement = _clip(min_agreement)
         if not opinions:
             return ConsensusResult("WAIT", 0.0, 0.0, {}, (), True, "No agent opinions")
         scores = {action: 0.0 for action in VALID_ACTIONS}
@@ -203,6 +251,8 @@ class MetaAI:
         hard_blockers: list[str] = []
         suppressed: list[str] = []
         for opinion in opinions:
+            if not isinstance(opinion, AgentOpinion):
+                raise TypeError("opinions must contain AgentOpinion instances")
             veto_authority = _has_veto_authority(opinion.agent_id)
             unsafe_evidence = opinion.evidence_score < min_evidence
             unsafe_risk = opinion.risk_score > max_risk
@@ -277,6 +327,10 @@ class MetaAI:
     ) -> DecisionAudit:
         selected = selected_action.upper()
         realized = realized_action.upper()
+        if selected not in VALID_ACTIONS or realized not in VALID_ACTIONS:
+            raise ValueError("selected_action and realized_action must be supported actions")
+        if any(not isinstance(opinion, AgentOpinion) for opinion in opinions):
+            raise TypeError("opinions must contain AgentOpinion instances")
         winners = tuple(sorted(o.agent_id for o in opinions if o.action == realized))
         losers = tuple(sorted(o.agent_id for o in opinions if o.action not in {realized, "WAIT", "HOLD"}))
         abstainers = tuple(sorted(o.agent_id for o in opinions if o.action in {"WAIT", "HOLD"}))
@@ -298,6 +352,8 @@ class MetaAI:
         regime: str = "unknown",
         similarity: Mapping[tuple[str, str], float] | None = None,
     ) -> tuple[OptimizerRecommendation, ...]:
+        if regime not in VALID_REGIMES:
+            raise ValueError(f"Unsupported regime: {regime}")
         recommendations: list[OptimizerRecommendation] = []
         for agent_id, rep in sorted(self._reputations.items()):
             if rep.total_predictions >= 20 and rep.accuracy < 0.45:
@@ -316,10 +372,11 @@ class MetaAI:
                     "Drawdown contribution is disproportionate to PnL contribution.",
                 ))
         for (left, right), value in sorted((similarity or {}).items()):
-            if left != right and value >= 0.92:
+            similarity_value = _finite(value, "similarity")
+            if left != right and similarity_value >= 0.92:
                 recommendations.append(OptimizerRecommendation(
                     "DUPLICATION_REVIEW", tuple(sorted((left, right))), "low",
-                    f"Opinion similarity {value:.2%}; verify that methods and data sources are genuinely independent.",
+                    f"Opinion similarity {similarity_value:.2%}; verify that methods and data sources are genuinely independent.",
                 ))
         return tuple(recommendations)
 
