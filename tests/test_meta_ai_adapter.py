@@ -10,7 +10,11 @@ def test_existing_payload_shape_is_supported():
     ]
     result = evaluate_agent_payloads(meta, payloads, regime="bull", min_agreement=0.5)
     assert result.action == "BUY"
+
+    # The legacy shape remains accepted for inference/consensus, but it carries
+    # no explicit verified evidence marker and therefore must not train durable
+    # reputation after settlement.
     record_realized_result(meta, payloads, realized_action="BUY", regime="bull")
     snapshot = meta.reputations_snapshot("bull")
-    assert snapshot["Market AI"]["total_predictions"] == 1
-    assert snapshot["News AI"]["accuracy"] == 1.0
+    assert "Market AI" not in snapshot
+    assert "News AI" not in snapshot
