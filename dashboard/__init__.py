@@ -21,6 +21,7 @@ from .app import app
 from .admin_auth_compat import install_admin_auth_compat
 from .auth_saas import install_saas_auth_api
 from .billing_saas import install_saas_billing_api
+from .canonical_presentation_guard import install_canonical_presentation_guard
 from .db_saas import init_saas_database
 from .final_ci_contracts import install_final_ci_contracts
 from .lifecycle_compat import ensure_event_handler_compat
@@ -51,6 +52,7 @@ def create_app(*args: Any, **kwargs: Any):
     if getattr(instance.state, "autonomous_paper_loop", None) is not None:
         install_canonical_runtime_compat_api(instance)
     install_security_headers(instance)
+    install_canonical_presentation_guard(instance)
     return instance
 
 
@@ -122,6 +124,7 @@ install_observability(app)
 install_ai_organ_state_api(app)
 install_system_health_api(app)
 install_system_watchdog(app)
+install_canonical_presentation_guard(app)
 
 try:
     from .telegram_news_agents import install_telegram_news_agent_commands
