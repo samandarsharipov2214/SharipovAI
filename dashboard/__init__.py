@@ -2,7 +2,20 @@
 from __future__ import annotations
 
 import importlib
+import os
 from typing import Any
+
+
+def _require_production_auth_secret() -> None:
+    production = bool(os.getenv("RENDER")) or os.getenv("ENVIRONMENT", "").lower() in {
+        "production",
+        "prod",
+    }
+    if production and not os.getenv("AUTH_SECRET", "").strip():
+        raise RuntimeError("AUTH_SECRET is required in production; refusing insecure session fallback")
+
+
+_require_production_auth_secret()
 
 from .app import app
 from .admin_auth_compat import install_admin_auth_compat
@@ -23,6 +36,7 @@ init_saas_database()
 
 
 def create_app(*args: Any, **kwargs: Any):
+    _require_production_auth_secret()
     install_final_ci_contracts()
     instance = importlib.import_module("dashboard.app").create_app(*args, **kwargs)
     init_saas_database()
