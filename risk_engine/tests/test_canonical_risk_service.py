@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import math
+
+import pytest
+
 from risk_engine import CanonicalRiskService
 
 
@@ -125,6 +129,31 @@ def test_council_requires_explicit_verified_liquidity() -> None:
     assert "missing_verified_liquidity" in result.hard_blocks
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("price_change_24h_percent", float("nan")),
+        ("volatility_percent", float("inf")),
+        ("portfolio_drawdown_percent", "not-a-number"),
+        ("ai_consensus_score", True),
+        ("turnover_usdt", float("-inf")),
+    ],
+)
+def test_malformed_explicit_risk_evidence_is_rejected(field: str, value: object) -> None:
+    payload: dict[str, object] = {
+        "market_data_verified": True,
+        "exchange_ok": True,
+        "price_change_24h_percent": 1.0,
+        "volatility_percent": 1.0,
+        "portfolio_drawdown_percent": 0.0,
+        "ai_consensus_score": 90.0,
+        "turnover_usdt": 10_000_000.0,
+    }
+    payload[field] = value
+    with pytest.raises(ValueError, match="finite number"):
+        CanonicalRiskService().evaluate(payload, profile="council")
+
+
 def test_assessment_dict_is_json_canonical_for_idempotent_comparison() -> None:
     result = CanonicalRiskService().evaluate(
         {
@@ -138,3 +167,4 @@ def test_assessment_dict_is_json_canonical_for_idempotent_comparison() -> None:
     assert isinstance(payload["hard_blocks"], list)
     assert isinstance(payload["blockers"], list)
     assert isinstance(payload["warnings"], list)
+    assert not any(isinstance(value, float) and not math.isfinite(value) for value in payload["inputs"].values() if isinstance(value, float))
