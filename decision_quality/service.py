@@ -113,7 +113,10 @@ class DecisionQualityService:
         )
         payload = {
             "assessment": assessment.to_dict(),
-            "opinions": [_opinion_payload(item) for item in opinions],
+            "opinions": [
+                _opinion_payload(opinion, source)
+                for opinion, source in zip(opinions, eligible, strict=True)
+            ],
             "rejected_agents": list(rejected),
             "owner": "decision_quality",
             "execution_authority": False,
@@ -240,7 +243,12 @@ def _split_payloads(
     return eligible, sorted(set(rejected))
 
 
-def _opinion_payload(opinion: AgentOpinion) -> dict[str, object]:
+def _opinion_payload(opinion: AgentOpinion, source: Mapping[str, Any]) -> dict[str, object]:
+    """Persist normalized opinion together with its original verification proof."""
+
+    evidence_class = str(source.get("evidence_class") or "").strip().lower()
+    verified_market_data = source.get("verified_market_data") is True
+    data_verified = source.get("data_verified") is True
     return {
         "agent_id": opinion.agent_id,
         "action": opinion.action,
@@ -249,6 +257,12 @@ def _opinion_payload(opinion: AgentOpinion) -> dict[str, object]:
         "risk_score": opinion.risk_score,
         "regime": opinion.regime,
         "rationale": opinion.rationale[:2_000],
+        "evidence_class": evidence_class,
+        "verified_market_data": verified_market_data,
+        "data_verified": data_verified,
+        "learning_eligible": source.get("learning_eligible") is not False,
+        "evidence_eligible": source.get("evidence_eligible") is not False,
+        "reputation_eligible": source.get("reputation_eligible") is not False,
     }
 
 
