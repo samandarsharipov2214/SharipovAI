@@ -9,9 +9,13 @@ from learning_engine import LearningSummary
 from runner import RunnerOutput
 
 
-def test_chat_requires_authentication_by_default() -> None:
+def test_chat_requires_authentication_by_default(monkeypatch) -> None:
     """Static compatibility text must not bypass the protected chat endpoint."""
 
+    # CI enables public dashboard mode globally for unrelated presentation
+    # contracts. This test verifies the production default-secure behavior, so
+    # remove that test-only override before constructing the app.
+    monkeypatch.delenv("SHARIPOVAI_DISABLE_AUTH", raising=False)
     client = TestClient(create_app(runner_factory=_runner_factory))
     response = client.post("/api/chat/message", json={"message": "какие боты работают?"})
 
