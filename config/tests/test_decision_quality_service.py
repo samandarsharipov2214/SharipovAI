@@ -55,6 +55,7 @@ def test_assessment_is_immutable_and_survives_restart(tmp_path) -> None:
     )
     assert len(events) == 1
     assert events[0]["payload"]["execution_authority"] is False
+    assert all(item["verified_market_data"] is True for item in events[0]["payload"]["opinions"])
 
 
 def test_synthetic_agents_are_rejected_before_consensus(tmp_path) -> None:
@@ -78,6 +79,48 @@ def test_synthetic_agents_are_rejected_before_consensus(tmp_path) -> None:
     assert assessment.action == "WAIT"
     assert assessment.blocked is True
     assert assessment.rejected_agents == ("Synthetic AI",)
+
+
+def test_missing_verification_proof_is_rejected_before_consensus(tmp_path) -> None:
+    service = DecisionQualityService(_database(tmp_path))
+    assessment = service.evaluate(
+        "decision-missing-proof",
+        [
+            {
+                "name": "Unproven AI",
+                "decision": "BUY",
+                "confidence": 100,
+                "data_quality": 100,
+                "risk": 0,
+                "evidence_class": "verified_market",
+            }
+        ],
+        regime="bull",
+    )
+    assert assessment.action == "WAIT"
+    assert assessment.blocked is True
+    assert assessment.rejected_agents == ("Unproven AI",)
+
+
+def test_missing_evidence_class_is_rejected_before_consensus(tmp_path) -> None:
+    service = DecisionQualityService(_database(tmp_path))
+    assessment = service.evaluate(
+        "decision-missing-class",
+        [
+            {
+                "name": "Unclassified AI",
+                "decision": "BUY",
+                "confidence": 100,
+                "data_quality": 100,
+                "risk": 0,
+                "verified_market_data": True,
+            }
+        ],
+        regime="bull",
+    )
+    assert assessment.action == "WAIT"
+    assert assessment.blocked is True
+    assert assessment.rejected_agents == ("Unclassified AI",)
 
 
 def test_risk_engine_keeps_canonical_veto(tmp_path) -> None:
@@ -104,6 +147,18 @@ def test_settlement_requires_prior_assessment(tmp_path) -> None:
     with pytest.raises(MetaAIPersistenceError, match="assessed"):
         service.settle(
             "missing-assessment",
+            _payloads(),
+            realized_action="BUY",
+            regime="bull",
+        )
+
+
+def test_settlement_requires_explicit_batch_verification(tmp_path) -> None:
+    service = DecisionQualityService(_database(tmp_path))
+    service.evaluate("decision-no-batch-proof", _payloads(), regime="bull", min_agreement=0.5)
+    with pytest.raises(MetaAIPersistenceError, match="verified market evidence"):
+        service.settle(
+            "decision-no-batch-proof",
             _payloads(),
             realized_action="BUY",
             regime="bull",
