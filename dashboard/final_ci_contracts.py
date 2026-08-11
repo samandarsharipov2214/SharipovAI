@@ -64,9 +64,6 @@ def _install_authoritative_auth(app_module: Any) -> None:
     app_module._session_username = session_username
     app_module._final_ci_auth_installed = True
 
-    # Modules imported before a dashboard.app reload may retain old function
-    # objects. Rebind them when present; modules imported later receive the
-    # current functions directly from dashboard.app.
     secure_module = _loaded_module("dashboard.secure_app")
     if secure_module is not None:
         secure_module._valid_credentials = valid_credentials
@@ -149,6 +146,8 @@ def _install_app_middleware(app: FastAPI, *, force_outer: bool = False) -> None:
     async def final_ci_contracts(request: Request, call_next: Callable[..., Any]):
         path = request.url.path
         method = request.method.upper()
+        canonical_loop = getattr(request.app.state, "autonomous_paper_loop", None)
+        canonical_runtime_available = callable(getattr(canonical_loop, "snapshot", None))
 
         if method == "POST" and path == "/login":
             admin_response = await _configured_admin_login(request)
@@ -161,26 +160,38 @@ def _install_app_middleware(app: FastAPI, *, force_outer: bool = False) -> None:
         if method == "GET" and path == "/api/auth/role":
             return JSONResponse(_role_payload(request))
 
-        if path in {
-            "/api/paper-activity/state",
-            "/api/virtual-account/state",
-            "/api/paper-activity/trades",
-            "/api/virtual-account/trades",
-        } and method == "GET":
+        # Once the canonical CouncilAuthorizedPaperLoop is installed, legacy
+        # compatibility middleware must not intercept its read/write routes.
+        # The canonical compatibility API owns read projections and blocks old
+        # mutation endpoints with 410 responses.
+        if (
+            not canonical_runtime_available
+            and path in {
+                "/api/paper-activity/state",
+                "/api/virtual-account/state",
+                "/api/paper-activity/trades",
+                "/api/virtual-account/trades",
+            }
+            and method == "GET"
+        ):
             return JSONResponse(_paper_read(path))
 
-        if path in {"/api/paper-activity/tick", "/api/virtual-account/tick"} and method == "POST":
+        if (
+            not canonical_runtime_available
+            and path in {"/api/paper-activity/tick", "/api/virtual-account/tick"}
+            and method == "POST"
+        ):
             return JSONResponse(await _paper_tick(request))
 
-        if path in {"/api/paper-activity/catch-up", "/api/virtual-account/catch-up"} and method == "POST":
+        if (
+            not canonical_runtime_available
+            and path in {"/api/paper-activity/catch-up", "/api/virtual-account/catch-up"}
+            and method == "POST"
+        ):
             return JSONResponse(await _paper_catch_up(request))
 
         response = await call_next(request)
-        if (
-            method == "GET"
-            and path == "/api/ai-bots"
-            and response.status_code == 200
-        ):
+        if method == "GET" and path == "/api/ai-bots" and response.status_code == 200:
             return await _normalize_ai_bots_response(response)
         return response
 
@@ -189,7 +200,6 @@ async def _normalize_ai_bots_response(response: Response) -> Response:
     """Guarantee the canonical summary contract after all legacy middleware."""
 
     body = getattr(response, "body", None)
-
     if body is None:
         chunks: list[bytes] = []
         async for chunk in response.body_iterator:
@@ -223,11 +233,9 @@ async def _normalize_ai_bots_response(response: Response) -> Response:
 
     bots = payload.get("bots", payload.get("agents", []))
     canonical_count = len(bots) if isinstance(bots, list) else 0
-
     summary = payload.get("summary")
     if not isinstance(summary, dict):
         summary = {}
-
     summary["canonical_ai_count"] = canonical_count
     summary.setdefault("total_bots", canonical_count)
     payload["summary"] = summary
@@ -237,7 +245,6 @@ async def _normalize_ai_bots_response(response: Response) -> Response:
         for key, value in response.headers.items()
         if key.lower() not in {"content-length", "content-type"}
     }
-
     return JSONResponse(
         content=payload,
         status_code=response.status_code,
@@ -353,11 +360,7 @@ def _quarantine_unverified_legacy_trades(engine: Any) -> None:
             or trade.get("last_quote_source")
             or ""
         ).strip()
-        if (
-            trade.get("real_order_placed") is False
-            and entry_price > 0.0
-            and quote_source
-        ):
+        if trade.get("real_order_placed") is False and entry_price > 0.0 and quote_source:
             valid.append(trade)
             continue
         changed = True
