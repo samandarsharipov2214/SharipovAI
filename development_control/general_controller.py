@@ -24,6 +24,7 @@ from .security_guard import SecurityGuard
 
 _SHA40 = re.compile(r"^[0-9a-f]{40}$")
 _TERMINAL = {"rejected", "applied", "failed", "rolled_back"}
+_CRITICAL_ACTIONS = frozenset({"restore_database", "git_revert"})
 
 
 @dataclass(slots=True)
@@ -124,6 +125,34 @@ class DevelopmentChangeController:
         )
         return self.get(decision_id)
 
+    def submit_critical_action(
+        self,
+        action: str,
+        *,
+        reason: str,
+        base_sha: str,
+        details: Mapping[str, Any] | None = None,
+    ) -> DevelopmentDecision:
+        """Create an owner-gated, non-patch destructive-action decision."""
+
+        clean_action = str(action).strip()
+        if clean_action not in _CRITICAL_ACTIONS:
+            raise ValueError("unsupported critical self-healing action")
+        proposal = {
+            "critical_action": clean_action,
+            "reason": str(reason).strip(),
+            "details": dict(details or {}),
+            "base_sha": str(base_sha).strip().lower(),
+            "target_branch": "main",
+            "source": "self_healing_agent",
+            "changed_files": [],
+            # The existing immutable fix ledger requires non-empty patch evidence.
+            # Store a canonical action manifest here; critical actions never pass it
+            # to git apply because queue_host_application routes them separately.
+            "patch": json.dumps({"critical_action": clean_action}, sort_keys=True, separators=(",", ":")),
+        }
+        return self.submit_proposal(proposal)
+
     def get(self, decision_id: str) -> DevelopmentDecision:
         row = self._find_decision(decision_id)
         return _decision_from_row(row)
@@ -131,16 +160,26 @@ class DevelopmentChangeController:
     def security_review(self, decision_id: str) -> DevelopmentDecision:
         decision = self.get(decision_id)
         self._ensure_mutable(decision)
-        verdict = self.guard.evaluate(str(decision.proposal.get("patch", "")))
-        verdict_payload = verdict.model_dump(mode="json") if hasattr(verdict, "model_dump") else {
-            "allowed": bool(verdict.allowed),
-            "reasons": list(verdict.reasons),
-        }
-        status = "security_approved" if verdict.allowed else "security_blocked"
+        critical_action = str(decision.proposal.get("critical_action") or "")
+        if critical_action:
+            if critical_action not in _CRITICAL_ACTIONS:
+                raise RuntimeError("unsupported critical self-healing action")
+            verdict_payload = {
+                "allowed": True,
+                "reasons": ["allow-listed critical action requires Telegram owner approval"],
+                "policy_version": "development-v2",
+            }
+        else:
+            verdict = self.guard.evaluate(str(decision.proposal.get("patch", "")))
+            verdict_payload = verdict.model_dump(mode="json") if hasattr(verdict, "model_dump") else {
+                "allowed": bool(verdict.allowed),
+                "reasons": list(verdict.reasons),
+            }
+        status = "security_approved" if verdict_payload["allowed"] else "security_blocked"
         self._transition(
             decision.decision_id,
             status=status,
-            security_verdict="allow" if verdict.allowed else "block",
+            security_verdict="allow" if verdict_payload["allowed"] else "block",
             event_type=status,
             actor="security_guard",
             metadata_updates={"security_verdict": verdict_payload},
@@ -213,6 +252,10 @@ class DevelopmentChangeController:
         if decision.security_verdict.get("allowed") is not True:
             raise RuntimeError("Security Guard did not allow this patch")
 
+        critical_action = str(decision.proposal.get("critical_action") or "")
+        if critical_action:
+            return self._queue_critical_action(decision, critical_action)
+
         patch = str(decision.proposal.get("patch", ""))
         patch_sha256 = hashlib.sha256(patch.encode("utf-8")).hexdigest()
         row = self.database.get_agent_decision(decision.decision_id)
@@ -244,6 +287,54 @@ class DevelopmentChangeController:
             event_type="queued_for_host",
             actor="general_controller",
             payload={"manifest_path": str(manifest_path), "patch_sha256": patch_sha256},
+        )
+        return self.get(decision.decision_id)
+
+    def claim_critical_action(self, decision_id: str, action: str) -> DevelopmentDecision:
+        """Consume one owner-approved destructive action before host execution."""
+
+        decision = self.get(decision_id)
+        if decision.status != "approved":
+            raise RuntimeError("critical action is not awaiting one-shot execution")
+        expected = str(decision.proposal.get("critical_action") or "")
+        if action not in _CRITICAL_ACTIONS or action != expected:
+            raise PermissionError("critical action does not match approved decision")
+        owner = os.getenv("TELEGRAM_OWNER_ID", "").strip()
+        if not owner or decision.owner_actor_id != owner or decision.owner_chat_id != owner:
+            raise PermissionError("critical action approval lacks configured owner evidence")
+        self._transition(
+            decision.decision_id,
+            status="executing",
+            security_verdict="allow",
+            event_type="critical_action_claimed",
+            actor="self-healing-run",
+            metadata_updates={},
+            event_payload={"action": action},
+        )
+        return self.get(decision.decision_id)
+
+    def _queue_critical_action(self, decision: DevelopmentDecision, action: str) -> DevelopmentDecision:
+        if action not in _CRITICAL_ACTIONS:
+            raise RuntimeError("unsupported critical self-healing action")
+        self.queue_dir.mkdir(parents=True, exist_ok=True)
+        action_path = self.queue_dir / "action"
+        action_json_path = self.queue_dir / "action.json"
+        expected_sha_path = self.queue_dir / "expected_sha"
+        action_payload = {
+            "action": action,
+            "approval_decision_id": decision.decision_id,
+            "expected_sha": str(decision.proposal.get("base_sha") or ""),
+            "details": dict(decision.proposal.get("details") or {}),
+            "created_at_ms": int(time.time() * 1000),
+        }
+        _atomic_write(action_json_path, json.dumps(action_payload, sort_keys=True, separators=(",", ":")) + "\n")
+        _atomic_write(expected_sha_path, action_payload["expected_sha"] + "\n")
+        _atomic_write(action_path, action + "\n")
+        self.database.append_agent_decision_event(
+            decision_id=decision.decision_id,
+            event_type="critical_action_queued",
+            actor="general_controller",
+            payload={"action": action},
         )
         return self.get(decision.decision_id)
 
@@ -390,8 +481,11 @@ def _normalize_proposal(proposal: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(proposal, Mapping):
         raise TypeError("proposal must be a mapping")
     clean = dict(proposal)
+    critical_action = str(clean.get("critical_action") or "")
     patch = clean.get("patch")
-    if not isinstance(patch, str) or not patch.strip():
+    if critical_action in _CRITICAL_ACTIONS and patch == "":
+        clean["critical_action"] = critical_action
+    elif not isinstance(patch, str) or not patch.strip():
         raise ValueError("proposal.patch must contain a unified diff")
     files = clean.get("changed_files") or clean.get("files") or []
     if not isinstance(files, (list, tuple)):

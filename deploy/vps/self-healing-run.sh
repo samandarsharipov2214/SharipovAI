@@ -143,11 +143,11 @@ read_agent_file() {
 clear_agent_action() {
     if container_running sharipovai; then
         docker exec --user "$CONTAINER_USER" sharipovai sh -ec \
-            "rm -f '$RUNTIME_DIR/action' '$RUNTIME_DIR/action.json' '$RUNTIME_DIR/expected_sha'" \
+            "rm -f '$RUNTIME_DIR/action' '$RUNTIME_DIR/action.json' '$RUNTIME_DIR/expected_sha' '$RUNTIME_DIR/critical_action_request.json'" \
             >/dev/null 2>&1 || true
     else
         compose run --rm --no-deps --user "$CONTAINER_USER" --entrypoint sh sharipovai -ec \
-            "rm -f '$RUNTIME_DIR/action' '$RUNTIME_DIR/action.json' '$RUNTIME_DIR/expected_sha'" \
+            "rm -f '$RUNTIME_DIR/action' '$RUNTIME_DIR/action.json' '$RUNTIME_DIR/expected_sha' '$RUNTIME_DIR/critical_action_request.json'" \
             >/dev/null 2>&1 || true
     fi
 }
@@ -219,6 +219,27 @@ revert_automatic_commit() {
     wait_for_health
 }
 
+critical_action_is_owner_approved() {
+    local action="$1"
+    docker exec --user "$CONTAINER_USER" sharipovai python - "$action" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+from development_control.general_controller import DevelopmentChangeController
+
+action = sys.argv[1]
+meta_path = Path("/var/lib/sharipovai/.self_healing/action.json")
+try:
+    metadata = json.loads(meta_path.read_text(encoding="utf-8"))
+    decision_id = str(metadata.get("approval_decision_id", "")).strip()
+    DevelopmentChangeController().claim_critical_action(decision_id, action)
+except Exception:
+    raise SystemExit(1)
+PY
+}
+
 APPROVED_PATCH_HELPER="$REPO_DIR/deploy/vps/self-healing-approved-patch.sh"
 APPROVED_PATCH_CLAIM_HELPER="$REPO_DIR/deploy/vps/self-healing-approved-claim.sh"
 if [ -r "$APPROVED_PATCH_HELPER" ] && [ -r "$APPROVED_PATCH_CLAIM_HELPER" ]; then
@@ -239,6 +260,14 @@ fi
 
 execute_action() {
     local action="$1" expected_sha="$2"
+    case "$action" in
+        restore_database|git_revert)
+            if ! critical_action_is_owner_approved "$action"; then
+                log "Refusing critical self-healing action without explicit Telegram owner approval: $action"
+                return 1
+            fi
+            ;;
+    esac
     case "$action" in
         ""|none) return 0 ;;
         compose_up)

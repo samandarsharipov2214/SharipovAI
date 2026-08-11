@@ -48,6 +48,10 @@ class AutonomousPaperLoop:
         self._lock = threading.RLock()
         self._db_version = 0
         self._last_backup_error = ""
+        # Immutable history is reconciled once after startup; subsequent writes
+        # only need to append new IDs rather than re-check the bounded UI cache.
+        self._synced_trade_ids: set[str] = set()
+        self._synced_event_ids: set[str] = set()
         self._state = self._load()
 
     def start(self) -> None:
@@ -392,9 +396,15 @@ class AutonomousPaperLoop:
 
     def _sync_immutable_history(self) -> None:
         for trade in self._state.get("trades", []):
-            self._put_immutable(self.trade_namespace, str(trade["trade_id"]), trade)
+            trade_id = str(trade["trade_id"])
+            if trade_id not in self._synced_trade_ids:
+                self._put_immutable(self.trade_namespace, trade_id, trade)
+                self._synced_trade_ids.add(trade_id)
         for event in self._state.get("events", []):
-            self._put_immutable(self.event_namespace, str(event["event_id"]), event)
+            event_id = str(event["event_id"])
+            if event_id not in self._synced_event_ids:
+                self._put_immutable(self.event_namespace, event_id, event)
+                self._synced_event_ids.add(event_id)
 
     def _put_immutable(self, namespace: str, key: str, value: dict[str, Any]) -> None:
         canonical = json.loads(json.dumps(value, ensure_ascii=False, allow_nan=False))

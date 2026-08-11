@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 from dashboard import create_app
@@ -24,6 +25,13 @@ VISIBLE_PAGES = (
     "/ai-control-center",
     "/settings",
 )
+
+
+@pytest.fixture(autouse=True)
+def _public_dashboard_test_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These UI contracts exercise the explicitly unauthenticated test mode."""
+
+    monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "1")
 
 
 def test_app_creates_successfully() -> None:

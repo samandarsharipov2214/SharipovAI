@@ -4,7 +4,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from dashboard.secure_app import create_secure_app
+from dashboard.secure_app import create_secure_app, login_attempt_guard
 from runner import RunnerOutput
 
 
@@ -34,6 +34,9 @@ def test_secure_app_blocks_login_after_repeated_failures(tmp_path: Path, monkeyp
     monkeypatch.setenv("AUTH_SECURITY_EVENTS_FILE", str(tmp_path / "security_events.json"))
     monkeypatch.setenv("AUTH_MAX_FAILED_ATTEMPTS", "3")
     monkeypatch.setenv("AUTH_LOCK_SECONDS", "60")
+    # CI enables the public dashboard test mode globally. This test specifically
+    # verifies the default-secure contract, so isolate it from that CI setting.
+    monkeypatch.delenv("SHARIPOVAI_DISABLE_AUTH", raising=False)
 
     app = create_secure_app(runner_factory=FakeRunner)
     client = TestClient(app)
@@ -53,9 +56,10 @@ def test_secure_app_blocks_login_after_repeated_failures(tmp_path: Path, monkeyp
     )
     assert locked_even_with_correct_password.status_code == 423
 
-    status = client.get("/api/security/login-attempts").json()
-    user_state = status["attempts"]["users"]["samandar2212"]
-    assert status["status"] == "ok"
+    status = client.get("/api/security/login-attempts")
+    assert status.status_code == 401
+
+    user_state = login_attempt_guard().snapshot()["users"]["samandar2212"]
     assert user_state["locked"] is True
     assert user_state["failed_attempts"] == 3
     assert user_state["seconds_left"] > 0

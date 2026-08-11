@@ -8,11 +8,11 @@ from dashboard.market_data_api import _configure_public_stream_feature
 from news_intelligence.network import NewsAgentNetwork
 
 
-def test_public_market_stream_defaults_to_enabled_but_explicit_disable_wins(monkeypatch) -> None:
+def test_public_market_stream_requires_opt_in_and_explicit_disable_wins(monkeypatch) -> None:
     monkeypatch.delenv("FEATURE_BYBIT_WEBSOCKET", raising=False)
     monkeypatch.delenv("MARKET_STREAM_ENABLED", raising=False)
     _configure_public_stream_feature()
-    assert os.getenv("FEATURE_BYBIT_WEBSOCKET") == "1"
+    assert "FEATURE_BYBIT_WEBSOCKET" not in os.environ
 
     monkeypatch.delenv("FEATURE_BYBIT_WEBSOCKET", raising=False)
     monkeypatch.setenv("MARKET_STREAM_ENABLED", "0")
