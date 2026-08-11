@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
+import canonical_surface_state
 import telegram_system_adapter
 from canonical_surface_state import load_canonical_paper_state
 from storage import ProjectDatabase
@@ -12,12 +13,7 @@ def _scope(path: Path) -> str:
     return hashlib.sha256(str(path.expanduser().resolve()).encode("utf-8")).hexdigest()[:20]
 
 
-def test_surface_projection_reads_canonical_state_and_full_trade_history(tmp_path, monkeypatch) -> None:
-    state_file = tmp_path / "paper.json"
-    monkeypatch.setenv("AUTONOMOUS_PAPER_STATE_FILE", str(state_file))
-    database = ProjectDatabase(f"sqlite:///{tmp_path / 'surface.db'}")
-    database.initialize()
-    scope = _scope(state_file)
+def _seed_state(database: ProjectDatabase, scope: str) -> None:
     database.put_json(
         "autonomous_paper_state",
         scope,
@@ -32,6 +28,15 @@ def test_surface_projection_reads_canonical_state_and_full_trade_history(tmp_pat
         },
         expected_version=0,
     )
+
+
+def test_surface_projection_reads_canonical_state_and_trade_history(tmp_path, monkeypatch) -> None:
+    state_file = tmp_path / "paper.json"
+    monkeypatch.setenv("AUTONOMOUS_PAPER_STATE_FILE", str(state_file))
+    database = ProjectDatabase(f"sqlite:///{tmp_path / 'surface.db'}")
+    database.initialize()
+    scope = _scope(state_file)
+    _seed_state(database, scope)
     database.put_json(
         f"paper_trades:{scope}",
         "trade-1",
@@ -53,7 +58,33 @@ def test_surface_projection_reads_canonical_state_and_full_trade_history(tmp_pat
     assert state["net_pnl"] == 25.0
     assert state["open_positions"] == 1
     assert state["trade_history_count"] == 1
+    assert state["trade_history_complete"] is True
     assert state["trades"][0]["trade_id"] == "trade-1"
+
+
+def test_surface_projection_keeps_latest_window_and_truthful_full_count(tmp_path, monkeypatch) -> None:
+    state_file = tmp_path / "paper-window.json"
+    monkeypatch.setenv("AUTONOMOUS_PAPER_STATE_FILE", str(state_file))
+    monkeypatch.setattr(canonical_surface_state, "_TRADE_WINDOW", 2)
+    database = ProjectDatabase(f"sqlite:///{tmp_path / 'surface-window.db'}")
+    database.initialize()
+    scope = _scope(state_file)
+    _seed_state(database, scope)
+    namespace = f"paper_trades:{scope}"
+    for index in range(1, 4):
+        database.put_json(
+            namespace,
+            f"trade-{index}",
+            {"trade_id": f"trade-{index}", "symbol": "BTCUSDT", "created_at_ms": index},
+            expected_version=0,
+        )
+
+    state = load_canonical_paper_state(database)
+
+    assert state["trade_history_count"] == 3
+    assert state["trade_history_window_count"] == 2
+    assert state["trade_history_complete"] is False
+    assert [item["trade_id"] for item in state["trades"]] == ["trade-2", "trade-3"]
 
 
 def test_missing_canonical_state_does_not_fall_back_to_demo(tmp_path, monkeypatch) -> None:
