@@ -6,7 +6,7 @@ from html import escape
 from typing import Any
 
 from fastapi import Body, FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from market_paper_engine import PaperActivityEngine
 from paper_activity_autorun import paper_activity_autorun_status, start_paper_activity_autorun
@@ -28,68 +28,65 @@ def install_paper_activity_api(app: FastAPI) -> None:
         app.state.paper_activity_autorun = start_paper_activity_autorun()
 
     @app.get("/api/paper-activity/state")
-    def paper_state() -> dict[str, Any]:
-        state = enrich_virtual_state(PaperActivityEngine().state(catch_up=True))
-        return {
-            "status": "ok",
-            "state": state,
-            "autorun": paper_activity_autorun_status(),
-            "constitution": constitution_snapshot(),
-        }
+    def paper_state() -> JSONResponse:
+        return _legacy_runtime_disabled()
 
     @app.get("/api/virtual-account/state")
-    def virtual_account_state() -> dict[str, Any]:
+    def virtual_account_state() -> JSONResponse:
         return paper_state()
 
     @app.get("/api/paper-activity/trades")
-    def paper_trades() -> dict[str, Any]:
-        state = enrich_virtual_state(PaperActivityEngine().state(catch_up=True))
-        return {
-            "status": "ok",
-            "summary": state.get("summary", {}),
-            "trades": state.get("trades", []),
-            "constitution": constitution_snapshot(),
-        }
+    def paper_trades() -> JSONResponse:
+        return _legacy_runtime_disabled()
 
     @app.get("/api/virtual-account/trades")
-    def virtual_account_trades() -> dict[str, Any]:
+    def virtual_account_trades() -> JSONResponse:
         return paper_trades()
 
     @app.post("/api/paper-activity/tick")
-    def paper_tick(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
-        data = payload or {}
-        result = PaperActivityEngine().tick(
-            force=bool(data.get("force", False)),
-            gate_payload=data.get("gate_payload") if isinstance(data.get("gate_payload"), dict) else None,
-        )
-        return enrich_tick_result(result)
+    def paper_tick(payload: dict[str, Any] | None = Body(default=None)) -> JSONResponse:
+        del payload
+        return _legacy_runtime_disabled()
 
     @app.post("/api/virtual-account/tick")
-    def virtual_account_tick(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
+    def virtual_account_tick(payload: dict[str, Any] | None = Body(default=None)) -> JSONResponse:
         return paper_tick(payload)
 
     @app.post("/api/paper-activity/catch-up")
-    def paper_catch_up(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
-        data = payload or {}
-        return enrich_tick_result(PaperActivityEngine().catch_up(max_ticks=int(data.get("max_ticks", 24) or 24)))
+    def paper_catch_up(payload: dict[str, Any] | None = Body(default=None)) -> JSONResponse:
+        del payload
+        return _legacy_runtime_disabled()
 
     @app.post("/api/virtual-account/catch-up")
-    def virtual_account_catch_up(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
+    def virtual_account_catch_up(payload: dict[str, Any] | None = Body(default=None)) -> JSONResponse:
         return paper_catch_up(payload)
 
     @app.post("/api/paper-activity/reset")
-    def paper_reset() -> dict[str, Any]:
-        return PaperActivityEngine().reset()
+    def paper_reset() -> JSONResponse:
+        return _legacy_runtime_disabled()
 
     @app.get("/paper-activity", response_class=HTMLResponse)
-    def paper_activity_page() -> HTMLResponse:
-        state = enrich_virtual_state(PaperActivityEngine().state(catch_up=True))
-        return HTMLResponse(_render(state, paper_activity_autorun_status()))
+    def paper_activity_page() -> JSONResponse:
+        return _legacy_runtime_disabled()
 
     @app.get("/virtual-account", response_class=HTMLResponse)
-    def virtual_account_page() -> HTMLResponse:
-        state = enrich_virtual_state(PaperActivityEngine().state(catch_up=True))
-        return HTMLResponse(_render(state, paper_activity_autorun_status()))
+    def virtual_account_page() -> JSONResponse:
+        return _legacy_runtime_disabled()
+
+
+def _legacy_runtime_disabled() -> JSONResponse:
+    """Do not let compatibility endpoints create a second paper decision path."""
+
+    return JSONResponse(
+        status_code=410,
+        content={
+            "status": "blocked",
+            "source_of_truth": "CouncilAuthorizedPaperLoop",
+            "replacement": "/api/autonomous-paper/status",
+            "automatic_legacy_mutation": False,
+            "reason": "legacy PaperActivityEngine is not an authorized decision or execution runtime",
+        },
+    )
 
 
 def _render(state: dict[str, Any], autorun: dict[str, Any] | None = None) -> str:

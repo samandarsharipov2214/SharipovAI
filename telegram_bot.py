@@ -704,28 +704,18 @@ def maybe_send_notifications() -> None:
 
 
 def poll() -> None:
-    if os.getenv("TELEGRAM_POLLING_ENABLED", "0").strip().lower() not in {"1", "true", "yes", "on"}:
-        print("SharipovAI Telegram polling disabled; webhook mode is expected.")
-        while True:
-            time.sleep(3600)
-    if os.getenv("TELEGRAM_POLLING_DELETE_WEBHOOK", "1").strip().lower() not in {"0", "false", "no", "off"}:
-        telegram("deleteWebhook", {"drop_pending_updates": True})
-    setup_bot_commands()
-    offset = 0
-    print("SharipovAI Telegram polling started")
-    while True:
-        try:
-            maybe_send_notifications()
-            data = telegram("getUpdates", {"timeout": 30, "offset": offset})
-            for update in data.get("result", []):
-                offset = max(offset, int(update["update_id"]) + 1)
-                if "message" in update:
-                    handle_message(update["message"])
-                if "callback_query" in update:
-                    handle_callback(update["callback_query"])
-        except Exception as exc:
-            print(f"Telegram polling error: {exc}")
-            time.sleep(5)
+    """Reject the retired standalone worker before it can split Telegram truth.
+
+    This module owns historical demo state and therefore must not process
+    updates alongside the canonical FastAPI webhook/``telegram_system_adapter``
+    path.  In particular, it must never delete the webhook and silently become
+    a second decision or portfolio source because an environment flag was set.
+    """
+
+    raise RuntimeError(
+        "legacy Telegram polling is retired; use the authenticated FastAPI webhook "
+        "backed by the canonical autonomous-paper runtime"
+    )
 
 
 if __name__ == "__main__":

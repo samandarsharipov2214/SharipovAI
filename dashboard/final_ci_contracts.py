@@ -167,13 +167,13 @@ def _install_app_middleware(app: FastAPI, *, force_outer: bool = False) -> None:
             "/api/paper-activity/trades",
             "/api/virtual-account/trades",
         } and method == "GET":
-            return JSONResponse(_paper_read(path))
+            return _legacy_paper_runtime_disabled()
 
         if path in {"/api/paper-activity/tick", "/api/virtual-account/tick"} and method == "POST":
-            return JSONResponse(await _paper_tick(request))
+            return _legacy_paper_runtime_disabled()
 
         if path in {"/api/paper-activity/catch-up", "/api/virtual-account/catch-up"} and method == "POST":
-            return JSONResponse(await _paper_catch_up(request))
+            return _legacy_paper_runtime_disabled()
 
         response = await call_next(request)
         if (
@@ -446,6 +446,19 @@ async def _paper_catch_up(request: Request) -> dict[str, Any]:
     result["historical_prices_fabricated"] = False
     result["state"] = _canonical_state(catch_up=False)
     return result
+
+
+def _legacy_paper_runtime_disabled() -> JSONResponse:
+    return JSONResponse(
+        status_code=410,
+        content={
+            "status": "blocked",
+            "source_of_truth": "CouncilAuthorizedPaperLoop",
+            "replacement": "/api/autonomous-paper/status",
+            "automatic_legacy_mutation": False,
+            "reason": "legacy PaperActivityEngine is not an authorized decision or execution runtime",
+        },
+    )
 
 
 async def _json_payload(request: Request) -> dict[str, Any]:

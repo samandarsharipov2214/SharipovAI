@@ -16,6 +16,7 @@ from .dashboard_contracts_middleware import install_dashboard_contracts_middlewa
 from .demo_state import run_ai_command
 from .stabilization_compat import install_stabilization_compat
 from .trade_explanations import enrich_virtual_state
+from telegram_runtime_state import canonical_state_from_app
 
 
 def _path() -> Path:
@@ -117,6 +118,17 @@ def _canonical_state_response() -> dict[str, Any]:
         "deprecated": True,
         "use": "/api/virtual-account/state",
         "state": _canonical_virtual_state(),
+    }
+
+
+def _canonical_runtime_response(app: FastAPI) -> dict[str, Any]:
+    state = canonical_state_from_app(app)
+    return {
+        "status": "ok" if state.get("data_available") else "unavailable",
+        "deprecated": True,
+        "replacement": "/api/autonomous-paper/status",
+        "source_of_truth": "CouncilAuthorizedPaperLoop",
+        "state": state,
     }
 
 
@@ -300,13 +312,17 @@ def install_demo_api(app: FastAPI) -> None:
     @app.middleware("http")
     async def shared_demo_contract(request: Request, call_next):
         if request.url.path == "/api/demo/state" and request.method == "GET":
-            return JSONResponse(_canonical_state_response())
+            return JSONResponse(_canonical_runtime_response(request.app))
         if request.url.path == "/api/demo/chat" and request.method == "POST":
-            try:
-                payload = await request.json()
-            except Exception:
-                payload = {}
-            return JSONResponse(_chat(str((payload or {}).get("message", "")).strip()))
+            return JSONResponse(
+                status_code=410,
+                content={
+                    "status": "deprecated_operation_blocked",
+                    "source_of_truth": "CouncilAuthorizedPaperLoop",
+                    "replacement": "/api/autonomous-paper/status",
+                    "automatic_legacy_mutation": False,
+                },
+            )
         return await call_next(request)
 
     @app.get("/login", response_class=HTMLResponse)
@@ -314,8 +330,8 @@ def install_demo_api(app: FastAPI) -> None:
         return HTMLResponse(_login_html())
 
     @app.get("/api/demo/state/shared")
-    def demo_state_shared() -> dict[str, object]:
-        return _canonical_state_response()
+    def demo_state_shared(request: Request) -> dict[str, object]:
+        return _canonical_runtime_response(request.app)
 
     @app.post("/api/demo/balance")
     def demo_balance(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, object]:
@@ -332,8 +348,17 @@ def install_demo_api(app: FastAPI) -> None:
         }
 
     @app.post("/api/demo/chat/shared")
-    def demo_chat_shared(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, object]:
-        return _chat(str((payload or {}).get("message", "")).strip())
+    def demo_chat_shared(payload: dict[str, Any] | None = Body(default=None)) -> JSONResponse:
+        del payload
+        return JSONResponse(
+            status_code=410,
+            content={
+                "status": "deprecated_operation_blocked",
+                "source_of_truth": "CouncilAuthorizedPaperLoop",
+                "replacement": "/api/autonomous-paper/status",
+                "automatic_legacy_mutation": False,
+            },
+        )
 
     @app.post("/api/demo/reset")
     def demo_reset(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, object]:

@@ -52,10 +52,12 @@ class AgentEvidence:
         )
         if value.get("learning_eligible") is False or value.get("evidence_eligible") is False:
             raise ValueError(f"agent evidence is not learning eligible: {agent_id}")
-        evidence_class = str(value.get("evidence_class") or "verified_market").strip().lower()
+        evidence_class = str(value.get("evidence_class") or "").strip().lower()
         if evidence_class in _FORBIDDEN_CLASSES:
             raise ValueError(f"synthetic evidence is forbidden: {agent_id}")
-        if value.get("verified_market_data") is False or value.get("data_verified") is False:
+        if evidence_class not in {"verified_market", "verified_exchange", "verified_bybit", "verified_market_and_news"}:
+            raise ValueError(f"verified evidence class is required: {agent_id}")
+        if value.get("verified_market_data") is not True or value.get("data_verified") is False:
             raise ValueError(f"unverified market evidence is forbidden: {agent_id}")
         return cls(
             agent_id=agent_id,

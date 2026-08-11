@@ -58,41 +58,26 @@ def start_text() -> str:
 
 
 def bot_ai_reply(message: str) -> str:
-    """Answer common portfolio/risk questions directly and safely."""
+    """Do not fabricate state through the retired compatibility package."""
 
-    text = str(message or "").strip().lower()
-    if any(word in text for word in ("портфель", "баланс", "капитал")):
-        return (
-            "💼 <b>Портфель SharipovAI</b>\n\n"
-            "Баланс: <b>10,000.00 USDT</b>\n"
-            "Режим: <b>Paper Trading</b>\n"
-            "Реальные деньги и ордера не используются."
-        )
-    if any(word in text for word in ("риск", "опас", "просад")):
-        return (
-            "⚠️ <b>Риск сейчас: НИЗКИЙ</b>\n\n"
-            "Risk Engine сохраняет WATCH, ограничивает размер позиции и "
-            "блокирует реальные ордера."
-        )
-    return _legacy.orchestrated_reply(message)
+    del message
+    return (
+        "⚠️ <b>Этот Telegram compatibility-вход отключён.</b>\n\n"
+        "Он не является источником состояния SharipovAI и не показывает "
+        "demo-баланс, риск или решение. Используйте защищённый webhook/Mini App, "
+        "которые читают canonical autonomous-paper runtime."
+    )
 
 
 def handle_message(message: dict[str, Any]) -> None:
-    """Handle stable direct replies, delegating advanced commands to the worker."""
+    """Reject the legacy update handler without serving a second reality."""
 
     chat = message.get("chat") if isinstance(message, dict) else {}
     chat_id = int((chat or {}).get("id", 0) or 0)
     text = str(message.get("text", "") if isinstance(message, dict) else "").strip()
     if not chat_id:
         return
-    if text.split(maxsplit=1)[0].lower() == "/start":
-        send_message(chat_id, start_text(), main_keyboard())
-        return
-    if text and not text.startswith("/"):
-        send_message(chat_id, bot_ai_reply(text), main_keyboard())
-        return
-    _legacy.send_message = send_message
-    _legacy.handle_message(message)
+    send_message(chat_id, bot_ai_reply(text), main_keyboard())
 
 
 __all__ = sorted(

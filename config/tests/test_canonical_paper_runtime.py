@@ -153,6 +153,38 @@ def test_runtime_fails_closed_without_agent_opinions(tmp_path) -> None:
         )
 
 
+def test_unverified_agent_payloads_cannot_authorize_paper_candidate(tmp_path) -> None:
+    """Missing verification must not be treated as verified market evidence."""
+
+    runtime = CanonicalPaperDecisionRuntime(_database(tmp_path))
+    packet, now_ms = _packet("paper-decision-unverified")
+    unverified = [
+        {
+            key: value
+            for key, value in payload.items()
+            if key not in {"evidence_class", "verified_market_data"}
+        }
+        for payload in _payloads()
+    ]
+
+    result = runtime.assess_entry(
+        "paper-decision-unverified",
+        unverified,
+        packet,
+        general_controller_decision=TradingDecision.ALLOW,
+        now_ms=now_ms,
+        regime="bull",
+    )
+
+    assert result.authorized is False
+    assert result.decision is TradingDecision.WAIT
+    assert result.assessment.rejected_agents == (
+        "market_intelligence",
+        "news_intelligence",
+        "portfolio_engine",
+    )
+
+
 def test_decision_and_candidate_ids_must_match(tmp_path) -> None:
     runtime = CanonicalPaperDecisionRuntime(_database(tmp_path))
     packet, now_ms = _packet("candidate-other")
