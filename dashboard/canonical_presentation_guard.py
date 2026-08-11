@@ -2,7 +2,8 @@
 
 Legacy compatibility middleware remains importable for older tests and clients,
 but it may not fabricate runtime state when the canonical SharipovAI package is
-assembled. This guard performs no trading mutation.
+assembled. This guard performs no trading mutation and preserves the global
+authentication contract even when it is the outermost middleware layer.
 """
 from __future__ import annotations
 
@@ -15,6 +16,15 @@ from fastapi.responses import JSONResponse
 from ai_chat_orchestrator import answer_chat
 from canonical_surface_state import load_canonical_paper_state
 
+_PROTECTED_PRESENTATION_PATHS = {
+    "/api/ai-bots",
+    "/api/chat/message",
+    "/api/demo/chat",
+    "/api/demo/state",
+    "/api/demo/balance",
+    "/api/demo/reset",
+}
+
 
 def install_canonical_presentation_guard(app: FastAPI) -> None:
     if getattr(app.state, "canonical_presentation_guard_installed", False):
@@ -25,6 +35,12 @@ def install_canonical_presentation_guard(app: FastAPI) -> None:
     async def canonical_presentation_guard(request: Request, call_next: Callable[[Request], Any]):
         path = request.url.path
         method = request.method.upper()
+
+        if path in _PROTECTED_PRESENTATION_PATHS and not _authenticated(request):
+            return JSONResponse(
+                {"status": "unauthorized", "detail": "authentication required"},
+                status_code=401,
+            )
 
         if method == "GET" and path == "/api/ai-bots":
             from .realtime_status_api import canonical_agent_health
@@ -80,6 +96,16 @@ def install_canonical_presentation_guard(app: FastAPI) -> None:
             )
 
         return await call_next(request)
+
+
+def _authenticated(request: Request) -> bool:
+    """Mirror the canonical user-auth decision without bypassing an inner guard."""
+
+    from .global_auth_guard import _principal, auth_disabled
+
+    if auth_disabled():
+        return True
+    return bool(_principal(request, request.app))
 
 
 async def _json_payload(request: Request) -> dict[str, Any]:
