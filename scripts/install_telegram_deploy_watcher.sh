@@ -69,7 +69,7 @@ if [[ "${SHARIPOVAI_DEPLOY_WATCHER_ACTIVE:-0}" != "1" ]]; then
 fi
 systemctl is-active --quiet sharipovai-deploy-watcher.service
 
-claim_code="$(docker exec "$SERVICE" python - <<'PY'
+claim_code="$(docker exec -i "$SERVICE" python - <<'PY'
 import json, os, secrets, time
 from pathlib import Path
 root = Path('/var/lib/sharipovai/deployment_control')

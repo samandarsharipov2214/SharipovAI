@@ -23,7 +23,7 @@ else
 fi
 
 read_request() {
-  docker exec "$SERVICE" python - <<'PY'
+  docker exec -i "$SERVICE" python - <<'PY'
 import json
 from pathlib import Path
 path = Path('/var/lib/sharipovai/deployment_control/pending.json')
