@@ -9,8 +9,8 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
 
 from capital_allocation import CapitalAllocationPolicy
-from market_paper_engine import MarketPaperActivityEngine as PaperActivityEngine
 from observability.metrics import update_runtime_metrics
+from telegram_runtime_state import canonical_state_from_app
 
 from dashboard.auth import AdminPrincipal, admin_principal
 
@@ -61,15 +61,8 @@ def build_execution_status(request: Request) -> dict[str, Any]:
         if execution_journal is not None
         else {"status": "unavailable", "record_count": 0}
     )
-    try:
-        paper_state = PaperActivityEngine().state(catch_up=False)
-    except Exception as exc:
-        paper_state = {
-            "summary": {},
-            "status": "unavailable",
-            "error": f"{type(exc).__name__}: {exc}",
-        }
-    paper = _mapping(paper_state.get("summary"))
+    canonical_paper = canonical_state_from_app(request.app)
+    paper = _mapping(canonical_paper)
     policy = CapitalAllocationPolicy.from_environment()
     equity = _number(paper.get("equity"))
     deployed = _number(paper.get("deployed_notional"))
@@ -111,7 +104,7 @@ def build_execution_status(request: Request) -> dict[str, Any]:
         "stage": assessment,
         "journal": journal,
         "risk": risk,
-        "paper": {**paper, "state_status": paper_state.get("status", "ok")},
+        "paper": {**paper, "state_status": canonical_paper.get("status", "unavailable")},
         "canonical_write_path": "ApprovedExecutionRequest",
         "raw_order_api": "removed",
         "mainnet_available": False,
