@@ -49,6 +49,7 @@ def test_agent_health_marks_proven_check_working(monkeypatch):
                     "ok": True,
                     "evidence": ["real_orders_blocked_policy"],
                     "last_action": "verified",
+                    "runtime_status": "healthy",
                 },
             )
         ],
@@ -58,9 +59,34 @@ def test_agent_health_marks_proven_check_working(monkeypatch):
 
     bot = snapshot["bots"][0]
     assert bot["status"] == "working"
-    assert bot["quality_score"] == 70
+    assert bot["quality_score"] == 100
     assert bot["evidence_count"] == 1
     assert bot["last_action"] == "verified"
+
+
+def test_agent_health_marks_stale_evidence_degraded(monkeypatch):
+    monkeypatch.setattr(
+        agent_health,
+        "_definitions",
+        lambda: [
+            agent_health.AgentDefinition(
+                "Market Intelligence",
+                "market",
+                lambda: {
+                    "ok": False,
+                    "evidence": ["old quote"],
+                    "last_error": "canonical runtime evidence stale",
+                    "runtime_status": "healthy",
+                    "stale": True,
+                },
+            )
+        ],
+    )
+
+    bot = agent_health.build_agent_health_snapshot()["bots"][0]
+    assert bot["status"] == "degraded"
+    assert bot["stale"] is True
+    assert bot["health_score"] == 50
 
 
 def test_agent_health_api_requires_auth_by_default(monkeypatch):
