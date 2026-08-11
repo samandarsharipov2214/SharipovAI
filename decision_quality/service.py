@@ -227,7 +227,18 @@ def _split_payloads(
             "fixture",
             "mock",
         }
-        if explicit_false or synthetic:
+        # Decision Quality is the canonical boundary before a paper candidate
+        # can be authorized.  Absence of verification is not verification:
+        # legacy/demo payloads may still be displayed elsewhere, but they must
+        # not influence an executable decision or its learning record.
+        verified = payload.get("verified_market_data") is True
+        verified_evidence = evidence_class in {
+            "verified_market",
+            "verified_exchange",
+            "verified_bybit",
+            "verified_market_and_news",
+        }
+        if explicit_false or synthetic or not verified or not verified_evidence:
             rejected.append(agent_id)
         else:
             eligible.append(payload)
