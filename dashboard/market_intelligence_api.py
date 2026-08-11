@@ -24,7 +24,7 @@ from typing import Any
 import httpx
 from fastapi import FastAPI, Query
 
-from market_paper_engine import PaperActivityEngine
+from telegram_runtime_state import canonical_state_from_app
 
 SYMBOLS = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT")
 INTERVALS = {"1": 60, "5": 300, "15": 900, "60": 3600, "240": 14_400, "D": 86_400}
@@ -52,7 +52,7 @@ def install_market_intelligence_api(app: FastAPI) -> None:
 
     @app.get("/api/market-intelligence/snapshot", response_model=None)
     async def market_intelligence_snapshot() -> Any:
-        return await get_market_snapshot()
+        return await get_market_snapshot(app)
 
     @app.get("/api/market-intelligence/replay", response_model=None)
     async def market_intelligence_replay(
@@ -91,7 +91,7 @@ def install_market_intelligence_api(app: FastAPI) -> None:
             }
 
 
-async def get_market_snapshot() -> dict[str, Any]:
+async def get_market_snapshot(app: FastAPI | None = None) -> dict[str, Any]:
     """Return a cached ranked screener plus actionable alerts."""
 
     async def factory() -> dict[str, Any]:
@@ -160,7 +160,7 @@ async def get_market_snapshot() -> dict[str, Any]:
                 )
 
         rows.sort(key=lambda item: (str(item.get("status")) == "ready", float(item.get("score", 0.0))), reverse=True)
-        virtual_state = await _safe_virtual_state()
+        virtual_state = await _safe_virtual_state(app)
         alerts = build_alerts(rows, virtual_state)
         ready = [row for row in rows if row.get("status") == "ready"]
         return {
@@ -548,11 +548,12 @@ def simulate_replay(candles: Sequence[dict[str, Any]], *, symbol: str, interval:
     }
 
 
-async def _safe_virtual_state() -> dict[str, Any]:
-    try:
-        return await asyncio.to_thread(lambda: PaperActivityEngine().state(catch_up=False))
-    except Exception:
+async def _safe_virtual_state(app: FastAPI | None) -> dict[str, Any]:
+    """Read the Council-owned paper projection; never instantiate legacy state."""
+
+    if app is None:
         return {}
+    return canonical_state_from_app(app)
 
 
 def _parse_kline(row: Sequence[Any]) -> dict[str, float | int]:
