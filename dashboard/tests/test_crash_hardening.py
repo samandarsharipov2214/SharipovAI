@@ -93,7 +93,7 @@ def test_chat_endpoint_handles_empty_payload(monkeypatch) -> None:
     payload = response.json()
     assert "reply" in payload
     assert "run" in payload
-    assert payload["run"]["decision"] == "BUY"
+    assert payload["run"]["decision"] != "BUY"
 
 
 def test_telegram_ignores_message_without_chat(monkeypatch) -> None:

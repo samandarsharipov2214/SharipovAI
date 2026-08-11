@@ -307,25 +307,34 @@ def _stress_scenarios() -> list[dict[str, str]]:
 def _chat(request: Request, payload: dict[str, object]) -> dict[str, object]:
     message = str(payload.get("message", "")).strip()
     try:
-        factory = getattr(request.app.state, "runner_factory", None)
-        output = factory().run() if factory else None
-        decision = str(getattr(output, "decision", "WATCH"))
-        state = {"decision": decision, "risk_level": str(getattr(output, "risk_level", "LOW"))}
+        from telegram_runtime_state import canonical_state_from_app
+
+        state = canonical_state_from_app(request.app)
+        if not state.get("data_available"):
+            return {
+                "status": "unavailable",
+                "reply": "Канонический paper runtime недоступен; ответ не строится из test/demo runner state.",
+                "run": {"decision": "UNKNOWN"},
+                "intent": "runtime_unavailable",
+                "source_ai": "canonical autonomous-paper runtime",
+                "state": state,
+            }
         answer = answer_chat(message, state)
         return {
             "status": "ok",
             "reply": str(answer.get("reply", "Команда принята.")),
             "run": {
                 "status": "ok",
-                "decision": decision,
-                "confidence": float(getattr(output, "confidence", 0.0)),
-                "risk_level": str(getattr(output, "risk_level", "LOW")),
+                "decision": state.get("last_action") or "WAIT",
+                "confidence": None,
+                "risk_level": None,
                 "intent": answer.get("intent"),
                 "source_ai": answer.get("source_ai"),
             },
             "intent": answer.get("intent"),
             "source_ai": answer.get("source_ai"),
             "data": answer.get("data", {}),
+            "state": state,
         }
     except Exception as exc:
         return {"status": "error", "reply": "Команда не выполнена безопасно.", "run": {"decision": "WATCH"}, "error": f"{type(exc).__name__}: {exc}"}
