@@ -12,7 +12,12 @@ from typing import Any, Mapping, Sequence
 
 from meta_ai import AgentOpinion
 from meta_ai_adapter import evaluate_agent_payloads, opinions_from_payloads, record_realized_result
-from meta_ai_persistence import EVENT_NAMESPACE, MetaAIPersistenceError, PersistentMetaAI
+from meta_ai_persistence import (
+    EVENT_NAMESPACE,
+    VERIFIED_EVIDENCE_CLASSES,
+    MetaAIPersistenceError,
+    PersistentMetaAI,
+)
 from storage import ProjectDatabase
 
 
@@ -152,10 +157,10 @@ class DecisionQualityService:
         pnl_by_agent: Mapping[str, float] | None = None,
         drawdown_by_agent: Mapping[str, float] | None = None,
         regime: str = "unknown",
-        evidence_class: str = "verified_market",
-        verified_market_data: bool = True,
+        evidence_class: str = "",
+        verified_market_data: bool = False,
     ) -> DecisionSettlement:
-        """Persist verified realized outcomes and immutable post-decision audit."""
+        """Persist explicitly verified realized outcomes and immutable post-decision audit."""
 
         clean_id = _decision_id(decision_id)
         assessment = self.get_assessment(clean_id)
@@ -205,29 +210,30 @@ class DecisionQualityService:
 def _split_payloads(
     payloads: Sequence[Mapping[str, Any]],
 ) -> tuple[list[Mapping[str, Any]], list[str]]:
+    """Accept only payloads carrying explicit, supported verification evidence."""
+
     eligible: list[Mapping[str, Any]] = []
     rejected: list[str] = []
     for index, payload in enumerate(payloads):
         agent_id = str(payload.get("agent_id") or payload.get("name") or f"agent-{index}")
         evidence_class = str(payload.get("evidence_class") or "").strip().lower()
-        explicit_false = any(
+        verification_proven = (
+            payload.get("verified_market_data") is True
+            or payload.get("data_verified") is True
+        )
+        explicitly_ineligible = any(
             payload.get(field) is False
             for field in (
                 "learning_eligible",
                 "evidence_eligible",
                 "reputation_eligible",
-                "verified_market_data",
-                "data_verified",
             )
         )
-        synthetic = evidence_class in {
-            "synthetic",
-            "synthetic_simulation",
-            "demo",
-            "fixture",
-            "mock",
-        }
-        if explicit_false or synthetic:
+        if (
+            explicitly_ineligible
+            or not verification_proven
+            or evidence_class not in VERIFIED_EVIDENCE_CLASSES
+        ):
             rejected.append(agent_id)
         else:
             eligible.append(payload)
