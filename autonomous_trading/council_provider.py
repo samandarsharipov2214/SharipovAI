@@ -287,7 +287,7 @@ class AutonomousCouncilProposalProvider:
             agent_payloads=tuple(eligible),
             evidence_packet=packet,
             general_controller_decision=directive,
-            regime=_meta_regime(regime),
+            regime=_meta_regime(regime, change=change),
         )
 
     def _news_opinion(self, agent_id: str, *, now_ms: int) -> tuple[dict[str, Any] | None, list[str]]:
@@ -423,7 +423,6 @@ def _risk_blocks(
     max_drawdown: float,
     deviation: float,
 ) -> tuple[str, ...]:
-    """Backward-compatible wrapper over the canonical Risk Engine service."""
     assessment = _DEFAULT_RISK_SERVICE.evaluate(
         {
             "market_data_verified": True,
@@ -442,7 +441,6 @@ def _risk_blocks(
 
 
 def _risk_score(change: float, drawdown: float, market: Mapping[str, Any], blocks: tuple[str, ...]) -> float:
-    """Backward-compatible score wrapper; ``blocks`` cannot weaken the service."""
     assessment = _DEFAULT_RISK_SERVICE.evaluate(
         {
             "market_data_verified": True,
@@ -467,9 +465,14 @@ def _market_regime(change: float, turnover: float, min_turnover: float) -> Marke
     return MarketRegime.RANGE
 
 
-def _meta_regime(regime: MarketRegime) -> str:
+def _meta_regime(regime: MarketRegime, *, change: float = 0.0) -> str:
+    if regime is MarketRegime.TREND:
+        if change > 0:
+            return "bull"
+        if change < 0:
+            return "bear"
+        return "sideways"
     return {
-        MarketRegime.TREND: "bull",
         MarketRegime.RANGE: "sideways",
         MarketRegime.HIGH_VOLATILITY: "high_volatility",
         MarketRegime.ILLIQUID: "unknown",
