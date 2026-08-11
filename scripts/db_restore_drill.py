@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -25,7 +24,15 @@ def validate_sqlite_backup(source: Path) -> dict[str, object]:
 
     with tempfile.TemporaryDirectory(prefix="sharipovai-restore-drill-") as tmp:
         restored = Path(tmp) / "restored.db"
-        shutil.copy2(source, restored)
+        # A filesystem copy can miss committed WAL pages.  SQLite's backup API
+        # reads a consistent snapshot without changing the source backup.
+        source_connection = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
+        destination_connection = sqlite3.connect(restored)
+        try:
+            source_connection.backup(destination_connection)
+        finally:
+            destination_connection.close()
+            source_connection.close()
         connection = sqlite3.connect(restored)
         try:
             integrity = str(connection.execute("PRAGMA integrity_check").fetchone()[0])
@@ -52,6 +59,7 @@ def validate_sqlite_backup(source: Path) -> dict[str, object]:
             "backend": "sqlite",
             "source_bytes": source.stat().st_size,
             "integrity_check": "ok",
+            "restore_method": "sqlite_backup_api",
             "schema_version": schema_version,
             "health": health,
         }

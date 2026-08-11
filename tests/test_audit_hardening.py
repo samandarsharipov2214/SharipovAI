@@ -123,6 +123,7 @@ def test_restore_drill_validates_copy_without_mutating_source(tmp_path: Path) ->
     after = source.read_bytes()
     assert result["status"] == "ok"
     assert result["integrity_check"] == "ok"
+    assert result["restore_method"] == "sqlite_backup_api"
     assert before == after
 
 
