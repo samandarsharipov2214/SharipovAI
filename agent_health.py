@@ -1,18 +1,20 @@
-"""Canonical evidence-based health snapshot for SharipovAI."""
+"""Read-only evidence-based health projection for SharipovAI.
+
+This compatibility module never starts workers, refreshes news, or reads the
+retired PaperActivityEngine. Health comes only from the canonical
+``ai_organ_runtime`` evidence written into ProjectDatabase by the runtime
+monitor. Missing/stale evidence is reported as unknown/degraded, never healthy.
+"""
 from __future__ import annotations
 
+import os
 import re
 import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
 from ai_architecture_registry import CANONICAL_AI_ORGANS
-from learning.bot_communication import BotCommunicationNetwork
-from news_monitor.agent_bridge import bridge_status
-from news_monitor.agent_network import network_status
-from news_monitor.storage import load_news_state
-from paper_activity_autorun import paper_activity_autorun_status
-from paper_activity_engine import PaperActivityEngine
+from storage import ProjectDatabase
 
 
 @dataclass(frozen=True, init=False)
@@ -22,7 +24,13 @@ class AgentDefinition:
     responsibility: str
     check: Callable[[], dict[str, Any]]
 
-    def __init__(self, id_or_name: str, name_or_responsibility: str, responsibility_or_check: str | Callable[[], dict[str, Any]], check: Callable[[], dict[str, Any]] | None = None) -> None:
+    def __init__(
+        self,
+        id_or_name: str,
+        name_or_responsibility: str,
+        responsibility_or_check: str | Callable[[], dict[str, Any]],
+        check: Callable[[], dict[str, Any]] | None = None,
+    ) -> None:
         if check is None:
             name = id_or_name
             responsibility = name_or_responsibility
@@ -46,72 +54,86 @@ def _safe_check(check: Callable[[], dict[str, Any]]) -> dict[str, Any]:
     try:
         result = check() or {}
         ok = bool(result.get("ok"))
-        return {"ok": ok, "checked_at": checked_at, "evidence": result.get("evidence", []), "last_action": result.get("last_action"), "last_error": None if ok else result.get("last_error", "проверка не подтверждена"), "details": result.get("details", {})}
+        return {
+            "ok": ok,
+            "checked_at": int(result.get("checked_at") or checked_at),
+            "evidence": list(result.get("evidence", [])),
+            "last_action": result.get("last_action"),
+            "last_error": None if ok else result.get("last_error", "проверка не подтверждена"),
+            "details": dict(result.get("details", {})),
+            "stale": bool(result.get("stale", False)),
+            "runtime_status": result.get("runtime_status"),
+        }
     except Exception as exc:
-        return {"ok": False, "checked_at": checked_at, "evidence": [], "last_action": None, "last_error": f"{type(exc).__name__}: {exc}", "details": {}}
+        return {
+            "ok": False,
+            "checked_at": checked_at,
+            "evidence": [],
+            "last_action": None,
+            "last_error": f"{type(exc).__name__}: {exc}",
+            "details": {},
+            "stale": False,
+            "runtime_status": "unknown",
+        }
 
 
-def _virtual_account_check() -> dict[str, Any]:
-    state = PaperActivityEngine().state(catch_up=False)
-    summary = state.get("summary", {})
-    tick_age = summary.get("last_tick_age_seconds")
-    fresh = tick_age is not None and int(tick_age) <= max(180, int(state.get("config", {}).get("tick_seconds", 60)) * 3)
-    return {"ok": fresh, "evidence": ["virtual_account_state", "last_tick_age_seconds"], "last_action": summary.get("last_reason_ru") or summary.get("last_reason"), "last_error": None if fresh else "Virtual Account не имеет свежего execution tick", "details": {"trade_count": summary.get("trade_count", 0), "open_positions": summary.get("open_positions", 0), "closed_positions": summary.get("closed_positions", 0), "last_tick_age_seconds": tick_age, "net_pnl": summary.get("net_pnl", 0), "total_fees": summary.get("total_fees", 0)}}
+def _runtime_check(organ_id: str) -> dict[str, Any]:
+    database = ProjectDatabase()
+    database.initialize()
+    current = database.get_json("ai_organ_runtime", organ_id)
+    if current is None or not isinstance(current.get("value"), dict):
+        return {
+            "ok": False,
+            "evidence": [],
+            "last_error": "canonical runtime evidence отсутствует",
+            "runtime_status": "unknown",
+            "details": {"organ_id": organ_id, "source": "ProjectDatabase.ai_organ_runtime"},
+        }
 
-
-def _autorun_check() -> dict[str, Any]:
-    status = paper_activity_autorun_status()
-    alive = bool(status.get("thread_alive")) and status.get("status") not in {"error", "disabled", "not_started"}
-    return {"ok": alive, "evidence": ["virtual_account_autorun_status"], "last_action": f"autorun: {status.get('status', 'unknown')}", "last_error": status.get("error") if not alive else None, "details": status}
-
-
-def _news_check() -> dict[str, Any]:
-    network = network_status(run_due=True)
-    bridge = bridge_status()
-    state = load_news_state()
-    last_refresh = int(state.get("last_refresh_at", 0) or 0)
-    age = max(0, int(time.time()) - last_refresh) if last_refresh else None
-    agent_count = int(network.get("agent_count", 0) or 0)
-    healthy = int(network.get("healthy_count", 0) or 0)
-    alive = bool(network.get("thread_alive")) and bool(bridge.get("thread_alive"))
-    fresh = age is not None and age <= 600
-    ok = agent_count > 0 and healthy > 0 and alive and fresh
-    return {"ok": ok, "evidence": ["news_agent_network", "rss_refresh_state", "news_bridge"], "last_action": f"RSS age={age}s, healthy={healthy}/{agent_count}", "last_error": None if ok else "News degraded", "details": {"agent_count": agent_count, "healthy_count": healthy, "last_refresh_age_seconds": age}}
-
-
-def _bot_bus_check() -> dict[str, Any]:
-    health = BotCommunicationNetwork().health()
-    ok = bool(health.get("full_mesh_possible")) and int(health.get("bot_count", 0)) > 0
-    return {"ok": ok, "evidence": ["bot_communication_health", "full_mesh_possible"], "last_action": "проверена durable связь AI-подсистем", "last_error": None if ok else "durable bot network не подтвердил связь", "details": health}
-
-
-def _security_check() -> dict[str, Any]:
-    return {"ok": True, "evidence": ["real_orders_blocked_policy", "policy_guard", "access_control"], "last_action": "подтверждён запрет real execution", "details": {"real_orders_blocked": True}}
-
-
-def _unknown(reason: str, *evidence: str) -> dict[str, Any]:
-    return {"ok": False, "evidence": list(evidence), "last_error": reason}
-
-
-def _composite_check(*checks: Callable[[], dict[str, Any]]) -> dict[str, Any]:
-    results = [_safe_check(check) for check in checks]
-    ok = all(item["ok"] for item in results)
-    return {"ok": ok, "evidence": [v for item in results for v in item.get("evidence", [])], "last_action": "; ".join(item.get("last_action") for item in results if item.get("last_action")) or None, "last_error": "; ".join(item.get("last_error") for item in results if item.get("last_error")) or None, "details": {"checks": results}}
+    value = dict(current["value"])
+    checked_at_ms = int(value.get("checked_at_ms") or current.get("updated_at_ms") or 0)
+    now_ms = int(time.time() * 1000)
+    maximum_age_seconds = _evidence_max_age_seconds()
+    age_seconds = max(0.0, (now_ms - checked_at_ms) / 1000.0) if checked_at_ms > 0 else None
+    stale = age_seconds is None or age_seconds > maximum_age_seconds
+    runtime_status = str(value.get("status") or "unknown").lower()
+    evidence = [str(item) for item in value.get("evidence", []) if str(item).strip()]
+    blockers = [str(item) for item in value.get("blockers", []) if str(item).strip()]
+    ok = runtime_status == "healthy" and not stale and not blockers
+    errors = list(blockers)
+    if stale:
+        errors.append(
+            "canonical runtime evidence stale"
+            if age_seconds is not None
+            else "canonical runtime evidence has no timestamp"
+        )
+    return {
+        "ok": ok,
+        "evidence": evidence,
+        "last_action": evidence[-1] if evidence else None,
+        "last_error": "; ".join(errors) or (None if ok else f"runtime status={runtime_status}"),
+        "runtime_status": runtime_status,
+        "checked_at": checked_at_ms // 1000 if checked_at_ms > 0 else int(time.time()),
+        "stale": stale,
+        "details": {
+            "organ_id": organ_id,
+            "source": "ProjectDatabase.ai_organ_runtime",
+            "age_seconds": age_seconds,
+            "blockers": blockers,
+        },
+    }
 
 
 def _definitions() -> list[AgentDefinition]:
-    checks: dict[str, Callable[[], dict[str, Any]]] = {
-        "general_controller": lambda: _composite_check(_virtual_account_check, _autorun_check, _news_check, _bot_bus_check),
-        "market_intelligence": lambda: _unknown("Нужна отдельная runtime-проверка live market stream", "trade_gate_paths"),
-        "news_intelligence": _news_check,
-        "risk_engine": lambda: _unknown("Risk checks существуют, но нет отдельного свежего probe результата", "trade_blocking", "stress_lab"),
-        "portfolio_engine": _virtual_account_check,
-        "virtual_execution": lambda: _composite_check(_virtual_account_check, _autorun_check),
-        "decision_quality": lambda: _unknown("Нет единого runtime probe Confidence + Consensus", "bot_communication_health"),
-        "learning_engine": lambda: _unknown("Замкнутый learning validation loop ещё не подтверждён", "learning_os", "evidence_vault"),
-        "security_guard": _security_check,
-    }
-    return [AgentDefinition(organ.id, organ.name, organ.responsibility, checks[organ.id]) for organ in CANONICAL_AI_ORGANS]
+    return [
+        AgentDefinition(
+            organ.id,
+            organ.name,
+            organ.responsibility,
+            lambda organ_id=organ.id: _runtime_check(organ_id),
+        )
+        for organ in CANONICAL_AI_ORGANS
+    ]
 
 
 def build_agent_health_snapshot() -> dict[str, Any]:
@@ -120,14 +142,64 @@ def build_agent_health_snapshot() -> dict[str, Any]:
     for definition in _definitions():
         check = _safe_check(definition.check)
         evidence_count = len(check.get("evidence", []))
+        runtime_status = str(check.get("runtime_status") or "unknown")
         if check["ok"]:
-            status, score = "working", min(100, 60 + evidence_count * 10)
-        elif evidence_count:
-            status, score = "degraded", max(0, 30 + evidence_count * 5)
+            status, score = "working", 100
+        elif evidence_count or runtime_status in {"degraded", "blocked"} or check.get("stale"):
+            status = "degraded"
+            score = 0 if runtime_status == "blocked" else 50
         else:
             status, score = "unknown", None
-        agents.append({"id": definition.id, "name": definition.name, "responsibility": definition.responsibility, "status": status, "quality_score": score, "health_score": score, "checked_at": check["checked_at"], "changed_at": check["checked_at"], "last_seen": check["checked_at"], "last_action": check.get("last_action"), "last_error": check.get("last_error"), "evidence": check.get("evidence", []), "evidence_count": evidence_count, "stale": False, "details": check.get("details", {})})
+        agents.append(
+            {
+                "id": definition.id,
+                "name": definition.name,
+                "responsibility": definition.responsibility,
+                "status": status,
+                "runtime_status": runtime_status,
+                "quality_score": score,
+                "health_score": score,
+                "checked_at": check["checked_at"],
+                "changed_at": check["checked_at"],
+                "last_seen": check["checked_at"] if evidence_count else None,
+                "last_action": check.get("last_action"),
+                "last_error": check.get("last_error"),
+                "evidence": check.get("evidence", []),
+                "evidence_count": evidence_count,
+                "stale": bool(check.get("stale")),
+                "details": check.get("details", {}),
+            }
+        )
     working = sum(agent["status"] == "working" for agent in agents)
     degraded = sum(agent["status"] == "degraded" for agent in agents)
     unknown = sum(agent["status"] == "unknown" for agent in agents)
-    return {"status": "ok" if degraded == 0 and unknown == 0 else "warning", "generated_at": generated_at, "summary": {"total_bots": len(agents), "canonical_ai_count": len(agents), "active": working, "warnings": degraded + unknown, "working": working, "degraded": degraded, "unknown": unknown}, "agents": agents, "bots": agents, "truth_policy": "No decorative score: missing evidence is shown as unknown."}
+    return {
+        "status": "ok" if degraded == 0 and unknown == 0 else "warning",
+        "generated_at": generated_at,
+        "summary": {
+            "total_bots": len(agents),
+            "canonical_ai_count": len(agents),
+            "active": working,
+            "warnings": degraded + unknown,
+            "working": working,
+            "degraded": degraded,
+            "unknown": unknown,
+        },
+        "agents": agents,
+        "bots": agents,
+        "truth_policy": (
+            "No decorative score: health is read-only ProjectDatabase ai_organ_runtime evidence; "
+            "missing or stale evidence is never healthy."
+        ),
+    }
+
+
+def _evidence_max_age_seconds() -> float:
+    try:
+        value = float(os.getenv("AI_ORGAN_EVIDENCE_MAX_AGE_SECONDS", "300"))
+    except ValueError:
+        value = 300.0
+    return min(max(value, 30.0), 3600.0)
+
+
+__all__ = ["AgentDefinition", "build_agent_health_snapshot"]
