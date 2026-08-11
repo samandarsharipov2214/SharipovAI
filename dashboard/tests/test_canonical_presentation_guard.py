@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -26,6 +27,12 @@ class _Monitor:
 class _Loop:
     def snapshot(self) -> dict[str, object]:
         return {"status": "ok"}
+
+
+@pytest.fixture(autouse=True)
+def _explicit_test_auth_bypass(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ENVIRONMENT", "test")
+    monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "1")
 
 
 def test_ai_bots_surface_ignores_inner_fabricated_status() -> None:
@@ -122,3 +129,16 @@ def test_chat_surface_is_presentation_only_and_does_not_call_inner_runner(monkey
     assert payload["presentation_only"] is True
     assert payload["mutation_performed"] is False
     assert inner_called["value"] is False
+
+
+def test_presentation_guard_fails_closed_without_auth(monkeypatch) -> None:
+    monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "0")
+    app = FastAPI()
+    app.state.ai_organ_runtime_monitor = _Monitor()
+    guard.install_canonical_presentation_guard(app)
+
+    with TestClient(app) as client:
+        response = client.get("/api/ai-bots")
+
+    assert response.status_code == 401
+    assert response.json()["status"] == "unauthorized"
