@@ -40,4 +40,19 @@ def list_json_items(
     ]
 
 
-__all__ = ["list_json_items"]
+def count_json_items(database: ProjectDatabase, namespace: str) -> int:
+    """Count canonical records without materializing their payloads."""
+
+    clean_namespace = str(namespace).strip()
+    if not clean_namespace or len(clean_namespace) > 200:
+        raise ValueError("invalid namespace")
+    with database.connect() as connection:
+        row = database._fetchone(
+            connection,
+            "SELECT COUNT(*) AS total FROM project_kv WHERE namespace = ?",
+            (clean_namespace,),
+        )
+    return int((row or {}).get("total") or 0)
+
+
+__all__ = ["count_json_items", "list_json_items"]
