@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from dashboard import create_app
+from dashboard.launch_check_api import launch_check
 
 
 class DummyRunner:
@@ -79,4 +80,16 @@ def test_launch_check_contains_paper_activity(tmp_path, monkeypatch) -> None:
     assert response.status_code == 200
     check_names = {item["name"] for item in response.json()["checks"]}
     assert "Paper Activity" in check_names
-    assert response.json()["important_urls"]["paper_activity"] == "/paper-activity"
+    assert response.json()["important_urls"]["paper_activity"] == "/api/autonomous-paper/status"
+
+
+def test_launch_check_does_not_fabricate_legacy_paper_state(tmp_path, monkeypatch) -> None:
+    isolate_state(tmp_path, monkeypatch)
+    app = create_app(runner_factory=DummyRunner)
+
+    report = launch_check(app)
+    paper_check = next(item for item in report["checks"] if item["name"] == "Paper Activity")
+
+    assert paper_check["ok"] is False
+    assert paper_check["data"]["status"] == "unavailable"
+    assert paper_check["data"]["source_of_truth"] == "CouncilAuthorizedPaperLoop"
