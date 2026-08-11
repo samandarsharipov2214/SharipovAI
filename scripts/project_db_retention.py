@@ -16,6 +16,10 @@ from dataclasses import asdict, dataclass
 from storage.project_database import ProjectDatabase
 
 APPLY_CONFIRMATION = "I_APPROVE_BOUNDED_PROJECT_EVENT_RETENTION"
+# Retention is deliberately conservative. These prefixes cover canonical audit,
+# decision, execution, risk, portfolio, paper and learning provenance. Adding a
+# new immutable namespace should extend this deny-list before retention is ever
+# applied in production.
 PROTECTED_NAMESPACE_PREFIXES = (
     "audit",
     "evidence",
@@ -24,8 +28,16 @@ PROTECTED_NAMESPACE_PREFIXES = (
     "promotion",
     "settlement",
     "learning",
+    "self_learning",
     "security",
     "deployment",
+    "risk",
+    "portfolio",
+    "trading",
+    "council",
+    "paper",
+    "authorization",
+    "agent",
 )
 DEFAULT_RETAIN_DAYS = 30
 DEFAULT_BATCH_SIZE = 5000
@@ -43,12 +55,17 @@ class RetentionResult:
 
 def _protected(namespace: str) -> bool:
     lowered = namespace.strip().lower()
-    return any(lowered == prefix or lowered.startswith(prefix + "_") or lowered.startswith(prefix + ".") for prefix in PROTECTED_NAMESPACE_PREFIXES)
+    return any(
+        lowered == prefix
+        or lowered.startswith(prefix + "_")
+        or lowered.startswith(prefix + ".")
+        for prefix in PROTECTED_NAMESPACE_PREFIXES
+    )
 
 
 def _eligible_namespaces(db: ProjectDatabase, cutoff_ms: int) -> list[str]:
     with db.connect() as connection:
-        rows = db._fetchall(  # canonical SQL adapter keeps SQLite/PostgreSQL placeholders compatible
+        rows = db._fetchall(
             connection,
             "SELECT DISTINCT namespace FROM project_events WHERE created_at_ms < ? ORDER BY namespace",
             (cutoff_ms,),
@@ -97,7 +114,11 @@ def run_retention(*, db: ProjectDatabase, retain_days: int, batch_size: int, app
                     connection.rollback()
                     break
                 id_placeholders = ",".join("?" for _ in ids)
-                cursor = db._execute(connection, f"DELETE FROM project_events WHERE event_id IN ({id_placeholders})", tuple(ids))
+                cursor = db._execute(
+                    connection,
+                    f"DELETE FROM project_events WHERE event_id IN ({id_placeholders})",
+                    tuple(ids),
+                )
                 connection.commit()
                 affected = int(getattr(cursor, "rowcount", 0) or len(ids))
                 deleted += affected if affected > 0 else len(ids)
@@ -109,14 +130,23 @@ def run_retention(*, db: ProjectDatabase, retain_days: int, batch_size: int, app
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--retain-days", type=int, default=int(os.getenv("SHARIPOVAI_PROJECT_EVENT_RETAIN_DAYS", DEFAULT_RETAIN_DAYS)))
+    parser.add_argument(
+        "--retain-days",
+        type=int,
+        default=int(os.getenv("SHARIPOVAI_PROJECT_EVENT_RETAIN_DAYS", DEFAULT_RETAIN_DAYS)),
+    )
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--confirm", default="")
     args = parser.parse_args()
     if args.apply and args.confirm != APPLY_CONFIRMATION:
         parser.error(f"--apply requires --confirm {APPLY_CONFIRMATION}")
-    result = run_retention(db=ProjectDatabase(), retain_days=args.retain_days, batch_size=args.batch_size, apply=args.apply)
+    result = run_retention(
+        db=ProjectDatabase(),
+        retain_days=args.retain_days,
+        batch_size=args.batch_size,
+        apply=args.apply,
+    )
     print(json.dumps(asdict(result), sort_keys=True))
     return 0
 
