@@ -87,7 +87,12 @@ class _ExecutionCallVisitor(ast.NodeVisitor):
 
     def visit_Assign(self, node: ast.Assign) -> None:  # noqa: N802
         name = _call_name(node.value) if isinstance(node.value, ast.Call) else _attribute_name(node.value)
+        dynamic_name = _statically_resolved_getattr(node.value)
         if name in FORBIDDEN_CALL_NAMES or (isinstance(node.value, ast.Name) and node.value.id in self.aliases):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    self.aliases.add(target.id)
+        if dynamic_name in FORBIDDEN_CALL_NAMES:
             for target in node.targets:
                 if isinstance(target, ast.Name):
                     self.aliases.add(target.id)
@@ -97,6 +102,9 @@ class _ExecutionCallVisitor(ast.NodeVisitor):
         name = _call_name(node)
         if name in FORBIDDEN_CALL_NAMES or (isinstance(node.func, ast.Name) and node.func.id in self.aliases):
             self._add(node, name or node.func.id)
+        dynamic_name = _statically_resolved_getattr(node.func)
+        if dynamic_name in FORBIDDEN_CALL_NAMES:
+            self._add(node, f"getattr_{dynamic_name}")
         for value in ast.walk(node):
             if isinstance(value, ast.Constant) and isinstance(value.value, str):
                 endpoint = value.value.lower()
@@ -112,6 +120,21 @@ class _ExecutionCallVisitor(ast.NodeVisitor):
 
 def _attribute_name(node: ast.AST) -> str | None:
     return node.attr if isinstance(node, ast.Attribute) else None
+
+
+def _statically_resolved_getattr(node: ast.AST) -> str | None:
+    """Return a literal attribute name for ``getattr(obj, 'name')`` only.
+
+    Dynamic attribute names intentionally remain outside this static guard's
+    proof boundary; execution still needs the runtime authorization contract.
+    """
+
+    if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name) or node.func.id != "getattr":
+        return None
+    if len(node.args) < 2:
+        return None
+    value = node.args[1]
+    return value.value if isinstance(value, ast.Constant) and isinstance(value.value, str) else None
 
 
 def iter_python_files(root: Path) -> Iterable[Path]:

@@ -18,8 +18,8 @@ from learning_engine_v2 import learning_state
 from news_monitor.agents import run_news_agents
 from news_monitor.analyzer import analyzed_news_payload
 from operations_ai import cto_report, diagnose_system
-from paper_activity_engine import PaperActivityEngine
 from system_ai_auditor import audit_system_ai
+from telegram_runtime_state import canonical_state_from_app
 from telegram_health import telegram_health
 from trading_intelligence import trade_gate
 
@@ -40,22 +40,22 @@ def install_launch_check_api(app: FastAPI) -> None:
 
     @app.get("/api/launch-check")
     def launch_check_api() -> dict[str, Any]:
-        return launch_check()
+        return launch_check(app)
 
     @app.get("/launch-check", response_class=HTMLResponse)
     def launch_check_page() -> HTMLResponse:
-        return HTMLResponse(_render_launch_check(launch_check()))
+        return HTMLResponse(_render_launch_check(launch_check(app)))
 
 
-def launch_check() -> dict[str, Any]:
+def launch_check(app: FastAPI | None = None) -> dict[str, Any]:
     """Run a compact final launch check."""
 
     checks = [
         _check("Backend", "FastAPI app отвечает", lambda: {"status": "ok", "home": "/", "health": "/api/health"}),
-        _check("AI Chat Router", "Чат выбирает внутренних AI-ботов", lambda: answer_chat("Что сегодня произошло?", _demo_state())),
+        _check("AI Chat Router", "Чат выбирает внутренних AI-ботов", lambda: answer_chat("Что сегодня произошло?", _runtime_state(app))),
         _check("News AI", "Новости и News Supervisor доступны", _news_check),
         _check("Trade Gate", "Риск и решение торговать доступны", trade_gate),
-        _check("Paper Activity", "Активный paper engine вместо статичных 3 сделок", _paper_activity_check),
+        _check("Paper Activity", "Канонический paper runtime доступен", lambda: _paper_activity_check(app)),
         _check("AI Scoreboard", "real_data_status/proof_score доступны", _scoreboard_check),
         _check("System AI Audit", "Аудит всех ИИ доступен", audit_system_ai),
         _check("Learning Engine 2.0", "Уроки и правила доступны", learning_state),
@@ -79,8 +79,8 @@ def launch_check() -> dict[str, Any]:
         "next_steps": next_steps,
         "important_urls": {
             "home": "/",
-            "paper_activity": "/paper-activity",
-            "paper_activity_state": "/api/paper-activity/state",
+            "paper_activity": "/api/autonomous-paper/status",
+            "paper_activity_state": "/api/autonomous-paper/status",
             "bot_network": "/bot-network",
             "bot_network_health": "/api/bot-network/health",
             "operations": "/operations",
@@ -111,7 +111,7 @@ def _is_ok(data: Any) -> bool:
     if not isinstance(data, dict):
         return True
     status = str(data.get("status", "ok"))
-    if status in {"error", "failed", "missing_token"}:
+    if status in {"error", "failed", "missing_token", "unavailable"}:
         return False
     if data.get("verdict") in {"telegram_error"}:
         return False
@@ -130,8 +130,12 @@ def _has_warning(data: Any) -> bool:
     return False
 
 
-def _demo_state() -> dict[str, Any]:
-    return {"mode": "DEMO", "decision": "WATCH", "risk_level": "LOW", "equity": 10051.63, "net_pnl": 51.63, "total_fees": 13.67}
+def _runtime_state(app: FastAPI | None) -> dict[str, Any]:
+    """Use the sole paper owner; launch diagnostics never invent account state."""
+
+    if app is None:
+        return canonical_state_from_app(None)
+    return canonical_state_from_app(app)
 
 
 def _news_check() -> dict[str, Any]:
@@ -155,9 +159,26 @@ def _bot_network_check() -> dict[str, Any]:
     return BotCommunicationNetwork().health()
 
 
-def _paper_activity_check() -> dict[str, Any]:
-    state = PaperActivityEngine().state()
-    return {"status": "ok", "summary": state.get("summary", {}), "config": state.get("config", {}), "real_orders_blocked": state.get("real_orders_blocked", True)}
+def _paper_activity_check(app: FastAPI | None) -> dict[str, Any]:
+    state = _runtime_state(app)
+    if not state.get("data_available"):
+        return {
+            "status": "unavailable",
+            "source_of_truth": "CouncilAuthorizedPaperLoop",
+            "reason": state.get("error", "autonomous_paper_runtime_unavailable"),
+            "real_orders_blocked": True,
+        }
+    return {
+        "status": "ok",
+        "source_of_truth": state.get("source_of_truth"),
+        "summary": {
+            "equity": state.get("equity"),
+            "net_pnl": state.get("net_pnl"),
+            "trade_count": state.get("trade_count"),
+            "open_positions": state.get("open_positions"),
+        },
+        "real_orders_blocked": True,
+    }
 
 
 def _next_steps(telegram: Any, failures: list[dict[str, Any]]) -> list[str]:
@@ -177,7 +198,7 @@ def _next_steps(telegram: Any, failures: list[dict[str, Any]]) -> list[str]:
         else:
             steps.append("После деплоя открыть /telegram-check и выполнить подсказку Next fix.")
     steps.append("Проверить /operations: AI Doctor должен показывать причины, а не декоративные проценты.")
-    steps.append("Проверить /paper-activity и при необходимости POST /api/paper-activity/tick с force=true.")
+    steps.append("Проверить /api/autonomous-paper/status: legacy paper endpoints намеренно отключены.")
     steps.append("Проверить /bot-network и /api/bot-network/health: full_mesh_possible должен быть true.")
     steps.append("Проверить /chat-debug?q=Что сегодня произошло? перед проверкой Telegram.")
     steps.append("В Telegram проверить /start, /now, /trade, /why, /scoreboard.")

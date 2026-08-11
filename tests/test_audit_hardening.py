@@ -36,6 +36,18 @@ def test_execution_path_guard_blocks_import_alias_assignment_and_private_endpoin
     ]
 
 
+def test_execution_path_guard_blocks_literal_getattr_order_alias(tmp_path: Path) -> None:
+    module = tmp_path / "rogue.py"
+    module.write_text(
+        "def run(client):\n"
+        "    submit = getattr(client, 'place_order')\n"
+        "    return submit(symbol='BTCUSDT')\n",
+        encoding="utf-8",
+    )
+
+    assert [(item.line, item.call) for item in scan_file(module, root=tmp_path)] == [(3, "submit")]
+
+
 def test_execution_path_guard_allows_canonical_execution_file(tmp_path: Path) -> None:
     path = tmp_path / "exchange_connector" / "bybit_execution.py"
     path.parent.mkdir(parents=True)
