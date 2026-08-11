@@ -130,7 +130,6 @@ class BacktestResult:
     profit_factor: float = 0.0
     exposure_time_percent: float = 0.0
     funding_payments: tuple[FundingPayment, ...] = field(default_factory=tuple)
-    net_expectancy_per_closed_trade: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
