@@ -1,8 +1,9 @@
 """Operational AI services for keeping SharipovAI healthy.
 
-These agents do not trade and do not invent intelligence. They inspect canonical
-runtime evidence, classify incidents, and propose or execute only explicitly
-allow-listed recovery actions.
+These agents do not trade and do not invent intelligence. They inspect runtime
+evidence, classify incidents, and may execute only explicitly allow-listed
+recovery actions. Deprecated PaperActivity/Virtual Account autorun is never
+restarted by this module.
 """
 
 from __future__ import annotations
@@ -12,7 +13,6 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from agent_health import build_agent_health_snapshot
-from paper_activity_autorun import paper_activity_autorun_status, start_paper_activity_autorun
 
 
 @dataclass(frozen=True)
@@ -23,23 +23,9 @@ class RecoveryAction:
     execute: Callable[[], dict[str, Any]]
 
 
-def _restart_virtual_account_autorun() -> dict[str, Any]:
-    """Idempotently ensure the virtual-account autorun thread is alive."""
-
-    before = paper_activity_autorun_status()
-    result = start_paper_activity_autorun()
-    after = paper_activity_autorun_status()
-    return {"status": "ok", "before": before, "result": result, "after": after}
-
-
-SAFE_RECOVERY_ACTIONS: dict[str, RecoveryAction] = {
-    "restart_virtual_account_autorun": RecoveryAction(
-        action_id="restart_virtual_account_autorun",
-        title="Перезапустить безопасный autorun виртуального счёта",
-        safe=True,
-        execute=_restart_virtual_account_autorun,
-    ),
-}
+# Recovery of canonical services belongs to the host self-healing/controller
+# chain. In-process Operations AI must not resurrect deprecated trading loops.
+SAFE_RECOVERY_ACTIONS: dict[str, RecoveryAction] = {}
 
 
 def diagnose_system() -> dict[str, Any]:
@@ -77,6 +63,7 @@ def diagnose_system() -> dict[str, Any]:
         "incidents": incidents,
         "agent_health": snapshot,
         "real_orders_blocked": True,
+        "legacy_paper_autorun_recovery_allowed": False,
     }
 
 
@@ -85,9 +72,9 @@ def _recommended_action(agent: dict[str, Any]) -> dict[str, Any]:
     error = str(agent.get("last_error", ""))
     if "autorun" in error.lower() or name == "Paper Trading Bot":
         return {
-            "action_id": "restart_virtual_account_autorun",
-            "title": SAFE_RECOVERY_ACTIONS["restart_virtual_account_autorun"].title,
-            "automatic_allowed": True,
+            "action_id": None,
+            "title": "Legacy PaperActivity autorun запрещён; проверь canonical CouncilAuthorizedPaperLoop через host self-healing.",
+            "automatic_allowed": False,
         }
     return {
         "action_id": None,
@@ -97,7 +84,7 @@ def _recommended_action(agent: dict[str, Any]) -> dict[str, Any]:
 
 
 def heal_system(*, execute_safe_actions: bool = False) -> dict[str, Any]:
-    """Diagnose and optionally execute allow-listed, reversible recovery actions."""
+    """Diagnose and optionally execute only currently allow-listed safe actions."""
 
     diagnosis_before = diagnose_system()
     executed: list[dict[str, Any]] = []
@@ -128,6 +115,7 @@ def heal_system(*, execute_safe_actions: bool = False) -> dict[str, Any]:
         "before": diagnosis_before,
         "after": diagnosis_after,
         "real_orders_blocked": True,
+        "legacy_paper_autorun_recovery_allowed": False,
     }
 
 
@@ -148,4 +136,5 @@ def cto_report() -> dict[str, Any]:
             "reason": "нет открытых инцидентов" if not incidents else "есть неподтверждённые или деградированные модули",
             "real_orders_allowed": False,
         },
+        "legacy_paper_autorun_recovery_allowed": False,
     }
