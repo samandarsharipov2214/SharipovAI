@@ -276,22 +276,28 @@ def _add(codes: list[str], messages: list[str], code: str, message: str) -> None
 
 def _finite(value: Any) -> float:
     if value in (None, "") or isinstance(value, bool):
-        return 0.0
+        raise ValueError("risk numeric input must be a finite number")
     try:
         parsed = float(value)
-    except (TypeError, ValueError):
-        return 0.0
-    return parsed if math.isfinite(parsed) else 0.0
+    except (TypeError, ValueError) as exc:
+        raise ValueError("risk numeric input must be a finite number") from exc
+    if not math.isfinite(parsed):
+        raise ValueError("risk numeric input must be a finite number")
+    return parsed
 
 
 def _optional_finite(value: Any) -> float | None:
-    if value in (None, "") or isinstance(value, bool):
+    if value in (None, ""):
         return None
+    if isinstance(value, bool):
+        raise ValueError("optional risk numeric input must be a finite number")
     try:
         parsed = float(value)
-    except (TypeError, ValueError):
-        return None
-    return parsed if math.isfinite(parsed) else None
+    except (TypeError, ValueError) as exc:
+        raise ValueError("optional risk numeric input must be a finite number") from exc
+    if not math.isfinite(parsed):
+        raise ValueError("optional risk numeric input must be a finite number")
+    return parsed
 
 
 def _bounded(value: Any) -> float:
