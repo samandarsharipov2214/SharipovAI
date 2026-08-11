@@ -24,6 +24,18 @@ RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("google_api_key", re.compile(r"\bAIza[A-Za-z0-9_-]{35}\b")),
 )
 
+# POSIX ERE prefilter for ``git grep``.  Detailed Python patterns still decide
+# findings; this only keeps history scanning proportional to plausible lines.
+_COARSE_PATTERN = r"github_pat_|gh[pousr]_|AKIA|PRIVATE KEY|[0-9]{6,12}:|sk-|AIza"
+
+# Scoped historical test fixture: the tuple intentionally pins rule, path and
+# non-reversible fingerprint.  Adding an entry is a code-reviewed decision.
+ALLOWLIST: frozenset[tuple[str, str, str]] = frozenset(
+    {
+        ("github_token", "tests/test_secret_history_scan.py", "4a000a3806c4e01d"),
+    }
+)
+
 
 @dataclass(frozen=True)
 class Finding:
@@ -38,6 +50,10 @@ def _fingerprint(value: str) -> str:
     """Provide reviewable correlation metadata without emitting a secret."""
 
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+
+
+def _allowlisted(*, rule: str, path: str, fingerprint: str) -> bool:
+    return (rule, path, fingerprint) in ALLOWLIST
 
 
 def _git(root: Path, *args: str) -> str:
@@ -57,20 +73,26 @@ def scan_history(root: Path, *, max_commits: int | None = None) -> list[Finding]
         commits = commits[: max(0, max_commits)]
     findings: list[Finding] = []
     for commit in commits:
-        names = [line for line in _git(root, "ls-tree", "-r", "--name-only", commit).splitlines() if line]
-        for path in names:
-            if path.endswith((".png", ".jpg", ".jpeg", ".gif", ".pdf", ".zip", ".sqlite", ".db")):
-                continue
-            try:
-                content = _git(root, "show", f"{commit}:{path}")
-            except subprocess.CalledProcessError:
-                continue
-            for line_no, line in enumerate(content.splitlines(), 1):
-                for rule, pattern in RULES:
-                    for match in pattern.finditer(line):
-                        findings.append(
-                            Finding(commit, path, line_no, rule, _fingerprint(match.group(0)))
-                        )
+        # Git performs binary exclusion and tree traversal internally.  One
+        # coarse grep per commit avoids one ``git show`` subprocess per file.
+        result = subprocess.run(
+            ["git", "-C", str(root), "grep", "-n", "-E", _COARSE_PATTERN, commit],
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if result.returncode not in {0, 1}:
+            raise RuntimeError(f"git grep failed for {commit}")
+        for row in result.stdout.splitlines():
+            _tree, path, line_no, line = row.split(":", 3)
+            for rule, pattern in RULES:
+                for match in pattern.finditer(line):
+                    fingerprint = _fingerprint(match.group(0))
+                    if not _allowlisted(rule=rule, path=path, fingerprint=fingerprint):
+                        findings.append(Finding(commit, path, int(line_no), rule, fingerprint))
     return findings
 
 

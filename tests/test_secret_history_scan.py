@@ -52,3 +52,14 @@ def test_secret_history_scan_skips_or_safely_decodes_binary_history(tmp_path: Pa
     _git(root, "commit", "-m", "binary")
 
     assert scan_history(root) == []
+
+
+def test_secret_history_allowlist_is_scoped_to_the_fixture_path(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    target = root / "elsewhere.txt"
+    target.write_text("TOKEN=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890\n", encoding="utf-8")
+    _git(root, "add", "elsewhere.txt")
+    _git(root, "commit", "-m", "unapproved fixture")
+
+    findings = scan_history(root)
+    assert [(item.path, item.rule) for item in findings] == [("elsewhere.txt", "github_token")]
