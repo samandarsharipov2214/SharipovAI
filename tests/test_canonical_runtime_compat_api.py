@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from dashboard.canonical_runtime_compat_api import install_canonical_runtime_compat_api
+from telegram_runtime_state import canonical_state_from_app
 
 
 class _CanonicalLoop:
@@ -88,6 +89,25 @@ def test_demo_state_is_intercepted_by_canonical_adapter() -> None:
     assert response.status_code == 200
     assert response.json()["state"]["source_of_truth"] == "CouncilAuthorizedPaperLoop"
     assert response.json()["state"]["legacy_virtual_account_deprecated"] is True
+
+
+def test_web_and_telegram_project_the_same_canonical_paper_state() -> None:
+    """Presentation surfaces must not compute independent paper PnL or counts."""
+
+    app, _loop, _startup = _app()
+
+    with TestClient(app) as client:
+        web = client.get("/api/virtual-account/state").json()
+    telegram = canonical_state_from_app(app)
+
+    assert web["source_of_truth"] == "CouncilAuthorizedPaperLoop"
+    assert telegram["data_available"] is True
+    assert telegram["equity"] == web["summary"]["equity"]
+    assert telegram["cash"] == web["summary"]["cash"]
+    assert telegram["net_pnl"] == web["summary"]["net_pnl"]
+    assert telegram["total_fees"] == web["summary"]["total_fees"]
+    assert telegram["open_positions"] == web["summary"]["open_positions"]
+    assert telegram["trade_count"] == web["summary"]["trade_count"]
 
 
 def test_legacy_tick_is_blocked_instead_of_creating_second_execution_path() -> None:

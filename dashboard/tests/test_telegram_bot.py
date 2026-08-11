@@ -43,8 +43,8 @@ def test_bot_token_missing_raises_at_runtime(monkeypatch) -> None:
         raise AssertionError("bot_token() should raise when BOT_TOKEN is missing")
 
 
-def test_handle_start_message_sends_welcome(monkeypatch) -> None:
-    """The /start command sends the SharipovAI welcome message."""
+def test_legacy_handler_never_serves_demo_state(monkeypatch) -> None:
+    """The compatibility package cannot become a second Telegram truth source."""
 
     sent: list[tuple[int, str, dict[str, object] | None]] = []
 
@@ -52,29 +52,26 @@ def test_handle_start_message_sends_welcome(monkeypatch) -> None:
         sent.append((chat_id, text, keyboard))
 
     monkeypatch.setattr(telegram_bot, "send_message", fake_send_message)
-    monkeypatch.setenv("WEBAPP_URL", "https://example.com")
-
     telegram_bot.handle_message({"chat": {"id": 123}, "text": "/start"})
 
     assert sent
     assert sent[0][0] == 123
-    assert "Добро пожаловать в SharipovAI" in sent[0][1]
-    assert "можно общаться прямо в Telegram" in sent[0][1]
+    assert "compatibility-вход отключён" in sent[0][1]
+    assert "demo-баланс" in sent[0][1]
     assert sent[0][2] is not None
 
 
-def test_bot_ai_reply_answers_portfolio_directly() -> None:
-    """Bot should answer portfolio questions without forcing Mini App navigation."""
+def test_bot_ai_reply_does_not_fabricate_portfolio_or_risk() -> None:
+    """Legacy direct replies must not invent balances or risk status."""
 
     reply = telegram_bot.bot_ai_reply("покажи портфель и баланс")
 
-    assert "10,000.00 USDT" in reply
-    assert "Paper Trading" in reply
-    assert "Mini App" not in reply
+    assert "10,000.00 USDT" not in reply
+    assert "compatibility-вход отключён" in reply
 
 
-def test_handle_plain_message_uses_ai_reply(monkeypatch) -> None:
-    """Plain Telegram messages should receive useful direct AI replies."""
+def test_handle_plain_message_is_explicitly_retired(monkeypatch) -> None:
+    """The retired handler cannot call the historical direct reply path."""
 
     sent: list[tuple[int, str, dict[str, object] | None]] = []
 
@@ -87,5 +84,16 @@ def test_handle_plain_message_uses_ai_reply(monkeypatch) -> None:
 
     assert sent
     assert sent[0][0] == 123
-    assert "Риск сейчас" in sent[0][1]
+    assert "compatibility-вход отключён" in sent[0][1]
     assert sent[0][2] is not None
+
+
+def test_legacy_polling_is_rejected_even_when_enabled(monkeypatch) -> None:
+    monkeypatch.setenv("TELEGRAM_POLLING_ENABLED", "1")
+
+    try:
+        telegram_bot.poll()
+    except RuntimeError as exc:
+        assert "legacy Telegram polling is retired" in str(exc)
+    else:
+        raise AssertionError("legacy poller must not start")

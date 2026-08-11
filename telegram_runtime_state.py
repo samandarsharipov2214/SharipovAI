@@ -68,7 +68,7 @@ def canonical_state_from_app(app: Any) -> dict[str, Any]:
     if not isinstance(positions, dict):
         return unavailable_state("autonomous_paper_positions_invalid")
 
-    trades = [item for item in (raw.get("trades") or []) if isinstance(item, dict)]
+    trades = _canonical_trades(loop, raw)
     market = raw.get("market_stream") if isinstance(raw.get("market_stream"), dict) else {}
 
     realized = _finite(raw.get("realized_pnl"), 0.0)
@@ -126,6 +126,20 @@ def _integer(value: Any, default: int) -> int:
     except (TypeError, ValueError):
         return int(default)
     return max(parsed, 0)
+
+
+def _canonical_trades(loop: Any, raw: dict[str, Any]) -> list[dict[str, Any]]:
+    """Prefer the loop's history reader over a bounded snapshot cache."""
+
+    reader = getattr(loop, "trade_history", None)
+    if callable(reader):
+        try:
+            rows = reader(limit=200)
+        except Exception:
+            rows = None
+        if isinstance(rows, list):
+            return [item for item in rows if isinstance(item, dict)]
+    return [item for item in (raw.get("trades") or []) if isinstance(item, dict)]
 
 
 __all__ = ["canonical_state_from_app", "unavailable_state"]
