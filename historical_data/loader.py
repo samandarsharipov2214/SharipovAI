@@ -99,7 +99,7 @@ class HistoricalDataLoader:
 
         relation = _read_parquet_sql(self._files())
         columns = self._columns(relation)
-        bid_sql, ask_sql = self._price_expressions(columns)
+        bid_sql, ask_sql, price_source = self._price_expressions(columns)
         volume_sql = "CAST(volume AS DOUBLE)" if "volume" in columns else "NULL"
         funding_sql = (
             "COALESCE(CAST(funding_rate AS DOUBLE), 0.0)"
@@ -162,6 +162,8 @@ class HistoricalDataLoader:
                     "venue": self.manifest.venue,
                     "market_type": self.manifest.market_type,
                     "manifest": str(self.manifest_path),
+                    "interval_ms": self.manifest.interval_ms,
+                    "price_source": price_source,
                 },
             )
 
@@ -212,15 +214,23 @@ class HistoricalDataLoader:
             ).fetchall()
         }
 
-    def _price_expressions(self, columns: set[str]) -> tuple[str, str]:
+    def _price_expressions(self, columns: set[str]) -> tuple[str, str, str]:
+        """Return executable-price SQL plus explicit price provenance.
+
+        Native bid/ask observations can represent point-in-time executable quotes.
+        A close-only bar is different: the loader synthesizes a spread around a bar
+        close, so downstream research must not silently treat it as a native quote.
+        """
+
         if {"bid", "ask"}.issubset(columns):
-            return "CAST(bid AS DOUBLE)", "CAST(ask AS DOUBLE)"
+            return "CAST(bid AS DOUBLE)", "CAST(ask AS DOUBLE)", "native_bid_ask"
         if "close" not in columns:
             raise ValueError("dataset requires bid+ask or close")
         half_spread = self.manifest.default_spread_bps / 20_000.0
         return (
             f"CAST(close AS DOUBLE) * {1.0 - half_spread:.16f}",
             f"CAST(close AS DOUBLE) * {1.0 + half_spread:.16f}",
+            "synthetic_from_close",
         )
 
 
