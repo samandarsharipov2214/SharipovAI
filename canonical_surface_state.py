@@ -12,9 +12,10 @@ import os
 from pathlib import Path
 from typing import Any
 
-from storage import ProjectDatabase, list_json_items
+from storage import ProjectDatabase, count_json_items, list_json_items
 
 _STATE_NAMESPACE = "autonomous_paper_state"
+_TRADE_WINDOW = 100
 
 
 def load_canonical_paper_state(database: ProjectDatabase | None = None) -> dict[str, Any]:
@@ -38,6 +39,9 @@ def load_canonical_paper_state(database: ProjectDatabase | None = None) -> dict[
             "open_positions": 0,
             "positions": [],
             "trades": [],
+            "trade_history_count": 0,
+            "trade_history_window_count": 0,
+            "trade_history_complete": True,
             "exchange_status": {"mode": os.getenv("EXCHANGE_MODE", "sandbox"), "connected": False},
             "real_orders_blocked": True,
         }
@@ -56,9 +60,11 @@ def load_canonical_paper_state(database: ProjectDatabase | None = None) -> dict[
         positions = []
 
     trade_namespace = f"paper_trades:{scope}"
+    trade_count = count_json_items(db, trade_namespace)
+    newest = list_json_items(db, trade_namespace, limit=_TRADE_WINDOW, newest_first=True)
     trades = [
         dict(item["value"])
-        for item in list_json_items(db, trade_namespace, limit=5_000)
+        for item in reversed(newest)
         if isinstance(item.get("value"), dict)
     ]
     realized = _number(state.get("realized_pnl"))
@@ -76,7 +82,9 @@ def load_canonical_paper_state(database: ProjectDatabase | None = None) -> dict[
         "open_positions": len(positions),
         "positions": positions,
         "trades": trades,
-        "trade_history_count": len(trades),
+        "trade_history_count": trade_count,
+        "trade_history_window_count": len(trades),
+        "trade_history_complete": trade_count <= len(trades),
         "exchange_status": {
             "mode": os.getenv("EXCHANGE_MODE", "sandbox"),
             "connected": None,
