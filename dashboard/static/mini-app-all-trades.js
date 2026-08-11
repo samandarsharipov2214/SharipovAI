@@ -70,6 +70,23 @@
     return map[String(status || 'OPEN').toUpperCase()] || String(status || 'открыта');
   }
 
+  function appendLine(container, text) {
+    if (container.childNodes.length) container.appendChild(document.createElement('br'));
+    container.appendChild(document.createTextNode(text));
+  }
+
+  function createStat(label, id, value) {
+    const item = document.createElement('div');
+    item.className = 'mini-stat';
+    const small = document.createElement('small');
+    small.textContent = label;
+    const strong = document.createElement('b');
+    strong.id = id;
+    strong.textContent = value;
+    item.append(small, strong);
+    return item;
+  }
+
   function renderAllTrades(state) {
     const table = document.querySelector('.mini-table tbody');
     const section = document.getElementById('trades-section');
@@ -89,9 +106,15 @@
     setText('#all-trades-profit-gate', profitGate.reason_ru || 'ожидаю следующий сигнал');
     setText('#all-trades-last-tick', summary.last_tick_at ? `${fmtTime(summary.last_tick_at)} · ${ageText(summary.last_tick_at)}` : '—');
 
-    table.innerHTML = '';
+    table.replaceChildren();
     if (!trades.length) {
-      table.innerHTML = '<tr><td>Сделок пока нет. Это может быть правильно, если Profitability Gate не видит преимущества.</td><td>0.00</td></tr>';
+      const tr = document.createElement('tr');
+      const message = document.createElement('td');
+      const pnl = document.createElement('td');
+      message.textContent = 'Сделок пока нет. Это может быть правильно, если Profitability Gate не видит преимущества.';
+      pnl.textContent = '0.00';
+      tr.append(message, pnl);
+      table.appendChild(tr);
       return;
     }
 
@@ -106,8 +129,24 @@
       const edgeRatio = Number(trade.edge_to_fee_ratio || 0);
       const tr = document.createElement('tr');
       tr.className = 'trade-clickable all-trade-row';
-      tr.dataset.tradeId = trade.id || '';
-      tr.innerHTML = `<td><b>#${trades.length - index} · ${trade.asset || trade.symbol || 'UNKNOWN'} ${trade.side || ''}</b><br><small>${statusRu(trade.status)} · комиссия ${fmt(fee)} USDT · ${sourceRu(trade.source, trade.source_ru)}<br>ожидание: ${expected >= 0 ? '+' : ''}${fmt(expected)} USDT · edge/fee ${edgeRatio.toFixed(2)}x<br>🕒 открыта: ${opened} · ${age}<br>⏱ длительность: ${duration}<br>🏁 закрыта: ${closed}</small></td><td class="${pnl >= 0 ? 'positive' : 'negative'}">${pnl >= 0 ? '+' : ''}${fmt(pnl)}</td>`;
+      tr.dataset.tradeId = String(trade.id || '');
+
+      const details = document.createElement('td');
+      const title = document.createElement('b');
+      title.textContent = `#${trades.length - index} · ${String(trade.asset || trade.symbol || 'UNKNOWN')} ${String(trade.side || '')}`;
+      const small = document.createElement('small');
+      appendLine(small, `${statusRu(trade.status)} · комиссия ${fmt(fee)} USDT · ${sourceRu(trade.source, trade.source_ru)}`);
+      appendLine(small, `ожидание: ${expected >= 0 ? '+' : ''}${fmt(expected)} USDT · edge/fee ${edgeRatio.toFixed(2)}x`);
+      appendLine(small, `🕒 открыта: ${opened} · ${age}`);
+      appendLine(small, `⏱ длительность: ${duration}`);
+      appendLine(small, `🏁 закрыта: ${closed}`);
+      details.append(title, document.createElement('br'), small);
+
+      const pnlCell = document.createElement('td');
+      pnlCell.className = pnl >= 0 ? 'positive' : 'negative';
+      pnlCell.textContent = `${pnl >= 0 ? '+' : ''}${fmt(pnl)}`;
+
+      tr.append(details, pnlCell);
       table.appendChild(tr);
     });
   }
@@ -117,13 +156,33 @@
     const box = document.createElement('div');
     box.id = 'all-trades-summary';
     box.className = 'mini-grid';
-    box.innerHTML = `<div class="mini-stat"><small>Всего сделок</small><b id="all-trades-count">0</b></div><div class="mini-stat"><small>Открыты</small><b id="all-trades-open">0</b></div><div class="mini-stat"><small>Закрыты</small><b id="all-trades-closed">0</b></div><div class="mini-stat"><small>Пропущено плохих входов</small><b id="all-trades-skipped">0</b></div><div class="mini-stat"><small>Прибыльных закрытий</small><b id="all-trades-profitable">0/0</b></div><div class="mini-stat"><small>Net PnL</small><b id="all-trades-pnl">0.00 USDT</b></div><div class="mini-stat"><small>Последний цикл</small><b id="all-trades-last-tick">—</b></div><div class="mini-stat"><small>Причина</small><b id="all-trades-reason">—</b></div><div class="mini-stat"><small>Profitability Gate</small><b id="all-trades-profit-gate">—</b></div>`;
+    box.append(
+      createStat('Всего сделок', 'all-trades-count', '0'),
+      createStat('Открыты', 'all-trades-open', '0'),
+      createStat('Закрыты', 'all-trades-closed', '0'),
+      createStat('Пропущено плохих входов', 'all-trades-skipped', '0'),
+      createStat('Прибыльных закрытий', 'all-trades-profitable', '0/0'),
+      createStat('Net PnL', 'all-trades-pnl', '0.00 USDT'),
+      createStat('Последний цикл', 'all-trades-last-tick', '—'),
+      createStat('Причина', 'all-trades-reason', '—'),
+      createStat('Profitability Gate', 'all-trades-profit-gate', '—'),
+    );
     const title = section.querySelector('h2');
     if (title) title.insertAdjacentElement('afterend', box);
 
     const hint = section.querySelector('.info-box');
     if (hint) {
-      hint.innerHTML = '<b>Новая логика:</b> сделка открывается только если ожидаемое преимущество больше комиссии и риска. Если преимущества нет — вход пропускается, чтобы не делать минус ради количества. Полный JSON: <a href="/api/paper-activity/state">/api/paper-activity/state</a>.';
+      const strong = document.createElement('b');
+      strong.textContent = 'Новая логика:';
+      const link = document.createElement('a');
+      link.href = '/api/paper-activity/state';
+      link.textContent = '/api/paper-activity/state';
+      hint.replaceChildren(
+        strong,
+        document.createTextNode(' сделка открывается только если ожидаемое преимущество больше комиссии и риска. Если преимущества нет — вход пропускается, чтобы не делать минус ради количества. Полный JSON: '),
+        link,
+        document.createTextNode('.'),
+      );
     }
   }
 
