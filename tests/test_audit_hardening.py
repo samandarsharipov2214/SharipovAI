@@ -57,6 +57,31 @@ def test_retention_apply_deletes_only_unprotected_old_events(tmp_path: Path) -> 
     assert len(db.list_events("execution")) == 1
 
 
+def test_retention_never_deletes_canonical_decision_risk_portfolio_or_learning_history(tmp_path: Path) -> None:
+    db = ProjectDatabase(f"sqlite:///{tmp_path / 'retention.db'}")
+    db.initialize()
+    old = int(time.time() * 1000) - 40 * 86_400_000
+    protected = (
+        "decision_quality",
+        "trading_candidates",
+        "risk_assessments",
+        "portfolio_snapshots",
+        "council_market_evidence",
+        "paper_decision_settlements",
+        "self_learning_events",
+    )
+    for namespace in protected:
+        db.append_event(namespace, "proof", namespace, {"keep": True}, created_at_ms=old)
+    db.append_event("news_fetch_observations", "source_fetch", "old-news", {"keep": False}, created_at_ms=old)
+
+    result = run_retention(db=db, retain_days=30, batch_size=100, apply=True)
+
+    assert result.deleted_rows == 1
+    assert db.list_events("news_fetch_observations") == []
+    for namespace in protected:
+        assert len(db.list_events(namespace)) == 1, namespace
+
+
 def test_retention_rejects_dangerously_short_window(tmp_path: Path) -> None:
     db = ProjectDatabase(f"sqlite:///{tmp_path / 'retention.db'}")
     with pytest.raises(ValueError, match="at least 7"):
