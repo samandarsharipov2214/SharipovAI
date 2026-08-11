@@ -61,6 +61,7 @@ def test_existing_agent_payloads_are_persisted_through_adapter(tmp_path) -> None
             "data_quality": 91,
             "risk": 24,
             "evidence_class": "verified_market",
+            "verified_market_data": True,
         },
         {
             "name": "News AI",
@@ -69,6 +70,7 @@ def test_existing_agent_payloads_are_persisted_through_adapter(tmp_path) -> None
             "data_quality": 85,
             "risk": 30,
             "evidence_class": "verified_market",
+            "verified_market_data": True,
         },
     ]
 
@@ -89,14 +91,46 @@ def test_existing_agent_payloads_are_persisted_through_adapter(tmp_path) -> None
     assert snapshot["News AI"]["total_predictions"] == 1
 
 
+def test_adapter_rejects_missing_verification_proof(tmp_path) -> None:
+    meta = PersistentMetaAI(_database(tmp_path))
+    recorded = record_realized_result(
+        meta,
+        [
+            {
+                "name": "Market AI",
+                "decision": "BUY",
+                "confidence": 80,
+                "evidence_class": "verified_market",
+            }
+        ],
+        realized_action="BUY",
+        regime="bull",
+        decision_id="missing-proof",
+        evidence_class="verified_market",
+        verified_market_data=True,
+    )
+    assert recorded is False
+    assert meta.reputations_snapshot() == {}
+
+
 def test_persistent_adapter_requires_decision_id(tmp_path) -> None:
     meta = PersistentMetaAI(_database(tmp_path))
     with pytest.raises(MetaAIPersistenceError, match="decision_id"):
         record_realized_result(
             meta,
-            [{"name": "Market AI", "decision": "BUY", "confidence": 80}],
+            [
+                {
+                    "name": "Market AI",
+                    "decision": "BUY",
+                    "confidence": 80,
+                    "evidence_class": "verified_market",
+                    "verified_market_data": True,
+                }
+            ],
             realized_action="BUY",
             regime="bull",
+            evidence_class="verified_market",
+            verified_market_data=True,
         )
 
 
