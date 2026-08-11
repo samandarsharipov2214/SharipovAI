@@ -97,3 +97,18 @@ def test_unchanged_fetch_is_reemitted_after_retention_interval(tmp_path, monkeyp
     assert len(observations) == 2
     assert observations[0]["created_at_ms"] == 161_000
     assert observations[1]["created_at_ms"] == 100_000
+
+
+def test_repeated_poll_load_does_not_scale_database_events_linearly(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("NEWS_FETCH_OBSERVATION_MIN_INTERVAL_SECONDS", "3600")
+    database = ProjectDatabase(f"sqlite:///{tmp_path / 'news.db'}")
+    hub = NewsHub(database=database)
+    agent = _agent()
+    article = _article()
+
+    for index in range(500):
+        hub.ingest(agent, [article], _fetch(received_at_ms=100_000 + index * 1_000))
+
+    observations = hub.fetch_observations(article_id=article.article_id, limit=1000)
+    assert len(observations) == 1
+    assert len(database.list_events("news_fetch_observations", limit=1000)) == 1
