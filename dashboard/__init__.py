@@ -51,6 +51,7 @@ def create_app(*args: Any, **kwargs: Any):
     install_memory_api(instance)
     if getattr(instance.state, "autonomous_paper_loop", None) is not None:
         install_canonical_runtime_compat_api(instance)
+    install_global_auth_guard(instance)
     install_security_headers(instance)
     install_canonical_presentation_guard(instance)
     return instance
