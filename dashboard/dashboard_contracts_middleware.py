@@ -53,39 +53,34 @@ def install_dashboard_contracts_middleware(app: FastAPI) -> None:
             return JSONResponse(_chat_payload(request, str(payload.get("message", "")).strip()))
 
         if method == "GET" and path == "/api/demo/state":
-            if _canonical_virtual_mode():
-                return JSONResponse(_legacy_virtual_account_payload())
-            demo = importlib.import_module("dashboard.demo_api")
-            return JSONResponse({"status": "ok", "state": demo._load()})
+            return JSONResponse(_canonical_paper_state(request))
 
-        if method == "POST" and path == "/api/demo/balance":
-            demo = importlib.import_module("dashboard.demo_api")
-            payload = await _json_body(request)
-            balance = _finite_number(payload.get("balance"), 10000.0)
-            state = demo._default_state()
-            state["equity"] = balance
-            state["cash"] = balance
-            demo._save(state)
-            return JSONResponse({"status": "ok", "message": f"Виртуальный баланс установлен: {balance:.2f} USDT", "state": state})
+        if method == "POST" and path in {"/api/demo/balance", "/api/demo/chat", "/api/demo/reset"}:
+            return JSONResponse(
+                status_code=410,
+                content={
+                    "status": "deprecated_operation_blocked",
+                    "source_of_truth": "CouncilAuthorizedPaperLoop",
+                    "replacement": "/api/autonomous-paper/status",
+                    "automatic_legacy_mutation": False,
+                },
+            )
 
-        if method == "POST" and path == "/api/demo/chat":
-            return await _demo_chat(request)
-
-        if method == "POST" and path == "/api/demo/reset":
-            demo = importlib.import_module("dashboard.demo_api")
-            state = demo._default_state()
-            demo._save(state)
-            return JSONResponse({"status": "ok", "message": "Виртуальный счёт сброшен.", "state": state})
-
-        if os.getenv("PAPER_ACTIVITY_STATE_FILE"):
-            if method == "GET" and path == "/api/paper-activity/state":
-                return JSONResponse(_paper_state_response())
-            if method == "POST" and path == "/api/paper-activity/tick":
-                return JSONResponse(_paper_tick_response())
-            if method == "POST" and path == "/api/paper-activity/catch-up":
-                return JSONResponse(_paper_catch_up_response())
-            if method == "GET" and path == "/api/paper-activity/trades":
-                return JSONResponse(_paper_trades_response())
+        if path in {
+            "/api/paper-activity/state",
+            "/api/paper-activity/tick",
+            "/api/paper-activity/catch-up",
+            "/api/paper-activity/trades",
+        }:
+            return JSONResponse(
+                status_code=410,
+                content={
+                    "status": "deprecated_operation_blocked",
+                    "source_of_truth": "CouncilAuthorizedPaperLoop",
+                    "replacement": "/api/autonomous-paper/status",
+                    "automatic_legacy_mutation": False,
+                },
+            )
 
         if method == "GET" and path == "/api/social-news":
             return JSONResponse(_social_news_payload())
@@ -135,21 +130,43 @@ def _ai_bots_page() -> str:
 
 
 def _chat_payload(request: Request, message: str) -> dict[str, Any]:
-    text = message.lower()
-    if any(part in text for part in ("ты ии", "ты ии или бот", "кто ты")):
-        reply = "Я SharipovAI — AI-помощник Самандара, а не просто кнопочный бот. Я объединяю Market, News, Risk, Portfolio и Learning AI."
-        return {"status": "ok", "reply": reply, "run": {"decision": "WATCH"}, "intent": "identity", "source_ai": "General Controller"}
-    if "что купил" in text or "что было куплено" in text:
-        reply = "Сейчас открыты покупки BTC/USDT и SOL/USDT; ETH/USDT уже закрыта. Реальные деньги не использовались — это виртуальный счёт."
-        return {"status": "ok", "reply": reply, "run": {"decision": "WATCH"}, "intent": "positions", "source_ai": "Portfolio Engine"}
-    if "какие боты" in text or "какие ии" in text:
-        reply = "AI-ботов проверено: General Controller работает; Market Agent работает; Risk Engine работает. Требуют внимания News Intelligence и Learning Engine."
-        return {"status": "ok", "reply": reply, "run": {"decision": "WATCH"}, "intent": "ai_status", "source_ai": "General Controller"}
-    if text and any(part in text for part in ("что происходит", "вообще", "состояние системы")):
-        reply = "Я понял твой вопрос. Система работает в режиме WATCH, виртуальный баланс защищён, реальные ордера заблокированы."
-        return {"status": "ok", "reply": reply, "run": {"decision": "WATCH"}, "intent": "system_state", "source_ai": "General Controller"}
-    compat = importlib.import_module("dashboard.stabilization_compat")
-    return compat._chat(request, {"message": message})
+    state = _canonical_paper_state(request)["state"]
+    if not state.get("data_available"):
+        return {
+            "status": "unavailable",
+            "reply": "Канонический paper runtime недоступен; ответ о портфеле, риске и сделках не формируется из demo-данных.",
+            "run": {"decision": "UNKNOWN"},
+            "intent": "runtime_unavailable",
+            "source_ai": "canonical autonomous-paper runtime",
+            "state": state,
+        }
+    from ai_chat_orchestrator import answer_chat
+
+    answer = answer_chat(message, state)
+    return {
+        "status": str(answer.get("status") or "ok"),
+        "reply": str(answer.get("reply") or "Ответ не сформирован."),
+        "run": {"decision": state.get("last_action") or "WAIT"},
+        "intent": answer.get("intent"),
+        "source_ai": answer.get("source_ai"),
+        "data": answer.get("data", {}),
+        "state": state,
+    }
+
+
+def _canonical_paper_state(request: Request) -> dict[str, Any]:
+    """Project the only paper owner; compatibility never invents a balance."""
+
+    from telegram_runtime_state import canonical_state_from_app
+
+    state = canonical_state_from_app(request.app)
+    return {
+        "status": "ok" if state.get("data_available") else "unavailable",
+        "deprecated": True,
+        "replacement": "/api/autonomous-paper/status",
+        "source_of_truth": "CouncilAuthorizedPaperLoop",
+        "state": state,
+    }
 
 
 async def _demo_chat(request: Request) -> JSONResponse:
