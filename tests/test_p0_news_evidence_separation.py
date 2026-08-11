@@ -48,7 +48,7 @@ def _fetch(requested: int, received: int) -> SourceFetch:
     )
 
 
-def test_article_identity_and_fetch_observations_are_separate(tmp_path) -> None:
+def test_article_identity_and_unchanged_fetch_observation_are_separate(tmp_path) -> None:
     database = ProjectDatabase(f"sqlite:///{tmp_path / 'project.db'}")
     database.initialize()
     hub = NewsHub(database=database)
@@ -62,13 +62,16 @@ def test_article_identity_and_fetch_observations_are_separate(tmp_path) -> None:
     assert "fetched" not in article["value"]
 
     observations = hub.fetch_observations(article_id="article-1")
-    assert len(observations) == 2
-    assert [row["payload"]["fetch"]["received_at_ms"] for row in observations] == [2_100, 1_100]
+    # Retrieval timestamps alone are operational telemetry, not independent
+    # article provenance.  Repeating an unchanged poll must not grow SQLite
+    # linearly; verification/status/error changes remain append-only evidence.
+    assert len(observations) == 1
+    assert observations[0]["payload"]["fetch"]["received_at_ms"] == 1_100
     assert all(row["entity_type"] == "source_fetch" for row in observations)
     assert hub.state()["article_fetch_evidence_separated"] is True
 
 
-def test_duplicate_suppressed_by_source_agent_still_records_fetch_observation(tmp_path) -> None:
+def test_duplicate_suppressed_by_source_agent_does_not_amplify_unchanged_telemetry(tmp_path) -> None:
     database = ProjectDatabase(f"sqlite:///{tmp_path / 'project.db'}")
     database.initialize()
     hub = NewsHub(database=database)
@@ -80,4 +83,4 @@ def test_duplicate_suppressed_by_source_agent_still_records_fetch_observation(tm
     assert first.accepted == 1
     assert duplicate.accepted == 0
     assert duplicate.duplicates == 1
-    assert len(hub.fetch_observations(article_id="article-1")) == 2
+    assert len(hub.fetch_observations(article_id="article-1")) == 1

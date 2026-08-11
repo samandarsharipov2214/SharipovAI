@@ -11,7 +11,7 @@ import math
 import os
 import time
 import uuid
-from collections import Counter, deque
+from collections import Counter, OrderedDict, deque
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -50,11 +50,31 @@ class NewsHub:
         self._events: deque[dict[str, Any]] = deque(maxlen=event_limit)
         # ``news_memory`` is retained as a backward-compatible analyzed-envelope
         # store. New immutable identity checks use ``news_article_evidence``;
-        # every source retrieval is written separately to project_events.
+        # source retrieval evidence is stored separately in project_events.
         self.memory_namespace = "news_memory"
         self.article_namespace = "news_article_evidence"
         self.fetch_observation_namespace = "news_fetch_observations"
         self.event_namespace = "news_events"
+        # Repeated RSS polls often contain the same article set. Persisting one
+        # fetch event per unchanged article on every poll creates no new decision
+        # evidence but causes severe SQLite write amplification. Keep a bounded
+        # process-local LRU and persist unchanged observations at most hourly by
+        # default. A changed verification/status/error state is always persisted.
+        self.fetch_observation_min_interval_ms = _bounded_int(
+            "NEWS_FETCH_OBSERVATION_MIN_INTERVAL_SECONDS",
+            default=3600,
+            minimum=60,
+            maximum=86400,
+        ) * 1000
+        self.fetch_observation_cache_limit = _bounded_int(
+            "NEWS_FETCH_OBSERVATION_CACHE_LIMIT",
+            default=20000,
+            minimum=1000,
+            maximum=100000,
+        )
+        self._fetch_observation_cache: OrderedDict[
+            str, tuple[tuple[str, str, bool, int, str], int]
+        ] = OrderedDict()
         self._restore()
 
     def ingest(self, agent: SourceAgent, articles: list[NewsArticle], fetched: SourceFetch) -> HubIngestResult:
@@ -146,6 +166,7 @@ class NewsHub:
             "article_history_count": article_total,
             "immutable_article_evidence_count": immutable_article_total,
             "fetch_observation_storage": "project_events" if self.database is not None else "unavailable",
+            "fetch_observation_min_interval_seconds": self.fetch_observation_min_interval_ms // 1000,
             "article_fetch_evidence_separated": self.database is not None,
             "event_history_count": event_total,
             "database_backed": self.database is not None,
@@ -171,12 +192,30 @@ class NewsHub:
     def _record_fetch_observation(self, agent: SourceAgent, article: NewsArticle, fetched: SourceFetch) -> None:
         if self.database is None:
             return
+        observed_at_ms = max(int(fetched.received_at_ms), 1)
+        cache_key = f"{agent.definition.source_id}:{article.article_id}"
+        fingerprint = (
+            str(fetched.source_id),
+            str(agent.definition.source_id),
+            bool(fetched.verified),
+            int(fetched.status_code),
+            str(fetched.error),
+        )
+        previous = self._fetch_observation_cache.get(cache_key)
+        if previous is not None:
+            previous_fingerprint, last_persisted_ms = previous
+            unchanged = previous_fingerprint == fingerprint
+            elapsed_ms = observed_at_ms - last_persisted_ms
+            if unchanged and elapsed_ms < self.fetch_observation_min_interval_ms:
+                self._fetch_observation_cache.move_to_end(cache_key)
+                return
+
         payload = {
             "article_id": article.article_id,
             "agent_id": agent.definition.source_id,
             "source_id": fetched.source_id,
             "fetch": fetched.to_dict(),
-            "observed_at_ms": int(fetched.received_at_ms),
+            "observed_at_ms": observed_at_ms,
             "article_evidence_namespace": self.article_namespace,
         }
         self.database.append_event(
@@ -184,8 +223,12 @@ class NewsHub:
             "source_fetch",
             article.article_id,
             payload,
-            created_at_ms=max(int(fetched.received_at_ms), 1),
+            created_at_ms=observed_at_ms,
         )
+        self._fetch_observation_cache[cache_key] = (fingerprint, observed_at_ms)
+        self._fetch_observation_cache.move_to_end(cache_key)
+        while len(self._fetch_observation_cache) > self.fetch_observation_cache_limit:
+            self._fetch_observation_cache.popitem(last=False)
 
     def _restore(self) -> None:
         if self.database is None:
