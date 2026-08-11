@@ -11,7 +11,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, Iterable
 
 from .backtest import EventDrivenBacktester
-from .models import BacktestConfig, BacktestResult, MarketEvent
+from .models import BacktestConfig, BacktestResult, MarketEvent, Side
 from .strategies import (
     BreakoutStrategy,
     BuyAndHoldStrategy,
@@ -47,6 +47,7 @@ class StrategyComparison:
     benchmark: bool
     return_percent: float
     net_pnl: float
+    net_expectancy_per_closed_trade: float
     max_drawdown_percent: float
     total_fees: float
     total_slippage_cost: float
@@ -55,6 +56,7 @@ class StrategyComparison:
     sortino_ratio: float
     profit_factor: float
     trade_count: int
+    closed_trade_count: int
     exposure_time_percent: float
     beats_buy_and_hold: bool
     review_eligible: bool
@@ -157,15 +159,35 @@ def _comparison(
     benchmark_return: float,
     config: StrategySuiteConfig,
 ) -> StrategyComparison:
+    closed_trade_count = int(
+        result.metadata.get(
+            "closed_trade_count",
+            result.winning_closed_trades + result.losing_closed_trades,
+        )
+        or 0
+    )
+    closed_net_pnl = sum(
+        float(fill.realized_pnl)
+        for fill in result.fills
+        if fill.side is Side.SELL
+    )
+    net_expectancy = (
+        closed_net_pnl / closed_trade_count
+        if closed_trade_count > 0
+        else 0.0
+    )
+
     failed: list[str] = []
-    if result.trade_count < config.minimum_trades:
-        failed.append("insufficient_trades")
+    if closed_trade_count < config.minimum_trades:
+        failed.append("insufficient_closed_trades")
     if result.max_drawdown_percent > config.maximum_drawdown_percent:
         failed.append("drawdown_limit_exceeded")
     if name != "buy_and_hold" and result.return_percent <= benchmark_return:
         failed.append("did_not_beat_buy_and_hold")
     if result.net_pnl <= 0:
         failed.append("non_positive_net_pnl")
+    if net_expectancy <= 0:
+        failed.append("non_positive_net_expectancy")
     if result.total_fees < 0 or result.total_slippage_cost < 0 or result.total_funding_cost < 0:
         failed.append("invalid_cost_accounting")
 
@@ -180,6 +202,7 @@ def _comparison(
         benchmark=name == "buy_and_hold",
         return_percent=result.return_percent,
         net_pnl=result.net_pnl,
+        net_expectancy_per_closed_trade=round(net_expectancy, 8),
         max_drawdown_percent=result.max_drawdown_percent,
         total_fees=result.total_fees,
         total_slippage_cost=result.total_slippage_cost,
@@ -188,6 +211,7 @@ def _comparison(
         sortino_ratio=result.sortino_ratio,
         profit_factor=result.profit_factor,
         trade_count=result.trade_count,
+        closed_trade_count=closed_trade_count,
         exposure_time_percent=result.exposure_time_percent,
         beats_buy_and_hold=name != "buy_and_hold" and result.return_percent > benchmark_return,
         review_eligible=name != "buy_and_hold" and not failed,
