@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from dashboard.canonical_runtime_compat_api import install_canonical_runtime_compat_api
+from dashboard.final_ci_contracts import _install_app_middleware
 
 
 class _CanonicalLoop:
@@ -132,3 +133,18 @@ def test_runtime_truth_reports_canonical_owners_and_locked_execution(monkeypatch
     assert payload["safety"]["status"] == "locked"
     assert payload["legacy"]["api_run_allowed_for_ui"] is False
     assert payload["legacy"]["paper_activity_engine_active"] is False
+
+
+def test_final_ci_compatibility_layer_defers_to_canonical_runtime() -> None:
+    app, loop, _startup = _app()
+    _install_app_middleware(app)
+
+    with TestClient(app) as client:
+        state = client.get("/api/virtual-account/state")
+        tick = client.post("/api/virtual-account/tick")
+
+    assert state.status_code == 200
+    assert state.json()["source_of_truth"] == "CouncilAuthorizedPaperLoop"
+    assert state.json()["state"]["mutation_on_read"] is False
+    assert tick.status_code == 410
+    assert loop.tick_count == 0
