@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 import httpx
 
 from ai_chat_orchestrator import answer_chat
-from dashboard.demo_api import _load as load_shared_state
+from canonical_surface_state import load_canonical_paper_state as load_shared_state
 from telegram_deploy_control import (
     cancel_confirmation,
     claim_owner,
@@ -178,6 +178,14 @@ def _reply(question: str) -> str:
 
 def _overview() -> str:
     state = load_shared_state()
+    if state.get("status") != "ok":
+        return (
+            "🏠 <b>SharipovAI Mission Control</b>\n\n"
+            "Canonical PAPER state: <b>нет актуальных данных</b>\n"
+            f"Источник: <b>{_safe(state.get('source_of_truth', 'ProjectDatabase'))}</b>\n"
+            "Реальные ордера: <b>заблокированы</b>\n\n"
+            "Показывать старый demo-баланс вместо реального состояния запрещено."
+        )
     return (
         "🏠 <b>SharipovAI Mission Control</b>\n\n"
         f"Режим: <b>{_safe(state.get('mode', 'PAPER'))}</b>\n"
@@ -185,28 +193,37 @@ def _overview() -> str:
         f"Net PnL: <b>{float(state.get('net_pnl', 0)):.2f} USDT</b>\n"
         f"Комиссии: <b>{float(state.get('total_fees', 0)):.2f} USDT</b>\n"
         f"Открытые позиции: <b>{int(state.get('open_positions', 0))}</b>\n\n"
-        "Выбери раздел ниже. Mini App открывает основной VPS SharipovAI."
+        f"Источник: <b>{_safe(state.get('source_of_truth'))}</b>"
     )
 
 
 def _trades() -> str:
     state = load_shared_state()
+    if state.get("status") != "ok":
+        return "💼 <b>Сделки</b>\n\nCanonical trade history сейчас недоступна; demo-сделки не показываются."
     trades = list(state.get("trades", []))
     lines = ["💼 <b>Сделки</b>", ""]
     if not trades:
-        lines.append("Сделок пока нет.")
+        lines.append("В canonical history сделок пока нет.")
     for index, trade in enumerate(trades[-10:], start=max(1, len(trades) - 9)):
-        lines.append(f"{index}. <b>{_safe(trade.get('symbol', trade.get('asset', 'UNKNOWN')))}</b> {_safe(trade.get('side', ''))} · fee {_safe(trade.get('fee', 0))} · net PnL {_safe(trade.get('net_pnl', '—'))}")
-    lines.append("\nПолные карточки сделок и графика доступны в Mini App.")
+        timestamp = trade.get("time") or trade.get("created_at_ms") or "—"
+        lines.append(
+            f"{index}. <b>{_safe(trade.get('symbol', trade.get('asset', 'UNKNOWN')))}</b> "
+            f"{_safe(trade.get('side', ''))} · {_safe(timestamp)} · fee {_safe(trade.get('fee', 0))} "
+            f"· net PnL {_safe(trade.get('net_pnl', '—'))}"
+        )
+    lines.append("\nИсточник: canonical ProjectDatabase history.")
     return "\n".join(lines)
 
 
 def _status() -> str:
     state = load_shared_state()
+    available = state.get("status") == "ok"
     return (
         "📡 <b>Статус интеграции</b>\n\n"
-        "Website core: <b>подключён</b>\nAI Chat Orchestrator: <b>подключён</b>\n"
-        "Shared paper state: <b>подключён</b>\nBot Communication Network: <b>подключён</b>\n"
+        f"Canonical PAPER state: <b>{'доступен' if available else 'недоступен'}</b>\n"
+        f"Источник: <b>{_safe(state.get('source_of_truth', 'ProjectDatabase'))}</b>\n"
+        f"Database-backed: <b>{_safe(bool(state.get('database_backed')))}</b>\n"
         f"Mini App: <b>{_safe(_webapp_url())}</b>\n"
         f"Exchange mode: <b>{_safe((state.get('exchange_status') or {}).get('mode', 'sandbox'))}</b>\n"
         "LIVE execution: <b>заблокирован</b>"
