@@ -1,3 +1,9 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+
+import pytest
+
 from meta_ai import AgentOpinion, MetaAI, PredictionOutcome
 
 
@@ -46,3 +52,43 @@ def test_no_opinions_defaults_to_wait():
     result = MetaAI().dynamic_consensus([])
     assert result.action == "WAIT"
     assert result.blocked
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_agent_opinion_rejects_non_finite_scores(value: float) -> None:
+    with pytest.raises(ValueError, match="finite number"):
+        AgentOpinion("market", "BUY", value, 0.9, 0.2, "bull")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("confidence", float("nan")),
+        ("pnl_contribution", float("inf")),
+        ("drawdown_contribution", float("-inf")),
+    ],
+)
+def test_prediction_outcome_rejects_non_finite_values(field: str, value: float) -> None:
+    kwargs = {
+        "agent_id": "market",
+        "predicted_action": "BUY",
+        "realized_action": "BUY",
+        "confidence": 0.8,
+        "pnl_contribution": 1.0,
+        "drawdown_contribution": 0.2,
+        "regime": "bull",
+        "timestamp": datetime.now(UTC),
+    }
+    kwargs[field] = value
+    with pytest.raises(ValueError, match="finite number"):
+        PredictionOutcome(**kwargs)
+
+
+def test_prediction_outcome_requires_timezone_aware_timestamp() -> None:
+    with pytest.raises(ValueError, match="timezone-aware"):
+        PredictionOutcome("market", "BUY", "BUY", 0.8, 1.0, 0.2, "bull", datetime.now())
+
+
+def test_invalid_regime_does_not_enter_consensus() -> None:
+    with pytest.raises(ValueError, match="Unsupported regime"):
+        MetaAI().dynamic_consensus([AgentOpinion("market", "BUY", 0.8)], regime="future_regime")
