@@ -41,22 +41,15 @@ def test_ai_bots_endpoint_returns_canonical_organs(monkeypatch, tmp_path) -> Non
         assert payload["summary"]["canonical_ai_count"] == len(CANONICAL_AI_ORGANS)
 
 
-def test_legacy_demo_state_mirrors_virtual_account(monkeypatch, tmp_path) -> None:
+def test_legacy_virtual_account_endpoint_is_disabled(monkeypatch, tmp_path) -> None:
     _configure_runtime(monkeypatch, tmp_path)
     with TestClient(create_app()) as client:
-        virtual_payload = client.get("/api/virtual-account/state").json()
-        legacy_payload = client.get("/api/demo/state").json()
-
-        virtual_state = virtual_payload["state"]
-        legacy_state = legacy_payload["state"]
-        virtual_summary = virtual_state.get("summary", {})
-
-        assert legacy_payload["deprecated"] is True
-        assert legacy_payload["use"] == "/api/virtual-account/state"
-        assert legacy_state["mode"] == "VIRTUAL_ACCOUNT"
-        assert legacy_state["equity"] == virtual_summary.get("equity", virtual_state.get("equity"))
-        assert legacy_state["trades"] == virtual_state["trades"]
-        assert legacy_state["online_monitoring"]["real_orders_blocked"] is True
+        virtual = client.get("/api/virtual-account/state")
+        assert virtual.status_code == 410
+        payload = virtual.json()
+        assert payload["status"] == "blocked"
+        assert payload["source_of_truth"] == "CouncilAuthorizedPaperLoop"
+        assert payload["automatic_legacy_mutation"] is False
 
 
 def test_realtime_status_exposes_news_startup_truth(monkeypatch, tmp_path) -> None:
