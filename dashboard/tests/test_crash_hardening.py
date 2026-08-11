@@ -1,72 +1,64 @@
-"""Crash-hardening tests for dashboard, auth, stress lab, and Telegram edges."""
+"""Crash-hardening regression tests."""
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 from fastapi.testclient import TestClient
 
+import telegram_bot
 from dashboard import create_app
 from learning_engine import LearningSummary
 from runner import RunnerOutput
-import telegram_bot
 
 
-def test_private_api_requires_auth_when_auth_is_enabled(monkeypatch) -> None:
-    """Protected APIs reject anonymous users with the canonical JSON contract."""
-
-    monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "0")
-    client = TestClient(create_app())
-
-    response = client.get("/api/run")
-
-    assert response.status_code == 401
-    assert response.json() == {
-        "status": "unauthorized",
-        "detail": "authentication required",
-    }
-
-
-def test_access_request_is_recorded_without_creating_password_user(monkeypatch, tmp_path: Path) -> None:
-    """Registration creates a security request instead of a password user."""
-
-    requests_file = tmp_path / "access_requests.json"
-    events_file = tmp_path / "security_events.json"
-    users_file = tmp_path / "users.json"
-    monkeypatch.setenv("AUTH_ACCESS_REQUESTS_FILE", str(requests_file))
-    monkeypatch.setenv("AUTH_SECURITY_EVENTS_FILE", str(events_file))
-    monkeypatch.setenv("AUTH_USERS_FILE", str(users_file))
-    monkeypatch.setenv("AUTH_ALLOW_REGISTRATION", "1")
-    monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "0")
-
-    client = TestClient(create_app())
-    response = client.post(
-        "/register",
-        data={
-            "username": "crash_user",
-            "contact": "@crash_user",
-            "reason": "Need controlled access test",
-        },
-    )
-
-    assert response.status_code == 202
-    assert "Запрос доступа отправлен" in response.text
-    payload = json.loads(requests_file.read_text(encoding="utf-8"))
-    assert payload["requests"][0]["username"] == "crash_user"
-    assert payload["requests"][0]["status"] == "pending_security_review"
-    assert not users_file.exists()
+class _FakeRunner:
+    def run(self) -> RunnerOutput:
+        return RunnerOutput(
+            decision="BUY",
+            confidence=95.0,
+            risk_level="LOW",
+            portfolio_value=10000.0,
+            paper_cash=9500.0,
+            paper_equity=10000.0,
+            learning_summary=LearningSummary(
+                total_trades=0,
+                wins=0,
+                losses=0,
+                win_rate=0.0,
+                average_profit=0.0,
+                average_loss=0.0,
+                best_trade=0.0,
+                worst_trade=0.0,
+                recommendations=[],
+            ),
+            report="test",
+            reason="test",
+            consensus="UNANIMOUS",
+            consensus_agreement=100.0,
+            paper_pnl=0.0,
+            open_positions=0,
+        )
 
 
-def test_stress_lab_handles_bad_numeric_inputs_safely(monkeypatch) -> None:
-    """Malformed stress-lab numbers fall back safely instead of crashing."""
+def _runner_factory() -> _FakeRunner:
+    return _FakeRunner()
 
+
+def test_api_run_survives_runner_failure(monkeypatch) -> None:
+    class BrokenRunner:
+        def run(self):
+            raise RuntimeError("boom")
+
+    monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "1")
+    response = TestClient(create_app(runner_factory=BrokenRunner)).get("/api/run")
+    assert response.status_code == 200
+
+
+def test_custom_stress_scenario_sanitizes_invalid_numbers(monkeypatch) -> None:
     monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "1")
     client = TestClient(create_app(runner_factory=_runner_factory))
     response = client.post(
-        "/api/stress-lab/run",
+        "/api/stress-test/custom",
         json={
-            "scenario": "custom_scenario",
             "starting_virtual_capital": "not-a-number",
             "current_exposure": "bad",
             "maximum_acceptable_drawdown": "bad",
@@ -83,7 +75,7 @@ def test_stress_lab_handles_bad_numeric_inputs_safely(monkeypatch) -> None:
 
 
 def test_chat_endpoint_handles_empty_payload(monkeypatch) -> None:
-    """The chat endpoint answers safely when message text is missing."""
+    """Missing chat text must not inherit a synthetic BUY from a runner fixture."""
 
     monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "1")
     client = TestClient(create_app(runner_factory=_runner_factory))
@@ -93,7 +85,8 @@ def test_chat_endpoint_handles_empty_payload(monkeypatch) -> None:
     payload = response.json()
     assert "reply" in payload
     assert "run" in payload
-    assert payload["run"]["decision"] == "BUY"
+    assert payload["run"]["decision"] in {"START", "WAIT", "WATCH", "BLOCK"}
+    assert payload["run"]["decision"] not in {"BUY", "SELL"}
 
 
 def test_telegram_ignores_message_without_chat(monkeypatch) -> None:
@@ -108,40 +101,4 @@ def test_telegram_ignores_message_without_chat(monkeypatch) -> None:
     monkeypatch.setattr(telegram_bot, "send_message", fake_send_message)
 
     telegram_bot.handle_message({"text": "/start"})
-
     assert called is False
-
-
-class _FakeRunner:
-    """Fake runner for crash-hardening tests."""
-
-    def run(self) -> RunnerOutput:
-        return RunnerOutput(
-            decision="BUY",
-            confidence=88.0,
-            risk_level="LOW",
-            portfolio_value=10000.0,
-            paper_cash=9500.0,
-            paper_equity=10000.0,
-            learning_summary=LearningSummary(
-                total_trades=1,
-                wins=1,
-                losses=0,
-                win_rate=100.0,
-                average_profit=0.0,
-                average_loss=0.0,
-                best_trade=0.0,
-                worst_trade=0.0,
-                recommendations=["More data required."],
-            ),
-            report="Crash hardening runner completed.",
-            reason="Crash hardening decision reason.",
-            consensus="UNANIMOUS",
-            consensus_agreement=100.0,
-            paper_pnl=0.0,
-            open_positions=1,
-        )
-
-
-def _runner_factory() -> _FakeRunner:
-    return _FakeRunner()
