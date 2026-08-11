@@ -36,13 +36,12 @@ _LOCAL_READONLY_EXACT = {"/api/market/bybit-websocket/status"}
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 
 
-
 def _is_private_ip(host: str) -> bool:
-    """Проверяет, принадлежит ли IP частной сети (RFC 1918)."""
-    if host.startswith('10.') or host.startswith('192.168.'):
+    """Return True only for an RFC 1918 IPv4 address."""
+    if host.startswith("10.") or host.startswith("192.168."):
         return True
-    if host.startswith('172.'):
-        parts = host.split('.')
+    if host.startswith("172."):
+        parts = host.split(".")
         if len(parts) == 4:
             try:
                 second = int(parts[1])
@@ -51,6 +50,7 @@ def _is_private_ip(host: str) -> bool:
             except ValueError:
                 pass
     return False
+
 
 def _is_loopback_request(request: Request) -> bool:
     host = request.client.host if request.client else None
@@ -117,7 +117,10 @@ def install_global_auth_guard(app: FastAPI) -> None:
                 )
             return await call_next(request)
 
-        if path in _LOCAL_READONLY_EXACT and (_is_loopback_request(request) or _is_private_ip(host)):
+        client_host = request.client.host if request.client else ""
+        if path in _LOCAL_READONLY_EXACT and (
+            _is_loopback_request(request) or _is_private_ip(client_host)
+        ):
             return await call_next(request)
 
         if auth_disabled():
