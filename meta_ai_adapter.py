@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from meta_ai import AgentOpinion, ConsensusResult, MetaAI, PredictionOutcome
+from meta_ai_persistence import VERIFIED_EVIDENCE_CLASSES
 
 
 def opinions_from_payloads(payloads: Sequence[Mapping[str, Any]], *, regime: str = "unknown") -> list[AgentOpinion]:
@@ -56,15 +57,10 @@ def record_realized_result(
     drawdown_by_agent: Mapping[str, float] | None = None,
     regime: str = "unknown",
     decision_id: str | None = None,
-    evidence_class: str = "verified_market",
-    verified_market_data: bool = True,
+    evidence_class: str = "",
+    verified_market_data: bool = False,
 ) -> bool:
-    """Record one realized result in memory or canonical persistent MetaAI.
-
-    Persistent MetaAI instances require ``decision_id`` and verified evidence.
-    Plain MetaAI remains backward compatible and records the same outcomes in
-    process memory.
-    """
+    """Record one realized result only from explicitly verified evidence."""
 
     pnl = pnl_by_agent or {}
     drawdown = drawdown_by_agent or {}
@@ -94,6 +90,8 @@ def record_realized_result(
             )
         )
 
+    if not verified_market_data or evidence_class not in VERIFIED_EVIDENCE_CLASSES:
+        return False
     meta.record_outcomes(outcomes)
     return True
 
@@ -102,13 +100,9 @@ def _learning_eligible(payload: Mapping[str, Any]) -> bool:
     for field in ("learning_eligible", "evidence_eligible", "reputation_eligible"):
         if payload.get(field) is False:
             return False
-    return str(payload.get("evidence_class") or "").strip().lower() not in {
-        "synthetic",
-        "synthetic_simulation",
-        "demo",
-        "fixture",
-        "mock",
-    }
+    evidence_class = str(payload.get("evidence_class") or "").strip().lower()
+    verified = payload.get("verified_market_data") is True or payload.get("data_verified") is True
+    return verified and evidence_class in VERIFIED_EVIDENCE_CLASSES
 
 
 def _ratio(value: Any, name: str) -> float:
