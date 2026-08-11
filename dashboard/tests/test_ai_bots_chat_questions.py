@@ -9,21 +9,13 @@ from learning_engine import LearningSummary
 from runner import RunnerOutput
 
 
-def test_chat_answers_ai_bot_status_question_with_bot_list() -> None:
-    """Questions about working bots should return bot status, not identity fallback."""
+def test_chat_requires_authentication_by_default() -> None:
+    """Static compatibility text must not bypass the protected chat endpoint."""
 
     client = TestClient(create_app(runner_factory=_runner_factory))
     response = client.post("/api/chat/message", json={"message": "какие боты работают?"})
 
-    assert response.status_code == 200
-    reply = response.json()["reply"]
-    assert "работает" in reply
-    assert "AI-ботов" in reply
-    assert "General Controller" in reply
-    assert "Market Agent" in reply
-    assert "Risk Engine" in reply
-    assert "Требуют внимания" in reply
-    assert "не просто кнопочный бот" not in reply
+    assert response.status_code == 401
 
 
 class _FakeRunner:

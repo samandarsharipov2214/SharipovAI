@@ -70,43 +70,39 @@ def test_ai_bots_api_returns_truthful_supervisor_summary(monkeypatch) -> None:
         assert payload["summary"]["active"] < payload["summary"]["total_bots"]
 
 
-def test_chat_answers_identity_like_ai_assistant(monkeypatch) -> None:
+def test_chat_identity_is_generated_by_the_current_runtime_not_static_contract(monkeypatch) -> None:
     monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "1")
     client = TestClient(create_app(runner_factory=_runner_factory))
     response = client.post("/api/chat/message", json={"message": "ты ИИ или бот?"})
 
     assert response.status_code == 200
-    reply = response.json()["reply"]
-    assert "SharipovAI" in reply
-    assert "AI-помощник" in reply
-    assert "не просто кнопочный бот" in reply
-    assert "Я могу ответить конкретно по торговле" not in reply
+    payload = response.json()
+    assert payload["reply"]
+    assert payload["source_ai"]
+    assert "Сейчас открыты покупки BTC/USDT" not in payload["reply"]
 
 
-def test_chat_answers_what_was_bought_with_trade_details(monkeypatch) -> None:
+def test_chat_does_not_invent_historical_positions(monkeypatch) -> None:
     monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "1")
     client = TestClient(create_app(runner_factory=_runner_factory))
     response = client.post("/api/chat/message", json={"message": "что купил?"})
 
     assert response.status_code == 200
     reply = response.json()["reply"]
-    assert "открыты покупки" in reply
-    assert "BTC/USDT" in reply
-    assert "SOL/USDT" in reply
-    assert "ETH/USDT" in reply
-    assert "Реальные деньги не использовались" in reply
+    assert "BTC/USDT" not in reply
+    assert "SOL/USDT" not in reply
+    assert "ETH/USDT" not in reply
 
 
-def test_chat_answers_unknown_question_with_system_state(monkeypatch) -> None:
+def test_chat_does_not_claim_static_system_state(monkeypatch) -> None:
     monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "1")
     client = TestClient(create_app(runner_factory=_runner_factory))
     response = client.post("/api/chat/message", json={"message": "что происходит вообще?"})
 
     assert response.status_code == 200
     reply = response.json()["reply"]
-    assert "Я понял твой вопрос" in reply
-    assert "виртуальный баланс" in reply
-    assert "Я могу ответить конкретно по торговле" not in reply
+    assert reply
+    assert "виртуальный баланс защищён" not in reply
 
 
 class _FakeRunner:

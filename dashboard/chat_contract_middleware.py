@@ -39,15 +39,9 @@ class ChatContractMiddleware:
 
 
 def _stable_answer(message: str) -> dict[str, Any] | None:
-    text = message.lower()
-    if any(part in text for part in ("ты ии", "ты ии или бот", "кто ты")):
-        return {"status": "ok", "reply": "Я SharipovAI — AI-помощник Самандара, а не просто кнопочный бот. Я объединяю Market, News, Risk, Portfolio и Learning AI.", "run": {"decision": "WATCH"}, "intent": "identity", "source_ai": "General Controller"}
-    if "что купил" in text or "что было куплено" in text:
-        return {"status": "ok", "reply": "Сейчас открыты покупки BTC/USDT и SOL/USDT; ETH/USDT уже закрыта. Реальные деньги не использовались — это виртуальный счёт.", "run": {"decision": "WATCH"}, "intent": "positions", "source_ai": "Portfolio Engine"}
-    if "какие боты" in text or "какие ии" in text:
-        return {"status": "ok", "reply": "AI-ботов проверено: General Controller работает; Market Agent работает; Risk Engine работает. Требуют внимания News Intelligence и Learning Engine.", "run": {"decision": "WATCH"}, "intent": "ai_status", "source_ai": "General Controller"}
-    if text and any(part in text for part in ("что происходит", "вообще", "состояние системы")):
-        return {"status": "ok", "reply": "Я понял твой вопрос. Система работает в режиме WATCH, виртуальный баланс защищён, реальные ордера заблокированы.", "run": {"decision": "WATCH"}, "intent": "system_state", "source_ai": "General Controller"}
+    """Static chat answers are retired: they were a second, fabricated truth."""
+
+    del message
     return None
 
 
