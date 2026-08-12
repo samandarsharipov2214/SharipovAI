@@ -12,6 +12,7 @@ from typing import Callable
 from historical_data import HistoricalDataLoader
 
 from .alpha_experiment import AlphaExperiment
+from .alpha_statistics import circular_block_bootstrap_mean_ci
 from .backtest import EventDrivenBacktester, Strategy
 from .benchmarks import BenchmarkEntry, BenchmarkSuiteResult, compare_strategy_to_benchmarks
 from .models import BacktestConfig, BacktestResult, Side
@@ -40,6 +41,7 @@ class AlphaAcceptanceCriteria:
     minimum_profitable_validation_window_percent: float = 60.0
     require_positive_final_net_pnl: bool = True
     require_positive_final_expectancy: bool = True
+    require_positive_expectancy_ci_lower: bool = True
     require_candidate_beat_buy_hold: bool = True
 
     def __post_init__(self) -> None:
@@ -74,6 +76,8 @@ class AlphaAcceptanceCriteria:
             f"require_positive_final_net_pnl={str(self.require_positive_final_net_pnl).lower()}",
             "require_positive_final_expectancy="
             f"{str(self.require_positive_final_expectancy).lower()}",
+            "require_positive_expectancy_ci_lower="
+            f"{str(self.require_positive_expectancy_ci_lower).lower()}",
             "require_candidate_beat_buy_hold="
             f"{str(self.require_candidate_beat_buy_hold).lower()}",
         )
@@ -89,6 +93,11 @@ class AlphaRunMetrics:
     total_slippage_cost_including_impact: float
     total_funding_cost: float
     net_expectancy_per_organic_closed_trade: float
+    expectancy_ci_95_lower: float | None
+    expectancy_ci_95_upper: float | None
+    expectancy_ci_block_length: int | None
+    expectancy_ci_bootstrap_samples: int | None
+    expectancy_ci_method: str
     profit_factor: float
     max_drawdown_percent: float
     fill_count: int
@@ -332,6 +341,7 @@ def alpha_metrics(result: BacktestResult) -> AlphaRunMetrics:
     )
     organic_pnls = tuple(float(fill.realized_pnl) for fill in organic_sells)
     expectancy = sum(organic_pnls) / len(organic_pnls) if organic_pnls else 0.0
+    interval = circular_block_bootstrap_mean_ci(organic_pnls)
     return AlphaRunMetrics(
         net_pnl=round(result.net_pnl, 8),
         return_percent=round(result.return_percent, 8),
@@ -341,6 +351,11 @@ def alpha_metrics(result: BacktestResult) -> AlphaRunMetrics:
         total_slippage_cost_including_impact=round(result.total_slippage_cost, 8),
         total_funding_cost=round(result.total_funding_cost, 8),
         net_expectancy_per_organic_closed_trade=round(expectancy, 8),
+        expectancy_ci_95_lower=None if interval is None else round(interval.lower, 8),
+        expectancy_ci_95_upper=None if interval is None else round(interval.upper, 8),
+        expectancy_ci_block_length=None if interval is None else interval.block_length,
+        expectancy_ci_bootstrap_samples=None if interval is None else interval.bootstrap_samples,
+        expectancy_ci_method="circular_block_bootstrap_95_seed0",
         profit_factor=round(_profit_factor(organic_pnls), 8),
         max_drawdown_percent=round(result.max_drawdown_percent, 8),
         fill_count=len(result.fills),
@@ -377,13 +392,27 @@ def backtest_risk_config(config: BacktestConfig) -> dict[str, object]:
 
 
 def canonical_falsification_rule(criteria: AlphaAcceptanceCriteria) -> str:
+    gates: list[str] = []
+    if criteria.require_positive_final_net_pnl:
+        gates.append("final-OOS net PnL is non-positive")
+    if criteria.require_positive_final_expectancy:
+        gates.append("organic final-OOS net expectancy is non-positive")
+    if criteria.require_positive_expectancy_ci_lower:
+        gates.append("the 95% circular block-bootstrap expectancy lower bound is not positive")
+    gates.append(
+        f"max drawdown exceeds {float(criteria.maximum_drawdown_percent):g}%"
+    )
+    gates.append(
+        "profitable sequential validation windows are below "
+        f"{float(criteria.minimum_profitable_validation_window_percent):g}%"
+    )
+    if criteria.require_candidate_beat_buy_hold:
+        gates.append("the candidate fails the risk-adjusted Buy&Hold comparison")
     return (
         "INSUFFICIENT_SAMPLE if organic final-OOS closed trades < "
         f"{criteria.minimum_organic_closed_trades}; otherwise REJECT_HYPOTHESIS if "
-        "net PnL or organic net expectancy is non-positive, max drawdown exceeds "
-        f"{float(criteria.maximum_drawdown_percent):g}%, profitable sequential validation "
-        f"windows are below {float(criteria.minimum_profitable_validation_window_percent):g}%, "
-        "or the candidate fails the preregistered risk-adjusted Buy&Hold comparison."
+        + "; or if ".join(gates)
+        + "."
     )
 
 
@@ -491,6 +520,10 @@ def _verdict(
         and metrics.net_expectancy_per_organic_closed_trade <= 0
     ):
         failures.append("final_oos_net_expectancy_not_positive")
+    if criteria.require_positive_expectancy_ci_lower and (
+        metrics.expectancy_ci_95_lower is None or metrics.expectancy_ci_95_lower <= 0
+    ):
+        failures.append("final_oos_expectancy_ci_lower_not_positive")
     if metrics.max_drawdown_percent > criteria.maximum_drawdown_percent:
         failures.append("final_oos_drawdown_exceeds_preregistered_limit")
     if (
