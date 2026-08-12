@@ -30,11 +30,11 @@ It uses no future-derived feature. On close-derived historical bars, the canonic
 
 ## Default frozen parameters
 
-The source of truth is `RegimeFilteredBreakoutConfig`. The first preregistration CLI serializes the exact values into the immutable experiment artifact. No value may be changed after the final holdout has been designated without creating a new experiment ID.
+The source of truth is `RegimeFilteredBreakoutConfig`. The first preregistration CLI serializes the exact values into the immutable experiment artifact. No value may be changed after the final holdout has been designated without creating a new experiment ID and a genuinely new untouched holdout.
 
 ## Data eligibility
 
-Final OOS may not run unless `HistoricalDataLoader.require_final_oos_eligible()` passes. The manifest must therefore carry explicit timestamp semantics, complete content hashes, attributable build commit, timezone-aware creation time, valid executable price provenance, and no observed missing intervals.
+Final OOS may not run unless `HistoricalDataLoader.require_final_oos_eligible()` passes. The manifest must carry explicit timestamp semantics, complete content hashes, attributable build commit, timezone-aware creation time, valid executable price provenance, no observed missing/irregular bar intervals, and complete start/end coverage for every declared symbol.
 
 The preregistration stores the SHA-256 of the exact manifest file. The OOS runner recomputes that hash and validates the underlying Parquet hashes before any final result is accepted.
 
@@ -43,10 +43,10 @@ The preregistration stores the SHA-256 of the exact manifest file. The OOS runne
 1. Build/validate the canonical historical dataset with public read-only data only.
 2. Choose chronological Train, sequential Validation windows, and one untouched Final OOS range.
 3. Use a **clean Git worktree** and run `tools/preregister_alpha_experiment.py`. It freezes code SHA, manifest SHA, hypothesis, falsification rule, parameters, cost model, risk model, execution timing, ranges, benchmarks, and acceptance criteria. It does **not** run Final OOS.
-4. Do not modify the candidate, costs, risk model, acceptance gates, dataset, or working tree after preregistration. Any change requires a new experiment ID and a new genuinely untouched holdout.
+4. Do not modify the candidate, costs, risk model, acceptance gates, dataset, or working tree after preregistration. Any change requires a new experiment ID and a genuinely new untouched holdout.
 5. Use the exact preregistered commit and run `tools/run_preregistered_alpha_experiment.py` once.
-6. Immediately before the canonical final runner starts, it atomically creates `.alpha_consumed/<experiment-fingerprint>.json` beside the dataset manifest. A second attempt for that fingerprint is rejected even if a different result filename is supplied.
-7. If execution crashes after the one-shot claim, the receipt remains consumed. The same holdout is not reopened; a new legitimate experiment/holdout is required.
+6. Immediately before the canonical final runner starts, it computes a holdout identity from **dataset-manifest SHA-256 + exact Final OOS range** and atomically creates `.alpha_consumed/<holdout-identity>.json` beside the dataset manifest. Changing experiment ID, parameters, artifact filename, or report filename cannot reopen that same dataset holdout.
+7. If execution crashes after the one-shot claim, the receipt remains consumed. The same holdout is not reopened; a new legitimate untouched range is required.
 8. Preserve the generated report SHA-256 and completed consumption receipt as evidence.
 
 ## Uncertainty and sample integrity
