@@ -3,17 +3,26 @@ from __future__ import annotations
 
 import hashlib
 import math
+import re
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from historical_data import HistoricalDataLoader
 
 from .alpha_experiment import AlphaExperiment
 from .backtest import EventDrivenBacktester, Strategy
-from .benchmarks import BenchmarkSuiteResult, compare_strategy_to_benchmarks
-from .models import BacktestConfig, BacktestResult, Fill, MarketEvent, Side
+from .benchmarks import BenchmarkSuiteEntry, BenchmarkSuiteResult, compare_strategy_to_benchmarks
+from .models import BacktestConfig, BacktestResult, Side
+
+_GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
+_CANONICAL_BENCHMARKS = (
+    "buy_and_hold",
+    "trend_following",
+    "breakout",
+    "mean_reversion",
+)
 
 
 class AlphaVerdict(StrEnum):
@@ -55,6 +64,21 @@ class AlphaAcceptanceCriteria:
             raise ValueError(
                 "minimum_profitable_validation_window_percent must be within 0..100"
             )
+
+    def canonical_metrics(self) -> tuple[str, ...]:
+        """Stable serialization stored inside the immutable preregistration."""
+
+        return (
+            f"minimum_organic_closed_trades={self.minimum_organic_closed_trades}",
+            f"maximum_drawdown_percent={float(self.maximum_drawdown_percent):g}",
+            "minimum_profitable_validation_window_percent="
+            f"{float(self.minimum_profitable_validation_window_percent):g}",
+            f"require_positive_final_net_pnl={str(self.require_positive_final_net_pnl).lower()}",
+            "require_positive_final_expectancy="
+            f"{str(self.require_positive_final_expectancy).lower()}",
+            "require_candidate_beat_buy_hold="
+            f"{str(self.require_candidate_beat_buy_hold).lower()}",
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,8 +124,10 @@ class AlphaValidationWindow:
 class AlphaValidationReport:
     experiment_id: str
     experiment_fingerprint: str
+    git_sha: str
     dataset_manifest_sha256: str
     strategy: str
+    train_event_count: int
     validation_windows: tuple[AlphaValidationWindow, ...]
     final_oos_event_count: int
     final_oos_metrics: AlphaRunMetrics
@@ -119,8 +145,10 @@ class AlphaValidationReport:
         return {
             "experiment_id": self.experiment_id,
             "experiment_fingerprint": self.experiment_fingerprint,
+            "git_sha": self.git_sha,
             "dataset_manifest_sha256": self.dataset_manifest_sha256,
             "strategy": self.strategy,
+            "train_event_count": self.train_event_count,
             "validation_windows": [item.to_dict() for item in self.validation_windows],
             "final_oos_event_count": self.final_oos_event_count,
             "final_oos_metrics": self.final_oos_metrics.to_dict(),
@@ -144,30 +172,48 @@ def run_preregistered_alpha_validation(
     strategy_factory: Callable[[], Strategy],
     *,
     candidate_name: str,
-    backtest_config: BacktestConfig | None = None,
-    criteria: AlphaAcceptanceCriteria | None = None,
+    current_git_sha: str,
+    backtest_config: BacktestConfig,
+    criteria: AlphaAcceptanceCriteria,
 ) -> AlphaValidationReport:
     """Evaluate frozen validation windows and then one untouched final holdout.
 
-    This function never promotes a strategy and never enables execution. It only
-    produces research evidence from a dataset that passed the strict final-OOS
-    provenance gate.
+    The runner binds dataset, code SHA, strategy identity/parameters, costs, risk,
+    execution timing, benchmarks and acceptance gates to the preregistration.
+    It never promotes a strategy and never enables execution.
     """
 
     dataset_report = loader.require_final_oos_eligible()
     if not dataset_report.final_oos_eligible:
         raise ValueError("historical dataset is not final-OOS eligible")
+
+    clean_git_sha = str(current_git_sha).strip().lower()
+    if not _GIT_SHA.fullmatch(clean_git_sha):
+        raise ValueError("current_git_sha must be 40 lowercase hex characters")
+    if clean_git_sha != experiment.git_sha:
+        raise ValueError("current git SHA differs from preregistered git SHA")
+
     actual_manifest_sha = sha256_file(loader.manifest_path)
     if actual_manifest_sha != experiment.dataset_manifest_sha256:
         raise ValueError("experiment dataset manifest SHA256 does not match loaded manifest")
     if experiment.strategy != candidate_name:
         raise ValueError("experiment strategy identity does not match candidate_name")
-    _validate_experiment_ranges(experiment, loader)
 
-    config = backtest_config or BacktestConfig(execution_timing=experiment.execution_timing)
-    if config.execution_timing != experiment.execution_timing:
-        raise ValueError("backtest execution timing differs from preregistration")
-    active_criteria = criteria or AlphaAcceptanceCriteria()
+    _validate_experiment_ranges(experiment, loader)
+    _validate_strategy_binding(experiment, strategy_factory, candidate_name)
+    _validate_backtest_binding(experiment, backtest_config)
+    _validate_acceptance_binding(experiment, criteria)
+    if tuple(experiment.benchmarks) != _CANONICAL_BENCHMARKS:
+        raise ValueError("experiment benchmarks differ from canonical benchmark suite")
+
+    train_events = tuple(
+        loader.iter_events(
+            start_timestamp_ms=experiment.train_range[0],
+            end_timestamp_ms=experiment.train_range[1],
+        )
+    )
+    if not train_events:
+        raise ValueError("training range contains no market events")
 
     validation_windows: list[AlphaValidationWindow] = []
     for start_ms, end_ms in experiment.validation_ranges:
@@ -179,7 +225,7 @@ def run_preregistered_alpha_validation(
         )
         if not events:
             raise ValueError("validation range contains no market events")
-        result = EventDrivenBacktester(config).run(events, strategy_factory())
+        result = EventDrivenBacktester(backtest_config).run(events, strategy_factory())
         validation_windows.append(
             AlphaValidationWindow(
                 start_ms=start_ms,
@@ -189,6 +235,7 @@ def run_preregistered_alpha_validation(
             )
         )
 
+    # Final OOS is materialized only after all preregistration/validation work.
     final_events = tuple(
         loader.iter_events(
             start_timestamp_ms=experiment.final_oos_range[0],
@@ -201,7 +248,7 @@ def run_preregistered_alpha_validation(
         final_events,
         strategy_factory,
         candidate_name=candidate_name,
-        config=config,
+        config=backtest_config,
     )
     candidate_entry = _entry(comparison, candidate_name)
     candidate_metrics = alpha_metrics(candidate_entry.result)
@@ -210,6 +257,9 @@ def run_preregistered_alpha_validation(
         for entry in comparison.entries
         if entry.name != candidate_name
     }
+    if tuple(benchmark_metrics) != _CANONICAL_BENCHMARKS:
+        raise RuntimeError("benchmark engine returned a non-canonical comparison set")
+
     candidate_rank = comparison.ranking.index(candidate_name) + 1
     candidate_beats_buy_hold = _beats_buy_hold(comparison, candidate_name)
     profitable_percent = (
@@ -221,13 +271,15 @@ def run_preregistered_alpha_validation(
         candidate_metrics,
         profitable_validation_window_percent=profitable_percent,
         candidate_beats_buy_hold=candidate_beats_buy_hold,
-        criteria=active_criteria,
+        criteria=criteria,
     )
     return AlphaValidationReport(
         experiment_id=experiment.experiment_id,
         experiment_fingerprint=experiment.fingerprint(),
+        git_sha=clean_git_sha,
         dataset_manifest_sha256=actual_manifest_sha,
         strategy=candidate_name,
+        train_event_count=len(train_events),
         validation_windows=tuple(validation_windows),
         final_oos_event_count=len(final_events),
         final_oos_metrics=candidate_metrics,
@@ -254,11 +306,7 @@ def alpha_metrics(result: BacktestResult) -> AlphaRunMetrics:
         fill.side is Side.SELL and fill.synthetic_finalization for fill in result.fills
     )
     organic_pnls = tuple(float(fill.realized_pnl) for fill in organic_sells)
-    expectancy = (
-        sum(organic_pnls) / len(organic_pnls)
-        if organic_pnls
-        else 0.0
-    )
+    expectancy = sum(organic_pnls) / len(organic_pnls) if organic_pnls else 0.0
     return AlphaRunMetrics(
         net_pnl=round(result.net_pnl, 8),
         return_percent=round(result.return_percent, 8),
@@ -277,6 +325,30 @@ def alpha_metrics(result: BacktestResult) -> AlphaRunMetrics:
         losing_organic_closed_trades=sum(value < 0 for value in organic_pnls),
         exposure_time_percent=round(result.exposure_time_percent, 8),
     )
+
+
+def backtest_cost_config(config: BacktestConfig) -> dict[str, object]:
+    return {
+        "fee_rate": config.fee_rate,
+        "maker_fee_rate": config.maker_fee_rate,
+        "slippage_bps": config.slippage_bps,
+        "market_impact_bps": config.market_impact_bps,
+        "max_participation_rate": config.max_participation_rate,
+    }
+
+
+def backtest_risk_config(config: BacktestConfig) -> dict[str, object]:
+    return {
+        "initial_cash": config.initial_cash,
+        "reserve_percent": config.reserve_percent,
+        "max_total_exposure_percent": config.max_total_exposure_percent,
+        "max_position_percent": config.max_position_percent,
+        "max_correlated_exposure_percent": config.max_correlated_exposure_percent,
+        "max_risk_per_trade_percent": config.max_risk_per_trade_percent,
+        "max_open_positions": config.max_open_positions,
+        "minimum_notional": config.minimum_notional,
+        "force_close_at_end": config.force_close_at_end,
+    }
 
 
 def sha256_file(path: str | Path) -> str:
@@ -304,7 +376,46 @@ def _validate_experiment_ranges(
             raise ValueError("experiment train/validation/final ranges must not overlap")
 
 
-def _entry(comparison: BenchmarkSuiteResult, name: str):
+def _validate_strategy_binding(
+    experiment: AlphaExperiment,
+    strategy_factory: Callable[[], Strategy],
+    candidate_name: str,
+) -> None:
+    probe = strategy_factory()
+    if getattr(probe, "candidate_name", None) != candidate_name:
+        raise ValueError("strategy factory candidate identity differs from preregistration")
+    if getattr(probe, "benchmark", True) is not False:
+        raise ValueError("alpha candidate must be explicitly marked non-benchmark")
+    strategy_config = getattr(probe, "config", None)
+    to_dict = getattr(strategy_config, "to_dict", None)
+    if not callable(to_dict):
+        raise ValueError("alpha candidate must expose serializable frozen config")
+    actual_parameters = dict(to_dict())
+    if actual_parameters != dict(experiment.parameters):
+        raise ValueError("strategy parameters differ from preregistration")
+
+
+def _validate_backtest_binding(
+    experiment: AlphaExperiment,
+    config: BacktestConfig,
+) -> None:
+    if config.execution_timing != experiment.execution_timing:
+        raise ValueError("backtest execution timing differs from preregistration")
+    if backtest_cost_config(config) != dict(experiment.cost_config):
+        raise ValueError("backtest cost config differs from preregistration")
+    if backtest_risk_config(config) != dict(experiment.risk_config):
+        raise ValueError("backtest risk config differs from preregistration")
+
+
+def _validate_acceptance_binding(
+    experiment: AlphaExperiment,
+    criteria: AlphaAcceptanceCriteria,
+) -> None:
+    if tuple(experiment.acceptance_metrics) != criteria.canonical_metrics():
+        raise ValueError("acceptance criteria differ from preregistration")
+
+
+def _entry(comparison: BenchmarkSuiteResult, name: str) -> BenchmarkSuiteEntry:
     for entry in comparison.entries:
         if entry.name == name:
             return entry
@@ -371,6 +482,8 @@ __all__ = [
     "AlphaValidationWindow",
     "AlphaVerdict",
     "alpha_metrics",
+    "backtest_cost_config",
+    "backtest_risk_config",
     "run_preregistered_alpha_validation",
     "sha256_file",
 ]
