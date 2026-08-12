@@ -1,6 +1,7 @@
 """End-to-end research-integrity contracts for the preregistered Alpha runner."""
 from __future__ import annotations
 
+import ast
 import hashlib
 from dataclasses import replace
 from pathlib import Path
@@ -239,6 +240,22 @@ def test_pre_final_validation_never_reads_untouched_final_oos(tmp_path: Path) ->
 
     assert train_count == 10
     assert [window.event_count for window in validation_windows] == [5, 5]
+
+
+def test_runner_completes_pre_final_validation_before_claiming_holdout() -> None:
+    runner = Path("tools/run_preregistered_alpha_experiment.py")
+    module = ast.parse(runner.read_text(encoding="utf-8"))
+    main = next(
+        node for node in module.body if isinstance(node, ast.FunctionDef) and node.name == "main"
+    )
+    call_lines = {
+        call.func.id: call.lineno
+        for call in ast.walk(main)
+        if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+        and call.func.id in {"run_preregistered_pre_final_validation", "claim_final_oos"}
+    }
+
+    assert call_lines["run_preregistered_pre_final_validation"] < call_lines["claim_final_oos"]
 
 
 def test_strategy_cost_risk_acceptance_and_falsification_drift_fail_closed(
