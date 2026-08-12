@@ -2,7 +2,8 @@
 """Run one immutable preregistered Alpha experiment and write its verdict.
 
 This is research-only. Even an ACCEPT_FOR_LONGER_PAPER verdict does not start a
-Paper campaign and cannot enable Testnet or Mainnet.
+Paper campaign and cannot enable Testnet or Mainnet. Final OOS is claimed once
+per experiment fingerprint in the canonical dataset directory.
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ import subprocess
 from pathlib import Path
 
 from historical_data import HistoricalDataLoader
+from trading_core.alpha_consumption import claim_final_oos, complete_final_oos
 from trading_core.alpha_experiment import AlphaExperiment
 from trading_core.alpha_strategies import (
     RegimeFilteredBreakoutConfig,
@@ -20,9 +22,13 @@ from trading_core.alpha_strategies import (
 )
 from trading_core.alpha_validation import (
     AlphaAcceptanceCriteria,
+    canonical_falsification_rule,
     run_preregistered_alpha_validation,
+    sha256_file,
 )
 from trading_core.models import BacktestConfig
+
+_BENCHMARKS = ("buy_and_hold", "trend_following", "breakout", "mean_reversion")
 
 
 def main() -> int:
@@ -42,6 +48,7 @@ def main() -> int:
     if experiment.strategy != "regime_filtered_breakout_v1":
         raise ValueError("this runner only supports the preregistered first Alpha candidate")
     strategy_config = RegimeFilteredBreakoutConfig(**experiment.parameters)
+    strategy_probe = RegimeFilteredBreakoutStrategy(strategy_config)
     backtest_config = BacktestConfig(
         **experiment.cost_config,
         **experiment.risk_config,
@@ -49,8 +56,31 @@ def main() -> int:
     )
     criteria = AlphaAcceptanceCriteria()
     current_git_sha = _current_git_sha()
+    if current_git_sha != experiment.git_sha:
+        raise ValueError("current git SHA differs from preregistered git SHA")
+    if sha256_file(manifest_path) != experiment.dataset_manifest_sha256:
+        raise ValueError("experiment dataset manifest SHA256 does not match loaded manifest")
+    if strategy_probe.hypothesis != experiment.hypothesis:
+        raise ValueError("strategy hypothesis differs from preregistration")
+    if tuple(experiment.acceptance_metrics) != criteria.canonical_metrics():
+        raise ValueError("acceptance criteria differ from preregistration")
+    if experiment.falsification_rule != canonical_falsification_rule(criteria):
+        raise ValueError("falsification rule differs from preregistered acceptance contract")
+    if tuple(experiment.benchmarks) != _BENCHMARKS:
+        raise ValueError("experiment benchmarks differ from canonical benchmark suite")
 
+    experiment_artifact_sha256 = _sha256(experiment_path)
     with HistoricalDataLoader(manifest_path) as loader:
+        loader.require_final_oos_eligible()
+        _validate_ranges_within_manifest(experiment, loader)
+        # Claim immediately before the canonical validation/final-OOS runner. If
+        # execution crashes after this point, the claim remains and the same
+        # holdout cannot legitimately be reopened under a different report name.
+        receipt_path = claim_final_oos(
+            manifest_path=manifest_path,
+            experiment=experiment,
+            experiment_artifact_sha256=experiment_artifact_sha256,
+        )
         report = run_preregistered_alpha_validation(
             loader,
             experiment,
@@ -64,7 +94,8 @@ def main() -> int:
     artifact = {
         "schema_version": 1,
         "research_only": True,
-        "experiment_artifact_sha256": _sha256(experiment_path),
+        "experiment_artifact_sha256": experiment_artifact_sha256,
+        "final_oos_consumption_receipt": str(receipt_path),
         "result": report.to_dict(),
     }
     encoded = json.dumps(artifact, indent=2, sort_keys=True).encode("utf-8")
@@ -73,6 +104,12 @@ def main() -> int:
     temp.write_bytes(encoded)
     temp.replace(report_path)
     report_sha256 = hashlib.sha256(encoded).hexdigest()
+    complete_final_oos(
+        receipt_path,
+        verdict=report.verdict.value,
+        report_path=report_path,
+        report_sha256=report_sha256,
+    )
 
     print(
         json.dumps(
@@ -82,6 +119,7 @@ def main() -> int:
                 "reasons": list(report.reasons),
                 "report": str(report_path),
                 "report_sha256": report_sha256,
+                "final_oos_consumption_receipt": str(receipt_path),
                 "paper_started": False,
                 "paper_authorized": False,
                 "testnet_authorized": False,
@@ -92,6 +130,20 @@ def main() -> int:
         )
     )
     return 0
+
+
+def _validate_ranges_within_manifest(
+    experiment: AlphaExperiment,
+    loader: HistoricalDataLoader,
+) -> None:
+    manifest = loader.manifest
+    for start_ms, end_ms in (
+        experiment.train_range,
+        *experiment.validation_ranges,
+        experiment.final_oos_range,
+    ):
+        if start_ms < manifest.start_timestamp_ms or end_ms > manifest.end_timestamp_ms:
+            raise ValueError("experiment range falls outside dataset manifest bounds")
 
 
 def _sha256(path: Path) -> str:
