@@ -23,25 +23,30 @@ def test_canonical_runner_never_replays_pre_final_after_claim() -> None:
         node for node in module.body
         if isinstance(node, ast.FunctionDef) and node.name == "main"
     )
-    calls = [
-        call.func.id
+    named_calls = [
+        call
         for call in ast.walk(main)
         if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
     ]
+    names = [call.func.id for call in named_calls]
 
-    assert "run_preregistered_alpha_validation" not in calls
-    assert "run_preregistered_pre_final_validation" not in calls
-    assert calls.count("prepare_preregistered_final_oos") == 1
-    assert calls.count("claim_final_oos") == 1
-    assert calls.count("run_prepared_final_oos_validation") == 1
+    assert "run_preregistered_alpha_validation" not in names
+    assert "run_preregistered_pre_final_validation" not in names
+    assert names.count("prepare_preregistered_final_oos") == 1
+    assert names.count("claim_final_oos") == 1
+    assert names.count("run_prepared_final_oos_validation") == 1
 
-    positions = {name: calls.index(name) for name in (
-        "prepare_preregistered_final_oos",
-        "claim_final_oos",
-        "run_prepared_final_oos_validation",
-    )}
-    assert positions["prepare_preregistered_final_oos"] < positions["claim_final_oos"]
-    assert positions["claim_final_oos"] < positions["run_prepared_final_oos_validation"]
+    lines = {
+        call.func.id: call.lineno
+        for call in named_calls
+        if call.func.id in {
+            "prepare_preregistered_final_oos",
+            "claim_final_oos",
+            "run_prepared_final_oos_validation",
+        }
+    }
+    assert lines["prepare_preregistered_final_oos"] < lines["claim_final_oos"]
+    assert lines["claim_final_oos"] < lines["run_prepared_final_oos_validation"]
 
 
 def test_prepare_freezes_the_manifest_digest_validated_before_claim(
