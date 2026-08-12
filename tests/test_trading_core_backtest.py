@@ -19,6 +19,7 @@ from trading_core.alpha_consumption import (
     claim_final_oos,
     complete_final_oos,
 )
+from trading_core.alpha_dataset_contract import require_regime_breakout_dataset
 from trading_core.alpha_experiment import AlphaExperiment
 from trading_core.alpha_statistics import circular_block_bootstrap_mean_ci
 from trading_core.alpha_strategies import (
@@ -183,7 +184,7 @@ def _critical_alpha_dataset(tmp_path: Path) -> Path:
         dataset_version="v1",
         venue="bybit",
         market_type="spot",
-        source="critical-test-fixture",
+        source="bybit_v5_market_kline",
         symbols=("BTCUSDT",),
         interval_ms=60_000,
         timezone="UTC",
@@ -245,6 +246,7 @@ def test_critical_suite_executes_preregistered_alpha_path_and_one_shot_receipt(
     )
 
     with HistoricalDataLoader(manifest_path) as loader:
+        require_regime_breakout_dataset(loader)
         report = run_preregistered_alpha_validation(
             loader,
             experiment,
