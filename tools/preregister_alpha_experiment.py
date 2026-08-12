@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Create an immutable preregistration for SharipovAI Alpha candidate v1.
 
-This command does not run the final holdout. It only verifies the historical
-manifest is final-OOS eligible and freezes code/data/strategy/cost/risk/ranges,
+This command does not run the final holdout. It verifies that the historical
+dataset matches Candidate v1 and freezes code/data/strategy/cost/risk/ranges,
 hypothesis, falsification rule, benchmarks and acceptance gates.
 """
 from __future__ import annotations
@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 
 from historical_data import HistoricalDataLoader
+from trading_core.alpha_dataset_contract import require_regime_breakout_dataset
 from trading_core.alpha_experiment import AlphaExperiment
 from trading_core.alpha_strategies import (
     RegimeFilteredBreakoutConfig,
@@ -60,9 +61,7 @@ def main() -> int:
     criteria = AlphaAcceptanceCriteria()
 
     with HistoricalDataLoader(manifest_path) as loader:
-        report = loader.require_final_oos_eligible()
-        if not report.final_oos_eligible:
-            raise ValueError("dataset is not final-OOS eligible")
+        require_regime_breakout_dataset(loader)
         _require_ranges_within_manifest(
             loader,
             (train_range, *validation_ranges, final_oos_range),
