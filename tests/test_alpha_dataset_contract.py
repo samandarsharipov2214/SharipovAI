@@ -33,12 +33,16 @@ class _Loader:
     def __init__(
         self,
         *,
+        venue: str = "bybit",
+        source: str = "bybit_v5_market_kline",
         market_type: str = "spot",
         timestamp_semantics: str = "bar_close",
         funding_included: bool = False,
         columns: tuple[str, ...] = ("timestamp_ms", "symbol", "close", "volume"),
     ) -> None:
         self.manifest = SimpleNamespace(
+            venue=venue,
+            source=source,
             market_type=market_type,
             timestamp_semantics=timestamp_semantics,
             funding_included=funding_included,
@@ -49,7 +53,7 @@ class _Loader:
         return self._report
 
 
-def test_spot_bar_close_close_and_volume_dataset_passes_candidate_contract() -> None:
+def test_canonical_bybit_spot_bar_close_volume_dataset_passes_contract() -> None:
     loader = _Loader()
 
     report = require_regime_breakout_dataset(loader)  # type: ignore[arg-type]
@@ -60,6 +64,11 @@ def test_spot_bar_close_close_and_volume_dataset_passes_candidate_contract() -> 
 @pytest.mark.parametrize(
     ("loader", "blocker"),
     (
+        (_Loader(venue="binance"), "venue_must_be_bybit"),
+        (
+            _Loader(source="manual_csv"),
+            "source_must_be_canonical_bybit_kline_importer",
+        ),
         (_Loader(market_type="linear"), "market_type_must_be_spot"),
         (_Loader(timestamp_semantics="point_in_time"), "timestamp_semantics_must_be_bar_close"),
         (_Loader(columns=("timestamp_ms", "symbol", "volume")), "close_column_required"),
