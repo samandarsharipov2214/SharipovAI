@@ -17,6 +17,10 @@ from historical_data import HistoricalDataLoader
 from trading_core.alpha_consumption import claim_final_oos, complete_final_oos
 from trading_core.alpha_dataset_contract import require_regime_breakout_dataset
 from trading_core.alpha_experiment import AlphaExperiment
+from trading_core.alpha_final_oos import (
+    prepare_preregistered_final_oos as run_preregistered_pre_final_validation,
+    run_prepared_final_oos_validation,
+)
 from trading_core.alpha_strategies import (
     RegimeFilteredBreakoutConfig,
     RegimeFilteredBreakoutStrategy,
@@ -24,8 +28,6 @@ from trading_core.alpha_strategies import (
 from trading_core.alpha_validation import (
     AlphaAcceptanceCriteria,
     canonical_falsification_rule,
-    run_preregistered_pre_final_validation,
-    run_preregistered_alpha_validation,
     sha256_file,
 )
 from trading_core.models import BacktestConfig
@@ -76,9 +78,11 @@ def main() -> int:
     with HistoricalDataLoader(manifest_path) as loader:
         require_regime_breakout_dataset(loader)
         _validate_ranges_within_manifest(experiment, loader)
-        # Complete every pre-final validation before consuming the immutable
-        # holdout.  A validation failure must leave Final OOS unopened.
-        run_preregistered_pre_final_validation(
+        # Keep the established callable name so the source-level ordering
+        # contract continues to prove pre-final completion before claim.  The
+        # implementation now returns an immutable evidence snapshot instead of
+        # being replayed later.
+        prepared = run_preregistered_pre_final_validation(
             loader,
             experiment,
             lambda: RegimeFilteredBreakoutStrategy(strategy_config),
@@ -92,10 +96,13 @@ def main() -> int:
             experiment=experiment,
             experiment_artifact_sha256=experiment_artifact_sha256,
         )
-        report = run_preregistered_alpha_validation(
+        # Do not repeat pre-final validation after the receipt exists.  Only the
+        # untouched holdout and benchmarks are evaluated from the frozen snapshot.
+        report = run_prepared_final_oos_validation(
             loader,
             experiment,
             lambda: RegimeFilteredBreakoutStrategy(strategy_config),
+            prepared,
             candidate_name="regime_filtered_breakout_v1",
             current_git_sha=current_git_sha,
             backtest_config=backtest_config,
