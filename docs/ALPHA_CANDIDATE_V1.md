@@ -36,16 +36,26 @@ The source of truth is `RegimeFilteredBreakoutConfig`. The first preregistration
 
 Final OOS may not run unless `HistoricalDataLoader.require_final_oos_eligible()` passes. The manifest must therefore carry explicit timestamp semantics, complete content hashes, attributable build commit, timezone-aware creation time, valid executable price provenance, and no observed missing intervals.
 
-The preregistration stores the SHA-256 of the exact manifest file. The OOS runner recomputes that hash and fails closed on any mismatch.
+The preregistration stores the SHA-256 of the exact manifest file. The OOS runner recomputes that hash and validates the underlying Parquet hashes before any final result is accepted.
 
 ## Research sequence
 
 1. Build/validate the canonical historical dataset with public read-only data only.
 2. Choose chronological Train, sequential Validation windows, and one untouched Final OOS range.
-3. Run `tools/preregister_alpha_experiment.py`. This freezes code SHA, manifest SHA, hypothesis, falsification rule, parameters, cost model, risk model, execution timing, ranges, benchmarks, and acceptance criteria. It does **not** read/run Final OOS.
-4. Do not modify the candidate, costs, risk model, acceptance gates, or dataset after preregistration. Any change requires a new experiment ID and a new genuinely untouched holdout.
-5. Run `tools/run_preregistered_alpha_experiment.py` exactly once for that immutable experiment/result path.
-6. Preserve the generated report and SHA-256 as evidence.
+3. Use a **clean Git worktree** and run `tools/preregister_alpha_experiment.py`. It freezes code SHA, manifest SHA, hypothesis, falsification rule, parameters, cost model, risk model, execution timing, ranges, benchmarks, and acceptance criteria. It does **not** run Final OOS.
+4. Do not modify the candidate, costs, risk model, acceptance gates, dataset, or working tree after preregistration. Any change requires a new experiment ID and a new genuinely untouched holdout.
+5. Use the exact preregistered commit and run `tools/run_preregistered_alpha_experiment.py` once.
+6. Immediately before the canonical final runner starts, it atomically creates `.alpha_consumed/<experiment-fingerprint>.json` beside the dataset manifest. A second attempt for that fingerprint is rejected even if a different result filename is supplied.
+7. If execution crashes after the one-shot claim, the receipt remains consumed. The same holdout is not reopened; a new legitimate experiment/holdout is required.
+8. Preserve the generated report SHA-256 and completed consumption receipt as evidence.
+
+## Uncertainty and sample integrity
+
+Synthetic end-of-backtest liquidation is not counted as an organic closed trade for sample-size or expectancy gates.
+
+For organic closed-trade PnL, the report computes a deterministic 95% circular block-bootstrap confidence interval for mean net expectancy. Blocks preserve adjacent trade outcomes rather than pretending every trade is independently distributed. The bootstrap is an uncertainty diagnostic, not a guarantee of stationarity.
+
+The default preregistered acceptance contract requires the **lower 95% block-bootstrap expectancy bound to be positive** once the minimum organic sample is reached. A positive point estimate alone cannot produce `ACCEPT_FOR_LONGER_PAPER`.
 
 ## Falsification and verdict
 
@@ -54,8 +64,6 @@ The exact falsification text is generated from `AlphaAcceptanceCriteria` and sto
 - `ACCEPT_FOR_LONGER_PAPER`
 - `REJECT_HYPOTHESIS`
 - `INSUFFICIENT_SAMPLE`
-
-Synthetic end-of-backtest liquidation is not counted as an organic closed trade for the sample-size or expectancy gates.
 
 `ACCEPT_FOR_LONGER_PAPER` is only eligibility for a separately reviewed longer Paper campaign. It does not automatically start Paper and never enables Testnet or Mainnet.
 
@@ -73,6 +81,6 @@ The report includes candidate rank and a preregistered risk-adjusted Buy & Hold 
 
 ## Current evidence
 
-Until a real final-OOS-eligible dataset is built, preregistered, and executed through this protocol, the only valid profitability statement is:
+Until a real final-OOS-eligible dataset is built, preregistered, one-shot consumed, and executed through this protocol, the only valid profitability statement is:
 
 `INSUFFICIENT EVIDENCE`
