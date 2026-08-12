@@ -10,15 +10,20 @@ def require_regime_breakout_dataset(
 ) -> DatasetValidationReport:
     """Fail closed unless data matches Candidate v1's economic hypothesis.
 
-    Generic final-OOS eligibility is intentionally broader. Candidate v1 is a
-    Spot close-bar/volume hypothesis, so native quote execution data, derivatives,
-    missing volume, non-bar-close timestamps or funding-bearing datasets must not
-    silently become evidence for a different experiment.
+    Generic final-OOS eligibility is intentionally broader. Candidate v1 is the
+    first Bybit Spot close-bar/volume experiment, so a different venue/source,
+    native quote execution data, derivatives, missing volume, non-bar-close
+    timestamps or funding-bearing data must not silently become evidence for a
+    different hypothesis.
     """
 
     report = loader.require_final_oos_eligible()
     manifest = loader.manifest
     blockers: list[str] = []
+    if manifest.venue != "bybit":
+        blockers.append("venue_must_be_bybit")
+    if manifest.source != "bybit_v5_market_kline":
+        blockers.append("source_must_be_canonical_bybit_kline_importer")
     if manifest.market_type != "spot":
         blockers.append("market_type_must_be_spot")
     if manifest.timestamp_semantics != "bar_close":
