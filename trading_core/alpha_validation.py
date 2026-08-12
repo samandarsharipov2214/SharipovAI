@@ -207,6 +207,106 @@ def run_preregistered_alpha_validation(
 ) -> AlphaValidationReport:
     """Run frozen sequential validation then one untouched final holdout."""
 
+    train_event_count, validation_windows = run_preregistered_pre_final_validation(
+        loader,
+        experiment,
+        strategy_factory,
+        candidate_name=candidate_name,
+        current_git_sha=current_git_sha,
+        backtest_config=backtest_config,
+        criteria=criteria,
+    )
+
+    # Final OOS is materialized only after all immutable bindings and sequential
+    # validation windows have succeeded.  The one-shot runner claims the
+    # holdout only after calling this same pre-final validation function.
+    final_events = tuple(
+        loader.iter_events(
+            start_timestamp_ms=experiment.final_oos_range[0],
+            end_timestamp_ms=experiment.final_oos_range[1],
+        )
+    )
+    if not final_events:
+        raise ValueError("final OOS range contains no market events")
+    comparison = compare_strategy_to_benchmarks(
+        final_events,
+        strategy_factory,
+        candidate_name=candidate_name,
+        config=backtest_config,
+    )
+    candidate_entry = _entry(comparison, candidate_name)
+    candidate_metrics = alpha_metrics(candidate_entry.result)
+    benchmark_metrics = {
+        entry.name: alpha_metrics(entry.result)
+        for entry in comparison.entries
+        if entry.name != candidate_name
+    }
+    if tuple(benchmark_metrics) != _CANONICAL_BENCHMARKS:
+        raise RuntimeError("benchmark engine returned a non-canonical comparison set")
+
+    candidate_rank = comparison.ranking.index(candidate_name) + 1
+    candidate_beats_buy_hold = _beats_buy_hold(comparison, candidate_name)
+    profitable_percent = (
+        sum(window.metrics.net_pnl > 0 for window in validation_windows)
+        / len(validation_windows)
+        * 100.0
+    )
+    verdict, reasons = _verdict(
+        candidate_metrics,
+        profitable_validation_window_percent=profitable_percent,
+        candidate_beats_buy_hold=candidate_beats_buy_hold,
+        criteria=criteria,
+    )
+    manifest = loader.manifest
+    return AlphaValidationReport(
+        experiment_id=experiment.experiment_id,
+        experiment_fingerprint=experiment.fingerprint(),
+        git_sha=str(current_git_sha).strip().lower(),
+        dataset_manifest_sha256=sha256_file(loader.manifest_path),
+        dataset_id=manifest.dataset_id,
+        dataset_version=manifest.dataset_version,
+        dataset_venue=manifest.venue,
+        dataset_market_type=manifest.market_type,
+        dataset_source=manifest.source,
+        dataset_symbols=manifest.symbols,
+        dataset_interval_ms=manifest.interval_ms,
+        dataset_timestamp_semantics=manifest.timestamp_semantics,
+        strategy=candidate_name,
+        hypothesis=experiment.hypothesis,
+        falsification_rule=experiment.falsification_rule,
+        train_event_count=train_event_count,
+        validation_windows=validation_windows,
+        final_oos_event_count=len(final_events),
+        final_oos_metrics=candidate_metrics,
+        benchmark_metrics=benchmark_metrics,
+        candidate_rank=candidate_rank,
+        candidate_beats_buy_hold=candidate_beats_buy_hold,
+        profitable_validation_window_percent=round(profitable_percent, 8),
+        verdict=verdict,
+        reasons=reasons,
+        paper_authorized=False,
+        testnet_authorized=False,
+        mainnet_authorized=False,
+    )
+
+
+def run_preregistered_pre_final_validation(
+    loader: HistoricalDataLoader,
+    experiment: AlphaExperiment,
+    strategy_factory: Callable[[], Strategy],
+    *,
+    candidate_name: str,
+    current_git_sha: str,
+    backtest_config: BacktestConfig,
+    criteria: AlphaAcceptanceCriteria,
+) -> tuple[int, tuple[AlphaValidationWindow, ...]]:
+    """Validate immutable bindings and sequential windows without reading Final OOS.
+
+    A one-shot holdout receipt must never be claimed until this function has
+    completed successfully.  It intentionally does not materialize events in
+    ``experiment.final_oos_range``.
+    """
+
     dataset_report = loader.require_final_oos_eligible()
     if not dataset_report.final_oos_eligible:
         raise ValueError("historical dataset is not final-OOS eligible")
@@ -258,76 +358,7 @@ def run_preregistered_alpha_validation(
             )
         )
 
-    # Final OOS is materialized only after all immutable bindings and sequential
-    # validation windows have succeeded.
-    final_events = tuple(
-        loader.iter_events(
-            start_timestamp_ms=experiment.final_oos_range[0],
-            end_timestamp_ms=experiment.final_oos_range[1],
-        )
-    )
-    if not final_events:
-        raise ValueError("final OOS range contains no market events")
-    comparison = compare_strategy_to_benchmarks(
-        final_events,
-        strategy_factory,
-        candidate_name=candidate_name,
-        config=backtest_config,
-    )
-    candidate_entry = _entry(comparison, candidate_name)
-    candidate_metrics = alpha_metrics(candidate_entry.result)
-    benchmark_metrics = {
-        entry.name: alpha_metrics(entry.result)
-        for entry in comparison.entries
-        if entry.name != candidate_name
-    }
-    if tuple(benchmark_metrics) != _CANONICAL_BENCHMARKS:
-        raise RuntimeError("benchmark engine returned a non-canonical comparison set")
-
-    candidate_rank = comparison.ranking.index(candidate_name) + 1
-    candidate_beats_buy_hold = _beats_buy_hold(comparison, candidate_name)
-    profitable_percent = (
-        sum(window.metrics.net_pnl > 0 for window in validation_windows)
-        / len(validation_windows)
-        * 100.0
-    )
-    verdict, reasons = _verdict(
-        candidate_metrics,
-        profitable_validation_window_percent=profitable_percent,
-        candidate_beats_buy_hold=candidate_beats_buy_hold,
-        criteria=criteria,
-    )
-    manifest = loader.manifest
-    return AlphaValidationReport(
-        experiment_id=experiment.experiment_id,
-        experiment_fingerprint=experiment.fingerprint(),
-        git_sha=clean_git_sha,
-        dataset_manifest_sha256=actual_manifest_sha,
-        dataset_id=manifest.dataset_id,
-        dataset_version=manifest.dataset_version,
-        dataset_venue=manifest.venue,
-        dataset_market_type=manifest.market_type,
-        dataset_source=manifest.source,
-        dataset_symbols=manifest.symbols,
-        dataset_interval_ms=manifest.interval_ms,
-        dataset_timestamp_semantics=manifest.timestamp_semantics,
-        strategy=candidate_name,
-        hypothesis=experiment.hypothesis,
-        falsification_rule=experiment.falsification_rule,
-        train_event_count=len(train_events),
-        validation_windows=tuple(validation_windows),
-        final_oos_event_count=len(final_events),
-        final_oos_metrics=candidate_metrics,
-        benchmark_metrics=benchmark_metrics,
-        candidate_rank=candidate_rank,
-        candidate_beats_buy_hold=candidate_beats_buy_hold,
-        profitable_validation_window_percent=round(profitable_percent, 8),
-        verdict=verdict,
-        reasons=reasons,
-        paper_authorized=False,
-        testnet_authorized=False,
-        mainnet_authorized=False,
-    )
+    return len(train_events), tuple(validation_windows)
 
 
 def alpha_metrics(result: BacktestResult) -> AlphaRunMetrics:
@@ -557,5 +588,6 @@ __all__ = [
     "backtest_risk_config",
     "canonical_falsification_rule",
     "run_preregistered_alpha_validation",
+    "run_preregistered_pre_final_validation",
     "sha256_file",
 ]

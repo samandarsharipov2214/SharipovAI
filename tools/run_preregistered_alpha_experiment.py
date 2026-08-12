@@ -24,6 +24,7 @@ from trading_core.alpha_strategies import (
 from trading_core.alpha_validation import (
     AlphaAcceptanceCriteria,
     canonical_falsification_rule,
+    run_preregistered_pre_final_validation,
     run_preregistered_alpha_validation,
     sha256_file,
 )
@@ -75,6 +76,17 @@ def main() -> int:
     with HistoricalDataLoader(manifest_path) as loader:
         require_regime_breakout_dataset(loader)
         _validate_ranges_within_manifest(experiment, loader)
+        # Complete every pre-final validation before consuming the immutable
+        # holdout.  A validation failure must leave Final OOS unopened.
+        run_preregistered_pre_final_validation(
+            loader,
+            experiment,
+            lambda: RegimeFilteredBreakoutStrategy(strategy_config),
+            candidate_name="regime_filtered_breakout_v1",
+            current_git_sha=current_git_sha,
+            backtest_config=backtest_config,
+            criteria=criteria,
+        )
         receipt_path = claim_final_oos(
             manifest_path=manifest_path,
             experiment=experiment,

@@ -21,6 +21,7 @@ from trading_core.alpha_validation import (
     backtest_cost_config,
     backtest_risk_config,
     canonical_falsification_rule,
+    run_preregistered_pre_final_validation,
     run_preregistered_alpha_validation,
     sha256_file,
 )
@@ -201,6 +202,43 @@ def test_manifest_or_git_identity_drift_fails_before_final_oos(tmp_path: Path) -
                 backtest_config=backtest,
                 criteria=criteria,
             )
+
+
+def test_pre_final_validation_never_reads_untouched_final_oos(tmp_path: Path) -> None:
+    manifest_path = _dataset(tmp_path)
+    strategy_config = _strategy_config()
+    backtest = _backtest_config()
+    criteria = AlphaAcceptanceCriteria()
+    experiment = _experiment(manifest_path)
+
+    with HistoricalDataLoader(manifest_path) as loader:
+        class GuardedLoader:
+            manifest = loader.manifest
+            manifest_path = loader.manifest_path
+
+            def require_final_oos_eligible(self):
+                return loader.require_final_oos_eligible()
+
+            def iter_events(self, *, start_timestamp_ms: int, end_timestamp_ms: int):
+                if (start_timestamp_ms, end_timestamp_ms) == experiment.final_oos_range:
+                    raise AssertionError("pre-final validation must not read Final OOS")
+                return loader.iter_events(
+                    start_timestamp_ms=start_timestamp_ms,
+                    end_timestamp_ms=end_timestamp_ms,
+                )
+
+        train_count, validation_windows = run_preregistered_pre_final_validation(
+            GuardedLoader(),
+            experiment,
+            lambda: RegimeFilteredBreakoutStrategy(strategy_config),
+            candidate_name="regime_filtered_breakout_v1",
+            current_git_sha=_GIT_SHA,
+            backtest_config=backtest,
+            criteria=criteria,
+        )
+
+    assert train_count == 10
+    assert [window.event_count for window in validation_windows] == [5, 5]
 
 
 def test_strategy_cost_risk_acceptance_and_falsification_drift_fail_closed(
