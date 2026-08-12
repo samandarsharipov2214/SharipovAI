@@ -20,6 +20,7 @@ from trading_core.alpha_validation import (
     alpha_metrics,
     backtest_cost_config,
     backtest_risk_config,
+    canonical_falsification_rule,
     run_preregistered_alpha_validation,
     sha256_file,
 )
@@ -100,15 +101,18 @@ def _experiment(
     backtest_config: BacktestConfig | None = None,
     criteria: AlphaAcceptanceCriteria | None = None,
 ) -> AlphaExperiment:
-    strategy = strategy_config or _strategy_config()
+    strategy_config = strategy_config or _strategy_config()
+    strategy = RegimeFilteredBreakoutStrategy(strategy_config)
     backtest = backtest_config or _backtest_config()
     acceptance = criteria or AlphaAcceptanceCriteria()
     return AlphaExperiment(
         experiment_id="alpha-regime-breakout-fixture-v1",
         git_sha=_GIT_SHA,
         dataset_manifest_sha256=sha256_file(manifest_path),
-        strategy="regime_filtered_breakout_v1",
-        parameters=strategy.to_dict(),
+        strategy=strategy.candidate_name,
+        hypothesis=strategy.hypothesis,
+        falsification_rule=canonical_falsification_rule(acceptance),
+        parameters=strategy_config.to_dict(),
         cost_config=backtest_cost_config(backtest),
         risk_config=backtest_risk_config(backtest),
         execution_timing="auto",
@@ -151,6 +155,16 @@ def test_preregistered_runner_returns_truthful_insufficient_sample_and_never_pro
     assert report.final_oos_event_count == 10
     assert report.final_oos_metrics.organic_closed_trade_count == 0
     assert tuple(report.benchmark_metrics) == _BENCHMARKS
+    assert report.dataset_id == "alpha-validation-fixture"
+    assert report.dataset_version == "v1"
+    assert report.dataset_venue == "bybit"
+    assert report.dataset_market_type == "spot"
+    assert report.dataset_source == "test-fixture"
+    assert report.dataset_symbols == ("BTCUSDT",)
+    assert report.dataset_interval_ms == 60_000
+    assert report.dataset_timestamp_semantics == "bar_close"
+    assert report.hypothesis == experiment.hypothesis
+    assert report.falsification_rule == experiment.falsification_rule
     assert report.paper_authorized is False
     assert report.testnet_authorized is False
     assert report.mainnet_authorized is False
@@ -189,7 +203,9 @@ def test_manifest_or_git_identity_drift_fails_before_final_oos(tmp_path: Path) -
             )
 
 
-def test_strategy_cost_risk_and_acceptance_drift_all_fail_closed(tmp_path: Path) -> None:
+def test_strategy_cost_risk_acceptance_and_falsification_drift_fail_closed(
+    tmp_path: Path,
+) -> None:
     manifest_path = _dataset(tmp_path)
     strategy_config = _strategy_config()
     backtest = _backtest_config()
@@ -197,32 +213,23 @@ def test_strategy_cost_risk_and_acceptance_drift_all_fail_closed(tmp_path: Path)
     base = _experiment(manifest_path)
 
     cases = (
+        (replace(base, hypothesis="different hypothesis"), "strategy hypothesis"),
         (
             replace(base, parameters={**base.parameters, "volume_multiplier": 9.0}),
-            backtest,
-            criteria,
             "strategy parameters",
         ),
-        (
-            replace(base, cost_config={**base.cost_config, "fee_rate": 0.0}),
-            backtest,
-            criteria,
-            "cost config",
-        ),
+        (replace(base, cost_config={**base.cost_config, "fee_rate": 0.0}), "cost config"),
         (
             replace(base, risk_config={**base.risk_config, "max_position_percent": 99.0}),
-            backtest,
-            criteria,
             "risk config",
         ),
         (
             replace(base, acceptance_metrics=("minimum_organic_closed_trades=1",)),
-            backtest,
-            criteria,
             "acceptance criteria",
         ),
+        (replace(base, falsification_rule="move the goalposts"), "falsification rule"),
     )
-    for experiment, active_backtest, active_criteria, message in cases:
+    for experiment, message in cases:
         with HistoricalDataLoader(manifest_path) as loader:
             with pytest.raises(ValueError, match=message):
                 run_preregistered_alpha_validation(
@@ -231,8 +238,8 @@ def test_strategy_cost_risk_and_acceptance_drift_all_fail_closed(tmp_path: Path)
                     lambda: RegimeFilteredBreakoutStrategy(strategy_config),
                     candidate_name="regime_filtered_breakout_v1",
                     current_git_sha=_GIT_SHA,
-                    backtest_config=active_backtest,
-                    criteria=active_criteria,
+                    backtest_config=backtest,
+                    criteria=criteria,
                 )
 
 
