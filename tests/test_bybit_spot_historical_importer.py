@@ -97,3 +97,57 @@ def test_importer_excludes_unclosed_candle(tmp_path: Path) -> None:
     assert result.manifest.row_count == 2
     assert result.manifest.end_timestamp_ms == 180_000
     assert result.validation.final_oos_eligible is True
+
+
+def test_importer_rejects_response_market_category_mismatch(tmp_path: Path) -> None:
+    def wrong_category(_url: str, *, params: dict[str, str]) -> dict:
+        assert params["category"] == "spot"
+        return {
+            "retCode": 0,
+            "result": {
+                "category": "linear",
+                "symbol": "BTCUSDT",
+                "list": [["60000", "100", "101", "99", "100", "1", "100"]],
+            },
+        }
+
+    importer = BybitSpotKlineImporter(fetch_json=wrong_category)
+    with pytest.raises(ValueError, match="category does not match"):
+        importer.build_dataset(
+            output_dir=tmp_path,
+            dataset_id="wrong-market",
+            dataset_version="v1",
+            symbols=("BTCUSDT",),
+            interval="1",
+            start_bar_open_ms=60_000,
+            end_bar_open_ms=60_000,
+            commit_sha="c" * 40,
+            retrieved_at_ms=180_000,
+        )
+
+
+def test_importer_rejects_response_symbol_mismatch(tmp_path: Path) -> None:
+    def wrong_symbol(_url: str, *, params: dict[str, str]) -> dict:
+        assert params["symbol"] == "BTCUSDT"
+        return {
+            "retCode": 0,
+            "result": {
+                "category": "spot",
+                "symbol": "ETHUSDT",
+                "list": [["60000", "100", "101", "99", "100", "1", "100"]],
+            },
+        }
+
+    importer = BybitSpotKlineImporter(fetch_json=wrong_symbol)
+    with pytest.raises(ValueError, match="symbol does not match"):
+        importer.build_dataset(
+            output_dir=tmp_path,
+            dataset_id="wrong-symbol",
+            dataset_version="v1",
+            symbols=("BTCUSDT",),
+            interval="1",
+            start_bar_open_ms=60_000,
+            end_bar_open_ms=60_000,
+            commit_sha="d" * 40,
+            retrieved_at_ms=180_000,
+        )

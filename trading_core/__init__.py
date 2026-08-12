@@ -1,4 +1,6 @@
 """Canonical domain layer shared by strategy research and execution simulation."""
+from .alpha_experiment import AlphaExperiment
+from .alpha_strategies import RegimeFilteredBreakoutConfig, RegimeFilteredBreakoutStrategy
 from .backtest import (
     EventDrivenBacktester,
     Strategy,
@@ -41,6 +43,7 @@ from .strategy_suite import (
 )
 
 __all__ = [
+    "AlphaExperiment",
     "BacktestConfig",
     "BacktestResult",
     "BenchmarkEntry",
@@ -57,6 +60,8 @@ __all__ = [
     "PaperBrokerConfig",
     "PortfolioSnapshot",
     "Position",
+    "RegimeFilteredBreakoutConfig",
+    "RegimeFilteredBreakoutStrategy",
     "RestartSafePaperBroker",
     "Side",
     "Signal",
