@@ -16,6 +16,7 @@ stores canonical timestamps at bar close and excludes any still-open candle.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import subprocess
 from datetime import datetime
@@ -59,11 +60,13 @@ def main() -> int:
         commit_sha=commit_sha,
         default_spread_bps=args.default_spread_bps,
     )
+    manifest_sha256 = _file_sha256(result.manifest_path)
     payload = {
         "status": "ok",
         "dataset_id": result.manifest.dataset_id,
         "dataset_version": result.manifest.dataset_version,
         "manifest_path": str(result.manifest_path),
+        "manifest_sha256": manifest_sha256,
         "parquet_path": str(result.parquet_path),
         "row_count": result.manifest.row_count,
         "symbols": list(result.manifest.symbols),
@@ -105,6 +108,14 @@ def _current_git_sha() -> str:
         text=True,
     )
     return completed.stdout.strip()
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 if __name__ == "__main__":
