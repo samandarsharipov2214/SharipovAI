@@ -131,18 +131,18 @@ class AlphaExperiment:
         }
 
     def save(self, path: str | Path) -> None:
-        """Persist once; preregistrations are immutable by construction."""
+        """Persist exactly once with race-safe exclusive creation."""
 
         target = Path(path)
-        if target.exists():
-            raise FileExistsError("alpha preregistration is immutable; choose a new experiment id")
         target.parent.mkdir(parents=True, exist_ok=True)
-        temp = target.with_suffix(target.suffix + ".tmp")
-        temp.write_text(
-            json.dumps(self.artifact_dict(), indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
-        temp.replace(target)
+        try:
+            with target.open("x", encoding="utf-8") as handle:
+                json.dump(self.artifact_dict(), handle, indent=2, sort_keys=True)
+                handle.write("\n")
+        except FileExistsError as exc:
+            raise FileExistsError(
+                "alpha preregistration is immutable; choose a new experiment id"
+            ) from exc
 
 
 def _range(value: Any, name: str) -> tuple[int, int]:
