@@ -18,6 +18,8 @@ class AlphaExperiment:
     git_sha: str
     dataset_manifest_sha256: str
     strategy: str
+    hypothesis: str
+    falsification_rule: str
     parameters: dict[str, object]
     cost_config: dict[str, object]
     risk_config: dict[str, object]
@@ -31,6 +33,10 @@ class AlphaExperiment:
     def __post_init__(self) -> None:
         if not self.experiment_id.strip() or not self.strategy.strip():
             raise ValueError("experiment identity and strategy are required")
+        if not self.hypothesis.strip():
+            raise ValueError("hypothesis is required")
+        if not self.falsification_rule.strip():
+            raise ValueError("falsification_rule is required")
         if not _GIT_SHA.fullmatch(self.git_sha):
             raise ValueError("git_sha must be 40 lowercase hex characters")
         if not _HEX_SHA256.fullmatch(self.dataset_manifest_sha256):
@@ -67,6 +73,8 @@ class AlphaExperiment:
                 git_sha=str(payload["git_sha"]).strip().lower(),
                 dataset_manifest_sha256=str(payload["dataset_manifest_sha256"]).strip().lower(),
                 strategy=str(payload["strategy"]).strip(),
+                hypothesis=str(payload["hypothesis"]).strip(),
+                falsification_rule=str(payload["falsification_rule"]).strip(),
                 parameters=dict(payload["parameters"]),
                 cost_config=dict(payload["cost_config"]),
                 risk_config=dict(payload["risk_config"]),
@@ -81,17 +89,9 @@ class AlphaExperiment:
                     str(item).strip() for item in payload["acceptance_metrics"]
                 ),
             )
-        except (KeyError, TypeError, ValueError) as exc:
-            if isinstance(exc, ValueError) and str(exc).startswith((
-                "git_sha",
-                "dataset_manifest",
-                "experiment",
-                "strategy",
-                "benchmarks",
-                "acceptance",
-                "train",
-            )):
-                raise
+        except KeyError as exc:
+            raise ValueError(f"invalid alpha experiment: missing {exc.args[0]}") from exc
+        except TypeError as exc:
             raise ValueError(f"invalid alpha experiment: {exc}") from exc
 
     @classmethod
