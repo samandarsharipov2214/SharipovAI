@@ -25,17 +25,40 @@
     const table = document.querySelector('.mini-table tbody');
     if (!table) return;
     const rows = (trades || []).slice(-15).reverse();
+    table.replaceChildren();
     if (!rows.length) {
-      table.innerHTML = '<tr><td>Виртуальных сделок пока нет</td><td>0.00</td></tr>';
+      const tr = document.createElement('tr');
+      const message = document.createElement('td');
+      const pnlCell = document.createElement('td');
+      message.textContent = 'Виртуальных сделок пока нет';
+      pnlCell.textContent = '0.00';
+      tr.append(message, pnlCell);
+      table.appendChild(tr);
       return;
     }
-    table.innerHTML = rows.map((trade) => {
+    rows.forEach((trade) => {
       const pnl = Number(trade.net_pnl ?? trade.pnl_usdt ?? 0);
       const fee = Number(trade.fee || 0);
       const opened = trade.opened_at ? new Date(Number(trade.opened_at) * 1000).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—';
-      const source = trade.source_ru || 'виртуальный счёт';
-      return `<tr class="trade-clickable"><td><b>${trade.asset || trade.symbol || '—'} ${trade.side || ''}</b><br><small>${trade.status || 'OPEN'} · ${opened} · комиссия ${fmt(fee)} USDT · ${source}</small></td><td class="${pnl >= 0 ? 'positive' : 'negative'}">${pnl >= 0 ? '+' : ''}${fmt(pnl)}</td></tr>`;
-    }).join('');
+      const source = String(trade.source_ru || 'виртуальный счёт');
+
+      const tr = document.createElement('tr');
+      tr.className = 'trade-clickable';
+
+      const details = document.createElement('td');
+      const title = document.createElement('b');
+      title.textContent = `${String(trade.asset || trade.symbol || '—')} ${String(trade.side || '')}`;
+      const small = document.createElement('small');
+      small.textContent = `${String(trade.status || 'OPEN')} · ${opened} · комиссия ${fmt(fee)} USDT · ${source}`;
+      details.append(title, document.createElement('br'), small);
+
+      const pnlCell = document.createElement('td');
+      pnlCell.className = pnl >= 0 ? 'positive' : 'negative';
+      pnlCell.textContent = `${pnl >= 0 ? '+' : ''}${fmt(pnl)}`;
+
+      tr.append(details, pnlCell);
+      table.appendChild(tr);
+    });
   }
 
   function equityFrom(state, summary) {
