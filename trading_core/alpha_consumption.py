@@ -1,6 +1,7 @@
-"""Atomic one-shot consumption receipts for untouched final-OOS experiments."""
+"""Atomic one-shot consumption receipts for untouched final-OOS ranges."""
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -10,7 +11,17 @@ from .alpha_experiment import AlphaExperiment
 
 
 class FinalOOSAlreadyConsumed(RuntimeError):
-    """Raised when an experiment fingerprint has already opened final OOS."""
+    """Raised when the exact dataset holdout range was already opened."""
+
+
+def final_oos_identity(experiment: AlphaExperiment) -> str:
+    """Content identity independent of experiment name or result filename."""
+
+    payload = (
+        f"{experiment.dataset_manifest_sha256}:"
+        f"{experiment.final_oos_range[0]}:{experiment.final_oos_range[1]}"
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def claim_final_oos(
@@ -19,21 +30,24 @@ def claim_final_oos(
     experiment: AlphaExperiment,
     experiment_artifact_sha256: str,
 ) -> Path:
-    """Atomically consume final OOS for this experiment fingerprint.
+    """Atomically consume the exact content-addressed dataset holdout.
 
-    The receipt lives beside the canonical dataset manifest rather than beside a
-    caller-selected result path. Copying/renaming the experiment file therefore
-    does not create a second legitimate look at the same dataset holdout.
+    The receipt key is the dataset-manifest SHA plus final-OOS range, not the
+    experiment fingerprint. Renaming the experiment, changing its ID, or choosing
+    a different report filename therefore cannot create a second legitimate look
+    at the same holdout.
     """
 
     manifest = Path(manifest_path).resolve()
     registry = manifest.parent / ".alpha_consumed"
     registry.mkdir(parents=True, exist_ok=True)
-    receipt = registry / f"{experiment.fingerprint()}.json"
+    holdout_id = final_oos_identity(experiment)
+    receipt = registry / f"{holdout_id}.json"
     payload = {
         "schema_version": 1,
         "status": "started",
         "claimed_at": datetime.now(UTC).isoformat(),
+        "holdout_identity": holdout_id,
         "experiment_id": experiment.experiment_id,
         "experiment_fingerprint": experiment.fingerprint(),
         "experiment_artifact_sha256": str(experiment_artifact_sha256).strip().lower(),
@@ -47,7 +61,7 @@ def claim_final_oos(
             handle.write("\n")
     except FileExistsError as exc:
         raise FinalOOSAlreadyConsumed(
-            "final OOS was already consumed for this experiment fingerprint"
+            "final OOS was already consumed for this dataset and holdout range"
         ) from exc
     return receipt
 
@@ -86,4 +100,9 @@ def _load_receipt(path: Path) -> dict[str, Any]:
     return payload
 
 
-__all__ = ["FinalOOSAlreadyConsumed", "claim_final_oos", "complete_final_oos"]
+__all__ = [
+    "FinalOOSAlreadyConsumed",
+    "claim_final_oos",
+    "complete_final_oos",
+    "final_oos_identity",
+]
