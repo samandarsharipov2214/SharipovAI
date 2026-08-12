@@ -25,6 +25,7 @@ from .execution_idempotency import ExecutionIdempotencyRepository
 from .execution_kill_switch import PersistentExecutionKillSwitch
 
 _SUBMISSION_CAPABILITY = object()
+_ABSOLUTE_TESTNET_NOTIONAL_CEILING_USDT = 50.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,7 +83,7 @@ class BybitExecutionClient:
         self.max_notional = _bounded_positive_env(
             "EXECUTION_MAX_NOTIONAL_USDT",
             default=25.0,
-            maximum=1000.0,
+            maximum=_ABSOLUTE_TESTNET_NOTIONAL_CEILING_USDT,
         )
         self._client = client
         self.database = database or ProjectDatabase()
