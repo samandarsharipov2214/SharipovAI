@@ -1,8 +1,8 @@
 """Shared verified market stream for the canonical paper runtime.
 
 The adapter reuses the dashboard's existing Bybit public WebSocket worker and
-read-only market services.  It never opens a second socket and never fabricates a
-quote.  A trading quote is usable only when WebSocket freshness, REST metadata,
+read-only market services. It never opens a second socket and never fabricates a
+quote. A trading quote is usable only when WebSocket freshness, REST metadata,
 and multi-exchange price agreement all succeed.
 """
 from __future__ import annotations
@@ -46,8 +46,18 @@ class SharedVerifiedMarketStream:
             max(float(os.getenv("PAPER_MAX_WS_CONSENSUS_DEVIATION_PERCENT", "0.75")), 0.05),
             3.0,
         )
+        # Council persists the exact market evidence used by each decision in
+        # council_market_evidence. The raw market namespace is therefore
+        # operational sampling, not the immutable decision provenance ledger.
+        self.market_event_persist_interval_ms = _bounded_seconds_env_ms(
+            "MARKET_QUOTE_EVENT_PERSIST_INTERVAL_SECONDS",
+            default=60.0,
+            minimum=5.0,
+            maximum=900.0,
+        )
         self._lock = threading.RLock()
         self._cache: dict[str, tuple[int, StreamQuote, dict[str, Any]]] = {}
+        self._last_persisted_exchange_ms: dict[str, int] = {}
 
     def start(self) -> None:
         """Start the shared worker idempotently; ownership remains with market-data API."""
@@ -94,14 +104,15 @@ class SharedVerifiedMarketStream:
             received_at_unix_ms=received_at_ms,
             verified=True,
         )
+        exchange_timestamp_ms = _positive_int(
+            websocket.get("exchange_timestamp_ms"), "exchange_timestamp_ms"
+        )
         evidence = {
             "verified": True,
             "symbol": clean,
             "websocket_source": str(websocket.get("source") or "bybit_websocket_v5"),
             "websocket_price": ws_price,
-            "websocket_exchange_timestamp_ms": _positive_int(
-                websocket.get("exchange_timestamp_ms"), "exchange_timestamp_ms"
-            ),
+            "websocket_exchange_timestamp_ms": exchange_timestamp_ms,
             "websocket_received_at_ms": received_at_ms,
             "rest_source": rest.source,
             "rest_received_at_ms": rest.received_at_unix_ms,
@@ -115,22 +126,51 @@ class SharedVerifiedMarketStream:
             "synthetic_fallback_used": False,
             "database_backed": True,
             "shared_worker": True,
+            "raw_market_persistence_class": "operational_sample",
+            "raw_market_persistence_interval_ms": self.market_event_persist_interval_ms,
         }
-        self.store.save_market_quote(
-            {
-                "provider": "bybit_websocket_v5",
-                "symbol": clean,
-                "category": "spot",
-                "price": ws_price,
-                "exchange_timestamp_ms": evidence["websocket_exchange_timestamp_ms"],
-                "received_at_unix_ms": received_at_ms,
-                "verified": True,
-                "consensus_sources": list(cross.sources),
-            }
+        self._persist_operational_quote(
+            symbol=clean,
+            price=ws_price,
+            exchange_timestamp_ms=exchange_timestamp_ms,
+            received_at_ms=received_at_ms,
+            consensus_sources=list(cross.sources),
         )
         with self._lock:
             self._cache[clean] = (received_at_ms, quote, evidence)
         return quote
+
+    def _persist_operational_quote(
+        self,
+        *,
+        symbol: str,
+        price: float,
+        exchange_timestamp_ms: int,
+        received_at_ms: int,
+        consensus_sources: list[str],
+    ) -> None:
+        with self._lock:
+            previous = self._last_persisted_exchange_ms.get(symbol)
+            if (
+                previous is not None
+                and exchange_timestamp_ms - previous < self.market_event_persist_interval_ms
+            ):
+                return
+            self.store.save_market_quote(
+                {
+                    "provider": "bybit_websocket_v5",
+                    "symbol": symbol,
+                    "category": "spot",
+                    "price": price,
+                    "exchange_timestamp_ms": exchange_timestamp_ms,
+                    "received_at_unix_ms": received_at_ms,
+                    "verified": True,
+                    "consensus_sources": consensus_sources,
+                    "persistence_class": "operational_sample",
+                    "persistence_interval_ms": self.market_event_persist_interval_ms,
+                }
+            )
+            self._last_persisted_exchange_ms[symbol] = exchange_timestamp_ms
 
     def evidence(self, symbol: str) -> dict[str, Any]:
         clean = _symbol(symbol)
@@ -174,7 +214,25 @@ class SharedVerifiedMarketStream:
             "database_backed": True,
             "shared_worker": True,
             "owns_socket": False,
+            "raw_market_persistence_interval_ms": self.market_event_persist_interval_ms,
         }
+
+
+def _bounded_seconds_env_ms(
+    name: str,
+    *,
+    default: float,
+    minimum: float,
+    maximum: float,
+) -> int:
+    raw = os.getenv(name, str(default))
+    try:
+        parsed = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be finite") from exc
+    if not math.isfinite(parsed):
+        raise ValueError(f"{name} must be finite")
+    return int(min(max(parsed, minimum), maximum) * 1000)
 
 
 def _symbol(value: Any) -> str:

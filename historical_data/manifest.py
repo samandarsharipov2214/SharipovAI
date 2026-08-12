@@ -3,9 +3,14 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping
+
+
+_COMMIT_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +116,31 @@ class DataManifest:
         )
         temp.replace(target)
 
+    def provenance_issues(self) -> tuple[str, ...]:
+        """Return blockers that make a dataset unsuitable for final OOS evidence.
+
+        Legacy manifests remain loadable for diagnostics. Final OOS is stricter:
+        every Parquet file must be content-addressed, timestamp meaning must be
+        explicit, and the importer/build commit plus creation time must be
+        attributable.
+        """
+
+        issues: list[str] = []
+        if self.timestamp_semantics == "unknown":
+            issues.append("timestamp_semantics_unknown")
+        missing_hashes = sorted(set(self.parquet_files) - set(self.sha256))
+        if missing_hashes:
+            issues.append("missing_sha256:" + ",".join(missing_hashes))
+        if not _COMMIT_SHA_PATTERN.fullmatch(self.commit_sha):
+            issues.append("commit_sha_missing_or_invalid")
+        if not _aware_iso8601(self.created_at):
+            issues.append("created_at_missing_or_not_timezone_aware")
+        return tuple(issues)
+
+    @property
+    def final_oos_provenance_complete(self) -> bool:
+        return not self.provenance_issues()
+
 
 def validate_manifest(manifest: DataManifest) -> None:
     if manifest.schema_version != 1:
@@ -160,6 +190,16 @@ def validate_manifest(manifest: DataManifest) -> None:
             raise ValueError("sha256 contains a file absent from parquet_files")
         if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
             raise ValueError("manifest sha256 values must be lowercase hex")
+
+
+def _aware_iso8601(value: str) -> bool:
+    if not value:
+        return False
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None and parsed.utcoffset() is not None
 
 
 __all__ = ["DataManifest", "validate_manifest"]

@@ -1,8 +1,8 @@
 """Fail-closed state and reconnect policy for Bybit public ticker streams.
 
 The state validates ticker events, tracks connection/freshness evidence and
-stores the latest verified quote in the canonical ProjectDatabase when supplied.
-It never opens sockets and never executes trades.
+stores a sampled latest verified quote in the canonical ProjectDatabase when
+supplied. It never opens sockets and never executes trades.
 """
 from __future__ import annotations
 
@@ -59,16 +59,27 @@ class BybitWebSocketState:
             max(int(os.getenv("BYBIT_WS_MAX_EXCHANGE_LAG_MS", "3000")), 100),
             60_000,
         )
+        # Runtime freshness always uses the in-memory quote. Durable KV is only
+        # an operational latest-state snapshot and therefore does not need one
+        # SQLite transaction per WebSocket tick.
+        self.db_persist_interval_ms = _bounded_seconds_env_ms(
+            "BYBIT_WS_DB_PERSIST_INTERVAL_SECONDS",
+            default=10.0,
+            minimum=1.0,
+            maximum=300.0,
+        )
         self.database = database
         if self.database is not None:
             self.database.initialize()
         self._quotes: dict[str, StreamQuote] = {}
+        self._last_persisted_at_ms: dict[str, int] = {}
         self._connected = False
         self._last_error: str | None = None
         self._disconnects = 0
         self._connected_at_ms = 0
         self._disconnected_at_ms = 0
         self._lock = threading.RLock()
+        self._persistence_lock = threading.Lock()
 
     def mark_connected(self, *, connected_at_ms: int | None = None) -> None:
         """Mark usable only after a successful Bybit subscription acknowledgement."""
@@ -195,21 +206,29 @@ class BybitWebSocketState:
             "last_error": error,
             "database_backed": self.database is not None,
             "synthetic_fallback_used": False,
+            "db_persist_interval_ms": self.db_persist_interval_ms,
         }
 
     def _persist(self, quote: StreamQuote) -> None:
         if self.database is None:
             return
-        self.database.put_json(
-            "market_quotes",
-            quote.symbol,
-            {
-                **quote.to_dict(),
-                "provider": quote.source,
-                "category": "spot",
-                "synthetic_fallback_used": False,
-            },
-        )
+        with self._persistence_lock:
+            previous = self._last_persisted_at_ms.get(quote.symbol)
+            if previous is not None and quote.received_at_ms - previous < self.db_persist_interval_ms:
+                return
+            self.database.put_json(
+                "market_quotes",
+                quote.symbol,
+                {
+                    **quote.to_dict(),
+                    "provider": quote.source,
+                    "category": "spot",
+                    "synthetic_fallback_used": False,
+                    "persistence_class": "operational_latest_snapshot",
+                    "persistence_interval_ms": self.db_persist_interval_ms,
+                },
+            )
+            self._last_persisted_at_ms[quote.symbol] = quote.received_at_ms
 
 
 class ReconnectPolicy:
@@ -234,6 +253,23 @@ class ReconnectPolicy:
 
     def reset(self) -> None:
         self._attempt = 0
+
+
+def _bounded_seconds_env_ms(
+    name: str,
+    *,
+    default: float,
+    minimum: float,
+    maximum: float,
+) -> int:
+    raw = os.getenv(name, str(default))
+    try:
+        parsed = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be finite") from exc
+    if not math.isfinite(parsed):
+        raise ValueError(f"{name} must be finite")
+    return int(min(max(parsed, minimum), maximum) * 1000)
 
 
 def _fraction_to_percent(value: Any) -> float | None:

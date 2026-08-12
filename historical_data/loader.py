@@ -65,6 +65,15 @@ class HistoricalDataLoader:
             pass
         return self.validation_report
 
+    def require_final_oos_eligible(self) -> DatasetValidationReport:
+        """Fail closed unless this dataset can support a final OOS claim."""
+
+        report = self.validation_report or self.validate()
+        if not report.final_oos_eligible:
+            details = "; ".join(report.oos_blockers) or "unknown eligibility blocker"
+            raise ValueError(f"historical dataset is not final-OOS eligible: {details}")
+        return report
+
     def iter_events(
         self,
         *,
@@ -165,6 +174,9 @@ class HistoricalDataLoader:
                     "interval_ms": self.manifest.interval_ms,
                     "price_source": price_source,
                     "timestamp_semantics": self.manifest.timestamp_semantics,
+                    "final_oos_eligible": bool(
+                        self.validation_report and self.validation_report.final_oos_eligible
+                    ),
                 },
             )
 

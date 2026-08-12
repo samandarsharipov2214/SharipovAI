@@ -30,6 +30,8 @@ class DatasetValidationReport:
     invalid_price_rows: int
     missing_interval_count: int
     issues: tuple[DatasetValidationIssue, ...] = field(default_factory=tuple)
+    final_oos_eligible: bool = False
+    oos_blockers: tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def valid(self) -> bool:
@@ -42,11 +44,18 @@ def validate_dataset(
     root: str | Path,
     connection: duckdb.DuckDBPyConnection | None = None,
 ) -> DatasetValidationReport:
-    """Validate files, schema, hashes, ranges and bar continuity."""
+    """Validate files, schema, hashes, ranges and bar continuity.
+
+    ``valid`` preserves the legacy diagnostic/loading contract. Final OOS is a
+    stronger claim and additionally requires complete provenance, no observed
+    time gaps, and timestamp semantics compatible with the executable price
+    representation.
+    """
 
     dataset_root = Path(root).resolve()
     files = tuple((dataset_root / item).resolve() for item in manifest.parquet_files)
     issues: list[DatasetValidationIssue] = []
+    provenance_blockers = list(manifest.provenance_issues())
     for path in files:
         if dataset_root not in path.parents:
             issues.append(DatasetValidationIssue("unsafe_path", f"{path} escapes dataset root"))
@@ -65,6 +74,7 @@ def validate_dataset(
                 )
 
     if issues:
+        blockers = _unique(("dataset_validation_failed", *provenance_blockers))
         return DatasetValidationReport(
             status="blocked",
             dataset_id=manifest.dataset_id,
@@ -77,6 +87,8 @@ def validate_dataset(
             invalid_price_rows=0,
             missing_interval_count=0,
             issues=tuple(issues),
+            final_oos_eligible=False,
+            oos_blockers=blockers,
         )
 
     owns_connection = connection is None
@@ -191,7 +203,32 @@ def validate_dataset(
                     severity="warning",
                 )
             )
+        for blocker in provenance_blockers:
+            issues.append(
+                DatasetValidationIssue(
+                    "provenance_incomplete",
+                    blocker,
+                    severity="warning",
+                )
+            )
+
         hard_errors = [item for item in issues if item.severity == "error"]
+        oos_blockers: list[str] = list(provenance_blockers)
+        if hard_errors:
+            oos_blockers.append("dataset_validation_failed")
+        if missing_intervals:
+            oos_blockers.append("missing_intervals_present")
+        if has_quotes:
+            if manifest.timestamp_semantics != "point_in_time":
+                oos_blockers.append("native_bid_ask_requires_point_in_time_timestamps")
+        elif has_close:
+            # A close is only knowable at bar close. bar_open/unknown manifests
+            # must not silently become final evidence at the earlier timestamp.
+            if manifest.timestamp_semantics != "bar_close":
+                oos_blockers.append("close_prices_require_bar_close_timestamps")
+        else:
+            oos_blockers.append("executable_price_source_unavailable")
+        unique_blockers = _unique(oos_blockers)
         return DatasetValidationReport(
             status="ok" if not hard_errors else "blocked",
             dataset_id=manifest.dataset_id,
@@ -204,10 +241,16 @@ def validate_dataset(
             invalid_price_rows=invalid_prices,
             missing_interval_count=missing_intervals,
             issues=tuple(issues),
+            final_oos_eligible=not unique_blockers,
+            oos_blockers=unique_blockers,
         )
     finally:
         if owns_connection:
             db.close()
+
+
+def _unique(values: list[str] | tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(str(item) for item in values if item))
 
 
 def _read_parquet_sql(files: tuple[Path, ...]) -> str:
