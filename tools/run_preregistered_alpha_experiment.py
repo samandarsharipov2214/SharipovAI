@@ -73,9 +73,6 @@ def main() -> int:
     with HistoricalDataLoader(manifest_path) as loader:
         loader.require_final_oos_eligible()
         _validate_ranges_within_manifest(experiment, loader)
-        # Claim immediately before the canonical validation/final-OOS runner. If
-        # execution crashes after this point, the claim remains and the same
-        # holdout cannot legitimately be reopened under a different report name.
         receipt_path = claim_final_oos(
             manifest_path=manifest_path,
             experiment=experiment,
@@ -100,9 +97,13 @@ def main() -> int:
     }
     encoded = json.dumps(artifact, indent=2, sort_keys=True).encode("utf-8")
     report_path.parent.mkdir(parents=True, exist_ok=True)
-    temp = report_path.with_suffix(report_path.suffix + ".tmp")
-    temp.write_bytes(encoded)
-    temp.replace(report_path)
+    try:
+        with report_path.open("xb") as handle:
+            handle.write(encoded)
+    except FileExistsError as exc:
+        # The final OOS claim remains consumed: choosing another filename is not
+        # a legitimate way to obtain another look at the holdout.
+        raise FileExistsError("alpha result path became occupied during execution") from exc
     report_sha256 = hashlib.sha256(encoded).hexdigest()
     complete_final_oos(
         receipt_path,
