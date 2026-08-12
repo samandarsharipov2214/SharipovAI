@@ -46,6 +46,7 @@ def main() -> int:
     parser.add_argument("--final-oos", required=True, help="Untouched final start,end")
     args = parser.parse_args()
 
+    _require_clean_git_worktree()
     manifest_path = Path(args.manifest).resolve()
     output_path = Path(args.output).resolve()
     current_git_sha = _current_git_sha()
@@ -129,6 +130,17 @@ def _timestamp_ms(value: str) -> int:
     if parsed <= 0:
         raise ValueError("timestamp must be positive")
     return parsed
+
+
+def _require_clean_git_worktree() -> None:
+    completed = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=normal"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    if completed.stdout.strip():
+        raise RuntimeError("alpha research requires a clean git worktree")
 
 
 def _current_git_sha() -> str:
