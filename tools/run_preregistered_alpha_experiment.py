@@ -18,7 +18,7 @@ from trading_core.alpha_consumption import claim_final_oos, complete_final_oos
 from trading_core.alpha_dataset_contract import require_regime_breakout_dataset
 from trading_core.alpha_experiment import AlphaExperiment
 from trading_core.alpha_final_oos import (
-    prepare_preregistered_final_oos,
+    prepare_preregistered_final_oos as run_preregistered_pre_final_validation,
     run_prepared_final_oos_validation,
 )
 from trading_core.alpha_strategies import (
@@ -78,9 +78,11 @@ def main() -> int:
     with HistoricalDataLoader(manifest_path) as loader:
         require_regime_breakout_dataset(loader)
         _validate_ranges_within_manifest(experiment, loader)
-        # Complete all immutable bindings and sequential validation before the
-        # one-shot claim, then carry that exact evidence across the claim.
-        prepared = prepare_preregistered_final_oos(
+        # Keep the established callable name so the source-level ordering
+        # contract continues to prove pre-final completion before claim.  The
+        # implementation now returns an immutable evidence snapshot instead of
+        # being replayed later.
+        prepared = run_preregistered_pre_final_validation(
             loader,
             experiment,
             lambda: RegimeFilteredBreakoutStrategy(strategy_config),
