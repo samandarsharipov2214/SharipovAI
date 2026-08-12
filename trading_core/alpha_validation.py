@@ -66,8 +66,6 @@ class AlphaAcceptanceCriteria:
             )
 
     def canonical_metrics(self) -> tuple[str, ...]:
-        """Stable serialization stored inside the immutable preregistration."""
-
         return (
             f"minimum_organic_closed_trades={self.minimum_organic_closed_trades}",
             f"maximum_drawdown_percent={float(self.maximum_drawdown_percent):g}",
@@ -126,7 +124,17 @@ class AlphaValidationReport:
     experiment_fingerprint: str
     git_sha: str
     dataset_manifest_sha256: str
+    dataset_id: str
+    dataset_version: str
+    dataset_venue: str
+    dataset_market_type: str
+    dataset_source: str
+    dataset_symbols: tuple[str, ...]
+    dataset_interval_ms: int
+    dataset_timestamp_semantics: str
     strategy: str
+    hypothesis: str
+    falsification_rule: str
     train_event_count: int
     validation_windows: tuple[AlphaValidationWindow, ...]
     final_oos_event_count: int
@@ -147,7 +155,19 @@ class AlphaValidationReport:
             "experiment_fingerprint": self.experiment_fingerprint,
             "git_sha": self.git_sha,
             "dataset_manifest_sha256": self.dataset_manifest_sha256,
+            "dataset": {
+                "dataset_id": self.dataset_id,
+                "dataset_version": self.dataset_version,
+                "venue": self.dataset_venue,
+                "market_type": self.dataset_market_type,
+                "source": self.dataset_source,
+                "symbols": list(self.dataset_symbols),
+                "interval_ms": self.dataset_interval_ms,
+                "timestamp_semantics": self.dataset_timestamp_semantics,
+            },
             "strategy": self.strategy,
+            "hypothesis": self.hypothesis,
+            "falsification_rule": self.falsification_rule,
             "train_event_count": self.train_event_count,
             "validation_windows": [item.to_dict() for item in self.validation_windows],
             "final_oos_event_count": self.final_oos_event_count,
@@ -176,12 +196,7 @@ def run_preregistered_alpha_validation(
     backtest_config: BacktestConfig,
     criteria: AlphaAcceptanceCriteria,
 ) -> AlphaValidationReport:
-    """Evaluate frozen validation windows and then one untouched final holdout.
-
-    The runner binds dataset, code SHA, strategy identity/parameters, costs, risk,
-    execution timing, benchmarks and acceptance gates to the preregistration.
-    It never promotes a strategy and never enables execution.
-    """
+    """Run frozen sequential validation then one untouched final holdout."""
 
     dataset_report = loader.require_final_oos_eligible()
     if not dataset_report.final_oos_eligible:
@@ -203,6 +218,8 @@ def run_preregistered_alpha_validation(
     _validate_strategy_binding(experiment, strategy_factory, candidate_name)
     _validate_backtest_binding(experiment, backtest_config)
     _validate_acceptance_binding(experiment, criteria)
+    if experiment.falsification_rule != canonical_falsification_rule(criteria):
+        raise ValueError("falsification rule differs from preregistered acceptance contract")
     if tuple(experiment.benchmarks) != _CANONICAL_BENCHMARKS:
         raise ValueError("experiment benchmarks differ from canonical benchmark suite")
 
@@ -218,10 +235,7 @@ def run_preregistered_alpha_validation(
     validation_windows: list[AlphaValidationWindow] = []
     for start_ms, end_ms in experiment.validation_ranges:
         events = tuple(
-            loader.iter_events(
-                start_timestamp_ms=start_ms,
-                end_timestamp_ms=end_ms,
-            )
+            loader.iter_events(start_timestamp_ms=start_ms, end_timestamp_ms=end_ms)
         )
         if not events:
             raise ValueError("validation range contains no market events")
@@ -235,7 +249,8 @@ def run_preregistered_alpha_validation(
             )
         )
 
-    # Final OOS is materialized only after all preregistration/validation work.
+    # Final OOS is materialized only after all immutable bindings and sequential
+    # validation windows have succeeded.
     final_events = tuple(
         loader.iter_events(
             start_timestamp_ms=experiment.final_oos_range[0],
@@ -273,12 +288,23 @@ def run_preregistered_alpha_validation(
         candidate_beats_buy_hold=candidate_beats_buy_hold,
         criteria=criteria,
     )
+    manifest = loader.manifest
     return AlphaValidationReport(
         experiment_id=experiment.experiment_id,
         experiment_fingerprint=experiment.fingerprint(),
         git_sha=clean_git_sha,
         dataset_manifest_sha256=actual_manifest_sha,
+        dataset_id=manifest.dataset_id,
+        dataset_version=manifest.dataset_version,
+        dataset_venue=manifest.venue,
+        dataset_market_type=manifest.market_type,
+        dataset_source=manifest.source,
+        dataset_symbols=manifest.symbols,
+        dataset_interval_ms=manifest.interval_ms,
+        dataset_timestamp_semantics=manifest.timestamp_semantics,
         strategy=candidate_name,
+        hypothesis=experiment.hypothesis,
+        falsification_rule=experiment.falsification_rule,
         train_event_count=len(train_events),
         validation_windows=tuple(validation_windows),
         final_oos_event_count=len(final_events),
@@ -289,7 +315,6 @@ def run_preregistered_alpha_validation(
         profitable_validation_window_percent=round(profitable_percent, 8),
         verdict=verdict,
         reasons=reasons,
-        # ACCEPT means eligible for human-reviewed longer Paper, never automatic execution.
         paper_authorized=False,
         testnet_authorized=False,
         mainnet_authorized=False,
@@ -351,6 +376,17 @@ def backtest_risk_config(config: BacktestConfig) -> dict[str, object]:
     }
 
 
+def canonical_falsification_rule(criteria: AlphaAcceptanceCriteria) -> str:
+    return (
+        "INSUFFICIENT_SAMPLE if organic final-OOS closed trades < "
+        f"{criteria.minimum_organic_closed_trades}; otherwise REJECT_HYPOTHESIS if "
+        "net PnL or organic net expectancy is non-positive, max drawdown exceeds "
+        f"{float(criteria.maximum_drawdown_percent):g}%, profitable sequential validation "
+        f"windows are below {float(criteria.minimum_profitable_validation_window_percent):g}%, "
+        "or the candidate fails the preregistered risk-adjusted Buy&Hold comparison."
+    )
+
+
 def sha256_file(path: str | Path) -> str:
     digest = hashlib.sha256()
     with Path(path).open("rb") as handle:
@@ -386,6 +422,8 @@ def _validate_strategy_binding(
         raise ValueError("strategy factory candidate identity differs from preregistration")
     if getattr(probe, "benchmark", True) is not False:
         raise ValueError("alpha candidate must be explicitly marked non-benchmark")
+    if str(getattr(probe, "hypothesis", "")).strip() != experiment.hypothesis:
+        raise ValueError("strategy hypothesis differs from preregistration")
     strategy_config = getattr(probe, "config", None)
     to_dict = getattr(strategy_config, "to_dict", None)
     if not callable(to_dict):
@@ -484,6 +522,7 @@ __all__ = [
     "alpha_metrics",
     "backtest_cost_config",
     "backtest_risk_config",
+    "canonical_falsification_rule",
     "run_preregistered_alpha_validation",
     "sha256_file",
 ]
