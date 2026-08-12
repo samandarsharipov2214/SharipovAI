@@ -16,6 +16,8 @@ def _experiment() -> AlphaExperiment:
         git_sha="a" * 40,
         dataset_manifest_sha256="b" * 64,
         strategy="regime_filtered_breakout_v1",
+        hypothesis="moderate-volatility volume-confirmed breakouts persist",
+        falsification_rule="reject on preregistered OOS gate failure",
         parameters={"window": 24},
         cost_config={"fee_rate": 0.001},
         risk_config={"initial_cash": 10_000.0},
@@ -58,6 +60,14 @@ def test_same_event_and_overlapping_ranges_are_rejected() -> None:
         replace(experiment, execution_timing="same_event")
     with pytest.raises(ValueError, match="must not overlap"):
         replace(experiment, validation_ranges=((190, 299),))
+
+
+def test_hypothesis_and_falsification_rule_are_mandatory() -> None:
+    experiment = _experiment()
+    with pytest.raises(ValueError, match="hypothesis"):
+        replace(experiment, hypothesis="")
+    with pytest.raises(ValueError, match="falsification_rule"):
+        replace(experiment, falsification_rule="")
 
 
 def test_git_and_manifest_hashes_must_be_canonical_lowercase_hex() -> None:
