@@ -206,7 +206,10 @@ def _comparison(
         failed.append("non_positive_net_pnl")
     if net_expectancy <= 0:
         failed.append("non_positive_net_expectancy")
-    if result.total_fees < 0 or result.total_slippage_cost < 0 or result.total_funding_cost < 0:
+    # Funding is signed: positive funding is paid by a long in this model,
+    # negative funding is received. Treating a legitimate credit as corrupt
+    # would reject an otherwise valid cost-adjusted result.
+    if result.total_fees < 0 or result.total_slippage_cost < 0:
         failed.append("invalid_cost_accounting")
 
     score = (
