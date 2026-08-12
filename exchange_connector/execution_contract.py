@@ -23,7 +23,7 @@ from trading_candidate import (
     TradingSide,
 )
 
-from .bybit_order_identity import OrderIntent
+from .bybit_order_identity import OrderIntent, spot_market_submission
 
 MAINNET_EXECUTION_COMPILED = False
 _MAX_REQUEST_LIFETIME_MS = 10_000
@@ -56,14 +56,23 @@ class ApprovedExecutionRequest:
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
+        intent = self.to_order_intent()
         payload["category"] = self.category.value
         payload["side"] = self.side.value
         payload["environment"] = self.environment.value
         payload["notional"] = self.notional
+        payload["market_unit"] = intent.market_unit
+        payload["submission_quantity"] = intent.quantity
         return payload
 
     def to_order_intent(self) -> OrderIntent:
         """Return the deterministic idempotency intent for this request."""
+
+        market_unit, submission_quantity = spot_market_submission(
+            side=self.side.value,
+            base_quantity=self.quantity,
+            reference_price=self.reference_price,
+        )
 
         return OrderIntent.create(
             candidate_id=self.candidate_id,
@@ -72,12 +81,12 @@ class ApprovedExecutionRequest:
             symbol=self.symbol,
             side=self.side.value,
             order_type="Market",
-            quantity=self.quantity,
+            quantity=submission_quantity,
             price=None,
             time_in_force="IOC",
             reduce_only=False,
             position_idx=0,
-            market_unit="baseCoin",
+            market_unit=market_unit,
             attempt=self.attempt,
         )
 

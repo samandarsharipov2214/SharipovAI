@@ -16,6 +16,7 @@ from storage import ProjectDatabase
 
 from .bybit_credentials import execution_credentials
 from .bybit_hosts import validate_bybit_base_url
+from .bybit_order_identity import spot_market_submission, spot_quote_notional
 from .execution_contract import (
     ApprovedExecutionRequest,
     MAINNET_EXECUTION_COMPILED,
@@ -40,6 +41,8 @@ class ExecutionResult:
     raw_code: int | None = None
     candidate_id: str = ""
     order_link_id: str = ""
+    market_unit: str = ""
+    submitted_quantity: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -80,11 +83,7 @@ class BybitExecutionClient:
         self.api_secret = credentials.api_secret
         self.credential_profile = credentials.profile
         self.recv_window = "5000"
-        self.max_notional = _bounded_positive_env(
-            "EXECUTION_MAX_NOTIONAL_USDT",
-            default=25.0,
-            maximum=_ABSOLUTE_TESTNET_NOTIONAL_CEILING_USDT,
-        )
+        self.max_notional = effective_testnet_notional_cap_usdt()
         self._client = client
         self.database = database or ProjectDatabase()
         self.database.initialize()
@@ -234,7 +233,12 @@ class BybitExecutionClient:
             raise RuntimeError("Only spot testnet execution is permitted")
         clean_quantity = _positive(quantity, "quantity")
         clean_price = _positive(reference_price, "reference_price")
-        notional = clean_quantity * clean_price
+        notional = float(
+            spot_quote_notional(
+                base_quantity=clean_quantity,
+                reference_price=clean_price,
+            )
+        )
         if not math.isfinite(notional):
             raise ValueError("order notional must be finite")
         if notional > self.max_notional:
@@ -269,15 +273,19 @@ class BybitExecutionClient:
     ) -> ExecutionResult:
         if capability is not _SUBMISSION_CAPABILITY:
             raise RuntimeError("direct exchange submission is forbidden")
-        del reference_price
         base_url = validate_bybit_base_url(self.base_url, environment="sandbox")
+        market_unit, submission_quantity = spot_market_submission(
+            side=side,
+            base_quantity=quantity,
+            reference_price=reference_price,
+        )
         body = {
             "category": category,
             "symbol": symbol,
             "side": side,
             "orderType": "Market",
-            "qty": _format_number(quantity),
-            "marketUnit": "baseCoin",
+            "qty": submission_quantity,
+            "marketUnit": market_unit,
             "orderLinkId": order_link_id,
         }
         timestamp = str(int(time.time() * 1000))
@@ -312,16 +320,18 @@ class BybitExecutionClient:
             raise BybitRejectedOrder(str(data.get("retMsg", "unknown error")), code)
         order_id = str(data.get("result", {}).get("orderId") or "") or None
         return ExecutionResult(
-            "accepted",
-            self.mode,
-            symbol,
-            side.upper(),
-            quantity,
-            order_id,
-            "Testnet order accepted by Bybit",
-            code,
-            candidate_id,
-            order_link_id,
+            status="accepted",
+            mode=self.mode,
+            symbol=symbol,
+            side=side.upper(),
+            quantity=quantity,
+            order_id=order_id,
+            message="Testnet order accepted by Bybit",
+            raw_code=code,
+            candidate_id=candidate_id,
+            order_link_id=order_link_id,
+            market_unit=market_unit,
+            submitted_quantity=submission_quantity,
         )
 
     def _live_unlocked(self, credentials: bool) -> bool:
@@ -350,6 +360,16 @@ def _bounded_positive_env(name: str, *, default: float, maximum: float) -> float
     return min(parsed, maximum)
 
 
+def effective_testnet_notional_cap_usdt() -> float:
+    """Return the exact cap enforced by the canonical execution gateway."""
+
+    return _bounded_positive_env(
+        "EXECUTION_MAX_NOTIONAL_USDT",
+        default=25.0,
+        maximum=_ABSOLUTE_TESTNET_NOTIONAL_CEILING_USDT,
+    )
+
+
 def _symbol(value: str) -> str:
     clean = str(value).strip().upper().replace("/", "").replace("-", "")
     if not clean.isalnum() or not clean:
@@ -357,12 +377,9 @@ def _symbol(value: str) -> str:
     return clean
 
 
-def _format_number(value: float) -> str:
-    return format(value, ".12f").rstrip("0").rstrip(".")
-
-
 __all__ = [
     "BybitExecutionClient",
     "BybitRejectedOrder",
     "ExecutionResult",
+    "effective_testnet_notional_cap_usdt",
 ]

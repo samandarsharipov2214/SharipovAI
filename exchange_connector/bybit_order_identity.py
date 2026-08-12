@@ -37,6 +37,41 @@ _TRANSITIONS = {
 }
 
 
+def spot_quote_notional(*, base_quantity: Any, reference_price: Any) -> str:
+    """Return a canonical positive quote notional for a spot order."""
+
+    quantity = Decimal(_decimal(base_quantity, "base_quantity", positive=True))
+    price = Decimal(_decimal(reference_price, "reference_price", positive=True))
+    return _decimal(quantity * price, "quote_notional", positive=True)
+
+
+def spot_market_submission(
+    *,
+    side: Any,
+    base_quantity: Any,
+    reference_price: Any,
+) -> tuple[str, str]:
+    """Map a canonical base quantity to Bybit's actual spot market payload.
+
+    Spot buys submit a quoteCoin amount so the exchange cannot spend more USDT
+    merely because the market moved above the request's reference price. Spot
+    sells retain baseCoin quantity because they dispose of an existing asset.
+    """
+
+    clean_side = _choice(side, "side", _SIDES, title=True)
+    clean_base_quantity = _decimal(base_quantity, "base_quantity", positive=True)
+    if clean_side == "Buy":
+        return (
+            "quoteCoin",
+            spot_quote_notional(
+                base_quantity=clean_base_quantity,
+                reference_price=reference_price,
+            ),
+        )
+    _decimal(reference_price, "reference_price", positive=True)
+    return "baseCoin", clean_base_quantity
+
+
 @dataclass(frozen=True, slots=True)
 class OrderIntent:
     candidate_id: str
@@ -431,4 +466,9 @@ def _timestamp(value: int | None) -> int:
     return parsed
 
 
-__all__ = ["OrderIntent", "OrderIntentRegistry"]
+__all__ = [
+    "OrderIntent",
+    "OrderIntentRegistry",
+    "spot_market_submission",
+    "spot_quote_notional",
+]
