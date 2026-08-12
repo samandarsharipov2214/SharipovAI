@@ -125,6 +125,7 @@ class RegimeFilteredBreakoutStrategy:
         event: MarketEvent,
         portfolio: PortfolioSnapshot,
     ) -> Signal | None:
+        _validate_research_event(event)
         symbol = event.symbol
         price = event.mid
         prices = self._prices[symbol]
@@ -159,8 +160,7 @@ class RegimeFilteredBreakoutStrategy:
             )
 
         prices.append(price)
-        if event.volume is not None:
-            volumes.append(float(event.volume))
+        volumes.append(float(event.volume))
         self._was_in_position[symbol] = in_position
         return signal
 
@@ -178,7 +178,7 @@ class RegimeFilteredBreakoutStrategy:
         )
         if len(prior_prices) < required_prices:
             return None
-        if event.volume is None or len(prior_volumes) < self.config.volume_window:
+        if len(prior_volumes) < self.config.volume_window:
             return None
 
         breakout_high = max(prior_prices[-self.config.breakout_window :])
@@ -229,6 +229,21 @@ class RegimeFilteredBreakoutStrategy:
             if event.mid < exit_floor:
                 return Signal(Side.SELL, reason="alpha_regime_breakout_channel_exit", liquidity_role="taker")
         return None
+
+
+def _validate_research_event(event: MarketEvent) -> None:
+    metadata = event.metadata
+    if str(metadata.get("market_type") or "").strip().lower() != "spot":
+        raise ValueError("regime_filtered_breakout_v1 requires spot market events")
+    if str(metadata.get("timestamp_semantics") or "").strip().lower() != "bar_close":
+        raise ValueError("regime_filtered_breakout_v1 requires bar_close timestamps")
+    if str(metadata.get("price_source") or "").strip().lower() != "synthetic_from_close":
+        raise ValueError("regime_filtered_breakout_v1 requires close-derived price events")
+    if event.volume is None:
+        raise ValueError("regime_filtered_breakout_v1 requires volume")
+    volume = float(event.volume)
+    if not math.isfinite(volume) or volume < 0:
+        raise ValueError("regime_filtered_breakout_v1 requires finite non-negative volume")
 
 
 def _realized_volatility_percent(prices: tuple[float, ...]) -> float:
