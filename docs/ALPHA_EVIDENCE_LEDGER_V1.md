@@ -1,0 +1,32 @@
+# Alpha Evidence Ledger — Candidate v1
+
+This ledger distinguishes source-controlled readiness from real market evidence.
+It must not be used to imply profitability before an immutable OOS result exists.
+
+## DONE — source-controlled protocol
+
+- Non-benchmark candidate identity: `regime_filtered_breakout_v1`.
+- Economic hypothesis is explicit and immutable in preregistration.
+- Falsification rule is derived from frozen acceptance criteria and immutable in preregistration.
+- Strategy parameters, code SHA, dataset-manifest SHA, cost model, risk model, timing, ranges and benchmarks are bound before final OOS.
+- Canonical historical-data gate requires final-OOS-eligible provenance.
+- Close-derived bars use canonical next-event execution semantics.
+- Synthetic finalization is excluded from organic closed-trade sample and expectancy.
+- Final report exposes readable dataset identity plus content-addressed manifest SHA.
+- Final result vocabulary is `ACCEPT_FOR_LONGER_PAPER`, `REJECT_HYPOTHESIS`, or `INSUFFICIENT_SAMPLE`.
+- No verdict automatically starts Paper or enables Testnet/Mainnet.
+
+## ACTIVE — real evidence
+
+- Build a real canonical Bybit Spot historical dataset outside Git using the public read-only importer.
+- Persist its manifest, SHA-256, gap/duplicate/timestamp-semantics validation evidence.
+- Freeze chronological Train / sequential Validation / untouched Final OOS ranges.
+- Create the immutable experiment artifact on the exact candidate code SHA.
+- Run the final OOS once and preserve the immutable result artifact + SHA-256.
+- Compare cost-adjusted Candidate v1 against all canonical benchmarks on identical assumptions.
+
+## CURRENT PROFITABILITY VERDICT
+
+`INSUFFICIENT EVIDENCE`
+
+Reason: source-controlled research machinery is not a substitute for a real final-OOS-eligible dataset and an executed immutable holdout experiment.
