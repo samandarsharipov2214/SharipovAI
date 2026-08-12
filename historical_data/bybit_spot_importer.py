@@ -36,7 +36,7 @@ class BybitSpotImportResult:
 
 
 class BybitSpotKlineImporter:
-    """Build one content-addressed, validation-ready Spot candle dataset."""
+    """Build one immutable, content-addressed Spot candle dataset."""
 
     def __init__(self, fetch_json: Callable[..., dict[str, Any]] | None = None) -> None:
         if fetch_json is None:
@@ -75,8 +75,18 @@ class BybitSpotKlineImporter:
             if retrieved_at_ms is None
             else _positive_int(retrieved_at_ms, "retrieved_at_ms")
         )
-        if not math.isfinite(float(default_spread_bps)) or not 0 <= float(default_spread_bps) <= 1_000:
+        spread_bps = float(default_spread_bps)
+        if not math.isfinite(spread_bps) or not 0 <= spread_bps <= 1_000:
             raise ValueError("default_spread_bps must be within 0..1000")
+
+        # Refuse reuse before any network request: one dataset version must map to
+        # exactly one immutable byte sequence and provenance manifest.
+        target = Path(output_dir).resolve()
+        target.mkdir(parents=True, exist_ok=True)
+        parquet_path = target / f"{clean_id}-{clean_version}.parquet"
+        manifest_path = target / "manifest.json"
+        if parquet_path.exists() or manifest_path.exists():
+            raise FileExistsError("historical dataset output is immutable; use a new dataset version")
 
         rows: list[tuple[int, int, str, float, float, float, float, float, float]] = []
         for symbol in clean_symbols:
@@ -93,12 +103,6 @@ class BybitSpotKlineImporter:
             rows.extend(symbol_rows)
         rows.sort(key=lambda item: (item[0], item[2]))
 
-        target = Path(output_dir).resolve()
-        target.mkdir(parents=True, exist_ok=True)
-        parquet_path = target / f"{clean_id}-{clean_version}.parquet"
-        manifest_path = target / "manifest.json"
-        if parquet_path.exists() or manifest_path.exists():
-            raise FileExistsError("historical dataset output is immutable; use a new dataset version")
         _write_parquet(parquet_path, rows)
         digest = _sha256(parquet_path)
         created_at = datetime.fromtimestamp(retrieved / 1000, tz=UTC).isoformat()
@@ -126,7 +130,7 @@ class BybitSpotKlineImporter:
                 "turnover",
             ),
             sha256={parquet_path.name: digest},
-            default_spread_bps=float(default_spread_bps),
+            default_spread_bps=spread_bps,
             funding_included=False,
             created_at=created_at,
             commit_sha=commit_sha,
@@ -174,9 +178,17 @@ class BybitSpotKlineImporter:
                 },
             )
             if payload.get("retCode") != 0:
-                raise ValueError(f"Bybit kline request failed: {payload.get('retMsg') or payload.get('retCode')}")
+                raise ValueError(
+                    f"Bybit kline request failed: {payload.get('retMsg') or payload.get('retCode')}"
+                )
             result = payload.get("result")
-            raw_rows = result.get("list") if isinstance(result, dict) else None
+            if not isinstance(result, dict):
+                raise ValueError("Bybit kline response is missing result")
+            if str(result.get("category") or "").strip().lower() != "spot":
+                raise ValueError("Bybit kline response category does not match requested spot market")
+            if _symbol(result.get("symbol") or "") != symbol:
+                raise ValueError("Bybit kline response symbol does not match request")
+            raw_rows = result.get("list")
             if not isinstance(raw_rows, list):
                 raise ValueError("Bybit kline response is missing result.list")
             if not raw_rows:
@@ -189,9 +201,8 @@ class BybitSpotKlineImporter:
                 page_starts.append(source_start)
                 if source_start < start_bar_open_ms or source_start > end_bar_open_ms:
                     continue
-                # Bybit documents closePrice on an unclosed candle as the latest
-                # traded price. Never admit that mutable candle into immutable
-                # historical evidence.
+                # An unclosed Bybit candle reports the latest traded price as
+                # closePrice. Never freeze that mutable value as historical close.
                 if parsed[0] > retrieved_at_ms:
                     continue
                 previous = by_start.get(source_start)
@@ -230,9 +241,8 @@ def _parse_kline(
     turnover = _nonnegative_float(raw[6], "turnover")
     if high < max(open_price, low, close) or low > min(open_price, high, close):
         raise ValueError(f"invalid OHLC relation for {symbol} at {start}")
-    close_timestamp = start + interval_ms
     return (
-        close_timestamp,
+        start + interval_ms,
         start,
         symbol,
         open_price,
@@ -290,12 +300,16 @@ def _interval_ms(value: str) -> int:
 
 def _safe_name(value: str, field: str) -> str:
     clean = str(value).strip()
-    if not clean or len(clean) > 100 or not all(character.isalnum() or character in "-_." for character in clean):
+    if (
+        not clean
+        or len(clean) > 100
+        or not all(character.isalnum() or character in "-_." for character in clean)
+    ):
         raise ValueError(f"{field} contains unsafe characters")
     return clean
 
 
-def _symbol(value: str) -> str:
+def _symbol(value: Any) -> str:
     clean = str(value).strip().upper().replace("/", "").replace("-", "")
     if not clean or len(clean) > 30 or not clean.isalnum():
         raise ValueError("invalid symbol")
