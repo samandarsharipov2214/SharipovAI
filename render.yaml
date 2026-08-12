@@ -109,7 +109,7 @@ services:
       - key: BYBIT_ACCOUNT_BASE_URL
         value: https://api.bybit.eu
       - key: VIRTUAL_ACCOUNT_AUTORUN_ENABLED
-        value: "1"
+        value: "0"
       - key: VIRTUAL_ACCOUNT_TICK_SECONDS
         value: "60"
       - key: VIRTUAL_ACCOUNT_MAX_OPEN
