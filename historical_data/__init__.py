@@ -1,4 +1,5 @@
-"""Historical market-data manifests, validation and DuckDB loading."""
+"""Historical market-data manifests, validation, import and DuckDB loading."""
+from .bybit_spot_importer import BybitSpotImportResult, BybitSpotKlineImporter
 from .loader import HistoricalDataLoader
 from .manifest import DataManifest, validate_manifest
 from .validation import (
@@ -8,6 +9,8 @@ from .validation import (
 )
 
 __all__ = [
+    "BybitSpotImportResult",
+    "BybitSpotKlineImporter",
     "DataManifest",
     "DatasetValidationIssue",
     "DatasetValidationReport",
