@@ -19,7 +19,7 @@ import duckdb
 
 from exchange_connector.market_data import MarketDataService
 
-from .manifest import DataManifest
+from .manifest import DataManifest, validate_manifest
 from .validation import DatasetValidationReport, validate_dataset
 
 _BYBIT_KLINE_URL = "https://api.bybit.com/v5/market/kline"
@@ -97,6 +97,8 @@ class BybitSpotKlineImporter:
         target.mkdir(parents=True, exist_ok=True)
         parquet_path = target / f"{clean_id}-{clean_version}.parquet"
         manifest_path = target / "manifest.json"
+        if parquet_path.exists() or manifest_path.exists():
+            raise FileExistsError("historical dataset output is immutable; use a new dataset version")
         _write_parquet(parquet_path, rows)
         digest = _sha256(parquet_path)
         created_at = datetime.fromtimestamp(retrieved / 1000, tz=UTC).isoformat()
@@ -130,6 +132,7 @@ class BybitSpotKlineImporter:
             commit_sha=commit_sha,
             timestamp_semantics="bar_close",
         )
+        validate_manifest(manifest)
         manifest.save(manifest_path)
         validation = validate_dataset(manifest, root=target)
         if not validation.valid:
