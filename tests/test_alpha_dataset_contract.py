@@ -9,7 +9,10 @@ from historical_data.validation import DatasetValidationReport
 from trading_core.alpha_dataset_contract import require_regime_breakout_dataset
 
 
-def _report(*, columns: tuple[str, ...] = ("timestamp_ms", "symbol", "close", "volume")) -> DatasetValidationReport:
+def _report(
+    *,
+    columns: tuple[str, ...] = ("timestamp_ms", "symbol", "close", "volume"),
+) -> DatasetValidationReport:
     return DatasetValidationReport(
         status="ok",
         dataset_id="fixture",
@@ -61,6 +64,12 @@ def test_spot_bar_close_close_and_volume_dataset_passes_candidate_contract() -> 
         (_Loader(timestamp_semantics="point_in_time"), "timestamp_semantics_must_be_bar_close"),
         (_Loader(columns=("timestamp_ms", "symbol", "volume")), "close_column_required"),
         (_Loader(columns=("timestamp_ms", "symbol", "close")), "volume_column_required"),
+        (
+            _Loader(
+                columns=("timestamp_ms", "symbol", "close", "volume", "bid", "ask")
+            ),
+            "native_bid_ask_not_allowed_for_close_bar_candidate",
+        ),
         (_Loader(funding_included=True), "funding_must_be_absent_for_spot_candidate"),
     ),
 )
