@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from historical_data import BybitSpotKlineImporter, HistoricalDataLoader
 
 
@@ -60,6 +62,19 @@ def test_importer_converts_bar_open_to_bar_close_and_builds_oos_provenance(tmp_p
     assert [event.timestamp_ms for event in events] == [120_000, 180_000, 240_000]
     assert [row["source_start_timestamp_ms"] for row in raw] == [60_000, 120_000, 180_000]
     assert all(event.metadata["timestamp_semantics"] == "bar_close" for event in events)
+
+    with pytest.raises(FileExistsError, match="immutable"):
+        importer.build_dataset(
+            output_dir=tmp_path,
+            dataset_id="btc-alpha",
+            dataset_version="v1",
+            symbols=("BTCUSDT",),
+            interval="1",
+            start_bar_open_ms=60_000,
+            end_bar_open_ms=180_000,
+            commit_sha="a" * 40,
+            retrieved_at_ms=300_000,
+        )
 
 
 def test_importer_excludes_unclosed_candle(tmp_path: Path) -> None:
