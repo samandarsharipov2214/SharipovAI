@@ -3,7 +3,7 @@
 
 This command does not run the final holdout. It only verifies the historical
 manifest is final-OOS eligible and freezes code/data/strategy/cost/risk/ranges,
-benchmarks and acceptance gates into a content-fingerprinted artifact.
+hypothesis, falsification rule, benchmarks and acceptance gates.
 """
 from __future__ import annotations
 
@@ -15,11 +15,15 @@ from pathlib import Path
 
 from historical_data import HistoricalDataLoader
 from trading_core.alpha_experiment import AlphaExperiment
-from trading_core.alpha_strategies import RegimeFilteredBreakoutConfig
+from trading_core.alpha_strategies import (
+    RegimeFilteredBreakoutConfig,
+    RegimeFilteredBreakoutStrategy,
+)
 from trading_core.alpha_validation import (
     AlphaAcceptanceCriteria,
     backtest_cost_config,
     backtest_risk_config,
+    canonical_falsification_rule,
     sha256_file,
 )
 from trading_core.models import BacktestConfig
@@ -47,6 +51,7 @@ def main() -> int:
     current_git_sha = _current_git_sha()
 
     strategy_config = RegimeFilteredBreakoutConfig()
+    strategy = RegimeFilteredBreakoutStrategy(strategy_config)
     backtest_config = BacktestConfig(execution_timing="auto")
     criteria = AlphaAcceptanceCriteria()
 
@@ -59,7 +64,9 @@ def main() -> int:
         experiment_id=str(args.experiment_id).strip(),
         git_sha=current_git_sha,
         dataset_manifest_sha256=sha256_file(manifest_path),
-        strategy="regime_filtered_breakout_v1",
+        strategy=strategy.candidate_name,
+        hypothesis=strategy.hypothesis,
+        falsification_rule=canonical_falsification_rule(criteria),
         parameters=strategy_config.to_dict(),
         cost_config=backtest_cost_config(backtest_config),
         risk_config=backtest_risk_config(backtest_config),
@@ -80,6 +87,8 @@ def main() -> int:
                 "git_sha": experiment.git_sha,
                 "dataset_manifest_sha256": experiment.dataset_manifest_sha256,
                 "strategy": experiment.strategy,
+                "hypothesis": experiment.hypothesis,
+                "falsification_rule": experiment.falsification_rule,
                 "train_range": experiment.train_range,
                 "validation_ranges": experiment.validation_ranges,
                 "final_oos_range": experiment.final_oos_range,
