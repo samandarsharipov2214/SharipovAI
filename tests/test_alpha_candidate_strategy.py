@@ -1,6 +1,8 @@
 """Contracts for the first explicitly non-benchmark Alpha candidate."""
 from __future__ import annotations
 
+import pytest
+
 from trading_core.alpha_strategies import (
     RegimeFilteredBreakoutConfig,
     RegimeFilteredBreakoutStrategy,
@@ -8,14 +10,28 @@ from trading_core.alpha_strategies import (
 from trading_core.models import MarketEvent, PortfolioSnapshot, Position, Side
 
 
-def _event(timestamp_ms: int, price: float, *, volume: float = 100.0) -> MarketEvent:
+def _event(
+    timestamp_ms: int,
+    price: float,
+    *,
+    volume: float = 100.0,
+    metadata: dict[str, object] | None = None,
+) -> MarketEvent:
+    canonical_metadata: dict[str, object] = {
+        "market_type": "spot",
+        "price_source": "synthetic_from_close",
+        "interval_ms": 60_000,
+        "timestamp_semantics": "bar_close",
+    }
+    if metadata:
+        canonical_metadata.update(metadata)
     return MarketEvent(
         timestamp_ms=timestamp_ms,
         symbol="BTCUSDT",
         bid=price - 0.01,
         ask=price + 0.01,
         volume=volume,
-        metadata={"price_source": "synthetic_from_close", "interval_ms": 60_000, "timestamp_semantics": "bar_close"},
+        metadata=canonical_metadata,
     )
 
 
@@ -74,7 +90,10 @@ def _warm(strategy: RegimeFilteredBreakoutStrategy) -> None:
         ((100.0, 100.0), (101.0, 110.0), (100.5, 120.0), (101.5, 100.0)),
         start=1,
     ):
-        assert strategy.on_market(_event(index * 60_000, price, volume=volume), _flat(index * 60_000)) is None
+        assert strategy.on_market(
+            _event(index * 60_000, price, volume=volume),
+            _flat(index * 60_000),
+        ) is None
 
 
 def test_candidate_is_explicitly_separate_from_benchmarks() -> None:
@@ -93,8 +112,6 @@ def test_entry_requires_prior_history_and_current_volume_confirmation() -> None:
     low_volume = strategy.on_market(_event(300_000, 103.0, volume=50.0), _flat(300_000))
     assert low_volume is None
 
-    # Fresh instance proves the prior low-volume observation cannot be reused as
-    # a hidden parameter or future-data shortcut.
     strategy = RegimeFilteredBreakoutStrategy(_config())
     _warm(strategy)
     signal = strategy.on_market(_event(300_000, 103.0, volume=150.0), _flat(300_000))
@@ -112,8 +129,6 @@ def test_current_breakout_does_not_mutate_prior_channel_before_decision() -> Non
 
     signal = strategy.on_market(_event(300_000, 103.0, volume=150.0), _flat(300_000))
 
-    # If the current 103 close were inserted before the breakout comparison,
-    # max(history) would become 103 and the signal would disappear.
     assert signal is not None and signal.side is Side.BUY
 
 
@@ -137,8 +152,28 @@ def test_cooldown_prevents_immediate_reentry_after_position_closes() -> None:
     strategy = RegimeFilteredBreakoutStrategy(_config())
     _warm(strategy)
     assert strategy.on_market(_event(300_000, 103.0, volume=150.0), _long(300_000)) is None
-
-    # Transition from in-position to flat starts cooldown. Even a strong new
-    # breakout is ignored until the configured number of flat bars has elapsed.
     assert strategy.on_market(_event(360_000, 106.0, volume=200.0), _flat(360_000)) is None
     assert strategy.on_market(_event(420_000, 108.0, volume=200.0), _flat(420_000)) is None
+
+
+@pytest.mark.parametrize(
+    ("metadata", "message"),
+    (
+        ({"market_type": "linear"}, "requires spot market events"),
+        ({"timestamp_semantics": "point_in_time"}, "requires bar_close timestamps"),
+        ({"price_source": "native_bid_ask"}, "requires close-derived price events"),
+    ),
+)
+def test_strategy_itself_rejects_wrong_event_provenance(
+    metadata: dict[str, object],
+    message: str,
+) -> None:
+    strategy = RegimeFilteredBreakoutStrategy(_config())
+    with pytest.raises(ValueError, match=message):
+        strategy.on_market(_event(60_000, 100.0, metadata=metadata), _flat(60_000))
+
+
+def test_strategy_itself_rejects_nonfinite_volume() -> None:
+    strategy = RegimeFilteredBreakoutStrategy(_config())
+    with pytest.raises(ValueError, match="finite non-negative volume"):
+        strategy.on_market(_event(60_000, 100.0, volume=float("nan")), _flat(60_000))
