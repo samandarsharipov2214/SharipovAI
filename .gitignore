@@ -24,6 +24,7 @@ runtime/
 artifacts/
 reports/
 logs/
+.alpha_consumed/
 *.log
 *.db
 *.db-*
