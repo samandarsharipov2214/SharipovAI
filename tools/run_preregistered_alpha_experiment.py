@@ -3,7 +3,7 @@
 
 This is research-only. Even an ACCEPT_FOR_LONGER_PAPER verdict does not start a
 Paper campaign and cannot enable Testnet or Mainnet. Final OOS is claimed once
-per experiment fingerprint in the canonical dataset directory.
+per content-addressed dataset holdout range.
 """
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from pathlib import Path
 
 from historical_data import HistoricalDataLoader
 from trading_core.alpha_consumption import claim_final_oos, complete_final_oos
+from trading_core.alpha_dataset_contract import require_regime_breakout_dataset
 from trading_core.alpha_experiment import AlphaExperiment
 from trading_core.alpha_strategies import (
     RegimeFilteredBreakoutConfig,
@@ -72,7 +73,7 @@ def main() -> int:
 
     experiment_artifact_sha256 = _sha256(experiment_path)
     with HistoricalDataLoader(manifest_path) as loader:
-        loader.require_final_oos_eligible()
+        require_regime_breakout_dataset(loader)
         _validate_ranges_within_manifest(experiment, loader)
         receipt_path = claim_final_oos(
             manifest_path=manifest_path,
