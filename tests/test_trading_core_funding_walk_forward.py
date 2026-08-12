@@ -61,6 +61,20 @@ def test_backtester_charges_positive_long_funding() -> None:
     assert result.metadata["funding_included"] is True
 
 
+def test_backtester_preserves_negative_funding_credit() -> None:
+    events = [
+        _event(1, 100.0, funding=-0.001),
+        _event(2, 100.0, funding=-0.001),
+        _event(3, 100.0, funding=-0.001),
+    ]
+    config = BacktestConfig(fee_rate=0.0, maker_fee_rate=0.0, slippage_bps=0.0, market_impact_bps=0.0)
+
+    result = EventDrivenBacktester(config).run(events, BuyThenSell())
+
+    assert result.total_funding_cost < 0
+    assert result.net_pnl == pytest.approx(-result.total_funding_cost)
+
+
 def test_market_impact_increases_slippage_with_participation() -> None:
     event = MarketEvent(
         timestamp_ms=1,
