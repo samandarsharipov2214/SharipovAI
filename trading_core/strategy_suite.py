@@ -153,19 +153,8 @@ def evaluate_strategy_suite(
     )
 
 
-def _validate_market_event_execution_semantics(
-    events: Sequence[MarketEvent],
-) -> None:
-    """Fail closed when historical price provenance cannot support same-event fills.
-
-    `EventDrivenBacktester` currently executes a returned signal on the same market
-    observation. Native bid/ask observations can represent executable quotes at that
-    timestamp. Close-only historical bars are different: `HistoricalDataLoader`
-    synthesizes bid/ask around the already observed close. Treating a signal derived
-    from that close as if it were executable at the same close can introduce an
-    optimistic timing bias. Until an explicit next-event/bar execution model is used,
-    those datasets cannot produce a Paper-review recommendation.
-    """
+def _validate_market_event_execution_semantics(events: Sequence[MarketEvent]) -> None:
+    """Require explicit provenance; close-derived bars use backtest next-event timing."""
 
     for event in events:
         metadata = event.metadata
@@ -175,10 +164,10 @@ def _validate_market_event_execution_semantics(
                 "historical strategy review requires explicit market-event price provenance"
             )
         if price_source == "synthetic_from_close":
-            raise ValueError(
-                "close-derived historical bars require next-event execution timing; "
-                "same-event strategy review is blocked"
-            )
+            if not metadata.get("interval_ms"):
+                raise ValueError("close-derived historical bars require interval_ms for next-event execution")
+            if metadata.get("timestamp_semantics") != "bar_close":
+                raise ValueError("close-derived historical bars require timestamp_semantics=bar_close")
 
 
 def _comparison(

@@ -67,6 +67,8 @@ class Fill:
     liquidity_role: str = "taker"
     spread_cost: float = 0.0
     participation_rate: float = 0.0
+    execution_timing: str = "same_event"
+    synthetic_finalization: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,6 +108,10 @@ class BacktestConfig:
     max_open_positions: int = 5
     minimum_notional: float = 25.0
     force_close_at_end: bool = True
+    # ``auto`` is the safe research default: point-in-time bid/ask quotes may
+    # execute immediately, while a close-derived signal is deferred to the
+    # next event for that same symbol.
+    execution_timing: str = "auto"
 
 
 @dataclass(frozen=True, slots=True)

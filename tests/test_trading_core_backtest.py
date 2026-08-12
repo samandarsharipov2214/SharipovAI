@@ -32,6 +32,19 @@ class BuyEveryNewSymbol:
         return None
 
 
+class FirstBuyThenSell:
+    def __init__(self) -> None:
+        self.entered = False
+
+    def on_market(self, event, portfolio):
+        if event.symbol == "BTCUSDT" and not self.entered:
+            self.entered = True
+            return Signal(Side.BUY, reason="close_signal")
+        if event.symbol == "BTCUSDT" and event.symbol in portfolio.positions:
+            return Signal(Side.SELL, reason="close_exit")
+        return None
+
+
 def test_event_driven_backtest_uses_bid_ask_fees_and_slippage() -> None:
     events = [
         MarketEvent(1, "BTCUSDT", bid=99.0, ask=100.0),
@@ -73,6 +86,30 @@ def test_backtester_rejects_out_of_order_and_duplicate_timestamps() -> None:
 
     with pytest.raises(ValueError, match="strictly increasing"):
         EventDrivenBacktester().run(events, BuyThenSell())
+
+
+def test_close_derived_signal_fills_only_on_next_event_of_same_symbol() -> None:
+    close = {"price_source": "synthetic_from_close", "timestamp_semantics": "bar_close", "interval_ms": 60_000}
+    events = [
+        MarketEvent(1, "BTCUSDT", 99.0, 101.0, metadata=close),
+        MarketEvent(2, "ETHUSDT", 49.0, 51.0, metadata=close),
+        MarketEvent(3, "BTCUSDT", 109.0, 111.0, metadata=close),
+        MarketEvent(4, "BTCUSDT", 119.0, 121.0, metadata=close),
+    ]
+
+    result = EventDrivenBacktester().run(events, FirstBuyThenSell())
+
+    assert [(fill.side, fill.timestamp_ms, fill.symbol, fill.execution_timing) for fill in result.fills] == [
+        (Side.BUY, 3, "BTCUSDT", "next_event"),
+        (Side.SELL, 4, "BTCUSDT", "next_event"),
+    ]
+
+
+def test_close_derived_pending_signal_without_next_event_does_not_fill() -> None:
+    event = MarketEvent(1, "BTCUSDT", 99.0, 101.0, metadata={"price_source": "synthetic_from_close"})
+    result = EventDrivenBacktester(BacktestConfig(force_close_at_end=False)).run([event], FirstBuyThenSell())
+    assert result.fills == ()
+    assert result.metadata["pending_signals_unfilled"] == 1
 
 
 def test_crypto_correlation_cap_limits_aggregate_entries() -> None:

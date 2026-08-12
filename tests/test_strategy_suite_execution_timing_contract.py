@@ -7,12 +7,15 @@ from trading_core.models import MarketEvent
 from trading_core.strategy_suite import _validate_market_event_execution_semantics
 
 
-def _event(*, price_source: str | None, dataset: bool = True) -> MarketEvent:
+def _event(*, price_source: str | None, dataset: bool = True, semantics: str | None = None) -> MarketEvent:
     metadata: dict[str, object] = {}
     if dataset:
         metadata["dataset_id"] = "dataset-v1"
     if price_source is not None:
         metadata["price_source"] = price_source
+    if semantics is not None:
+        metadata["timestamp_semantics"] = semantics
+        metadata["interval_ms"] = 60_000
     return MarketEvent(
         timestamp_ms=1,
         symbol="BTCUSDT",
@@ -28,11 +31,17 @@ def test_native_bid_ask_historical_events_pass_timing_gate() -> None:
     )
 
 
-def test_close_derived_historical_events_are_blocked_from_review() -> None:
-    with pytest.raises(ValueError, match="next-event execution timing"):
+def test_close_derived_historical_events_require_explicit_bar_close_semantics() -> None:
+    with pytest.raises(ValueError, match="interval_ms"):
         _validate_market_event_execution_semantics(
             (_event(price_source="synthetic_from_close"),)
         )
+
+
+def test_close_derived_bar_close_events_pass_with_next_event_contract() -> None:
+    _validate_market_event_execution_semantics(
+        (_event(price_source="synthetic_from_close", semantics="bar_close"),)
+    )
 
 
 def test_historical_dataset_without_price_provenance_fails_closed() -> None:

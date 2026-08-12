@@ -164,6 +164,7 @@ class HistoricalDataLoader:
                     "manifest": str(self.manifest_path),
                     "interval_ms": self.manifest.interval_ms,
                     "price_source": price_source,
+                    "timestamp_semantics": self.manifest.timestamp_semantics,
                 },
             )
 

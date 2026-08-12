@@ -99,6 +99,80 @@ class EventDrivenBacktester:
         losing_closed = 0
         event_count = 0
         exposed_events = 0
+        pending_signals: dict[str, Signal] = {}
+
+        def execute(event: MarketEvent, signal: Signal, snapshot: PortfolioSnapshot, *, timing: str) -> None:
+            """Apply an already-authorized signal using this event's executable quote."""
+
+            nonlocal cash, realized_pnl, gross_trading_pnl, total_fees, total_slippage
+            nonlocal winning_closed, losing_closed
+            if signal.side is Side.BUY:
+                if event.symbol in positions:
+                    return
+                allocation = build_capital_allocation(
+                    equity=snapshot.equity,
+                    open_trades=[
+                        {
+                            "status": "OPEN",
+                            "symbol": position.symbol,
+                            "notional": position.quantity * last_events.get(
+                                position.symbol,
+                                MarketEvent(event.timestamp_ms, position.symbol, position.entry_price, position.entry_price),
+                            ).mid,
+                            "correlation_group": position.correlation_group,
+                        }
+                        for position in positions.values()
+                    ],
+                    max_open_positions=self.config.max_open_positions,
+                    stop_loss_percent=signal.stop_loss_percent,
+                    fee_rate=self.config.fee_rate,
+                    requested_risk_percent=signal.requested_risk_percent,
+                    policy=self.policy,
+                    symbol=event.symbol,
+                    correlation_group=correlation_group_for_symbol(event.symbol),
+                )
+                if not allocation["allowed"] or allocation["notional"] <= 0:
+                    return
+                quantity = allocation["notional"] / event.ask
+                cost = self.costs.estimate(event, side=Side.BUY, quantity=quantity, liquidity_role=signal.liquidity_role)
+                spent = cost.execution_price * quantity + cost.fee
+                if spent > cash:
+                    return
+                cash -= spent
+                total_fees += cost.fee
+                total_slippage += cost.slippage_cost
+                positions[event.symbol] = Position(
+                    symbol=event.symbol, quantity=quantity, entry_price=cost.execution_price,
+                    entry_notional=cost.execution_price * quantity, entry_fee=cost.fee,
+                    opened_at_ms=event.timestamp_ms,
+                    correlation_group=correlation_group_for_symbol(event.symbol),
+                )
+                last_funding_timestamp[event.symbol] = event.timestamp_ms
+                fills.append(Fill(
+                    timestamp_ms=event.timestamp_ms, symbol=event.symbol, side=Side.BUY,
+                    quantity=quantity, reference_price=cost.reference_price,
+                    execution_price=cost.execution_price, notional=cost.execution_price * quantity,
+                    fee=cost.fee, slippage_cost=cost.slippage_cost, realized_pnl=0.0,
+                    reason=signal.reason, liquidity_role=signal.liquidity_role,
+                    spread_cost=cost.spread_cost, participation_rate=cost.participation_rate,
+                    execution_timing=timing,
+                ))
+            elif signal.side is Side.SELL:
+                position = positions.pop(event.symbol, None)
+                last_funding_timestamp.pop(event.symbol, None)
+                if position is None:
+                    return
+                cash, realized_pnl, gross_trading_pnl, total_fees, total_slippage, net, fill = self._close_position(
+                    event=event, position=position, signal=signal, cash=cash,
+                    realized_pnl=realized_pnl, gross_trading_pnl=gross_trading_pnl,
+                    total_fees=total_fees, total_slippage=total_slippage,
+                )
+                closed_pnls.append(net)
+                winning_closed += int(net > 0)
+                losing_closed += int(net < 0)
+                fills.append(replace(fill, execution_timing=timing))
+            else:
+                raise ValueError("unsupported strategy side")
 
         for event in events:
             validate_market_event(event)
@@ -133,6 +207,22 @@ class EventDrivenBacktester:
                 if funding_payment is not None:
                     funding_payments.append(funding_payment)
 
+            # Close-derived signals from the preceding bar execute here, before
+            # strategy evaluation. Pending signals are keyed by symbol, so an
+            # intervening ETH event can never fill a BTC signal.
+            snapshot = self._snapshot(
+                timestamp_ms=event.timestamp_ms,
+                cash=cash,
+                realized_pnl=realized_pnl,
+                total_fees=total_fees,
+                total_funding=total_funding,
+                positions=positions,
+                prices=last_events,
+            )
+            pending = pending_signals.pop(event.symbol, None)
+            if pending is not None:
+                execute(event, pending, snapshot, timing="next_event")
+
             snapshot = self._snapshot(
                 timestamp_ms=event.timestamp_ms,
                 cash=cash,
@@ -146,105 +236,11 @@ class EventDrivenBacktester:
             if signal is not None:
                 if not isinstance(signal, Signal):
                     raise TypeError("strategy must return Signal or None")
-                if signal.side is Side.BUY:
-                    if event.symbol not in positions:
-                        allocation = build_capital_allocation(
-                            equity=snapshot.equity,
-                            open_trades=[
-                                {
-                                    "status": "OPEN",
-                                    "symbol": position.symbol,
-                                    "notional": position.quantity
-                                    * last_events.get(
-                                        position.symbol,
-                                        MarketEvent(
-                                            event.timestamp_ms,
-                                            position.symbol,
-                                            position.entry_price,
-                                            position.entry_price,
-                                        ),
-                                    ).mid,
-                                    "correlation_group": position.correlation_group,
-                                }
-                                for position in positions.values()
-                            ],
-                            max_open_positions=self.config.max_open_positions,
-                            stop_loss_percent=signal.stop_loss_percent,
-                            fee_rate=self.config.fee_rate,
-                            requested_risk_percent=signal.requested_risk_percent,
-                            policy=self.policy,
-                            symbol=event.symbol,
-                            correlation_group=correlation_group_for_symbol(event.symbol),
-                        )
-                        if allocation["allowed"] and allocation["notional"] > 0:
-                            quantity = allocation["notional"] / event.ask
-                            cost = self.costs.estimate(
-                                event,
-                                side=Side.BUY,
-                                quantity=quantity,
-                                liquidity_role=signal.liquidity_role,
-                            )
-                            spent = cost.execution_price * quantity + cost.fee
-                            if spent <= cash:
-                                cash -= spent
-                                total_fees += cost.fee
-                                total_slippage += cost.slippage_cost
-                                positions[event.symbol] = Position(
-                                    symbol=event.symbol,
-                                    quantity=quantity,
-                                    entry_price=cost.execution_price,
-                                    entry_notional=cost.execution_price * quantity,
-                                    entry_fee=cost.fee,
-                                    opened_at_ms=event.timestamp_ms,
-                                    correlation_group=correlation_group_for_symbol(event.symbol),
-                                )
-                                last_funding_timestamp[event.symbol] = event.timestamp_ms
-                                fills.append(
-                                    Fill(
-                                        timestamp_ms=event.timestamp_ms,
-                                        symbol=event.symbol,
-                                        side=Side.BUY,
-                                        quantity=quantity,
-                                        reference_price=cost.reference_price,
-                                        execution_price=cost.execution_price,
-                                        notional=cost.execution_price * quantity,
-                                        fee=cost.fee,
-                                        slippage_cost=cost.slippage_cost,
-                                        realized_pnl=0.0,
-                                        reason=signal.reason,
-                                        liquidity_role=signal.liquidity_role,
-                                        spread_cost=cost.spread_cost,
-                                        participation_rate=cost.participation_rate,
-                                    )
-                                )
-                elif signal.side is Side.SELL:
-                    position = positions.pop(event.symbol, None)
-                    last_funding_timestamp.pop(event.symbol, None)
-                    if position is not None:
-                        (
-                            cash,
-                            realized_pnl,
-                            gross_trading_pnl,
-                            total_fees,
-                            total_slippage,
-                            net,
-                            fill,
-                        ) = self._close_position(
-                            event=event,
-                            position=position,
-                            signal=signal,
-                            cash=cash,
-                            realized_pnl=realized_pnl,
-                            gross_trading_pnl=gross_trading_pnl,
-                            total_fees=total_fees,
-                            total_slippage=total_slippage,
-                        )
-                        closed_pnls.append(net)
-                        winning_closed += int(net > 0)
-                        losing_closed += int(net < 0)
-                        fills.append(fill)
+                timing = self._execution_timing(event)
+                if timing == "next_event":
+                    pending_signals[event.symbol] = signal
                 else:
-                    raise ValueError("unsupported strategy side")
+                    execute(event, signal, snapshot, timing="same_event")
 
             snapshot = self._snapshot(
                 timestamp_ms=event.timestamp_ms,
@@ -299,7 +295,7 @@ class EventDrivenBacktester:
                 closed_pnls.append(net)
                 winning_closed += int(net > 0)
                 losing_closed += int(net < 0)
-                fills.append(fill)
+                fills.append(replace(fill, execution_timing="synthetic_finalization", synthetic_finalization=True))
             if previous_timestamp:
                 equity_curve.append((previous_timestamp, cash))
 
@@ -348,6 +344,9 @@ class EventDrivenBacktester:
                 "leverage": 1.0,
                 "event_count": event_count,
                 "closed_trade_count": len(closed_pnls),
+                "execution_timing": self.config.execution_timing,
+                "pending_signals_unfilled": len(pending_signals),
+                "force_close_is_synthetic_finalization": bool(self.config.force_close_at_end),
                 "duration_seconds": round(time.perf_counter() - started, 6),
             },
             total_funding_cost=round(total_funding, 8),
@@ -473,6 +472,8 @@ class EventDrivenBacktester:
         )
 
     def _validate_config(self) -> None:
+        if self.config.execution_timing not in {"auto", "same_event", "next_event"}:
+            raise ValueError("execution_timing must be auto, same_event or next_event")
         values = {
             "initial_cash": self.config.initial_cash,
             "fee_rate": self.config.fee_rate,
@@ -516,6 +517,17 @@ class EventDrivenBacktester:
             > 100.000001
         ):
             raise ValueError("reserve plus total exposure exceeds 100 percent")
+
+    def _execution_timing(self, event: MarketEvent) -> str:
+        configured = self.config.execution_timing
+        price_source = str(event.metadata.get("price_source") or "").strip()
+        if configured == "next_event":
+            return "next_event"
+        if price_source == "synthetic_from_close":
+            if configured == "same_event":
+                raise ValueError("same_event execution is unsafe for synthetic_from_close data")
+            return "next_event"
+        return "same_event"
 
 
 class WalkForwardBacktester:

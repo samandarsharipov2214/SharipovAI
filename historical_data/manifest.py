@@ -32,6 +32,9 @@ class DataManifest:
     funding_included: bool = False
     created_at: str = ""
     commit_sha: str = ""
+    # ``unknown`` preserves old manifests but is deliberately not research-final
+    # evidence for candle-derived execution.
+    timestamp_semantics: str = "unknown"
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "DataManifest":
@@ -47,6 +50,7 @@ class DataManifest:
                 source=str(payload["source"]).strip(),
                 symbols=tuple(str(item).strip().upper() for item in payload["symbols"]),
                 interval_ms=int(payload["interval_ms"]),
+                timestamp_semantics=str(payload.get("timestamp_semantics", "unknown")).strip().lower(),
                 timezone=str(payload.get("timezone", "UTC")).strip(),
                 start_timestamp_ms=int(payload["start_timestamp_ms"]),
                 end_timestamp_ms=int(payload["end_timestamp_ms"]),
@@ -127,6 +131,8 @@ def validate_manifest(manifest: DataManifest) -> None:
         raise ValueError("manifest symbols must be uppercase alphanumeric")
     if manifest.interval_ms <= 0:
         raise ValueError("manifest interval_ms must be positive")
+    if manifest.timestamp_semantics not in {"unknown", "point_in_time", "bar_open", "bar_close"}:
+        raise ValueError("manifest timestamp_semantics is unsupported")
     if manifest.start_timestamp_ms <= 0:
         raise ValueError("manifest start_timestamp_ms must be positive")
     if manifest.end_timestamp_ms < manifest.start_timestamp_ms:
