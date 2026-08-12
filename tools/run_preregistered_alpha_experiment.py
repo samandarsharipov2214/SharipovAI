@@ -38,6 +38,7 @@ def main() -> int:
     parser.add_argument("--report", required=True, help="New immutable result JSON path")
     args = parser.parse_args()
 
+    _require_clean_git_worktree()
     manifest_path = Path(args.manifest).resolve()
     experiment_path = Path(args.experiment).resolve()
     report_path = Path(args.report).resolve()
@@ -101,8 +102,6 @@ def main() -> int:
         with report_path.open("xb") as handle:
             handle.write(encoded)
     except FileExistsError as exc:
-        # The final OOS claim remains consumed: choosing another filename is not
-        # a legitimate way to obtain another look at the holdout.
         raise FileExistsError("alpha result path became occupied during execution") from exc
     report_sha256 = hashlib.sha256(encoded).hexdigest()
     complete_final_oos(
@@ -145,6 +144,17 @@ def _validate_ranges_within_manifest(
     ):
         if start_ms < manifest.start_timestamp_ms or end_ms > manifest.end_timestamp_ms:
             raise ValueError("experiment range falls outside dataset manifest bounds")
+
+
+def _require_clean_git_worktree() -> None:
+    completed = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=normal"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    if completed.stdout.strip():
+        raise RuntimeError("alpha research requires a clean git worktree")
 
 
 def _sha256(path: Path) -> str:
