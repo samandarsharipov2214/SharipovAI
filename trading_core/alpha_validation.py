@@ -7,13 +7,13 @@ import re
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
 from historical_data import HistoricalDataLoader
 
 from .alpha_experiment import AlphaExperiment
 from .backtest import EventDrivenBacktester, Strategy
-from .benchmarks import BenchmarkSuiteEntry, BenchmarkSuiteResult, compare_strategy_to_benchmarks
+from .benchmarks import BenchmarkEntry, BenchmarkSuiteResult, compare_strategy_to_benchmarks
 from .models import BacktestConfig, BacktestResult, Side
 
 _GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -415,7 +415,7 @@ def _validate_acceptance_binding(
         raise ValueError("acceptance criteria differ from preregistration")
 
 
-def _entry(comparison: BenchmarkSuiteResult, name: str) -> BenchmarkSuiteEntry:
+def _entry(comparison: BenchmarkSuiteResult, name: str) -> BenchmarkEntry:
     for entry in comparison.entries:
         if entry.name == name:
             return entry
