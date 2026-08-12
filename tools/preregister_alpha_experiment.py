@@ -50,6 +50,9 @@ def main() -> int:
     manifest_path = Path(args.manifest).resolve()
     output_path = Path(args.output).resolve()
     current_git_sha = _current_git_sha()
+    train_range = _range(args.train)
+    validation_ranges = tuple(_range(value) for value in args.validation)
+    final_oos_range = _range(args.final_oos)
 
     strategy_config = RegimeFilteredBreakoutConfig()
     strategy = RegimeFilteredBreakoutStrategy(strategy_config)
@@ -60,6 +63,10 @@ def main() -> int:
         report = loader.require_final_oos_eligible()
         if not report.final_oos_eligible:
             raise ValueError("dataset is not final-OOS eligible")
+        _require_ranges_within_manifest(
+            loader,
+            (train_range, *validation_ranges, final_oos_range),
+        )
 
     experiment = AlphaExperiment(
         experiment_id=str(args.experiment_id).strip(),
@@ -72,9 +79,9 @@ def main() -> int:
         cost_config=backtest_cost_config(backtest_config),
         risk_config=backtest_risk_config(backtest_config),
         execution_timing=backtest_config.execution_timing,
-        train_range=_range(args.train),
-        validation_ranges=tuple(_range(value) for value in args.validation),
-        final_oos_range=_range(args.final_oos),
+        train_range=train_range,
+        validation_ranges=validation_ranges,
+        final_oos_range=final_oos_range,
         benchmarks=_BENCHMARKS,
         acceptance_metrics=criteria.canonical_metrics(),
     )
@@ -130,6 +137,16 @@ def _timestamp_ms(value: str) -> int:
     if parsed <= 0:
         raise ValueError("timestamp must be positive")
     return parsed
+
+
+def _require_ranges_within_manifest(
+    loader: HistoricalDataLoader,
+    ranges: tuple[tuple[int, int], ...],
+) -> None:
+    manifest = loader.manifest
+    for start_ms, end_ms in ranges:
+        if start_ms < manifest.start_timestamp_ms or end_ms > manifest.end_timestamp_ms:
+            raise ValueError("experiment range falls outside dataset manifest bounds")
 
 
 def _require_clean_git_worktree() -> None:
