@@ -108,6 +108,19 @@ def test_security_guard_blocks_unsafe_execution_runtime(tmp_path, monkeypatch) -
     assert len(security["blockers"]) >= 3
 
 
+def test_risk_monitor_reports_effective_clamped_execution_cap(tmp_path, monkeypatch) -> None:
+    configure_safe(monkeypatch)
+    monkeypatch.setenv("EXECUTION_MAX_NOTIONAL_USDT", "1000")
+    db = database(tmp_path)
+
+    result = SafeAIOrganRuntimeMonitor(prepared_app(db), db, clock_ms=lambda: 3_500).refresh()
+    risk = next(item for item in result["organs"] if item["organ_id"] == "risk_engine")
+
+    assert "execution_notional_cap=50" in risk["evidence"]
+    assert "execution_notional_config_clamped" in risk["evidence"]
+    assert "execution_notional_cap=1000" not in risk["evidence"]
+
+
 def test_snapshot_recovers_persisted_organ_state_after_restart(tmp_path, monkeypatch) -> None:
     configure_safe(monkeypatch)
     db = database(tmp_path)

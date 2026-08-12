@@ -102,6 +102,8 @@ def test_successful_submission_binds_exchange_order_id_and_blocks_until_private_
         assert request.url.path == "/v5/order/create"
         payload = __import__("json").loads(request.content)
         assert payload["orderLinkId"].startswith("sai_")
+        assert payload["marketUnit"] == "quoteCoin"
+        assert payload["qty"] == "10"
         return httpx.Response(
             200,
             json={
@@ -120,6 +122,8 @@ def test_successful_submission_binds_exchange_order_id_and_blocks_until_private_
 
     assert result.order_id == "testnet-order-1"
     assert result.order_link_id == request.order_link_id
+    assert result.market_unit == "quoteCoin"
+    assert result.submitted_quantity == "10"
     assert record is not None
     assert record["status"] == "Submitted"
     assert record["order_id"] == "testnet-order-1"

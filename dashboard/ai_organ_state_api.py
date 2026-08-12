@@ -17,6 +17,7 @@ from typing import Any, Callable
 from fastapi import FastAPI
 
 from ai_architecture_registry import CANONICAL_AI_ORGANS
+from exchange_connector.bybit_execution import effective_testnet_notional_cap_usdt
 from risk_engine import CanonicalRiskService
 from storage import ProjectDatabase, list_json_items
 
@@ -241,9 +242,12 @@ class AIOrganRuntimeMonitor:
         else:
             blockers.append("critical: canonical risk service did not fail closed")
         try:
-            max_notional = float(os.getenv("EXECUTION_MAX_NOTIONAL_USDT", "25"))
-            if math.isfinite(max_notional) and 0 < max_notional <= 1000:
-                evidence.append(f"execution_notional_cap={max_notional:g}")
+            configured_notional = float(os.getenv("EXECUTION_MAX_NOTIONAL_USDT", "25"))
+            if math.isfinite(configured_notional) and configured_notional > 0:
+                effective_notional = effective_testnet_notional_cap_usdt()
+                evidence.append(f"execution_notional_cap={effective_notional:g}")
+                if effective_notional != configured_notional:
+                    evidence.append("execution_notional_config_clamped")
             else:
                 blockers.append("critical: execution notional cap is invalid")
         except ValueError:

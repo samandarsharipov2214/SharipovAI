@@ -19,12 +19,16 @@ from trading_candidate import (
 )
 
 
-def _candidate(environment: TradingEnvironment = TradingEnvironment.TESTNET) -> TradingCandidate:
+def _candidate(
+    environment: TradingEnvironment = TradingEnvironment.TESTNET,
+    *,
+    side: TradingSide = TradingSide.BUY,
+) -> TradingCandidate:
     return TradingCandidate(
         candidate_id="candidate-001",
         symbol="BTCUSDT",
         category=TradingCategory.SPOT,
-        side=TradingSide.BUY,
+        side=side,
         environment=environment,
         market_timestamp_ms=9_999_000,
         received_timestamp_ms=9_999_100,
@@ -70,8 +74,26 @@ def test_builds_short_lived_testnet_execution_request() -> None:
     assert request.order_link_id.startswith("sai_")
     assert len(request.order_link_id) == 36
     assert request.to_order_intent().order_link_id() == request.order_link_id
+    assert request.to_order_intent().market_unit == "quoteCoin"
+    assert request.to_order_intent().quantity == "10"
+    assert request.to_dict()["market_unit"] == "quoteCoin"
+    assert request.to_dict()["submission_quantity"] == "10"
     assert len(request.candidate_hash) == 64
     validate_execution_request(request, now_ms=10_000_001)
+
+
+def test_sell_identity_retains_base_coin_quantity() -> None:
+    request = build_execution_request(
+        _candidate(side=TradingSide.SELL),
+        _validation(),
+        quantity=0.0002,
+        now_ms=10_000_000,
+    )
+
+    assert request.to_order_intent().market_unit == "baseCoin"
+    assert request.to_order_intent().quantity == "0.0002"
+    assert request.to_dict()["market_unit"] == "baseCoin"
+    assert request.to_dict()["submission_quantity"] == "0.0002"
 
 
 def test_same_intent_has_same_identity_and_retry_has_new_identity() -> None:
