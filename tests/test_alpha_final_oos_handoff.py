@@ -31,8 +31,7 @@ def test_canonical_runner_never_replays_pre_final_after_claim() -> None:
     names = [call.func.id for call in named_calls]
 
     assert "run_preregistered_alpha_validation" not in names
-    assert "run_preregistered_pre_final_validation" not in names
-    assert names.count("prepare_preregistered_final_oos") == 1
+    assert names.count("run_preregistered_pre_final_validation") == 1
     assert names.count("claim_final_oos") == 1
     assert names.count("run_prepared_final_oos_validation") == 1
 
@@ -40,12 +39,12 @@ def test_canonical_runner_never_replays_pre_final_after_claim() -> None:
         call.func.id: call.lineno
         for call in named_calls
         if call.func.id in {
-            "prepare_preregistered_final_oos",
+            "run_preregistered_pre_final_validation",
             "claim_final_oos",
             "run_prepared_final_oos_validation",
         }
     }
-    assert lines["prepare_preregistered_final_oos"] < lines["claim_final_oos"]
+    assert lines["run_preregistered_pre_final_validation"] < lines["claim_final_oos"]
     assert lines["claim_final_oos"] < lines["run_prepared_final_oos_validation"]
 
 
