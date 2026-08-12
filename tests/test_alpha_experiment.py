@@ -11,6 +11,8 @@ def _experiment(**changes: object) -> AlphaExperiment:
         "git_sha": "a" * 40,
         "dataset_manifest_sha256": "b" * 64,
         "strategy": "trend",
+        "hypothesis": "A preregistered trend candidate has positive untouched OOS expectancy after costs.",
+        "falsification_rule": "Reject if untouched OOS expectancy is non-positive or integrity gates fail.",
         "parameters": {"short_window": 20},
         "cost_config": {"fee_rate": 0.001},
         "risk_config": {"max_position_percent": 20},
