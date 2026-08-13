@@ -73,7 +73,16 @@ def test_analyzer_scores_official_confirmed_news_higher() -> None:
 def test_analyzed_news_payload_contains_credibility_summary() -> None:
     """API payload should include credibility summary and per-item scores."""
 
-    payload = analyzed_news_payload()
+    # ``analyzed_news_payload()`` is the production read path and may trigger
+    # an RSS refresh.  Give this unit test explicit input so it verifies
+    # analysis shape without requiring network availability or demo fallback.
+    payload = analyzed_news_payload([
+        {
+            "source_id": "watcher_guru_x",
+            "title": "Breaking: BTC liquidation alert",
+            "summary": "Unconfirmed social report requiring verification.",
+        }
+    ])
 
     assert payload["status"] == "ok"
     assert payload["summary"]["total"] > 0
