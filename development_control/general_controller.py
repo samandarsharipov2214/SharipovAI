@@ -347,6 +347,14 @@ class DevelopmentChangeController:
         if decision.status not in {"approved", "executing", "applied", "failed"}:
             raise RuntimeError("host result is not valid in the current state")
         clean = dict(result)
+        if decision.status in {"applied", "failed"}:
+            previous = decision.host_result
+            if previous == clean:
+                # A host may retry reporting after a transport failure.  Preserve
+                # the original immutable terminal event rather than appending a
+                # second, indistinguishable completion record.
+                return decision
+            raise RuntimeError("host result conflicts with the terminal audit record")
         success = clean.get("success") is True or clean.get("status") in {"ok", "success", "applied"}
         self._transition(
             decision.decision_id,

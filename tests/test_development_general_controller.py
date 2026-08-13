@@ -217,3 +217,40 @@ def test_critical_action_requires_matching_owner_approval_and_is_one_shot(
         "critical_action_claimed",
         "host_applied",
     ]
+
+
+def test_failed_critical_action_records_one_idempotent_terminal_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TELEGRAM_OWNER_ID", "12345")
+    monkeypatch.setattr(
+        module,
+        "send_development_approval",
+        lambda decision: {"ok": True, "result": {"chat": {"id": 12345}}},
+    )
+    service = controller(tmp_path)
+    submitted = service.submit_critical_action(
+        "git_revert",
+        reason="verified automatic regression",
+        base_sha=BASE_SHA,
+    )
+    awaiting = service.request_owner_approval(service.security_review(submitted.decision_id).decision_id)
+    approved = service.decide(
+        awaiting.decision_id, True, "12345", "12345", awaiting.approval_token, "approved"
+    )
+    claimed = service.claim_critical_action(approved.decision_id, "git_revert")
+    failed_result = {"status": "failed", "action": "git_revert", "reason": "revert failed"}
+
+    failed = service.record_host_result(claimed.decision_id, failed_result)
+    assert failed.status == "failed"
+    assert failed.host_result == failed_result
+    before_retry = service.database.list_agent_decision_events(claimed.decision_id)
+
+    assert service.record_host_result(claimed.decision_id, failed_result).status == "failed"
+    assert service.database.list_agent_decision_events(claimed.decision_id) == before_retry
+    with pytest.raises(RuntimeError, match="conflicts with the terminal audit record"):
+        service.record_host_result(
+            claimed.decision_id,
+            {"status": "success", "action": "git_revert"},
+        )
