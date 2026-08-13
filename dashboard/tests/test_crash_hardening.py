@@ -51,10 +51,10 @@ def test_access_request_is_recorded_without_creating_password_user(monkeypatch, 
     )
 
     assert response.status_code == 202
-    assert "Запрос доступа отправлен" in response.text
+    assert "\u0417\u0430\u044f\u0432\u043a\u0430 \u043f\u0440\u0438\u043d\u044f\u0442\u0430" in response.text
     payload = json.loads(requests_file.read_text(encoding="utf-8"))
     assert payload["requests"][0]["username"] == "crash_user"
-    assert payload["requests"][0]["status"] == "pending_security_review"
+    assert payload["requests"][0]["status"] == "pending"
     assert not users_file.exists()
 
 
