@@ -60,6 +60,45 @@ def test_expensive_or_mutating_workflows_are_rate_limited() -> None:
     assert "workflow_dispatch:" in bybit_sync
 
 
+def test_legacy_ai_autofix_is_evidence_only_and_cannot_mutate_repository() -> None:
+    workflow = _read(WORKFLOWS / "ai-autofix.yml")
+
+    assert "contents: read" in workflow
+    for forbidden in (
+        "contents: write",
+        "pull-requests: write",
+        "issues: write",
+        "OPENAI_API_KEY",
+        "OPENAI_MODEL",
+        "AI_AUTOFIX_ATTEMPTS",
+        "git add .",
+        "git commit",
+        "git push",
+        "issue_comment:",
+    ):
+        assert forbidden not in workflow
+    assert "Run evidence-only pytest" in workflow
+    assert "python scripts/ai_autofix.py" in workflow
+    assert "persist-credentials: false" in workflow
+
+
+def test_production_smoke_requires_canonical_configured_public_endpoint() -> None:
+    workflow = _read(WORKFLOWS / "production-smoke.yml")
+
+    assert "SHARIPOVAI_PRODUCTION_BASE_URL" in workflow
+    assert "sharipovai-bot.onrender.com" not in workflow
+    assert "--public-liveness-only" in workflow
+    assert "repository variable is required" in workflow
+
+
+def test_web2_workflow_does_not_reference_missing_lockfile() -> None:
+    workflow = _read(WORKFLOWS / "web2.yml")
+
+    assert "package-lock.json" not in workflow
+    assert "cache: npm" not in workflow
+    assert "npm install --ignore-scripts --no-audit --no-fund" in workflow
+
+
 def test_runner_installers_never_add_runner_user_to_docker_group() -> None:
     linux_installer = _read(ROOT / "deploy" / "vps" / "install_github_actions_runner.sh")
     windows_installer = _read(ROOT / "scripts" / "windows" / "install_github_actions_runner.ps1")

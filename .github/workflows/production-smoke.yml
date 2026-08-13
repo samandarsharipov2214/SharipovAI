@@ -17,6 +17,8 @@ jobs:
     if: ${{ vars.SHARIPOVAI_SELF_HOSTED_CI == '1' }}
     runs-on: [self-hosted, linux, x64, sharipovai-ci]
     timeout-minutes: 8
+    env:
+      SHARIPOVAI_PRODUCTION_BASE_URL: ${{ vars.SHARIPOVAI_PRODUCTION_BASE_URL }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -28,9 +30,11 @@ jobs:
 
       - name: Check deployed SharipovAI
         run: |
+          : "${SHARIPOVAI_PRODUCTION_BASE_URL:?SHARIPOVAI_PRODUCTION_BASE_URL repository variable is required}"
           python scripts/production_smoke.py \
-            --base-url https://sharipovai-bot.onrender.com \
+            --base-url "$SHARIPOVAI_PRODUCTION_BASE_URL" \
             --attempts 5 \
             --timeout 20 \
             --sleep 8 \
+            --public-liveness-only \
             --json
