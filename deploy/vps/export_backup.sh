@@ -38,9 +38,13 @@ if [[ -n "$container_id" ]]; then
   running=$(docker inspect --format '{{.State.Running}}' "$container_id" 2>/dev/null || printf 'false')
 fi
 
-if [[ "$running" == 'true' ]] && docker exec "$CONTAINER" true >/dev/null 2>&1; then
+if [[ "$running" == 'true' ]] && docker exec --user 0:0 "$CONTAINER" true >/dev/null 2>&1; then
   log 'creating transactionally consistent backup through running application container'
-  docker exec -i "$CONTAINER" python - <<'PY'
+  # The backup service is host-root and must read every durable evidence
+  # directory.  Runtime evidence can be owned by a different service UID
+  # (for example immutable Alpha artifacts); do not make backup correctness
+  # depend on that UID being able to recursively read all durable state.
+  docker exec --user 0:0 -i "$CONTAINER" python - <<'PY'
 import os
 import shutil
 import sqlite3
@@ -74,12 +78,12 @@ if db.exists():
             raise RuntimeError(f"database quick_check failed: {result!r}")
 PY
 
-  container_data_dir=$(docker exec "$CONTAINER" sh -c 'printf "%s" "${SHARIPOVAI_DATA_DIR:-/var/lib/sharipovai}"')
+  container_data_dir=$(docker exec --user 0:0 "$CONTAINER" sh -c 'printf "%s" "${SHARIPOVAI_DATA_DIR:-/var/lib/sharipovai}"')
   if [[ "$container_data_dir" != /* || "$container_data_dir" == *$'\n'* || "$container_data_dir" == *'/../'* ]]; then
     fail 'container data directory is unsafe'
   fi
   docker cp "$container_id:$container_data_dir/.backup-export/." "$work/data/"
-  docker exec "$CONTAINER" rm -rf "$container_data_dir/.backup-export"
+  docker exec --user 0:0 "$CONTAINER" rm -rf "$container_data_dir/.backup-export"
 else
   source_mode='stopped-volume-readonly'
   log 'application container is stopped; creating read-only backup directly from persistent volume'
