@@ -97,7 +97,7 @@ def test_web2_workflow_does_not_reference_missing_lockfile() -> None:
     assert "package-lock.json" not in workflow
     assert "cache: npm" not in workflow
     assert "npm install --ignore-scripts --no-audit --no-fund" in workflow
-    assert 'listener.bind(("127.0.0.1", 0))' in workflow
+    assert 'listener.listen(0, "127.0.0.1"' in workflow
     assert '"http://127.0.0.1:${PORT}/"' in workflow
     assert "cat /tmp/sharipoai-web2.log >&2 || true" in workflow
 

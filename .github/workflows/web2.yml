@@ -52,14 +52,14 @@ jobs:
           NEXT_PUBLIC_API_BASE_URL: https://sharipovai-bot.onrender.com
         run: |
           set -euo pipefail
-          PORT="$(python - <<'PY'
-          import socket
-
-          with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
-              listener.bind(("127.0.0.1", 0))
-              print(listener.getsockname()[1])
-          PY
-          )"
+          PORT="$(node -e '
+          const net = require("net");
+          const listener = net.createServer();
+          listener.listen(0, "127.0.0.1", () => {
+            console.log(listener.address().port);
+            listener.close();
+          });
+          ')"
           export PORT
           npm run start > /tmp/sharipoai-web2.log 2>&1 &
           pid=$!
