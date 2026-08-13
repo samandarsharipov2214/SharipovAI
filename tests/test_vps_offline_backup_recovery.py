@@ -34,6 +34,13 @@ def test_offline_backup_consolidates_sqlite_and_forbids_symlinks() -> None:
     assert 'source_mode' in source
 
 
+def test_running_backup_reads_durable_state_independent_of_service_uid() -> None:
+    source = EXPORT_BACKUP.read_text(encoding="utf-8")
+
+    assert 'docker exec --user 0:0 -i "$CONTAINER" python - <<\'PY\'' in source
+    assert 'docker exec --user 0:0 "$CONTAINER" rm -rf "$container_data_dir/.backup-export"' in source
+
+
 def test_updater_uses_target_backup_exporter_before_checkout() -> None:
     source = UPDATE_SCRIPT.read_text(encoding="utf-8")
 
