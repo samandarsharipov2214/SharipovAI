@@ -7,7 +7,7 @@ from pathlib import Path
 import telegram_deploy_control as control
 
 
-def test_owner_claim_and_deploy_request_are_restricted(tmp_path: Path, monkeypatch):
+def _configure_control(tmp_path: Path, monkeypatch, *, owner_id: str = "111", owner_chat_id: str = "") -> None:
     monkeypatch.setattr(control, "CONTROL_DIR", tmp_path)
     monkeypatch.setattr(control, "REQUEST_FILE", tmp_path / "pending.json")
     monkeypatch.setattr(control, "STATUS_FILE", tmp_path / "status.json")
@@ -15,9 +15,22 @@ def test_owner_claim_and_deploy_request_are_restricted(tmp_path: Path, monkeypat
     monkeypatch.setattr(control, "CLAIM_FILE", tmp_path / "owner_claim.json")
     monkeypatch.setenv("TELEGRAM_ADMIN_USER_ID", "")
     monkeypatch.setenv("TELEGRAM_ADMIN_CHAT_ID", "")
+    monkeypatch.setenv("TELEGRAM_OWNER_ID", owner_id)
+    monkeypatch.setenv("TELEGRAM_OWNER_CHAT_ID", owner_chat_id)
     control._CONFIRMATIONS.clear()
 
-    control.CLAIM_FILE.write_text(json.dumps({"code": "654321", "expires_at": int(time.time()) + 600}), encoding="utf-8")
+
+def _write_claim(code: str = "654321", *, expires_at: int | None = None) -> None:
+    control.CLAIM_FILE.write_text(
+        json.dumps({"code": code, "expires_at": expires_at or int(time.time()) + 600}),
+        encoding="utf-8",
+    )
+
+
+def test_owner_claim_and_deploy_request_are_restricted(tmp_path: Path, monkeypatch):
+    _configure_control(tmp_path, monkeypatch)
+
+    _write_claim()
     text, _ = control.claim_owner(111, 111, "bad")
     assert "Неверный" in text
     text, keyboard = control.claim_owner(111, 111, "654321")
@@ -37,6 +50,65 @@ def test_owner_claim_and_deploy_request_are_restricted(tmp_path: Path, monkeypat
     payload = json.loads(control.REQUEST_FILE.read_text(encoding="utf-8"))
     assert payload["action"] == "deploy_main"
     assert payload["actor_id"] == 111
+
+
+def test_claim_rejects_wrong_user_without_creating_owner(tmp_path: Path, monkeypatch):
+    _configure_control(tmp_path, monkeypatch, owner_id="111")
+    _write_claim()
+
+    text, _ = control.claim_owner(222, 222, "654321")
+
+    assert "не является" in text
+    assert not control.OWNER_FILE.exists()
+    assert control.CLAIM_FILE.exists()
+
+
+def test_claim_rejects_wrong_chat_when_canonical_chat_is_configured(tmp_path: Path, monkeypatch):
+    _configure_control(tmp_path, monkeypatch, owner_id="111", owner_chat_id="333")
+    _write_claim()
+
+    text, _ = control.claim_owner(111, 222, "654321")
+
+    assert "не является" in text
+    assert not control.OWNER_FILE.exists()
+
+
+def test_claim_fails_closed_without_canonical_owner(tmp_path: Path, monkeypatch):
+    _configure_control(tmp_path, monkeypatch, owner_id="")
+    _write_claim()
+
+    text, _ = control.claim_owner(111, 111, "654321")
+
+    assert "не настроен" in text
+    assert not control.OWNER_FILE.exists()
+
+
+def test_claim_rejects_expired_and_reused_codes(tmp_path: Path, monkeypatch):
+    _configure_control(tmp_path, monkeypatch)
+    _write_claim(expires_at=int(time.time()) - 1)
+    text, _ = control.claim_owner(111, 111, "654321")
+    assert "истёк" in text
+    assert not control.OWNER_FILE.exists()
+
+    _write_claim()
+    text, _ = control.claim_owner(111, 111, "654321")
+    assert "назначен владельцем" in text
+    assert not control.CLAIM_FILE.exists()
+    text, _ = control.claim_owner(111, 111, "654321")
+    assert "уже настроен" in text
+
+
+def test_claimed_owner_cannot_be_replaced(tmp_path: Path, monkeypatch):
+    _configure_control(tmp_path, monkeypatch)
+    _write_claim()
+    control.claim_owner(111, 111, "654321")
+    _write_claim(code="999999")
+
+    text, _ = control.claim_owner(222, 222, "999999")
+
+    assert "уже настроен" in text
+    owner = json.loads(control.OWNER_FILE.read_text(encoding="utf-8"))
+    assert owner["user_id"] == 111
 
 
 def test_watcher_is_fixed_command_https_only_and_never_mounts_docker_socket():
