@@ -29,6 +29,7 @@ def run_smoke(
     attempts: int = 5,
     timeout_seconds: float = 20.0,
     sleep_seconds: float = 5.0,
+    require_internal_health: bool = True,
     opener: Any = urllib.request.urlopen,
 ) -> SmokeResult:
     base = str(base_url).strip().rstrip("/")
@@ -48,7 +49,7 @@ def run_smoke(
             if status != 200:
                 errors.append(f"health HTTP status is {status}")
             last_health = payload
-            errors.extend(_validate_health(payload))
+            errors.extend(_validate_health(payload, require_internal_health=require_internal_health))
         except Exception as exc:
             errors.append(f"health request failed: {type(exc).__name__}: {exc}")
 
@@ -70,10 +71,12 @@ def run_smoke(
     return SmokeResult("blocked", base, attempts, last_health, homepage_status, tuple(last_errors))
 
 
-def _validate_health(payload: dict[str, Any]) -> list[str]:
+def _validate_health(payload: dict[str, Any], *, require_internal_health: bool) -> list[str]:
     errors: list[str] = []
     if payload.get("status") != "ok":
         errors.append("health status is not ok")
+    if not require_internal_health:
+        return errors
     database = payload.get("database")
     if not isinstance(database, dict) or database.get("status") != "ok":
         errors.append("database health is not ok")
@@ -123,17 +126,23 @@ def _request(url: str, timeout: float, opener: Any) -> tuple[int, str]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Check the deployed SharipovAI service")
-    parser.add_argument("--base-url", default="https://sharipovai-bot.onrender.com")
+    parser.add_argument("--base-url", required=True)
     parser.add_argument("--attempts", type=int, default=5)
     parser.add_argument("--timeout", type=float, default=20.0)
     parser.add_argument("--sleep", type=float, default=5.0)
     parser.add_argument("--json", action="store_true")
+    parser.add_argument(
+        "--public-liveness-only",
+        action="store_true",
+        help="require only the intentionally public /health contract, not internal safety details",
+    )
     args = parser.parse_args(argv)
     result = run_smoke(
         args.base_url,
         attempts=args.attempts,
         timeout_seconds=args.timeout,
         sleep_seconds=args.sleep,
+        require_internal_health=not args.public_liveness_only,
     )
     if args.json:
         print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2, sort_keys=True))

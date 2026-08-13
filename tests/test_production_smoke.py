@@ -85,6 +85,40 @@ def test_production_smoke_blocks_database_and_execution_failures() -> None:
     assert any("Live" in item for item in result.errors)
 
 
+def test_public_liveness_mode_accepts_only_the_intentionally_public_contract() -> None:
+    public_health = {"status": "ok"}
+
+    strict = run_smoke(
+        "https://example.com",
+        attempts=1,
+        sleep_seconds=0,
+        opener=opener_for(public_health),
+    )
+    public = run_smoke(
+        "https://example.com",
+        attempts=1,
+        sleep_seconds=0,
+        require_internal_health=False,
+        opener=opener_for(public_health),
+    )
+
+    assert strict.status == "blocked"
+    assert public.status == "ok"
+
+
+def test_public_liveness_mode_still_blocks_non_ok_health() -> None:
+    result = run_smoke(
+        "https://example.com",
+        attempts=1,
+        sleep_seconds=0,
+        require_internal_health=False,
+        opener=opener_for({"status": "error"}),
+    )
+
+    assert result.status == "blocked"
+    assert "health status is not ok" in result.errors
+
+
 def test_production_smoke_retries_transient_failure() -> None:
     calls = {"health": 0}
 
