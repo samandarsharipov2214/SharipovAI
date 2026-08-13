@@ -31,62 +31,20 @@ fi
 mkdir -p "$work/data"
 
 cd "$COMPOSE_DIR"
-source_mode='running-container'
+source_mode='stopped-volume-readonly'
 container_id=$(docker compose ps -a -q "$CONTAINER" 2>/dev/null || true)
 running='false'
 if [[ -n "$container_id" ]]; then
   running=$(docker inspect --format '{{.State.Running}}' "$container_id" 2>/dev/null || printf 'false')
 fi
 
-if [[ "$running" == 'true' ]] && docker exec --user 0:0 "$CONTAINER" true >/dev/null 2>&1; then
-  log 'creating transactionally consistent backup through running application container'
-  # The backup service is host-root and must read every durable evidence
-  # directory.  Runtime evidence can be owned by a different service UID
-  # (for example immutable Alpha artifacts); do not make backup correctness
-  # depend on that UID being able to recursively read all durable state.
-  docker exec --user 0:0 -i "$CONTAINER" python - <<'PY'
-import os
-import shutil
-import sqlite3
-from pathlib import Path
-
-source = Path(os.getenv("SHARIPOVAI_DATA_DIR", "/var/lib/sharipovai"))
-staging = source / ".backup-export"
-if staging.exists():
-    shutil.rmtree(staging)
-if source.is_symlink() or not source.is_dir():
-    raise RuntimeError("data directory must be a real directory")
-for path in source.rglob("*"):
-    if path == staging or staging in path.parents:
-        continue
-    if path.is_symlink():
-        raise RuntimeError(f"data symlink is forbidden in backup: {path.relative_to(source)}")
-staging.mkdir(parents=True)
-for item in source.iterdir():
-    if item.name == staging.name:
-        continue
-    if item.is_dir():
-        shutil.copytree(item, staging / item.name)
-    elif item.name != "sharipovai_shared.db" and not item.name.endswith(("-wal", "-shm")):
-        shutil.copy2(item, staging / item.name)
-db = source / "sharipovai_shared.db"
-if db.exists():
-    with sqlite3.connect(db) as src, sqlite3.connect(staging / db.name) as dst:
-        src.backup(dst)
-        result = dst.execute("PRAGMA quick_check").fetchone()
-        if not result or result[0] != "ok":
-            raise RuntimeError(f"database quick_check failed: {result!r}")
-PY
-
-  container_data_dir=$(docker exec --user 0:0 "$CONTAINER" sh -c 'printf "%s" "${SHARIPOVAI_DATA_DIR:-/var/lib/sharipovai}"')
-  if [[ "$container_data_dir" != /* || "$container_data_dir" == *$'\n'* || "$container_data_dir" == *'/../'* ]]; then
-    fail 'container data directory is unsafe'
-  fi
-  docker cp "$container_id:$container_data_dir/.backup-export/." "$work/data/"
-  docker exec --user 0:0 "$CONTAINER" rm -rf "$container_data_dir/.backup-export"
+if [[ "$running" == 'true' ]]; then
+  source_mode='running-volume-readonly'
+  log 'creating transactionally consistent backup through isolated read-only helper'
 else
-  source_mode='stopped-volume-readonly'
   log 'application container is stopped; creating read-only backup directly from persistent volume'
+fi
+
 
   rendered=$(mktemp)
   docker compose config --format json >"$rendered"
@@ -134,26 +92,26 @@ PY
     -v "$volume_name:/source:ro" \
     -v "$work/data:/backup" \
     --entrypoint python \
-    "$image_name" - <<'PY'
+    "$image_name" "$source_mode" - <<'PY'
 import os
 import shutil
 import sqlite3
+import sys
 from pathlib import Path
 
 source = Path("/source")
 destination = Path("/backup")
+source_mode = sys.argv[1]
 if source.is_symlink() or not source.is_dir():
     raise RuntimeError("persistent data source must be a real directory")
 for path in source.rglob("*"):
-    if path.name == ".backup-export" or ".backup-export" in path.parts:
-        continue
     if path.is_symlink():
-        raise RuntimeError(f"data symlink is forbidden in offline backup: {path.relative_to(source)}")
+        raise RuntimeError(f"data symlink is forbidden in backup: {path.relative_to(source)}")
     if not (path.is_dir() or path.is_file()):
-        raise RuntimeError(f"unsupported data entry in offline backup: {path.relative_to(source)}")
+        raise RuntimeError(f"unsupported data entry in backup: {path.relative_to(source)}")
 
 for item in source.iterdir():
-    if item.name == ".backup-export":
+    if item.name == "sharipovai_shared.db" or item.name.endswith(("-wal", "-shm")):
         continue
     target = destination / item.name
     if item.is_dir():
@@ -161,24 +119,17 @@ for item in source.iterdir():
     elif item.is_file():
         shutil.copy2(item, target)
 
-# A stopped container gives us a stable SQLite file set. Copy DB/WAL/SHM first,
-# then consolidate it into a clean database inside the writable backup mount.
-db = destination / "sharipovai_shared.db"
+# The source volume stays read-only. SQLite's backup API produces a consistent
+# snapshot without copying a running database's WAL/SHM files.
+db = source / "sharipovai_shared.db"
 if db.exists():
-    clean = destination / ".sharipovai_shared.db.clean"
-    with sqlite3.connect(db) as src, sqlite3.connect(clean) as dst:
+    target_db = destination / db.name
+    with sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True) as src, sqlite3.connect(target_db) as dst:
         src.backup(dst)
         result = dst.execute("PRAGMA quick_check").fetchone()
         if not result or result[0] != "ok":
             raise RuntimeError(f"database quick_check failed: {result!r}")
-    os.replace(clean, db)
-    for suffix in ("-wal", "-shm"):
-        try:
-            (destination / f"{db.name}{suffix}").unlink()
-        except FileNotFoundError:
-            pass
 PY
-fi
 
 python3 - "$work" "$source_mode" <<'PY'
 import hashlib
