@@ -49,21 +49,35 @@ jobs:
       - name: Runtime smoke test
         shell: bash
         env:
-          PORT: '3100'
           NEXT_PUBLIC_API_BASE_URL: https://sharipovai-bot.onrender.com
         run: |
           set -euo pipefail
+          PORT="$(python - <<'PY'
+          import socket
+
+          with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+              listener.bind(("127.0.0.1", 0))
+              print(listener.getsockname()[1])
+          PY
+          )"
+          export PORT
           npm run start > /tmp/sharipoai-web2.log 2>&1 &
           pid=$!
           trap 'kill $pid 2>/dev/null || true' EXIT
+          ready=false
           for attempt in {1..30}; do
-            if curl --fail --silent http://127.0.0.1:3100/ > /tmp/sharipoai-home.html; then
+            if curl --fail --silent "http://127.0.0.1:${PORT}/" > /tmp/sharipoai-home.html; then
+              ready=true
               break
             fi
             sleep 1
           done
+          if [[ "$ready" != true ]]; then
+            cat /tmp/sharipoai-web2.log >&2 || true
+            exit 1
+          fi
           grep -q 'SharipoAI' /tmp/sharipoai-home.html
-          curl --fail --silent http://127.0.0.1:3100/sharipoai-logo.svg > /tmp/sharipoai-logo.svg
+          curl --fail --silent "http://127.0.0.1:${PORT}/sharipoai-logo.svg" > /tmp/sharipoai-logo.svg
           grep -q '<svg' /tmp/sharipoai-logo.svg
           test -s /tmp/sharipoai-home.html
           echo 'SharipoAI Web 2 runtime smoke test passed'
