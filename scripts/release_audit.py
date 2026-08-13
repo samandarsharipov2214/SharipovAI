@@ -117,7 +117,7 @@ def _audit_blueprint(root: Path, record: Any) -> None:
         "render_postgresql": all(token in text for token in ("databases:", "name: sharipovai-db", "property: connectionString")),
         "render_migration": "preDeployCommand: python scripts/migrate_project_db.py" in text,
         "render_health": "healthCheckPath: /health" in text,
-        "render_checks_pass": "autoDeployTrigger: checksPass" in text,
+        "render_auto_deploy_disabled": "autoDeployTrigger: off" in text,
         "render_web2_build": "cd web2" in text and "npm run build" in text,
         "render_telegram_worker": "startCommand: python scripts/run_telegram_worker.py" in text,
         "render_database_required": _env_value(text, "SHARIPOVAI_DATABASE_REQUIRED") == "1",
