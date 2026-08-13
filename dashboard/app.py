@@ -149,6 +149,8 @@ def _install_auth_entrypoints(app_instance: FastAPI) -> None:
         form = parse_qs((await request.body()).decode("utf-8"))
         username = _clean_username((form.get("username") or [""])[0])
         password = (form.get("password") or [""])[0]
+        contact = (form.get("contact") or [""])[0].strip()
+        reason = (form.get("reason") or [""])[0].strip()
         users = _load_users()
         if not username or len(password) < MIN_PASSWORD_LENGTH:
             return HTMLResponse(_register_result_html(f"Нужен логин и пароль от {MIN_PASSWORD_LENGTH} символов."), status_code=400)
@@ -164,10 +166,23 @@ def _install_auth_entrypoints(app_instance: FastAPI) -> None:
         _save_users(users)
         requests = _load_access_requests()
         request_id = f"REQ-{int(time.time())}-{secrets.token_hex(3)}"
-        requests[request_id] = {"username": username, "status": "pending", "created_at": int(time.time())}
+        requests[request_id] = {
+            "username": username,
+            "contact": contact,
+            "reason": reason,
+            "status": "pending",
+            "created_at": int(time.time()),
+        }
         _save_access_requests(requests)
         _record_security_event("access_request_created", username, request, {"request_id": request_id})
-        return HTMLResponse(_register_result_html("Заявка создана. Вход станет доступен после одобрения администратора."))
+        return HTMLResponse(
+            _register_result_html(
+                "\u0417\u0430\u044f\u0432\u043a\u0430 \u043f\u0440\u0438\u043d\u044f\u0442\u0430. "
+                "\u0414\u043e\u0441\u0442\u0443\u043f \u0435\u0449\u0451 \u043d\u0435 \u0430\u043a\u0442\u0438\u0432\u0435\u043d. "
+                "\u041f\u043e\u0441\u043b\u0435 \u043e\u0434\u043e\u0431\u0440\u0435\u043d\u0438\u044f \u0432\u044b \u0441\u043c\u043e\u0436\u0435\u0442\u0435 \u0432\u043e\u0439\u0442\u0438 \u0447\u0435\u0440\u0435\u0437 \u043e\u0431\u044b\u0447\u043d\u0443\u044e \u0444\u043e\u0440\u043c\u0443 Login."
+            ),
+            status_code=202,
+        )
 
     @app_instance.get("/api/security/access-requests")
     def access_requests(request: Request) -> dict[str, Any]:

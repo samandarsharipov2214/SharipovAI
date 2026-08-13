@@ -178,10 +178,22 @@ async def _register(request: Request) -> HTMLResponse:
     if any(str(item.get("username")) == username for item in items):
         return HTMLResponse("<h1>Заявка уже существует</h1>", status_code=409)
     request_id = f"REQ-{int(time.time())}-{secrets.token_hex(3)}"
-    items.append({"id": request_id, "username": username, "contact": contact, "reason": reason, "status": "pending_security_review", "created_at": int(time.time())})
+    items.append({
+        "id": request_id,
+        "username": username,
+        "contact": contact,
+        "reason": reason,
+        "status": "pending",
+        "created_at": int(time.time()),
+    })
     _save_requests(items)
     _event("access_request_created", username)
-    return HTMLResponse("<h1>Запрос доступа отправлен</h1><p>Ожидайте одобрения администратора.</p>", status_code=202)
+    return HTMLResponse(
+        "<h1>\u0417\u0430\u044f\u0432\u043a\u0430 \u043f\u0440\u0438\u043d\u044f\u0442\u0430</h1>"
+        "<p>\u0414\u043e\u0441\u0442\u0443\u043f \u0435\u0449\u0451 \u043d\u0435 \u0430\u043a\u0442\u0438\u0432\u0435\u043d. "
+        "\u041f\u043e\u0441\u043b\u0435 \u043e\u0434\u043e\u0431\u0440\u0435\u043d\u0438\u044f \u0432\u044b \u0441\u043c\u043e\u0436\u0435\u0442\u0435 \u0432\u043e\u0439\u0442\u0438 \u0447\u0435\u0440\u0435\u0437 \u043e\u0431\u044b\u0447\u043d\u0443\u044e \u0444\u043e\u0440\u043c\u0443 Login.</p>",
+        status_code=202,
+    )
 
 
 def _approve(request_id: str) -> JSONResponse:
