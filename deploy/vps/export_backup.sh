@@ -110,8 +110,13 @@ for path in source.rglob("*"):
     if not (path.is_dir() or path.is_file()):
         raise RuntimeError(f"unsupported data entry in backup: {path.relative_to(source)}")
 
+sqlite_suffixes = (".db", ".sqlite", ".sqlite3")
+
 for item in source.iterdir():
-    if item.name == "sharipovai_shared.db" or item.name.endswith(("-wal", "-shm")):
+    # SQLite databases are copied only below through SQLite's backup API.  A
+    # plain copy of an active database (even if the WAL/SHM files are omitted)
+    # is not a verified snapshot.
+    if item.suffix.lower() in sqlite_suffixes or item.name.endswith(("-wal", "-shm")):
         continue
     target = destination / item.name
     if item.is_dir():
@@ -120,15 +125,17 @@ for item in source.iterdir():
         shutil.copy2(item, target)
 
 # The source volume stays read-only. SQLite's backup API produces a consistent
-# snapshot without copying a running database's WAL/SHM files.
-db = source / "sharipovai_shared.db"
-if db.exists():
+# snapshot for every canonical top-level SQLite database without copying a
+# running database's WAL/SHM files.
+for db in sorted(source.iterdir()):
+    if db.suffix.lower() not in sqlite_suffixes:
+        continue
     target_db = destination / db.name
     with sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True) as src, sqlite3.connect(target_db) as dst:
         src.backup(dst)
         result = dst.execute("PRAGMA quick_check").fetchone()
         if not result or result[0] != "ok":
-            raise RuntimeError(f"database quick_check failed: {result!r}")
+            raise RuntimeError(f"database quick_check failed: {db.name}: {result!r}")
 PY
 
 python3 - "$work" "$source_mode" <<'PY'
