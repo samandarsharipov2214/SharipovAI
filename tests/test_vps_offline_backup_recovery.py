@@ -27,10 +27,13 @@ def test_backup_uses_sqlite_snapshot_and_forbids_symlinks() -> None:
 
     assert "data symlink is forbidden in backup" in source
     assert "unsupported data entry in backup" in source
+    assert 'sqlite_suffixes = (".db", ".sqlite", ".sqlite3")' in source
     assert 'sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)' in source
     assert 'src.backup(dst)' in source
     assert 'PRAGMA quick_check' in source
-    assert 'item.name == "sharipovai_shared.db" or item.name.endswith(("-wal", "-shm"))' in source
+    assert 'for db in sorted(source.iterdir()):' in source
+    assert 'db.suffix.lower() not in sqlite_suffixes' in source
+    assert 'item.suffix.lower() in sqlite_suffixes or item.name.endswith(("-wal", "-shm"))' in source
     assert 'source_mode' in source
 
 
