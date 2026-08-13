@@ -15,6 +15,7 @@ old_network=""
 proxy_network=""
 data_volume=""
 runtime_override=""
+docker_config_tmp=""
 runtime_project="sharipovai-runtime-$(date +%s)-$$"
 
 cd "$DEPLOY"
@@ -33,6 +34,9 @@ data_volume="${data_volume:-vps_sharipovai_data}"
 cleanup() {
   if [[ -n "$runtime_override" ]]; then
     rm -f "$runtime_override"
+  fi
+  if [[ -n "$docker_config_tmp" ]]; then
+    rm -rf "$docker_config_tmp"
   fi
 }
 trap cleanup EXIT
@@ -101,6 +105,10 @@ on_error() {
   exit "$status"
 }
 trap on_error ERR
+
+docker_config_tmp="$(mktemp -d /tmp/sharipovai-docker-config-XXXXXX)"
+chmod 0700 "$docker_config_tmp"
+export DOCKER_CONFIG="$docker_config_tmp"
 
 echo "[1/6] Building candidate image..."
 docker compose build "$SERVICE"
