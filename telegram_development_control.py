@@ -36,7 +36,19 @@ def send_development_approval(
     tests = proposal.get("test_results") or proposal.get("tests") or "не указаны"
     error = proposal.get("error") or proposal.get("failure") or proposal.get("summary") or "не указана"
     reasons = verdict.get("reasons") or []
-    verdict_text = "ALLOW" if verdict.get("allowed") is True else "BLOCK"
+    verdict_kind = str(verdict.get("verdict") or "").strip().lower()
+    if verdict_kind not in {"allow", "manual_review", "block"}:
+        if verdict.get("allowed") is True:
+            verdict_kind = "allow"
+        elif verdict.get("requires_human_approval") is True:
+            verdict_kind = "manual_review"
+        else:
+            verdict_kind = "block"
+    verdict_text = {
+        "allow": "ALLOW",
+        "manual_review": "MANUAL_REVIEW",
+        "block": "BLOCK",
+    }[verdict_kind]
     text = (
         "🛠 SharipovAI — предложение исправления\n\n"
         f"ID: {short_id}\n"
