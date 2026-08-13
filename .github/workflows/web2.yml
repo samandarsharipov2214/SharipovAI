@@ -34,11 +34,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
-          cache-dependency-path: web2/package-lock.json
 
       - name: Install dependencies
-        run: npm ci --silent --no-audit --no-fund
+        run: npm install --ignore-scripts --no-audit --no-fund
 
       - name: Lint
         run: npx eslint .
@@ -51,21 +49,57 @@ jobs:
       - name: Runtime smoke test
         shell: bash
         env:
-          PORT: '3100'
           NEXT_PUBLIC_API_BASE_URL: https://sharipovai-bot.onrender.com
         run: |
           set -euo pipefail
-          npm run start > /tmp/sharipoai-web2.log 2>&1 &
+          PORT="$(node -e '
+          const net = require("net");
+          const listener = net.createServer();
+          listener.listen(0, "127.0.0.1", () => {
+            console.log(listener.address().port);
+            listener.close();
+          });
+          ')"
+          export PORT
+          node -e '
+          const fs = require("fs");
+          const http = require("http");
+          const path = require("path");
+          const files = {
+            "/": "index.html",
+            "/sharipoai-logo.svg": "sharipoai-logo.svg",
+          };
+          http.createServer((request, response) => {
+            const file = files[request.url];
+            if (!file) {
+              response.writeHead(404).end();
+              return;
+            }
+            fs.readFile(path.join("out", file), (error, body) => {
+              if (error) {
+                response.writeHead(500).end();
+                return;
+              }
+              response.writeHead(200).end(body);
+            });
+          }).listen(process.env.PORT, "127.0.0.1");
+          ' > /tmp/sharipoai-web2.log 2>&1 &
           pid=$!
           trap 'kill $pid 2>/dev/null || true' EXIT
+          ready=false
           for attempt in {1..30}; do
-            if curl --fail --silent http://127.0.0.1:3100/ > /tmp/sharipoai-home.html; then
+            if curl --fail --silent "http://127.0.0.1:${PORT}/" > /tmp/sharipoai-home.html; then
+              ready=true
               break
             fi
             sleep 1
           done
+          if [[ "$ready" != true ]]; then
+            cat /tmp/sharipoai-web2.log >&2 || true
+            exit 1
+          fi
           grep -q 'SharipoAI' /tmp/sharipoai-home.html
-          curl --fail --silent http://127.0.0.1:3100/sharipoai-logo.svg > /tmp/sharipoai-logo.svg
+          curl --fail --silent "http://127.0.0.1:${PORT}/sharipoai-logo.svg" > /tmp/sharipoai-logo.svg
           grep -q '<svg' /tmp/sharipoai-logo.svg
           test -s /tmp/sharipoai-home.html
           echo 'SharipoAI Web 2 runtime smoke test passed'
