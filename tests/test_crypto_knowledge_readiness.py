@@ -7,6 +7,7 @@ from learning.crypto_knowledge_readiness import (
     readiness_snapshot,
     score_exam,
 )
+from learning.legal_source_watcher import legal_source_registry
 
 
 def test_all_canonical_organs_receive_crypto_knowledge() -> None:
@@ -39,10 +40,7 @@ def test_time_sensitive_sources_expire_fail_closed() -> None:
     snapshot = readiness_snapshot(today=date(2026, 9, 15))
     assert snapshot["status"] == "degraded"
     assert snapshot["ready_organs"] < 9
-    assert any(
-        organ["stale_fact_ids"]
-        for organ in snapshot["organs"].values()
-    )
+    assert any(organ["stale_fact_ids"] for organ in snapshot["organs"].values())
 
 
 def test_exchange_fee_facts_require_runtime_revalidation() -> None:
@@ -57,15 +55,17 @@ def test_live_legal_facts_require_manual_review() -> None:
     assert all(fact.requires_manual_legal_review_before_live for fact in legal_or_tax)
 
 
+def test_russian_legal_watch_sources_are_official() -> None:
+    registry = legal_source_registry("ru")
+    domains = {item["domain"] for item in registry["sources"]}
+    assert "cbr.ru" in domains
+    assert "nalog.gov.ru" in domains
+
+
 def test_general_controller_can_pass_grounded_exam() -> None:
     result = score_exam(
         "general_controller",
-        {
-            "reg_limit": "300000",
-            "payment": "нет",
-            "tax": "13%",
-            "cost": "нет",
-        },
+        {"reg_limit": "300000", "payment": "нет", "tax": "13%", "cost": "нет"},
     )
     assert result["passed"] is True
     assert result["score_percent"] == 100.0
@@ -75,12 +75,7 @@ def test_general_controller_can_pass_grounded_exam() -> None:
 def test_wrong_answer_fails_exam() -> None:
     result = score_exam(
         "risk_engine",
-        {
-            "reg_limit": "500000",
-            "payment": "да",
-            "tax": "22",
-            "cost": "да",
-        },
+        {"reg_limit": "500000", "payment": "да", "tax": "22", "cost": "да"},
     )
     assert result["passed"] is False
     assert result["score_percent"] < 100.0
