@@ -61,7 +61,29 @@ jobs:
           });
           ')"
           export PORT
-          npm run start > /tmp/sharipoai-web2.log 2>&1 &
+          node -e '
+          const fs = require("fs");
+          const http = require("http");
+          const path = require("path");
+          const files = {
+            "/": "index.html",
+            "/sharipoai-logo.svg": "sharipoai-logo.svg",
+          };
+          http.createServer((request, response) => {
+            const file = files[request.url];
+            if (!file) {
+              response.writeHead(404).end();
+              return;
+            }
+            fs.readFile(path.join("out", file), (error, body) => {
+              if (error) {
+                response.writeHead(500).end();
+                return;
+              }
+              response.writeHead(200).end(body);
+            });
+          }).listen(process.env.PORT, "127.0.0.1");
+          ' > /tmp/sharipoai-web2.log 2>&1 &
           pid=$!
           trap 'kill $pid 2>/dev/null || true' EXIT
           ready=false

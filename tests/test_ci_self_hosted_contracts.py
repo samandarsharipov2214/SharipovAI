@@ -99,6 +99,8 @@ def test_web2_workflow_does_not_reference_missing_lockfile() -> None:
     assert "npm install --ignore-scripts --no-audit --no-fund" in workflow
     assert 'listener.listen(0, "127.0.0.1"' in workflow
     assert '"http://127.0.0.1:${PORT}/"' in workflow
+    assert 'path.join("out", file)' in workflow
+    assert '"/sharipoai-logo.svg": "sharipoai-logo.svg"' in workflow
     assert "cat /tmp/sharipoai-web2.log >&2 || true" in workflow
 
 
