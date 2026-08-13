@@ -340,7 +340,11 @@ class DevelopmentChangeController:
 
     def record_host_result(self, decision_id: str, result: Mapping[str, Any]) -> DevelopmentDecision:
         decision = self.get(decision_id)
-        if decision.status not in {"approved", "applied", "failed"}:
+        # Destructive actions transition to ``executing`` when their one-shot
+        # owner approval is consumed.  The host must be able to write exactly
+        # one terminal outcome from that state; otherwise the canonical audit
+        # ledger permanently misreports a completed critical action as running.
+        if decision.status not in {"approved", "executing", "applied", "failed"}:
             raise RuntimeError("host result is not valid in the current state")
         clean = dict(result)
         success = clean.get("success") is True or clean.get("status") in {"ok", "success", "applied"}

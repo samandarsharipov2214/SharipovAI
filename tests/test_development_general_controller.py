@@ -203,3 +203,17 @@ def test_critical_action_requires_matching_owner_approval_and_is_one_shot(
     assert claimed.status == "executing"
     with pytest.raises(RuntimeError, match="one-shot"):
         service.claim_critical_action(queued.decision_id, "restore_database")
+
+    completed = service.record_host_result(
+        claimed.decision_id,
+        {"status": "success", "action": "restore_database"},
+    )
+    assert completed.status == "applied"
+    assert completed.host_result == {
+        "status": "success",
+        "action": "restore_database",
+    }
+    assert [event["event_type"] for event in service.database.list_agent_decision_events(claimed.decision_id)][-2:] == [
+        "critical_action_claimed",
+        "host_applied",
+    ]
