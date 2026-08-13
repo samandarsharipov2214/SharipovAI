@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import urllib.error
 import urllib.request
@@ -22,6 +23,13 @@ UNITS = (
     "sharipovai-self-healing.timer",
     "sharipovai-self-healing.service",
 )
+_TOKEN_RE = re.compile(r"bot\d+:[A-Za-z0-9_-]+", re.IGNORECASE)
+_SECRET_RE = re.compile(r"(?i)(secret(?:_token)?|bot_token|authorization)([=: ]+)([^\s,;\"']+)")
+
+
+def _sanitize(value: str) -> str:
+    value = _TOKEN_RE.sub("bot<REDACTED>", value)
+    return _SECRET_RE.sub(lambda match: f"{match.group(1)}{match.group(2)}<REDACTED>", value)
 
 
 def _run(args: list[str], *, timeout: int = 20) -> dict[str, object]:
@@ -32,8 +40,8 @@ def _run(args: list[str], *, timeout: int = 20) -> dict[str, object]:
     return {
         "argv": args[:3],
         "returncode": proc.returncode,
-        "stdout": proc.stdout[-8000:],
-        "stderr": proc.stderr[-3000:],
+        "stdout": _sanitize(proc.stdout[-16000:]),
+        "stderr": _sanitize(proc.stderr[-4000:]),
     }
 
 
@@ -67,6 +75,13 @@ def _unit(unit: str) -> dict[str, object]:
     }
 
 
+def _journal(unit: str, since: str) -> dict[str, object]:
+    return _run([
+        "journalctl", "-u", unit, "--since", since,
+        "--no-pager", "--output=short-iso", "-n", "200",
+    ], timeout=20)
+
+
 def _status_file() -> dict[str, object]:
     path = Path("/var/lib/sharipovai-agent/status.json")
     if not path.exists():
@@ -83,6 +98,11 @@ def test_live_telegram_runtime_diagnostic() -> None:
     evidence = {
         "http": [_get(path) for path in PATHS],
         "units": {unit: _unit(unit) for unit in UNITS},
+        "journals": {
+            "deploy_watcher": _journal("sharipovai-deploy-watcher.service", "2026-08-11 00:00:00"),
+            "self_healing": _journal("sharipovai-self-healing.service", "2026-08-12 00:00:00"),
+            "legacy_agent": _journal("sharipovai-agent.service", "2026-07-25 00:00:00"),
+        },
         "agent_status_file": _status_file(),
         "uid": os.getuid(),
     }
