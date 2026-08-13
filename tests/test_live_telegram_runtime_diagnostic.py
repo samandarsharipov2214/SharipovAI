@@ -12,6 +12,7 @@ import urllib.request
 BASE = "https://85-137-88-17.sslip.io"
 PATHS = (
     "/health",
+    "/telegram/webhook",
     "/api/telegram/status",
     "/api/telegram/self-test",
     "/api/release/status",
@@ -25,17 +26,19 @@ def _get(path: str) -> dict[str, object]:
         headers={"User-Agent": "SharipovAI-Live-Diagnostic/1.0", "Accept": "application/json"},
         method="GET",
     )
+    opener = urllib.request.build_opener(urllib.request.HTTPHandler(), urllib.request.HTTPSHandler())
     try:
-        with urllib.request.urlopen(request, timeout=15) as response:
+        response = opener.open(request, timeout=15)
+        with response:
             body = response.read(1_000_000).decode("utf-8", "replace")
             try:
                 payload: object = json.loads(body)
             except json.JSONDecodeError:
                 payload = body[:4000]
-            return {"url": url, "status": int(response.status), "payload": payload}
+            return {"url": url, "status": int(response.status), "payload": payload, "final_url": response.geturl()}
     except urllib.error.HTTPError as exc:
         body = exc.read(1_000_000).decode("utf-8", "replace")
-        return {"url": url, "status": int(exc.code), "error": body[:4000]}
+        return {"url": url, "status": int(exc.code), "error": body[:4000], "final_url": exc.geturl()}
     except Exception as exc:
         return {"url": url, "status": 0, "error": f"{type(exc).__name__}: {exc}"}
 
