@@ -23,6 +23,28 @@ CONFIRM_TTL_SECONDS = 300
 _CONFIRMATIONS: dict[int, tuple[str, float]] = {}
 
 
+def _canonical_owner_id(name: str) -> int | None:
+    """Return a positive canonical Telegram identifier or fail closed."""
+    value = os.getenv(name, "").strip()
+    try:
+        identifier = int(value)
+    except (TypeError, ValueError):
+        return None
+    return identifier if identifier > 0 else None
+
+
+def expected_bootstrap_owner() -> tuple[int, int | None] | None:
+    """Return the configured immutable bootstrap identity, if valid."""
+    user_id = _canonical_owner_id("TELEGRAM_OWNER_ID")
+    if user_id is None:
+        return None
+    configured_chat = os.getenv("TELEGRAM_OWNER_CHAT_ID", "").strip()
+    if not configured_chat:
+        return user_id, None
+    chat_id = _canonical_owner_id("TELEGRAM_OWNER_CHAT_ID")
+    return (user_id, chat_id) if chat_id is not None else None
+
+
 def admin_ids() -> set[int]:
     values: list[str] = []
     for name in ("TELEGRAM_ADMIN_USER_ID", "TELEGRAM_ADMIN_CHAT_ID"):
@@ -50,6 +72,17 @@ def is_admin(actor_id: int | None, chat_id: int | None = None) -> bool:
 def claim_owner(actor_id: int, chat_id: int, code: str) -> tuple[str, dict[str, Any]]:
     if admin_ids():
         return "Владелец уже настроен. Повторное присвоение запрещено.", {"inline_keyboard": []}
+    expected_owner = expected_bootstrap_owner()
+    if expected_owner is None:
+        return (
+            "Канонический владелец Telegram не настроен. Присвоение владельца запрещено.",
+            {"inline_keyboard": []},
+        )
+    expected_user_id, expected_chat_id = expected_owner
+    if int(actor_id) != expected_user_id or (
+        expected_chat_id is not None and int(chat_id) != expected_chat_id
+    ):
+        return "Этот Telegram-аккаунт не является назначенным владельцем.", {"inline_keyboard": []}
     try:
         claim = json.loads(CLAIM_FILE.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -61,7 +94,7 @@ def claim_owner(actor_id: int, chat_id: int, code: str) -> tuple[str, dict[str, 
     if not secrets.compare_digest(expected, str(code).strip()):
         return "Неверный код активации владельца.", {"inline_keyboard": []}
     _atomic_write(OWNER_FILE, {
-        "user_id": int(actor_id),
+        "user_id": expected_user_id,
         "chat_id": int(chat_id),
         "claimed_at": int(time.time()),
     })
