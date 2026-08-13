@@ -18,6 +18,7 @@ def test_backup_helper_uses_read_only_named_volume_and_no_network() -> None:
     assert '--cap-add DAC_READ_SEARCH' in source
     assert '-v "$volume_name:/source:ro"' in source
     assert '-v "$work/data:/backup"' in source
+    assert '"$image_name" - "$source_mode" <<\'PY\'' in source
     assert "docker volume inspect \"$volume_name\"" in source
     assert "docker image inspect \"$image_name\"" in source
 
