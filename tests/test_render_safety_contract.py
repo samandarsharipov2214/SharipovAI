@@ -29,3 +29,9 @@ def test_render_keeps_execution_fail_closed() -> None:
     assert _value_for("AUTONOMOUS_TESTNET_ENABLED") == "0"
     assert _value_for("AUTONOMOUS_TESTNET_BRIDGE_ENABLED") == "0"
     assert _value_for("EXCHANGE_LIVE_TRADING_ENABLED") == "0"
+
+
+def test_render_cannot_reconfigure_canonical_telegram_webhook() -> None:
+    """Legacy Render must never race the canonical VPS for Telegram webhook ownership."""
+    assert _value_for("TELEGRAM_AUTO_SET_WEBHOOK") == "0"
+    assert _value_for("TELEGRAM_POLLING_ENABLED") == "0"
