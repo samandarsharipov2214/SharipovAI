@@ -76,6 +76,19 @@ def test_enabled_render_bridge_is_detected(tmp_path: Path) -> None:
     assert seen["render_testnet_locked"] is False
 
 
+def test_render_auto_deploy_is_required_to_be_disabled(tmp_path: Path) -> None:
+    source = Path("render.yaml").read_text(encoding="utf-8")
+    unsafe = source.replace("autoDeployTrigger: off", "autoDeployTrigger: checksPass", 1)
+    (tmp_path / "render.yaml").write_text(unsafe, encoding="utf-8")
+    seen = {}
+
+    def record(name, passed, detail, **kwargs):
+        seen[name] = passed
+
+    _audit_blueprint(tmp_path, record)
+    assert seen["render_auto_deploy_disabled"] is False
+
+
 def test_missing_runtime_auth_kill_switch_and_enabled_live_are_blocked(monkeypatch) -> None:
     for name in ("AUTH_SECRET", "ADMIN_USERNAME", "ADMIN_PASSWORD", "DATABASE_URL", "EXECUTION_KILL_SWITCH"):
         monkeypatch.delenv(name, raising=False)

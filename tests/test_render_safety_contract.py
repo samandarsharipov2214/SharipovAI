@@ -35,3 +35,12 @@ def test_render_cannot_reconfigure_canonical_telegram_webhook() -> None:
     """Legacy Render must never race the canonical VPS for Telegram webhook ownership."""
     assert _value_for("TELEGRAM_AUTO_SET_WEBHOOK") == "0"
     assert _value_for("TELEGRAM_POLLING_ENABLED") == "0"
+
+
+def test_render_blueprint_cannot_autodeploy_competing_production() -> None:
+    text = RENDER.read_text(encoding="utf-8")
+
+    assert "autoDeployTrigger: off" in text
+    assert "autoDeployTrigger: checksPass" not in text
+    assert "autoDeployTrigger: commit" not in text
+    assert "autoDeploy: true" not in text

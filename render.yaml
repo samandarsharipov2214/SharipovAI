@@ -12,7 +12,7 @@ services:
     preDeployCommand: python scripts/migrate_project_db.py
     startCommand: uvicorn dashboard:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
-    autoDeployTrigger: checksPass
+    autoDeployTrigger: off
     disk:
       name: sharipovai-data
       mountPath: /var/data
