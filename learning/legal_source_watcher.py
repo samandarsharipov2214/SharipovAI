@@ -20,6 +20,8 @@ from .legal_regulatory_monitor import evaluate_legal_change, legal_alert_summary
 
 
 DEFAULT_LEGAL_SOURCES = [
+    {"id": "RU-CBR", "region": "ru", "domain": "cbr.ru", "source_type": "regulator_docs", "topics": ["crypto_regulation", "exchange_rules", "consumer_protection", "financial_institutions"]},
+    {"id": "RU-FNS", "region": "ru", "domain": "nalog.gov.ru", "source_type": "official", "topics": ["tax", "crypto_regulation"]},
     {"id": "US-SEC", "region": "us", "domain": "sec.gov", "source_type": "regulator_docs", "topics": ["securities_law", "crypto_regulation", "consumer_protection"]},
     {"id": "US-CFTC", "region": "us", "domain": "cftc.gov", "source_type": "regulator_docs", "topics": ["crypto_regulation", "exchange_rules"]},
     {"id": "US-FINCEN", "region": "us", "domain": "fincen.gov", "source_type": "regulator_docs", "topics": ["aml_kyc"]},
