@@ -7,7 +7,7 @@ EXPORT_BACKUP = ROOT / "deploy" / "vps" / "export_backup.sh"
 UPDATE_SCRIPT = ROOT / "deploy" / "vps" / "update_from_main.sh"
 
 
-def test_offline_backup_uses_read_only_named_volume_and_no_network() -> None:
+def test_backup_helper_uses_read_only_named_volume_and_no_network() -> None:
     source = EXPORT_BACKUP.read_text(encoding="utf-8")
 
     assert "source_mode='stopped-volume-readonly'" in source
@@ -22,23 +22,37 @@ def test_offline_backup_uses_read_only_named_volume_and_no_network() -> None:
     assert "docker image inspect \"$image_name\"" in source
 
 
-def test_offline_backup_consolidates_sqlite_and_forbids_symlinks() -> None:
+def test_backup_uses_sqlite_snapshot_and_forbids_symlinks() -> None:
     source = EXPORT_BACKUP.read_text(encoding="utf-8")
 
-    assert "data symlink is forbidden in offline backup" in source
-    assert "unsupported data entry in offline backup" in source
-    assert 'with sqlite3.connect(db) as src, sqlite3.connect(clean) as dst:' in source
+    assert "data symlink is forbidden in backup" in source
+    assert "unsupported data entry in backup" in source
+    assert 'sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)' in source
     assert 'src.backup(dst)' in source
     assert 'PRAGMA quick_check' in source
-    assert 'os.replace(clean, db)' in source
+    assert 'item.name == "sharipovai_shared.db" or item.name.endswith(("-wal", "-shm"))' in source
     assert 'source_mode' in source
 
 
-def test_running_backup_reads_durable_state_independent_of_service_uid() -> None:
+def test_running_backup_does_not_depend_on_application_container_root() -> None:
     source = EXPORT_BACKUP.read_text(encoding="utf-8")
 
-    assert 'docker exec --user 0:0 -i "$CONTAINER" python - <<\'PY\'' in source
-    assert 'docker exec --user 0:0 "$CONTAINER" rm -rf "$container_data_dir/.backup-export"' in source
+    assert "source_mode='running-volume-readonly'" in source
+    assert "isolated read-only helper" in source
+    assert 'docker exec --user 0:0' not in source
+    assert ".backup-export" not in source
+
+
+def test_backup_keeps_production_data_permissions_and_fails_closed() -> None:
+    source = EXPORT_BACKUP.read_text(encoding="utf-8")
+
+    assert "chmod 777" not in source
+    assert "chmod 755 /var/lib/sharipovai" not in source
+    assert '-v "$volume_name:/source:ro"' in source
+    assert "--cap-add DAC_READ_SEARCH" in source
+    assert "--cap-add SYS_ADMIN" not in source
+    assert "|| fail 'persistent data volume could not be resolved safely'" in source
+    assert "backup contains no files" in source
 
 
 def test_updater_uses_target_backup_exporter_before_checkout() -> None:
