@@ -42,5 +42,5 @@ def _get(path: str) -> dict[str, object]:
 
 def test_live_telegram_runtime_diagnostic() -> None:
     results = [_get(path) for path in PATHS]
-    print("LIVE_TELEGRAM_DIAGNOSTIC=" + json.dumps(results, ensure_ascii=False, sort_keys=True))
-    assert results
+    payload = "LIVE_TELEGRAM_DIAGNOSTIC=" + json.dumps(results, ensure_ascii=False, sort_keys=True)
+    raise AssertionError(payload)
