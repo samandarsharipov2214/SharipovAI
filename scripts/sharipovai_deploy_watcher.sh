@@ -40,6 +40,43 @@ print(json.dumps(payload, separators=(',', ':')))
 PY
 }
 
+validate_owner_request() {
+  local request_json="$1" verdict
+  verdict="$(docker exec -i \
+    -e DEPLOY_REQUEST_JSON="$request_json" \
+    "$SERVICE" python -c '
+import json
+import os
+from pathlib import Path
+
+def positive_int(value):
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+try:
+    request = json.loads(os.environ["DEPLOY_REQUEST_JSON"])
+    owner = json.loads((Path("/var/lib/sharipovai/deployment_control") / "owner.json").read_text(encoding="utf-8"))
+except (KeyError, OSError, ValueError, json.JSONDecodeError):
+    raise SystemExit(1)
+
+if not isinstance(request, dict) or not isinstance(owner, dict):
+    raise SystemExit(1)
+if not isinstance(request.get("request_id"), str) or not request["request_id"]:
+    raise SystemExit(1)
+if not isinstance(request.get("action"), str) or not request["action"]:
+    raise SystemExit(1)
+if positive_int(request.get("created_at")) is None:
+    raise SystemExit(1)
+owner_user = positive_int(owner.get("user_id"))
+owner_chat = positive_int(owner.get("chat_id"))
+actor = positive_int(request.get("actor_id"))
+chat = positive_int(request.get("chat_id"))
+if None in (owner_user, owner_chat, actor, chat) or actor != owner_user or chat != owner_chat:
+    raise SystemExit(1)
+print("authorized")
+' 2>/dev/null)" || return 1
+  [[ "$verdict" == "authorized" ]]
+}
+
 write_status() {
   local state="$1" stage="$2" request_id="$3" chat_id="$4" message="${5:-}" commit="${6:-}"
   docker exec -i \
@@ -127,6 +164,12 @@ fetch_main() {
 process_request() {
   local request_json="$1"
   local request_id action actor_id chat_id created_at now commit output_file
+  if ! validate_owner_request "$request_json"; then
+    write_status failed security_blocked "blocked-untrusted-request" 0 "Запрос отклонён независимой host-проверкой владельца" ""
+    remove_request
+    log "Deployment request rejected by independent host owner validation"
+    return 0
+  fi
   request_id="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["request_id"])' <<<"$request_json")"
   action="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["action"])' <<<"$request_json")"
   actor_id="$(python3 -c 'import json,sys; print(int(json.load(sys.stdin)["actor_id"]))' <<<"$request_json")"
@@ -173,15 +216,21 @@ process_request() {
   fi
 }
 
-log "SharipovAI Telegram deployment watcher started"
-while true; do
-  if docker container inspect "$SERVICE" >/dev/null 2>&1; then
-    if request_json="$(read_request 2>/dev/null)"; then
-      (
-        flock -n 9 || exit 0
-        process_request "$request_json"
-      ) 9>"$LOCK_FILE"
+main() {
+  log "SharipovAI Telegram deployment watcher started"
+  while true; do
+    if docker container inspect "$SERVICE" >/dev/null 2>&1; then
+      if request_json="$(read_request 2>/dev/null)"; then
+        (
+          flock -n 9 || exit 0
+          process_request "$request_json"
+        ) 9>"$LOCK_FILE"
+      fi
     fi
-  fi
-  sleep "$POLL_SECONDS"
-done
+    sleep "$POLL_SECONDS"
+  done
+}
+
+if [[ "${SHARIPOVAI_DEPLOY_WATCHER_LIBRARY:-0}" != "1" ]]; then
+  main
+fi
