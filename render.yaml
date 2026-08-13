@@ -41,7 +41,7 @@ services:
       - key: TELEGRAM_WEBHOOK_SECRET
         sync: false
       - key: TELEGRAM_AUTO_SET_WEBHOOK
-        value: "1"
+        value: "0"
       - key: TELEGRAM_POLLING_ENABLED
         value: "0"
       - key: MARKET_STREAM_ENABLED
