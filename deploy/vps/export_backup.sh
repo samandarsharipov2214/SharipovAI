@@ -92,7 +92,7 @@ PY
     -v "$volume_name:/source:ro" \
     -v "$work/data:/backup" \
     --entrypoint python \
-    "$image_name" "$source_mode" - <<'PY'
+    "$image_name" - "$source_mode" <<'PY'
 import os
 import shutil
 import sqlite3
