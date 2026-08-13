@@ -76,6 +76,16 @@ def test_social_news_supervisor_api(monkeypatch, tmp_path: Path) -> None:
     """Supervisor endpoint should return Main News Supervisor AI assessment."""
 
     monkeypatch.setenv("NEWS_MONITOR_STATE_FILE", str(tmp_path / "news_state.json"))
+    # This contract is about projecting the analysis submitted below.  Do not
+    # let the read endpoint replace it with an external RSS refresh: production
+    # correctly treats unavailable fresh news as a fail-closed no-trade state.
+    import dashboard.social_news_api as social_news_api
+
+    monkeypatch.setattr(
+        social_news_api,
+        "refresh_news_if_stale",
+        lambda **_kwargs: {"status": "fixture_fresh"},
+    )
     client = TestClient(create_app())
     client.post(
         "/api/social-news/analyze",
@@ -193,6 +203,15 @@ def test_social_news_alerts_api(monkeypatch, tmp_path: Path) -> None:
     """Alerts endpoint should return alert list and safety rules."""
 
     monkeypatch.setenv("NEWS_MONITOR_STATE_FILE", str(tmp_path / "news_state.json"))
+    # Keep this API projection test hermetic; live RSS refresh has a separate
+    # contract and must never be required for deterministic unit tests.
+    import dashboard.social_news_api as social_news_api
+
+    monkeypatch.setattr(
+        social_news_api,
+        "refresh_news_if_stale",
+        lambda **_kwargs: {"status": "fixture_fresh"},
+    )
     client = TestClient(create_app())
     client.post(
         "/api/social-news/analyze",
