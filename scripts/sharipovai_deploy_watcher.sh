@@ -42,7 +42,7 @@ PY
 
 write_status() {
   local state="$1" stage="$2" request_id="$3" chat_id="$4" message="${5:-}" commit="${6:-}"
-  docker exec \
+  docker exec -i \
     -e DEPLOY_STATE="$state" \
     -e DEPLOY_STAGE="$stage" \
     -e DEPLOY_REQUEST_ID="$request_id" \
