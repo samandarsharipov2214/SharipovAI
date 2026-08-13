@@ -48,14 +48,21 @@ index a1b2c3d..d4e5f6a 100644
 """
 
 
-def test_allowed_patch_passes_security_guard_and_sandbox(tmp_path: Path, monkeypatch) -> None:
+def test_allowed_patch_passes_security_guard_but_legacy_route_never_applies_it(
+    tmp_path: Path, monkeypatch
+) -> None:
     repo = _sandbox_repo(tmp_path)
     autofix = _load_autofix_module()
     monkeypatch.setattr(autofix, "ROOT", repo)
 
+    def no_git_mutation(*_args, **_kwargs):
+        raise AssertionError("legacy autofix must not invoke git")
+
+    monkeypatch.setattr(autofix, "run", no_git_mutation)
+
     assert validate_patch(SAFE_PATCH).allowed
-    assert autofix.apply_patch(SAFE_PATCH) is True
-    assert (repo / "sample.py").read_text(encoding="utf-8") == "VALUE = 2\n"
+    assert autofix.apply_patch(SAFE_PATCH) is False
+    assert (repo / "sample.py").read_text(encoding="utf-8") == "VALUE = 1\n"
 
 
 def test_protected_patch_is_blocked_before_git_apply(monkeypatch) -> None:
@@ -78,3 +85,12 @@ def test_invalid_patch_fails_closed_before_git_apply(monkeypatch) -> None:
 
     monkeypatch.setattr(autofix, "run", git_apply_must_not_run)
     assert autofix.apply_patch(invalid) is False
+
+
+def test_legacy_autofix_has_no_external_provider_or_direct_apply_route() -> None:
+    source = SCRIPT.read_text(encoding="utf-8")
+
+    assert "api.openai.com" not in source
+    assert "OPENAI_API_KEY" not in source
+    assert '"git", "apply"' not in source
+    assert "internal Gemini" in source

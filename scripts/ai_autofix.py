@@ -1,42 +1,25 @@
 #!/usr/bin/env python3
-"""Run pytest, ask OpenAI for a focused patch, apply it, and retest.
+"""Fail closed for the retired direct GitHub AI-autofix route.
 
-This script is intended for GitHub Actions. It is deliberately conservative:
-- it only edits repository files through a unified diff returned by the model;
-- it refuses to continue when OPENAI_API_KEY is missing;
-- it commits nothing itself; the workflow commits only if files changed;
-- it keeps real trading/order execution concerns in the prompt.
+The canonical repair path is ``tools.ai_fixer.AIFixer`` through the authenticated
+internal Gemini endpoint, Security Guard, isolated validation, and the
+DevelopmentChangeController owner approval flow.  This legacy workflow helper
+may record pytest evidence but must never request a patch from an alternate
+provider or apply one directly in a GitHub checkout.
 """
 
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import sys
-import tempfile
 import textwrap
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 from development_control.security_guard import validate_patch
 
 ROOT = Path.cwd()
 PYTEST_LOG = ROOT / "pytest-autofix.log"
-MAX_LOG_CHARS = int(os.getenv("AI_AUTOFIX_MAX_LOG_CHARS", "60000"))
-MAX_ATTEMPTS = int(os.getenv("AI_AUTOFIX_ATTEMPTS", "2"))
-MODEL = os.getenv("OPENAI_MODEL", "gpt-5.5")
-
-
-SYSTEM_PROMPT = """You are an autonomous senior software engineer fixing a private repository.
-Return ONLY a unified diff patch. Do not use markdown fences. Do not explain.
-Patch must be applicable with `git apply` from repository root.
-Do not delete meaningful tests. Update tests only when they are stale because product terminology or backwards-compatible endpoints changed.
-Preserve safety: real exchange orders must remain blocked; virtual/paper execution must not place live orders.
-Keep user-facing UI in Russian where the current product expects Russian.
-Preserve backwards compatibility for /api/paper-activity/* when possible.
-"""
 
 
 def run(
@@ -58,151 +41,23 @@ def run_pytest() -> tuple[int, str]:
     return proc.returncode, proc.stdout
 
 
-def repo_snapshot() -> str:
-    files = [
-        ".github/workflows/tests.yml",
-        "paper_activity_engine.py",
-        "profitability_gate.py",
-        "persistence_paths.py",
-        "dashboard/paper_activity_api.py",
-        "dashboard/bot_communication_api.py",
-        "dashboard/demo_state.py",
-        "dashboard/static/mini-app-live.js",
-        "dashboard/static/mini-app-all-trades.js",
-        "dashboard/static/mini-app-agent-persistence.js",
-        "tests/test_profitability_gate.py",
-        "tests/test_persistence_and_virtual_account.py",
-        "dashboard/tests/test_paper_activity_dashboard.py",
-        "dashboard/tests/test_bot_chat_persistence_api.py",
-    ]
-    chunks: list[str] = []
-    for path in files:
-        p = ROOT / path
-        if p.exists() and p.is_file():
-            text = p.read_text(encoding="utf-8", errors="replace")
-            if len(text) > 12000:
-                text = text[:12000] + "\n...TRUNCATED...\n"
-            chunks.append(f"\n--- FILE: {path} ---\n{text}")
-    return "\n".join(chunks)
-
-
-def openai_patch(task: str, pytest_log: str, attempt: int) -> str:
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY is missing. Add it in GitHub Settings → Secrets and variables → Actions.")
-
-    trimmed_log = pytest_log[-MAX_LOG_CHARS:]
-    prompt = f"""
-Task from GitHub Actions:
-{task}
-
-Attempt: {attempt}/{MAX_ATTEMPTS}
-
-Full pytest is failing. Fix the repository with a minimal safe patch.
-Return only unified diff.
-
-Pytest output tail:
-{trimmed_log}
-
-Relevant repository snapshot:
-{repo_snapshot()}
-"""
-    body = {
-        "model": MODEL,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
-        ],
-        "temperature": 0.1,
-    }
-    req = urllib.request.Request(
-        "https://api.openai.com/v1/chat/completions",
-        data=json.dumps(body).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=240) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"OpenAI API error {exc.code}: {detail}") from exc
-    content = data["choices"][0]["message"]["content"]
-    return strip_fences(content).strip() + "\n"
-
-
-def strip_fences(text: str) -> str:
-    stripped = text.strip()
-    if stripped.startswith("```"):
-        lines = stripped.splitlines()
-        if lines and lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        return "\n".join(lines)
-    return text
-
-
 def apply_patch(patch: str) -> bool:
+    """Validate a supplied patch but never apply it from this legacy route."""
+
     if "diff --git" not in patch and "--- " not in patch:
-        print("Model did not return a unified diff; skipping apply.")
-        print(patch[:2000])
+        print("Patch is not a unified diff; refusing legacy autofix.")
         return False
     verdict = validate_patch(patch)
     if not verdict.allowed:
-        print("Security Guard rejected AI patch:")
+        print("Security Guard rejected legacy autofix patch:")
         for reason in verdict.reasons:
             print(f"  - {reason}")
         return False
-
-    # Do not write or apply an untrusted patch in the main checkout.  The patch is
-    # first checked and tested from an isolated worktree, then applied only when
-    # its complete test run succeeds.
-    with tempfile.TemporaryDirectory(prefix="ai-autofix-", dir=ROOT.parent) as temp_dir:
-        sandbox = Path(temp_dir) / "worktree"
-        patch_file = Path(temp_dir) / "candidate.patch"
-        patch_file.write_text(patch, encoding="utf-8")
-
-        check = run(["git", "apply", "--check", str(patch_file)], timeout=120)
-        if check.returncode != 0:
-            print("Patch did not apply cleanly:")
-            print(check.stdout)
-            print(patch[:4000])
-            return False
-
-        created = run(["git", "worktree", "add", "--detach", str(sandbox), "HEAD"], timeout=120)
-        if created.returncode != 0:
-            print("Could not create isolated patch sandbox:")
-            print(created.stdout)
-            return False
-        try:
-            sandbox_check = run(["git", "apply", "--check", str(patch_file)], timeout=120, cwd=sandbox)
-            if sandbox_check.returncode != 0:
-                print("Patch did not apply cleanly in sandbox:")
-                print(sandbox_check.stdout)
-                return False
-            sandbox_apply = run(["git", "apply", str(patch_file)], timeout=120, cwd=sandbox)
-            if sandbox_apply.returncode != 0:
-                print("Patch could not be applied in sandbox:")
-                print(sandbox_apply.stdout)
-                return False
-            sandbox_tests = run([sys.executable, "-m", "pytest"], timeout=900, cwd=sandbox)
-            print(sandbox_tests.stdout)
-            if sandbox_tests.returncode != 0:
-                print("Sandbox tests failed; refusing to apply AI patch.")
-                return False
-        finally:
-            cleanup = run(["git", "worktree", "remove", "--force", str(sandbox)], timeout=120)
-            if cleanup.returncode != 0:
-                print("Could not remove isolated patch sandbox:")
-                print(cleanup.stdout)
-
-        applied = run(["git", "apply", str(patch_file)], timeout=120)
-        print(applied.stdout)
-        return applied.returncode == 0
+    print(
+        "Legacy GitHub autofix never applies patches. Use the internal Gemini "
+        "AIFixer → Security Guard → owner approval flow."
+    )
+    return False
 
 
 def main() -> int:
@@ -210,26 +65,16 @@ def main() -> int:
     print("AI autofix task:")
     print(textwrap.indent(task, "  "))
 
-    final_code = 1
-    last_log = ""
-    for attempt in range(1, MAX_ATTEMPTS + 1):
-        code, log = run_pytest()
-        last_log = log
-        print(log[-12000:])
-        if code == 0:
-            print("pytest already green.")
-            return 0
-        patch = openai_patch(task, log, attempt)
-        if not apply_patch(patch):
-            break
-        final_code, last_log = run_pytest()
-        print(last_log[-12000:])
-        if final_code == 0:
-            print("pytest green after AI patch.")
-            return 0
-    print("AI autofix finished but pytest is still failing.")
-    PYTEST_LOG.write_text(last_log, encoding="utf-8")
-    return final_code
+    code, log = run_pytest()
+    print(log[-12000:])
+    if code == 0:
+        print("pytest already green.")
+        return 0
+    print(
+        "Pytest failed; no patch was requested or applied. Route a bounded "
+        "proposal through the internal Gemini and owner-approval pipeline."
+    )
+    return code
 
 
 if __name__ == "__main__":
