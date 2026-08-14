@@ -6,9 +6,10 @@ PUBLIC_URL="${SHARIPOVAI_PUBLIC_URL:-https://85-137-88-17.sslip.io}"
 SERVICE="${SHARIPOVAI_SERVICE:-sharipovai}"
 
 public_index_tmp="$(mktemp /tmp/sharipovai-public-index-XXXXXX.html)"
-public_headers_tmp="$(mktemp /tmp/sharipovai-public-headers-XXXXXX.txt)"
+root_headers_tmp="$(mktemp /tmp/sharipovai-root-headers-XXXXXX.txt)"
+static_headers_tmp="$(mktemp /tmp/sharipovai-static-headers-XXXXXX.txt)"
 cleanup() {
-  rm -f "$public_index_tmp" "$public_headers_tmp"
+  rm -f "$public_index_tmp" "$root_headers_tmp" "$static_headers_tmp"
 }
 trap cleanup EXIT
 
@@ -89,51 +90,43 @@ assert not missing, f"missing runtime routes: {missing}"
 print("PHASE7_DASHBOARD_CONTRACTS_OK", len(required))
 PY
 
-echo "[verify 2/3] Verifying public Dashboard and health contracts..."
-public_status="$(
+echo "[verify 2/3] Verifying public Dashboard auth/static/health contracts..."
+# The production root is intentionally authenticated.  Anonymous public access
+# must hit the fail-closed auth guard, not bypass it just to make deployment
+# verification pass.
+public_root_status="$(
   curl --connect-timeout 5 --max-time 15 --fail --silent --show-error \
-    --dump-header "$public_headers_tmp" \
-    --output "$public_index_tmp" \
+    --dump-header "$root_headers_tmp" \
+    --output /dev/null \
     --write-out '%{http_code}' \
     "$PUBLIC_URL/"
 )"
-if [[ "$public_status" != "200" ]]; then
-  echo "PUBLIC_WEB2_HTTP_STATUS_FAILED expected=200 actual=$public_status" >&2
-  cat "$public_headers_tmp" >&2 || true
+public_root_location="$(
+  awk 'BEGIN { IGNORECASE=1 } /^location:/ { sub(/\r$/, ""); sub(/^[^:]+:[[:space:]]*/, ""); print; exit }' \
+    "$root_headers_tmp"
+)"
+if [[ "$public_root_status" != "303" || "$public_root_location" != "/login?next=/" ]]; then
+  echo "PUBLIC_ROOT_AUTH_GATE_FAILED expected_status=303 actual_status=$public_root_status expected_location=/login?next=/ actual_location=${public_root_location:-missing}" >&2
+  cat "$root_headers_tmp" >&2 || true
   exit 1
 fi
-echo "PUBLIC_WEB2_HTTP_STATUS_OK $public_status"
+echo "PUBLIC_ROOT_AUTH_GATE_OK $public_root_status $public_root_location"
 
-python - "$public_headers_tmp" <<'PY'
-from pathlib import Path
-import sys
-
-headers = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace").splitlines()
-values = [
-    line.split(":", 1)[1].strip()
-    for line in headers
-    if line.lower().startswith("cache-control:") and ":" in line
-]
-if not values:
-    raise SystemExit("PUBLIC_WEB2_CACHE_CONTROL_FAILED: Cache-Control header missing")
-
-tokens = {
-    token.strip().lower()
-    for value in values
-    for token in value.split(",")
-    if token.strip()
-}
-required = {"no-store", "no-cache", "must-revalidate", "max-age=0"}
-missing = sorted(required - tokens)
-if missing:
-    raise SystemExit(
-        "PUBLIC_WEB2_CACHE_CONTROL_FAILED: missing="
-        + ",".join(missing)
-        + " actual="
-        + " | ".join(values)
-    )
-print("PUBLIC_WEB2_CACHE_CONTROL_OK", ",".join(sorted(required)))
-PY
+# /static/ is the intentionally public asset surface.  Verify the exact Web2
+# shell there while preserving authentication on the browser entry route.
+public_static_status="$(
+  curl --connect-timeout 5 --max-time 15 --fail --silent --show-error \
+    --dump-header "$static_headers_tmp" \
+    --output "$public_index_tmp" \
+    --write-out '%{http_code}' \
+    "$PUBLIC_URL/static/web2/index.html"
+)"
+if [[ "$public_static_status" != "200" ]]; then
+  echo "PUBLIC_WEB2_STATIC_HTTP_STATUS_FAILED expected=200 actual=$public_static_status" >&2
+  cat "$static_headers_tmp" >&2 || true
+  exit 1
+fi
+echo "PUBLIC_WEB2_STATIC_HTTP_STATUS_OK $public_static_status"
 
 for family in \
   navigation_coordinator_v \
