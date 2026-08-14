@@ -24,13 +24,21 @@ def test_profile_verifier_runs_before_rollback_snapshot_is_committed() -> None:
     source = RUNTIME.read_text(encoding="utf-8")
 
     replaced = source.index("production_replaced=1")
-    verifier = source.index('bash "$ROOT/scripts/verify_web2_refresh_contracts.sh"')
-    remove_backup = source.index('docker rm "$backup_container"')
-    committed = source.index("production_replaced=0")
+    transaction_marker = source.index(
+        'echo "[transaction] Verifying Dashboard/public/Telegram contracts before commit..."',
+        replaced,
+    )
+    verifier = source.index(
+        'bash "$ROOT/scripts/verify_web2_refresh_contracts.sh"',
+        transaction_marker,
+    )
+    remove_backup = source.index('docker rm "$backup_container"', verifier)
+    committed = source.index("production_replaced=0", remove_backup)
 
-    assert replaced < verifier < remove_backup < committed
+    assert replaced < transaction_marker < verifier < remove_backup < committed
     assert 'trap on_error ERR' in source
     assert source.index('trap on_error ERR') < replaced
+    assert source.index('trap - ERR', verifier) > committed
 
 
 def test_web2_verifier_is_version_agnostic_and_stdin_safe() -> None:
