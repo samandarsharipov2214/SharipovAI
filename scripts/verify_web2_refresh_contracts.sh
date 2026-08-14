@@ -91,7 +91,7 @@ print("PHASE7_DASHBOARD_CONTRACTS_OK", len(required))
 PY
 
 echo "[verify 2/3] Verifying public Dashboard auth/static/health contracts..."
-# The production root is intentionally authenticated.  Anonymous public access
+# The production root is intentionally authenticated. Anonymous public access
 # must hit the fail-closed auth guard, not bypass it just to make deployment
 # verification pass.
 public_root_status="$(
@@ -112,7 +112,7 @@ if [[ "$public_root_status" != "303" || "$public_root_location" != "/login?next=
 fi
 echo "PUBLIC_ROOT_AUTH_GATE_OK $public_root_status $public_root_location"
 
-# /static/ is the intentionally public asset surface.  Verify the exact Web2
+# /static/ is the intentionally public asset surface. Verify the exact Web2
 # shell there while preserving authentication on the browser entry route.
 public_static_status="$(
   curl --connect-timeout 5 --max-time 15 --fail --silent --show-error \
@@ -167,24 +167,36 @@ assert _webapp_url() == expected
 assert main_keyboard()["inline_keyboard"][-1][0]["web_app"]["url"] == expected
 assert _set_webhook().get("status") == "ok"
 
+last_evidence = {}
 for _ in range(10):
     health = telegram_health()
     info = health.get("webhook_info", {}).get("result", {})
     menu = _telegram("getChatMenuButton").get("result", {})
     menu_url = ((menu.get("web_app") or {}).get("url") or "").rstrip("/")
+    last_evidence = {
+        "verdict": health.get("verdict"),
+        "webhook_url": info.get("url"),
+        "last_error_date": health.get("last_error_date"),
+        "last_error_is_current": bool(health.get("last_error_is_current")),
+        "stale_webhook_error_ignored": bool(health.get("stale_webhook_error_ignored")),
+        "menu_type": menu.get("type"),
+        "menu_url": menu_url,
+    }
     if (
         health.get("verdict") == "working"
         and info.get("url") == f"{expected}/telegram/webhook"
-        and not info.get("last_error_message")
+        and not health.get("last_error_is_current")
         and menu.get("type") == "web_app"
         and menu_url == expected
     ):
+        if health.get("stale_webhook_error_ignored"):
+            print("TELEGRAM_HISTORICAL_WEBHOOK_ERROR_IGNORED", health.get("last_error_date"))
         print("TELEGRAM_WEBHOOK_OK", info.get("url"))
         print("TELEGRAM_MINIAPP_MENU_OK", menu_url)
         break
     time.sleep(2)
 else:
-    raise AssertionError("Telegram webhook/menu verification failed")
+    raise AssertionError(f"Telegram webhook/menu verification failed: {last_evidence}")
 PY
 
 echo "WEB2_REFRESH_CONTRACTS_OK"
