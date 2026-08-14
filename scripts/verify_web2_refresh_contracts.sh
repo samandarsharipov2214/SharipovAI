@@ -6,8 +6,9 @@ PUBLIC_URL="${SHARIPOVAI_PUBLIC_URL:-https://85-137-88-17.sslip.io}"
 SERVICE="${SHARIPOVAI_SERVICE:-sharipovai}"
 
 public_index_tmp="$(mktemp /tmp/sharipovai-public-index-XXXXXX.html)"
+public_headers_tmp="$(mktemp /tmp/sharipovai-public-headers-XXXXXX.txt)"
 cleanup() {
-  rm -f "$public_index_tmp"
+  rm -f "$public_index_tmp" "$public_headers_tmp"
 }
 trap cleanup EXIT
 
@@ -89,9 +90,51 @@ print("PHASE7_DASHBOARD_CONTRACTS_OK", len(required))
 PY
 
 echo "[verify 2/3] Verifying public Dashboard and health contracts..."
-headers="$(curl --connect-timeout 5 --max-time 15 --fail --silent --show-error --head "$PUBLIC_URL/")"
-grep -i -F "cache-control: no-store, no-cache, must-revalidate, max-age=0" <<<"$headers" >/dev/null
-curl --connect-timeout 5 --max-time 15 --fail --silent --show-error "$PUBLIC_URL/" >"$public_index_tmp"
+public_status="$(
+  curl --connect-timeout 5 --max-time 15 --fail --silent --show-error \
+    --dump-header "$public_headers_tmp" \
+    --output "$public_index_tmp" \
+    --write-out '%{http_code}' \
+    "$PUBLIC_URL/"
+)"
+if [[ "$public_status" != "200" ]]; then
+  echo "PUBLIC_WEB2_HTTP_STATUS_FAILED expected=200 actual=$public_status" >&2
+  cat "$public_headers_tmp" >&2 || true
+  exit 1
+fi
+echo "PUBLIC_WEB2_HTTP_STATUS_OK $public_status"
+
+python - "$public_headers_tmp" <<'PY'
+from pathlib import Path
+import sys
+
+headers = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace").splitlines()
+values = [
+    line.split(":", 1)[1].strip()
+    for line in headers
+    if line.lower().startswith("cache-control:") and ":" in line
+]
+if not values:
+    raise SystemExit("PUBLIC_WEB2_CACHE_CONTROL_FAILED: Cache-Control header missing")
+
+tokens = {
+    token.strip().lower()
+    for value in values
+    for token in value.split(",")
+    if token.strip()
+}
+required = {"no-store", "no-cache", "must-revalidate", "max-age=0"}
+missing = sorted(required - tokens)
+if missing:
+    raise SystemExit(
+        "PUBLIC_WEB2_CACHE_CONTROL_FAILED: missing="
+        + ",".join(missing)
+        + " actual="
+        + " | ".join(values)
+    )
+print("PUBLIC_WEB2_CACHE_CONTROL_OK", ",".join(sorted(required)))
+PY
+
 for family in \
   navigation_coordinator_v \
   runtime_render_guard_v \
@@ -100,10 +143,20 @@ for family in \
   campaign_operations_v \
   campaign_decision_v \
   campaign_monitor_v; do
-  grep -F "$family" "$public_index_tmp" >/dev/null
+  if ! grep -F "$family" "$public_index_tmp" >/dev/null; then
+    echo "PUBLIC_WEB2_ASSET_FAMILY_FAILED missing=$family" >&2
+    exit 1
+  fi
 done
-! grep -F "market_terminal_v13.js" "$public_index_tmp" >/dev/null
+if grep -F "market_terminal_v13.js" "$public_index_tmp" >/dev/null; then
+  echo "PUBLIC_WEB2_RETIRED_ASSET_FAILED market_terminal_v13.js" >&2
+  exit 1
+fi
+echo "PUBLIC_WEB2_ASSET_FAMILIES_OK"
+
 curl --connect-timeout 5 --max-time 15 --fail --silent --show-error "$PUBLIC_URL/health"
+echo
+curl --connect-timeout 5 --max-time 15 --fail --silent --show-error "$PUBLIC_URL/api/health"
 echo
 
 echo "[verify 3/3] Verifying Telegram webhook and Mini App menu..."
