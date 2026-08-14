@@ -52,3 +52,26 @@ def test_auth_guard_remains_fail_closed_for_root() -> None:
     assert 'if path.startswith("/api/")' in source
     assert "status_code=303" in source
     assert 'url=f"/login?next={quote(safe_next' in source
+
+
+def test_telegram_verifier_uses_canonical_health_error_freshness() -> None:
+    source = VERIFY.read_text(encoding="utf-8")
+
+    assert 'health.get("verdict") == "working"' in source
+    assert 'not health.get("last_error_is_current")' in source
+    assert 'not info.get("last_error_message")' not in source
+    assert 'health.get("stale_webhook_error_ignored")' in source
+    assert "TELEGRAM_HISTORICAL_WEBHOOK_ERROR_IGNORED" in source
+    assert 'info.get("url") == f"{expected}/telegram/webhook"' in source
+    assert 'menu.get("type") == "web_app"' in source
+    assert "menu_url == expected" in source
+
+
+def test_telegram_verifier_failure_is_diagnostic_without_raw_error_message() -> None:
+    source = VERIFY.read_text(encoding="utf-8")
+
+    assert '"last_error_date": health.get("last_error_date")' in source
+    assert '"last_error_is_current": bool(health.get("last_error_is_current"))' in source
+    assert '"stale_webhook_error_ignored": bool(health.get("stale_webhook_error_ignored"))' in source
+    assert 'raise AssertionError(f"Telegram webhook/menu verification failed: {last_evidence}")' in source
+    assert '"last_error_message":' not in source
