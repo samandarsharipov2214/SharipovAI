@@ -20,13 +20,30 @@ runtime_project="sharipovai-runtime-$(date +%s)-$$"
 head_sha=""
 candidate_image_ref=""
 expected_web2_sha=""
+BUILD_TIMEOUT_SECONDS="${SHARIPOVAI_DEPLOY_BUILD_TIMEOUT_SECONDS:-900}"
+CANDIDATE_TEST_TIMEOUT_SECONDS="${SHARIPOVAI_DEPLOY_CANDIDATE_TEST_TIMEOUT_SECONDS:-900}"
+CANDIDATE_PROBE_TIMEOUT_SECONDS="${SHARIPOVAI_DEPLOY_CANDIDATE_PROBE_TIMEOUT_SECONDS:-180}"
+RUNTIME_UP_TIMEOUT_SECONDS="${SHARIPOVAI_DEPLOY_RUNTIME_UP_TIMEOUT_SECONDS:-120}"
+RUNTIME_VERIFY_TIMEOUT_SECONDS="${SHARIPOVAI_DEPLOY_RUNTIME_VERIFY_TIMEOUT_SECONDS:-180}"
+
+for limit in "$BUILD_TIMEOUT_SECONDS" "$CANDIDATE_TEST_TIMEOUT_SECONDS" "$CANDIDATE_PROBE_TIMEOUT_SECONDS" "$RUNTIME_UP_TIMEOUT_SECONDS" "$RUNTIME_VERIFY_TIMEOUT_SECONDS"; do
+  [[ "$limit" =~ ^[1-9][0-9]*$ ]] || { echo "Deploy timeout values must be positive integers." >&2; exit 64; }
+done
+
+run_bounded() {
+  local limit="$1"
+  shift
+  # timeout creates an isolated process group, so a timed-out compose/test child
+  # cannot leave its own helper processes behind while the host watcher survives.
+  timeout --signal=TERM --kill-after=30s "${limit}s" "$@"
+}
 
 [[ "$ROOT" == /* ]] || {
   echo "SHARIPOVAI_DEPLOY_ROOT must be an absolute path." >&2
   exit 64
 }
-[[ -d "$ROOT/.git" ]] || {
-  echo "Deployment root is not a Git checkout: $ROOT" >&2
+git -c safe.directory="$ROOT" -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+  echo "Deployment root is not a Git worktree: $ROOT" >&2
   exit 66
 }
 
@@ -79,7 +96,7 @@ refresh_caddy_route() {
   fi
   docker restart "$CADDY_SERVICE" >/dev/null
   for _ in $(seq 1 45); do
-    if curl --fail --silent --show-error "$PUBLIC_HEALTH" >/tmp/public-health.json 2>/tmp/public-health.err; then
+    if curl --connect-timeout 5 --max-time 15 --fail --silent --show-error "$PUBLIC_HEALTH" >/tmp/public-health.json 2>/tmp/public-health.err; then
       cat /tmp/public-health.json
       echo
       return 0
@@ -110,7 +127,7 @@ rollback() {
     fi
     docker start "$SERVICE" >/dev/null
     for _ in $(seq 1 45); do
-      if curl --fail --silent "$LOCAL_HEALTH" >/dev/null 2>&1; then
+      if curl --connect-timeout 5 --max-time 15 --fail --silent "$LOCAL_HEALTH" >/dev/null 2>&1; then
         if refresh_caddy_route; then
           echo "Previous SharipovAI container restored and publicly healthy."
           return 0
@@ -160,7 +177,7 @@ export SHARIPOVAI_BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 candidate_image_ref="sharipovai:${SHARIPOVAI_RELEASE_TAG}"
 
 echo "[1/6] Building exact candidate image $candidate_image_ref..."
-docker compose build "$SERVICE"
+run_bounded "$BUILD_TIMEOUT_SECONDS" docker compose build "$SERVICE"
 docker image inspect "$candidate_image_ref" >/dev/null
 
 candidate_revision="$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$candidate_image_ref")"
@@ -181,7 +198,7 @@ fi
 echo "CANDIDATE_IMAGE_IDENTITY_OK $head_sha $expected_web2_sha"
 
 echo "[2/6] Running focused tests and importing the complete FastAPI graph..."
-docker compose run --rm --no-deps \
+run_bounded "$CANDIDATE_TEST_TIMEOUT_SECONDS" docker compose run --rm --no-deps \
   -e PAPER_ACTIVITY_AUTORUN_ENABLED=0 \
   --entrypoint sh "$SERVICE" -lc '
 set -Eeuo pipefail
@@ -239,7 +256,7 @@ PY
 '
 
 echo "[3/6] Probing candidate /health in isolation..."
-docker compose run --rm --no-deps \
+run_bounded "$CANDIDATE_PROBE_TIMEOUT_SECONDS" docker compose run --rm --no-deps \
   -e PAPER_ACTIVITY_AUTORUN_ENABLED=0 \
   --entrypoint sh "$SERVICE" -lc '
 set -Eeuo pipefail
@@ -254,7 +271,7 @@ cleanup_candidate() {
 }
 trap cleanup_candidate EXIT
 for _ in $(seq 1 60); do
-  if curl --fail --silent --show-error http://127.0.0.1:8000/health >/tmp/health.json 2>/tmp/curl.err; then
+  if curl --connect-timeout 3 --max-time 10 --fail --silent --show-error http://127.0.0.1:8000/health >/tmp/health.json 2>/tmp/curl.err; then
     echo "CANDIDATE_HEALTH_OK"
     cat /tmp/health.json
     echo
@@ -288,7 +305,7 @@ networks:
     name: ${proxy_network}
 YAML
 
-docker compose -p "$runtime_project" \
+run_bounded "$RUNTIME_UP_TIMEOUT_SECONDS" docker compose -p "$runtime_project" \
   -f "$DEPLOY/docker-compose.yml" \
   -f "$runtime_override" \
   config --quiet
@@ -302,7 +319,7 @@ if docker container inspect "$SERVICE" >/dev/null 2>&1; then
 fi
 production_replaced=1
 
-docker compose -p "$runtime_project" \
+run_bounded "$RUNTIME_UP_TIMEOUT_SECONDS" docker compose -p "$runtime_project" \
   -f "$DEPLOY/docker-compose.yml" \
   -f "$runtime_override" \
   up -d --no-deps --no-build "$SERVICE"
@@ -321,7 +338,7 @@ echo "RUNNING_IMAGE_IDENTITY_OK $running_image_id"
 health="starting"
 for _ in $(seq 1 90); do
   container_state="$(docker inspect -f '{{.State.Status}}' "$SERVICE" 2>/dev/null || true)"
-  if [[ "$container_state" == "running" ]] && curl --fail --silent "$LOCAL_HEALTH" >/tmp/production-health.json 2>/dev/null; then
+  if [[ "$container_state" == "running" ]] && curl --connect-timeout 5 --max-time 15 --fail --silent "$LOCAL_HEALTH" >/tmp/production-health.json 2>/dev/null; then
     health="healthy"
     break
   fi
@@ -342,7 +359,7 @@ if [[ "$health" != "healthy" ]]; then
 fi
 
 echo "[5/6] Verifying the running market-backed virtual account..."
-docker exec -e PYTHONPATH=/app "$SERVICE" python /app/scripts/verify_market_paper_runtime.py
+run_bounded "$RUNTIME_VERIFY_TIMEOUT_SECONDS" docker exec -e PYTHONPATH=/app "$SERVICE" python /app/scripts/verify_market_paper_runtime.py
 
 echo "[6/6] Refreshing and verifying the public Caddy route..."
 refresh_caddy_route

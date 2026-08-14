@@ -7,26 +7,21 @@ ENV_FILE="$ROOT/deploy/vps/.env.vps"
 
 [[ -f "$ENV_FILE" ]] || { echo "Missing $ENV_FILE" >&2; exit 1; }
 
-python3 - "$ENV_FILE" "$PUBLIC_URL" <<'PY'
+configured_url="$(python3 - "$ENV_FILE" <<'PY'
 from pathlib import Path
 import sys
 
-path = Path(sys.argv[1])
-public_url = sys.argv[2].rstrip("/")
-lines = path.read_text(encoding="utf-8").splitlines()
-updated = []
-found = False
-for line in lines:
+for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
     if line.startswith("WEBAPP_URL="):
-        updated.append(f"WEBAPP_URL={public_url}")
-        found = True
-    else:
-        updated.append(line)
-if not found:
-    updated.append(f"WEBAPP_URL={public_url}")
-path.write_text("\n".join(updated) + "\n", encoding="utf-8")
-print("TELEGRAM_WEBAPP_ENV_MIGRATED", public_url)
+        print(line.split("=", 1)[1].strip().strip('"').strip("'"))
+        break
 PY
+)"
+[[ "$configured_url" == "$PUBLIC_URL" ]] || {
+  echo "WEBAPP_URL does not match the verified public endpoint; refusing to modify .env.vps." >&2
+  exit 65
+}
+echo "TELEGRAM_WEBAPP_URL_VERIFIED $PUBLIC_URL"
 
 echo "Running protected candidate deployment with transactional Web2/Telegram verification..."
 cd "$ROOT"

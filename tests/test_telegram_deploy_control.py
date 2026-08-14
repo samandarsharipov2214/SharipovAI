@@ -111,12 +111,42 @@ def test_claimed_owner_cannot_be_replaced(tmp_path: Path, monkeypatch):
     assert owner["user_id"] == 111
 
 
+def test_stale_running_deploy_is_terminalized_and_matching_pending_removed(tmp_path: Path, monkeypatch):
+    _configure_control(tmp_path, monkeypatch)
+    monkeypatch.setattr(control.time, "time", lambda: 10_000)
+    control.REQUEST_FILE.write_text(json.dumps({"request_id": "request-a"}), encoding="utf-8")
+    control.STATUS_FILE.write_text(
+        json.dumps({"state": "running", "request_id": "request-a", "updated_at": 9_000}),
+        encoding="utf-8",
+    )
+
+    status = control.read_status()
+
+    assert status["state"] == "timeout"
+    assert status["stage"] == "stale_status"
+    assert not control.REQUEST_FILE.exists()
+
+
+def test_stale_status_does_not_remove_a_newer_request(tmp_path: Path, monkeypatch):
+    _configure_control(tmp_path, monkeypatch)
+    monkeypatch.setattr(control.time, "time", lambda: 10_000)
+    control.REQUEST_FILE.write_text(json.dumps({"request_id": "request-new"}), encoding="utf-8")
+    control.STATUS_FILE.write_text(
+        json.dumps({"state": "running", "request_id": "request-old", "updated_at": 9_000}),
+        encoding="utf-8",
+    )
+
+    assert control.read_status()["state"] == "timeout"
+    assert json.loads(control.REQUEST_FILE.read_text(encoding="utf-8"))["request_id"] == "request-new"
+
+
 def test_watcher_is_fixed_command_https_only_and_never_mounts_docker_socket():
     source = Path("scripts/sharipovai_deploy_watcher.sh").read_text(encoding="utf-8")
     assert '[[ "$action" != "deploy_main" ]]' in source
     assert 'git fetch --no-tags "${FETCH_REMOTE}" main' in source
     assert 'target_sha="$(git rev-parse FETCH_HEAD)"' in source
     assert 'git reset --hard "${target_sha}"' in source
-    assert 'SHARIPOVAI_DEPLOY_WATCHER_ACTIVE=1 bash "$ROOT/scripts/deploy_web2_refresh_fix.sh"' in source
+    assert 'env SHARIPOVAI_DEPLOY_WATCHER_ACTIVE=1' in source
+    assert 'timeout --signal=TERM --kill-after=' in source
     assert "docker.sock" not in source
     assert "amnezia-awg2" not in source

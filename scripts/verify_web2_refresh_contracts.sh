@@ -89,9 +89,9 @@ print("PHASE7_DASHBOARD_CONTRACTS_OK", len(required))
 PY
 
 echo "[verify 2/3] Verifying public Dashboard and health contracts..."
-headers="$(curl --fail --silent --show-error --head "$PUBLIC_URL/")"
+headers="$(curl --connect-timeout 5 --max-time 15 --fail --silent --show-error --head "$PUBLIC_URL/")"
 grep -i -F "cache-control: no-store, no-cache, must-revalidate, max-age=0" <<<"$headers" >/dev/null
-curl --fail --silent --show-error "$PUBLIC_URL/" >"$public_index_tmp"
+curl --connect-timeout 5 --max-time 15 --fail --silent --show-error "$PUBLIC_URL/" >"$public_index_tmp"
 for family in \
   navigation_coordinator_v \
   runtime_render_guard_v \
@@ -103,7 +103,7 @@ for family in \
   grep -F "$family" "$public_index_tmp" >/dev/null
 done
 ! grep -F "market_terminal_v13.js" "$public_index_tmp" >/dev/null
-curl --fail --silent --show-error "$PUBLIC_URL/health"
+curl --connect-timeout 5 --max-time 15 --fail --silent --show-error "$PUBLIC_URL/health"
 echo
 
 echo "[verify 3/3] Verifying Telegram webhook and Mini App menu..."

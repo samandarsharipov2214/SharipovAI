@@ -22,6 +22,9 @@ def test_deploy_watcher_remains_main_only_and_owner_requested() -> None:
     assert 'git fetch --no-tags "${FETCH_REMOTE}" main' in source
     assert 'git checkout -q main' in source
     assert 'SHARIPOVAI_DEPLOY_WATCHER_ACTIVE=1' in source
+    assert 'heartbeat_loop()' in source
+    assert 'run_deploy_with_watchdog()' in source
+    assert 'timeout timed_out' in source
 
 
 def test_watcher_independently_validates_persisted_owner_before_any_fetch() -> None:
@@ -31,7 +34,7 @@ def test_watcher_independently_validates_persisted_owner_before_any_fetch() -> N
     assert 'actor != owner_user or chat != owner_chat' in source
     assert 'if ! validate_owner_request "$request_json"; then' in source
     validation = source.index('if ! validate_owner_request "$request_json"; then')
-    assert validation < source.index('    fetch_main\n', validation)
+    assert validation < source.index('  if ! fetch_main', validation)
 
 
 def test_unauthorized_requests_never_call_fetch_main(tmp_path: Path) -> None:
@@ -65,6 +68,41 @@ process_request "$REQUEST"
         assert result.returncode == 0, result.stderr
 
     assert not trace.exists(), "unauthorized request reached fetch_main"
+
+
+def test_watcher_records_terminal_timeout_and_removes_request(tmp_path: Path) -> None:
+    trace = tmp_path / "trace.log"
+    request = {
+        "request_id": "timeout-request",
+        "action": "deploy_main",
+        "actor_id": 1,
+        "chat_id": 1,
+        "created_at": int(__import__("time").time()),
+    }
+    script = r'''
+set -Eeuo pipefail
+export SHARIPOVAI_DEPLOY_WATCHER_LIBRARY=1
+source "$1"
+validate_owner_request() { return 0; }
+fetch_main() { :; }
+git() { echo 96296887; }
+write_status() { printf '%s|%s\n' "$1" "$2" >> "$TRACE"; }
+remove_request() { echo removed >> "$TRACE"; }
+notify() { :; }
+run_deploy_with_watchdog() { return 124; }
+process_request "$REQUEST"
+'''
+    result = subprocess.run(
+        ["bash", "-c", script, "watcher", str(WATCHER)],
+        env=os.environ | {"TRACE": str(trace), "REQUEST": json.dumps(request)},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "timeout|timed_out" in trace.read_text(encoding="utf-8")
+    assert "removed" in trace.read_text(encoding="utf-8")
 
 
 def test_installed_watcher_source_and_installer_keep_heredoc_stdin() -> None:

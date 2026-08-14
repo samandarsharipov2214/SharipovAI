@@ -7,8 +7,16 @@ ENV_FILE="$ROOT/deploy/vps/.env.vps"
 LOCK_FILE="/run/sharipovai-telegram-deploy.lock"
 POLL_SECONDS="5"
 FETCH_REMOTE="${FETCH_REMOTE:-origin}"
+STATUS_WRITE_TIMEOUT_SECONDS="${SHARIPOVAI_DEPLOY_STATUS_WRITE_TIMEOUT_SECONDS:-20}"
+DEPLOY_TIMEOUT_SECONDS="${SHARIPOVAI_DEPLOY_TIMEOUT_SECONDS:-1800}"
+DEPLOY_HEARTBEAT_SECONDS="${SHARIPOVAI_DEPLOY_HEARTBEAT_SECONDS:-30}"
+DEPLOY_KILL_AFTER_SECONDS="${SHARIPOVAI_DEPLOY_KILL_AFTER_SECONDS:-30}"
 
 log() { printf '%s %s\n' "$(date -Is)" "$*"; }
+
+for limit in "$STATUS_WRITE_TIMEOUT_SECONDS" "$DEPLOY_TIMEOUT_SECONDS" "$DEPLOY_HEARTBEAT_SECONDS" "$DEPLOY_KILL_AFTER_SECONDS"; do
+  [[ "$limit" =~ ^[1-9][0-9]*$ ]] || { echo "Deploy timeout values must be positive integers" >&2; exit 64; }
+done
 
 if [[ "${FETCH_REMOTE}" == https://github.com/* ]]; then
   [[ "${FETCH_REMOTE}" =~ ^https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+(\.git)?$ ]] || {
@@ -23,7 +31,7 @@ else
 fi
 
 read_request() {
-  docker exec -i "$SERVICE" python - <<'PY'
+  timeout --foreground --kill-after=5s "$STATUS_WRITE_TIMEOUT_SECONDS" docker exec -i "$SERVICE" python - <<'PY'
 import json
 from pathlib import Path
 path = Path('/var/lib/sharipovai/deployment_control/pending.json')
@@ -42,7 +50,7 @@ PY
 
 validate_owner_request() {
   local request_json="$1" verdict
-  verdict="$(docker exec -i \
+  verdict="$(timeout --foreground --kill-after=5s "$STATUS_WRITE_TIMEOUT_SECONDS" docker exec -i \
     -e DEPLOY_REQUEST_JSON="$request_json" \
     "$SERVICE" python -c '
 import json
@@ -79,13 +87,14 @@ print("authorized")
 
 write_status() {
   local state="$1" stage="$2" request_id="$3" chat_id="$4" message="${5:-}" commit="${6:-}"
-  docker exec -i \
+  timeout --foreground --kill-after=5s "$STATUS_WRITE_TIMEOUT_SECONDS" docker exec -i \
     -e DEPLOY_STATE="$state" \
     -e DEPLOY_STAGE="$stage" \
     -e DEPLOY_REQUEST_ID="$request_id" \
     -e DEPLOY_CHAT_ID="$chat_id" \
     -e DEPLOY_MESSAGE="$message" \
     -e DEPLOY_COMMIT="$commit" \
+    -e DEPLOY_WATCHER_PID="$$" \
     "$SERVICE" python - <<'PY'
 import json, os, time
 from pathlib import Path
@@ -100,7 +109,9 @@ payload = {
     'chat_id': int(os.environ['DEPLOY_CHAT_ID']),
     'message': os.environ.get('DEPLOY_MESSAGE', ''),
     'commit': os.environ.get('DEPLOY_COMMIT', ''),
+    'watcher_pid': int(os.environ.get('DEPLOY_WATCHER_PID', '0') or 0),
     'updated_at': int(time.time()),
+    'heartbeat_at': int(time.time()),
 }
 tmp.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True), encoding='utf-8')
 os.replace(tmp, path)
@@ -108,7 +119,39 @@ PY
 }
 
 remove_request() {
-  docker exec "$SERVICE" sh -lc 'rm -f /var/lib/sharipovai/deployment_control/pending.json'
+  timeout --foreground --kill-after=5s "$STATUS_WRITE_TIMEOUT_SECONDS" \
+    docker exec "$SERVICE" sh -lc 'rm -f /var/lib/sharipovai/deployment_control/pending.json'
+}
+
+publish_status() {
+  if ! write_status "$@"; then
+    log "Unable to persist deploy status; deployment will not continue."
+    return 1
+  fi
+}
+
+heartbeat_loop() {
+  local request_id="$1" chat_id="$2" commit="$3"
+  while sleep "$DEPLOY_HEARTBEAT_SECONDS"; do
+    publish_status running "защищённые тесты и deploy" "$request_id" "$chat_id" \
+      "Кандидат проверяется" "$commit" || log "Deploy heartbeat persistence failed"
+  done
+}
+
+run_deploy_with_watchdog() {
+  local request_id="$1" chat_id="$2" commit="$3" heartbeat_pid result
+  heartbeat_loop "$request_id" "$chat_id" "$commit" &
+  heartbeat_pid=$!
+  set +e
+  timeout --signal=TERM --kill-after="${DEPLOY_KILL_AFTER_SECONDS}s" \
+    "${DEPLOY_TIMEOUT_SECONDS}s" \
+    env SHARIPOVAI_DEPLOY_WATCHER_ACTIVE=1 \
+    bash "$ROOT/scripts/deploy_web2_refresh_fix.sh"
+  result=$?
+  set -e
+  kill "$heartbeat_pid" 2>/dev/null || true
+  wait "$heartbeat_pid" 2>/dev/null || true
+  return "$result"
 }
 
 read_env_value() {
@@ -190,29 +233,45 @@ process_request() {
     return 0
   fi
 
-  write_status running "получение main" "$request_id" "$chat_id" "Запущено владельцем Telegram ${actor_id}" ""
+  if ! publish_status running "получение main" "$request_id" "$chat_id" "Запущено владельцем Telegram ${actor_id}" ""; then
+    return 1
+  fi
   notify "$chat_id" "🔄 <b>Обновление SharipovAI началось</b>\n\nID: <code>${request_id}</code>\nСначала будут проверены кандидат и тесты."
 
   output_file="/tmp/${request_id}.log"
-  if (
-    fetch_main
+  if ! fetch_main >"$output_file" 2>&1; then
+    commit="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || true)"
+    publish_status failed failed "$request_id" "$chat_id" "Не удалось получить проверенный main; production не изменён" "$commit" || true
+    remove_request || true
+    log "Deployment $request_id could not fetch main; see $output_file"
+    return 0
+  fi
+  commit="$(git -C "$ROOT" rev-parse --short HEAD)"
+  if ! publish_status running "защищённые тесты и deploy" "$request_id" "$chat_id" "Кандидат проверяется" "$commit"; then
+    return 1
+  fi
+
+  if run_deploy_with_watchdog "$request_id" "$chat_id" "$commit" >>"$output_file" 2>&1; then
     commit="$(git -C "$ROOT" rev-parse --short HEAD)"
-    write_status running "защищённые тесты и deploy" "$request_id" "$chat_id" "Кандидат проверяется" "$commit"
-    SHARIPOVAI_DEPLOY_WATCHER_ACTIVE=1 bash "$ROOT/scripts/deploy_web2_refresh_fix.sh"
-  ) >"$output_file" 2>&1; then
-    commit="$(git -C "$ROOT" rev-parse --short HEAD)"
-    write_status success completed "$request_id" "$chat_id" "Production проверен; реальные ордера заблокированы" "$commit"
-    remove_request
+    publish_status success completed "$request_id" "$chat_id" "Production проверен; реальные ордера заблокированы" "$commit" || true
+    remove_request || true
     notify "$chat_id" "✅ <b>SharipovAI обновлён и проверен</b>\n\nКоммит: <code>${commit}</code>\nProduction healthy. Реальные ордера заблокированы."
     log "Deployment $request_id succeeded at $commit"
   else
+    local deploy_result=$?
     commit="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || true)"
     local tail_text
     tail_text="$(tail -n 12 "$output_file" 2>/dev/null | sed 's/[<>]/ /g' | tail -c 2500)"
-    write_status failed failed "$request_id" "$chat_id" "Deploy завершился ошибкой; production защищён откатом" "$commit"
-    remove_request
-    notify "$chat_id" "❌ <b>Обновление не выполнено</b>\n\nProduction сохранён или восстановлен.\nКоммит: <code>${commit:-—}</code>\n\n<pre>${tail_text}</pre>"
-    log "Deployment $request_id failed; see $output_file"
+    if [[ "$deploy_result" == "124" || "$deploy_result" == "137" ]]; then
+      publish_status timeout timed_out "$request_id" "$chat_id" "Deploy превысил лимит времени; production защищён откатом" "$commit" || true
+      notify "$chat_id" "⏱️ <b>Обновление остановлено по таймауту</b>\n\nProduction сохранён или восстановлен.\nКоммит: <code>${commit:-—}</code>"
+      log "Deployment $request_id timed out; see $output_file"
+    else
+      publish_status failed failed "$request_id" "$chat_id" "Deploy завершился ошибкой; production защищён откатом" "$commit" || true
+      notify "$chat_id" "❌ <b>Обновление не выполнено</b>\n\nProduction сохранён или восстановлен.\nКоммит: <code>${commit:-—}</code>\n\n<pre>${tail_text}</pre>"
+      log "Deployment $request_id failed; see $output_file"
+    fi
+    remove_request || true
   fi
 }
 
@@ -223,7 +282,7 @@ main() {
       if request_json="$(read_request 2>/dev/null)"; then
         (
           flock -n 9 || exit 0
-          process_request "$request_json"
+          process_request "$request_json" || log "Deployment request processing stopped before execution"
         ) 9>"$LOCK_FILE"
       fi
     fi

@@ -20,6 +20,7 @@ STATUS_FILE = CONTROL_DIR / "status.json"
 OWNER_FILE = CONTROL_DIR / "owner.json"
 CLAIM_FILE = CONTROL_DIR / "owner_claim.json"
 CONFIRM_TTL_SECONDS = 300
+DEPLOY_STATUS_STALE_SECONDS = 120
 _CONFIRMATIONS: dict[int, tuple[str, float]] = {}
 
 
@@ -208,6 +209,8 @@ def status_message(actor_id: int | None, chat_id: int | None) -> tuple[str, dict
             "running": "ВЫПОЛНЯЕТСЯ",
             "success": "УСПЕШНО",
             "failed": "ОШИБКА",
+            "timeout": "ТАЙМАУТ",
+            "rolled_back": "ОТКАЧЕНО",
         }
         state = str(status.get("state", "unknown"))
         text = (
@@ -216,6 +219,7 @@ def status_message(actor_id: int | None, chat_id: int | None) -> tuple[str, dict
             f"Этап: {_safe(status.get('stage', '—'))}\n"
             f"ID: <code>{_safe(status.get('request_id', '—'))}</code>\n"
             f"Коммит: <code>{_safe(status.get('commit', '—'))}</code>\n"
+            f"Последний прогресс: <code>{_safe(status.get('heartbeat_at', status.get('updated_at', '—')))}</code>\n"
             f"Сообщение: {_safe(status.get('message', '—'))}"
         )
     keyboard = {"inline_keyboard": [[
@@ -228,7 +232,7 @@ def status_message(actor_id: int | None, chat_id: int | None) -> tuple[str, dict
 def read_status() -> dict[str, Any]:
     try:
         value = json.loads(STATUS_FILE.read_text(encoding="utf-8"))
-        return value if isinstance(value, dict) else {}
+        return _terminalize_stale_status(value) if isinstance(value, dict) else {}
     except (OSError, json.JSONDecodeError):
         return {}
 
@@ -259,6 +263,44 @@ def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
     temporary = path.with_suffix(f".tmp-{os.getpid()}")
     temporary.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True), encoding="utf-8")
     os.replace(temporary, path)
+
+
+def _terminalize_stale_status(status: dict[str, Any]) -> dict[str, Any]:
+    """Never present an abandoned deployment as still running.
+
+    The host watcher refreshes ``heartbeat_at`` while its bounded deploy child is
+    alive.  If that evidence stops, the application atomically closes only the
+    matching pending request; a later request cannot be removed accidentally.
+    """
+    if str(status.get("state", "")).lower() not in {"queued", "running"}:
+        return status
+    try:
+        heartbeat = int(status.get("heartbeat_at", status.get("updated_at", 0)) or 0)
+    except (TypeError, ValueError):
+        heartbeat = 0
+    if heartbeat > 0 and int(time.time()) - heartbeat <= DEPLOY_STATUS_STALE_SECONDS:
+        return status
+
+    request_id = str(status.get("request_id") or "")
+    terminal = {
+        **status,
+        "state": "timeout",
+        "stage": "stale_status",
+        "message": "Нет актуального heartbeat от host watcher; deploy остановлен fail-closed.",
+        "updated_at": int(time.time()),
+        "heartbeat_at": heartbeat,
+    }
+    _atomic_write(STATUS_FILE, terminal)
+    try:
+        pending = json.loads(REQUEST_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        pending = {}
+    if isinstance(pending, dict) and str(pending.get("request_id") or "") == request_id:
+        try:
+            REQUEST_FILE.unlink()
+        except OSError:
+            pass
+    return terminal
 
 
 def _safe(value: Any) -> str:

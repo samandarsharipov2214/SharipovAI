@@ -699,23 +699,29 @@ class SelfHealingAgent:
     def check_changed_modules(self) -> None:
         repo = self.config.repo_dir
         if not (repo / ".git").exists():
-            self.logger.warning("Git repository is unavailable at %s", repo)
+            self._record_git_verification_unavailable(
+                f"Git repository is unavailable at {repo}"
+            )
             return
 
-        head = self._git("rev-parse", "HEAD").strip()
-        last_tested = str(self.state.value.get("last_tested_sha", "")).strip()
-        bootstrap = not bool(last_tested)
-        if last_tested and self._git_ok("cat-file", "-e", f"{last_tested}^{{commit}}"):
-            base = last_tested
-        else:
-            base = self._git("rev-parse", "HEAD^").strip() if self._git_ok(
-                "rev-parse", "HEAD^"
-            ) else head
+        try:
+            head = self._git("rev-parse", "HEAD").strip()
+            last_tested = str(self.state.value.get("last_tested_sha", "")).strip()
+            bootstrap = not bool(last_tested)
+            if last_tested and self._git_ok("cat-file", "-e", f"{last_tested}^{{commit}}"):
+                base = last_tested
+            else:
+                base = self._git("rev-parse", "HEAD^").strip() if self._git_ok(
+                    "rev-parse", "HEAD^"
+                ) else head
 
-        changed = set(self._git_lines("diff", "--name-only", f"{base}..{head}"))
-        changed.update(self._git_lines("diff", "--name-only"))
-        changed.update(self._git_lines("diff", "--name-only", "--cached"))
-        changed.update(self._git_lines("ls-files", "--others", "--exclude-standard"))
+            changed = set(self._git_lines("diff", "--name-only", f"{base}..{head}"))
+            changed.update(self._git_lines("diff", "--name-only"))
+            changed.update(self._git_lines("diff", "--name-only", "--cached"))
+            changed.update(self._git_lines("ls-files", "--others", "--exclude-standard"))
+        except RuntimeError as exc:
+            self._record_git_verification_unavailable(str(exc))
+            return
         changed = {
             item
             for item in changed
@@ -806,6 +812,17 @@ class SelfHealingAgent:
         self.state.value["last_pytest_ok_at"] = utc_now_iso()
         self.state.save()
         self.logger.info("Changed-module tests passed")
+
+    def _record_git_verification_unavailable(self, reason: str) -> None:
+        """Fail closed without aborting the health checks that follow Git verification."""
+        message = f"Changed-module verification unavailable: {reason}"
+        self.logger.error(message)
+        self.unresolved.append(message)
+        self.notifier.send(
+            "Self-Healing: Git-проверка недоступна",
+            message,
+            fingerprint="self_healing_git_unavailable",
+        )
 
     def _handle_test_failure(self, *, head: str, output: str, command: Any) -> None:
         excerpt = output[-3000:]
@@ -943,16 +960,21 @@ class SelfHealingAgent:
         self.state.save()
 
     def _git(self, *arguments: str) -> str:
-        result = subprocess.run(
-            ["git", "-c", f"safe.directory={self.config.repo_dir}", *arguments],
-            cwd=self.config.repo_dir,
-            env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"},
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=60,
-            check=False,
-        )
+        try:
+            result = subprocess.run(
+                ["git", "-c", f"safe.directory={self.config.repo_dir}", *arguments],
+                cwd=self.config.repo_dir,
+                env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"},
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=60,
+                check=False,
+            )
+        except (FileNotFoundError, PermissionError, OSError) as exc:
+            raise RuntimeError(
+                f"git executable is unavailable: {type(exc).__name__}: {exc}"
+            ) from exc
         stderr = result.stderr.strip()
         if result.returncode != 0:
             details = result.stdout.strip()
