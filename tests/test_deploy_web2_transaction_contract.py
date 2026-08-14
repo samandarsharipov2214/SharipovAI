@@ -18,6 +18,8 @@ def test_web2_refresh_delegates_full_verification_to_transaction() -> None:
     assert "deploy_market_paper_runtime.sh" in source
     assert "navigation_coordinator_v23.js" not in source
     assert "docker exec" not in source
+    assert "refusing to modify .env.vps" in source
+    assert "path.write_text" not in source
 
 
 def test_profile_verifier_runs_before_rollback_snapshot_is_committed() -> None:
@@ -128,3 +130,15 @@ def test_running_container_image_id_must_match_verified_candidate() -> None:
     assert replaced < running_check < market_verify
     assert "RUNNING_IMAGE_IDENTITY_OK" in source
     assert "docker inspect -f '{{.Image}}' \"$SERVICE\"" in source
+
+
+def test_deploy_commands_and_public_probes_are_bounded() -> None:
+    source = RUNTIME.read_text(encoding="utf-8")
+    verifier = VERIFY.read_text(encoding="utf-8")
+
+    assert 'run_bounded "$BUILD_TIMEOUT_SECONDS" docker compose build "$SERVICE"' in source
+    assert 'run_bounded "$CANDIDATE_TEST_TIMEOUT_SECONDS" docker compose run' in source
+    assert 'run_bounded "$RUNTIME_UP_TIMEOUT_SECONDS" docker compose -p' in source
+    assert 'run_bounded "$RUNTIME_VERIFY_TIMEOUT_SECONDS" docker exec' in source
+    assert "--connect-timeout 5 --max-time 15" in source
+    assert "--connect-timeout 5 --max-time 15" in verifier

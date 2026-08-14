@@ -21,31 +21,33 @@ def test_deploy_build_uses_ephemeral_private_docker_config_and_fails_before_repl
     """
 
     trace = tmp_path / "docker-build-trace.txt"
-    bash_env = tmp_path / "docker-function.sh"
-    bash_env.write_text(
-        """docker() {
-  if [[ \"${1:-}\" == \"container\" && \"${2:-}\" == \"inspect\" ]]; then
-    return 1
-  fi
-  if [[ \"${1:-}\" == \"compose\" && \"${2:-}\" == \"build\" ]]; then
-    test \"${HOME}\" = \"/root\"
-    test -n \"${DOCKER_CONFIG:-}\"
-    test -d \"${DOCKER_CONFIG}\"
-    printf '%s\\n' \"${DOCKER_CONFIG}\" > \"${TRACE}\"
-    stat -c '%a' \"${DOCKER_CONFIG}\" >> \"${TRACE}\"
-    return 73
-  fi
-  echo \"unexpected docker invocation: $*\" >&2
-  return 74
-}
+    mock_bin = tmp_path / "bin"
+    mock_bin.mkdir()
+    docker_mock = mock_bin / "docker"
+    docker_mock.write_text(
+        """#!/usr/bin/env bash
+if [[ "${1:-}" == "container" && "${2:-}" == "inspect" ]]; then
+  exit 1
+fi
+if [[ "${1:-}" == "compose" && "${2:-}" == "build" ]]; then
+  test "${HOME}" = "/root"
+  test -n "${DOCKER_CONFIG:-}"
+  test -d "${DOCKER_CONFIG}"
+  printf '%s\\n' "${DOCKER_CONFIG}" > "${TRACE}"
+  stat -c '%a' "${DOCKER_CONFIG}" >> "${TRACE}"
+  exit 73
+fi
+echo "unexpected docker invocation: $*" >&2
+exit 74
 """,
         encoding="utf-8",
     )
+    docker_mock.chmod(0o755)
 
     environment = os.environ | {
         "HOME": "/root",
-        "BASH_ENV": str(bash_env),
         "TRACE": str(trace),
+        "PATH": f"{mock_bin}:{os.environ['PATH']}",
         "SHARIPOVAI_DEPLOY_ROOT": str(ROOT),
     }
     result = subprocess.run(
@@ -85,6 +87,6 @@ def test_deploy_root_defaults_to_canonical_checkout_and_override_is_explicit() -
 
     assert 'ROOT="${SHARIPOVAI_DEPLOY_ROOT:-/opt/sharipovai-repo}"' in source
     assert '[[ "$ROOT" == /* ]]' in source
-    assert '[[ -d "$ROOT/.git" ]]' in source
+    assert 'git -c safe.directory="$ROOT" -C "$ROOT" rev-parse --is-inside-work-tree' in source
     assert 'git -c safe.directory="$ROOT" -C "$ROOT" "$@"' in source
     assert "git config --global" not in source

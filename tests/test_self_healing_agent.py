@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sqlite3
+import subprocess
 import sys
 import tarfile
 from pathlib import Path
@@ -147,3 +148,48 @@ def test_repository_snapshot_keeps_git_metadata(tmp_path: Path) -> None:
 
     assert (destination / ".git" / "HEAD").is_file()
     assert (destination / "module.py").is_file()
+
+
+def test_missing_git_is_unresolved_but_does_not_abort_safe_checks(tmp_path: Path, monkeypatch) -> None:
+    config = make_config(tmp_path)
+    (config.repo_dir / ".git").mkdir()
+    instance = agent.SelfHealingAgent(config)
+    safe_checks: list[str] = []
+
+    monkeypatch.setattr(
+        agent.subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(FileNotFoundError("git")),
+    )
+    monkeypatch.setattr(instance, "check_container_snapshot", lambda: safe_checks.append("container"))
+    monkeypatch.setattr(instance, "check_health", lambda: safe_checks.append("health"))
+    monkeypatch.setattr(instance, "check_database", lambda **_: safe_checks.append("database"))
+    monkeypatch.setattr(instance, "check_recent_logs", lambda **_: safe_checks.append("logs"))
+    monkeypatch.setattr(instance, "check_websocket", lambda **_: safe_checks.append("websocket"))
+    monkeypatch.setattr(instance.notifier, "send", lambda *args, **kwargs: safe_checks.append("alert"))
+
+    assert instance.run() == agent.EXIT_UNRESOLVED
+    state = json.loads(config.state_file.read_text(encoding="utf-8"))
+    assert state["last_cycle_result"] == "unresolved"
+    assert state["last_cycle_finished_at"]
+    assert safe_checks == ["container", "health", "database", "logs", "alert", "websocket"]
+    assert instance.action.action == "none"
+    assert not config.action_file.exists()
+
+
+def test_git_os_errors_are_normalized_to_controlled_runtime_error(tmp_path: Path, monkeypatch) -> None:
+    instance = agent.SelfHealingAgent(make_config(tmp_path))
+
+    monkeypatch.setattr(
+        agent.subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("git")),
+    )
+
+    try:
+        instance._git("rev-parse", "HEAD")
+    except RuntimeError as exc:
+        assert "git executable is unavailable" in str(exc)
+        assert "PermissionError" in str(exc)
+    else:
+        raise AssertionError("git execution error must fail closed")
