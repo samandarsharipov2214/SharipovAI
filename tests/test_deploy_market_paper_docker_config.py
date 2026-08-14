@@ -18,11 +18,26 @@ def test_deploy_build_uses_ephemeral_private_docker_config_and_fails_before_repl
     error trap and proves that a build failure happens before production replacement.
     The explicit deploy-root override keeps this hermetic test away from the root-owned
     production checkout while production still defaults to /opt/sharipovai-repo.
+    Host free-space must not decide whether this Docker-config contract is exercised,
+    so ``df`` is mocked with a deterministic healthy disk observation.
     """
 
     trace = tmp_path / "docker-build-trace.txt"
     mock_bin = tmp_path / "bin"
     mock_bin.mkdir()
+
+    df_mock = mock_bin / "df"
+    df_mock.write_text(
+        """#!/usr/bin/env bash
+cat <<'EOF'
+Filesystem 1024-blocks Used Available Capacity Mounted on
+/dev/mock 104857600 0 104857600 0% /
+EOF
+""",
+        encoding="utf-8",
+    )
+    df_mock.chmod(0o755)
+
     docker_mock = mock_bin / "docker"
     docker_mock.write_text(
         """#!/usr/bin/env bash
@@ -60,6 +75,7 @@ exit 74
 
     assert result.returncode == 73
     assert "Candidate verification failed before production replacement" in result.stdout
+    assert "DEPLOY_DISK_PREFLIGHT_OK" in result.stdout
     directory, mode = trace.read_text(encoding="utf-8").splitlines()
     assert directory.startswith("/tmp/sharipovai-docker-config-")
     assert mode == "700"
