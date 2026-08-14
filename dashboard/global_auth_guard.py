@@ -13,13 +13,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from .auth_saas import resolve_authenticated_principal
 from .internal_service_auth import require_internal_service
 
-# The canonical Web2 shell is intentionally public: it contains no privileged
-# data by itself and fetches protected runtime data through /api/**, which stays
-# behind the fail-closed user-auth gate below.  Keep this list exact so exposing
-# the browser shell can never turn into a blanket API exemption.
 _PUBLIC_EXACT = {
-    "/",
-    "/dashboard",
     "/login",
     "/register",
     "/logout",
