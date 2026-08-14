@@ -14,8 +14,10 @@ def test_deploy_build_uses_ephemeral_private_docker_config_and_fails_before_repl
 ) -> None:
     """A read-only /root must not prevent the candidate build from starting.
 
-    The mock rejects the build after recording its environment.  This exercises the
+    The mock rejects the build after recording its environment. This exercises the
     error trap and proves that a build failure happens before production replacement.
+    The explicit deploy-root override keeps this hermetic test away from the root-owned
+    production checkout while production still defaults to /opt/sharipovai-repo.
     """
 
     trace = tmp_path / "docker-build-trace.txt"
@@ -44,6 +46,7 @@ def test_deploy_build_uses_ephemeral_private_docker_config_and_fails_before_repl
         "HOME": "/root",
         "BASH_ENV": str(bash_env),
         "TRACE": str(trace),
+        "SHARIPOVAI_DEPLOY_ROOT": str(ROOT),
     }
     result = subprocess.run(
         ["bash", str(SCRIPT)],
@@ -75,3 +78,13 @@ def test_deploy_script_never_uses_root_docker_config() -> None:
     )
     assert 'rm -rf "$docker_config_tmp"' in source
     assert "/root/.docker" not in source
+
+
+def test_deploy_root_defaults_to_canonical_checkout_and_override_is_explicit() -> None:
+    source = SCRIPT.read_text(encoding="utf-8")
+
+    assert 'ROOT="${SHARIPOVAI_DEPLOY_ROOT:-/opt/sharipovai-repo}"' in source
+    assert '[[ "$ROOT" == /* ]]' in source
+    assert '[[ -d "$ROOT/.git" ]]' in source
+    assert 'git -c safe.directory="$ROOT" -C "$ROOT" "$@"' in source
+    assert "git config --global" not in source
