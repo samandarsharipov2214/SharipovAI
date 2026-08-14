@@ -129,7 +129,13 @@ docker_config_tmp="$(mktemp -d /tmp/sharipovai-docker-config-XXXXXX)"
 chmod 0700 "$docker_config_tmp"
 export DOCKER_CONFIG="$docker_config_tmp"
 
-head_sha="$(git -C "$ROOT" rev-parse HEAD)"
+# Trust only the fixed canonical deployment checkout for these read-only Git
+# identity checks. Do not mutate global/system Git safe.directory settings.
+git_repo() {
+  git -c safe.directory="$ROOT" -C "$ROOT" "$@"
+}
+
+head_sha="$(git_repo rev-parse HEAD)"
 [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || {
   echo "Cannot resolve exact deployment HEAD." >&2
   exit 66
@@ -153,7 +159,7 @@ if [[ "$candidate_revision" != "$head_sha" ]]; then
   exit 67
 fi
 
-expected_web2_sha="$(git -C "$ROOT" show "${head_sha}:dashboard/static/web2/index.html" | sha256sum | awk '{print $1}')"
+expected_web2_sha="$(git_repo show "${head_sha}:dashboard/static/web2/index.html" | sha256sum | awk '{print $1}')"
 actual_web2_sha="$(docker run --rm --entrypoint sha256sum "$candidate_image_ref" /app/dashboard/static/web2/index.html | awk '{print $1}')"
 if [[ -z "$expected_web2_sha" || "$actual_web2_sha" != "$expected_web2_sha" ]]; then
   echo "Candidate Web2 index does not match exact Git HEAD." >&2
