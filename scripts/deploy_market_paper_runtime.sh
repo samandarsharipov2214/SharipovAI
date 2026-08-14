@@ -8,6 +8,7 @@ CADDY_SERVICE="sharipovai-caddy"
 ACTIVE_IMAGE_REF="vps-sharipovai:latest"
 LOCAL_HEALTH="http://127.0.0.1:8000/health"
 PUBLIC_HEALTH="https://85-137-88-17.sslip.io/health"
+DEPLOY_PROFILE="${SHARIPOVAI_DEPLOY_PROFILE:-}"
 
 production_replaced=0
 backup_container=""
@@ -19,6 +20,22 @@ docker_config_tmp=""
 runtime_project="sharipovai-runtime-$(date +%s)-$$"
 
 cd "$DEPLOY"
+
+case "$DEPLOY_PROFILE" in
+  ""|web2-refresh) ;;
+  *)
+    echo "Unsupported SHARIPOVAI_DEPLOY_PROFILE: $DEPLOY_PROFILE" >&2
+    exit 64
+    ;;
+esac
+
+if [[ "$DEPLOY_PROFILE" == "web2-refresh" ]]; then
+  [[ -s "$ROOT/scripts/verify_web2_refresh_contracts.sh" ]] || {
+    echo "Missing transactional Web2 verifier." >&2
+    exit 65
+  }
+  bash -n "$ROOT/scripts/verify_web2_refresh_contracts.sh"
+fi
 
 if docker container inspect "$CADDY_SERVICE" >/dev/null 2>&1; then
   proxy_network="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "$CADDY_SERVICE" | head -n 1 | tr -d '[:space:]')"
@@ -121,6 +138,8 @@ docker compose run --rm --no-deps \
 set -Eeuo pipefail
 export PYTHONPATH="/app${PYTHONPATH:+:$PYTHONPATH}"
 cd /app
+command -v git >/dev/null
+git --version
 python -m pytest \
   tests/test_market_paper_engine.py \
   tests/test_news_intelligence_runtime.py \
@@ -268,6 +287,11 @@ docker exec -e PYTHONPATH=/app "$SERVICE" python /app/scripts/verify_market_pape
 echo "[6/6] Refreshing and verifying the public Caddy route..."
 refresh_caddy_route
 
+if [[ "$DEPLOY_PROFILE" == "web2-refresh" ]]; then
+  echo "[transaction] Verifying Dashboard/public/Telegram contracts before commit..."
+  bash "$ROOT/scripts/verify_web2_refresh_contracts.sh"
+fi
+
 if [[ -n "$backup_container" ]] && docker container inspect "$backup_container" >/dev/null 2>&1; then
   docker rm "$backup_container" >/dev/null
 fi
@@ -276,4 +300,7 @@ production_replaced=0
 trap - ERR
 echo "Market-backed virtual account deployed and verified."
 echo "Public HTTPS route deployed and verified."
+if [[ "$DEPLOY_PROFILE" == "web2-refresh" ]]; then
+  echo "Dashboard/public/Telegram verification committed inside rollback boundary."
+fi
 echo "Real exchange orders remain blocked."

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -50,6 +51,13 @@ def healthy_app(tmp_path: Path, monkeypatch) -> FastAPI:
     monkeypatch.setenv("EXCHANGE_LIVE_TRADING_ENABLED", "0")
     monkeypatch.setenv("TESTNET_EXECUTION_ENABLED", "0")
     monkeypatch.setenv("MARKET_STREAM_ENABLED", "1")
+    # The healthy-runtime contract must not depend on the self-hosted runner's
+    # real disk pressure. Storage thresholds have dedicated behavior in the
+    # production code; this fixture supplies deterministic healthy storage.
+    monkeypatch.setattr(
+        "dashboard.system_health_api.shutil.disk_usage",
+        lambda _target: SimpleNamespace(total=100, used=40, free=60),
+    )
 
     app = FastAPI()
     database = FakeDatabase()

@@ -44,6 +44,7 @@ services:
       - .env.vps
     environment:
       ENVIRONMENT: production
+      PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
       PORT: 8000
       SHARIPOVAI_DATA_DIR: /var/lib/sharipovai
       BYBIT_ACCOUNT_STATE_FILE: /var/lib/sharipovai/bybit_account.json
