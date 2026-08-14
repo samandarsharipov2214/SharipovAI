@@ -5,7 +5,6 @@ ROOT="/opt/sharipovai-repo"
 DEPLOY="$ROOT/deploy/vps"
 SERVICE="sharipovai"
 CADDY_SERVICE="sharipovai-caddy"
-ACTIVE_IMAGE_REF="vps-sharipovai:latest"
 LOCAL_HEALTH="http://127.0.0.1:8000/health"
 PUBLIC_HEALTH="https://85-137-88-17.sslip.io/health"
 DEPLOY_PROFILE="${SHARIPOVAI_DEPLOY_PROFILE:-}"
@@ -18,6 +17,9 @@ data_volume=""
 runtime_override=""
 docker_config_tmp=""
 runtime_project="sharipovai-runtime-$(date +%s)-$$"
+head_sha=""
+candidate_image_ref=""
+expected_web2_sha=""
 
 cd "$DEPLOY"
 
@@ -127,9 +129,40 @@ docker_config_tmp="$(mktemp -d /tmp/sharipovai-docker-config-XXXXXX)"
 chmod 0700 "$docker_config_tmp"
 export DOCKER_CONFIG="$docker_config_tmp"
 
-echo "[1/6] Building candidate image..."
+head_sha="$(git -C "$ROOT" rev-parse HEAD)"
+[[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || {
+  echo "Cannot resolve exact deployment HEAD." >&2
+  exit 66
+}
+
+# Give this build a unique tag and use the same tag for candidate tests and
+# production replacement. This prevents a stale legacy image tag from being
+# substituted after the candidate has already passed its checks.
+export SHARIPOVAI_RELEASE_TAG="deploy-${head_sha:0:12}-$(date +%s)-$$"
+export SHARIPOVAI_RELEASE_SHA="$head_sha"
+export SHARIPOVAI_BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+candidate_image_ref="sharipovai:${SHARIPOVAI_RELEASE_TAG}"
+
+echo "[1/6] Building exact candidate image $candidate_image_ref..."
 docker compose build "$SERVICE"
-docker image inspect "$ACTIVE_IMAGE_REF" >/dev/null
+docker image inspect "$candidate_image_ref" >/dev/null
+
+candidate_revision="$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$candidate_image_ref")"
+if [[ "$candidate_revision" != "$head_sha" ]]; then
+  echo "Candidate image revision mismatch: expected $head_sha, got $candidate_revision" >&2
+  exit 67
+fi
+
+expected_web2_sha="$(git -C "$ROOT" show "${head_sha}:dashboard/static/web2/index.html" | sha256sum | awk '{print $1}')"
+actual_web2_sha="$(docker run --rm --entrypoint sha256sum "$candidate_image_ref" /app/dashboard/static/web2/index.html | awk '{print $1}')"
+if [[ -z "$expected_web2_sha" || "$actual_web2_sha" != "$expected_web2_sha" ]]; then
+  echo "Candidate Web2 index does not match exact Git HEAD." >&2
+  echo "Expected: ${expected_web2_sha:-missing}" >&2
+  echo "Actual:   ${actual_web2_sha:-missing}" >&2
+  exit 68
+fi
+
+echo "CANDIDATE_IMAGE_IDENTITY_OK $head_sha $expected_web2_sha"
 
 echo "[2/6] Running focused tests and importing the complete FastAPI graph..."
 docker compose run --rm --no-deps \
@@ -228,7 +261,7 @@ runtime_override="$(mktemp /tmp/sharipovai-runtime-XXXXXX.yml)"
 cat >"$runtime_override" <<YAML
 services:
   sharipovai:
-    image: ${ACTIVE_IMAGE_REF}
+    image: ${candidate_image_ref}
 volumes:
   sharipovai_data:
     external: true
@@ -257,6 +290,17 @@ docker compose -p "$runtime_project" \
   -f "$DEPLOY/docker-compose.yml" \
   -f "$runtime_override" \
   up -d --no-deps --no-build "$SERVICE"
+
+running_image_id="$(docker inspect -f '{{.Image}}' "$SERVICE")"
+candidate_image_id="$(docker image inspect -f '{{.Id}}' "$candidate_image_ref")"
+if [[ -z "$candidate_image_id" || "$running_image_id" != "$candidate_image_id" ]]; then
+  echo "Production container is not running the verified candidate image." >&2
+  echo "Expected image ID: ${candidate_image_id:-missing}" >&2
+  echo "Running image ID:  ${running_image_id:-missing}" >&2
+  exit 69
+fi
+
+echo "RUNNING_IMAGE_IDENTITY_OK $running_image_id"
 
 health="starting"
 for _ in $(seq 1 90); do
