@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-ROOT="/opt/sharipovai-repo"
+ROOT="${SHARIPOVAI_DEPLOY_ROOT:-/opt/sharipovai-repo}"
 DEPLOY="$ROOT/deploy/vps"
 SERVICE="sharipovai"
 CADDY_SERVICE="sharipovai-caddy"
@@ -20,6 +20,15 @@ runtime_project="sharipovai-runtime-$(date +%s)-$$"
 head_sha=""
 candidate_image_ref=""
 expected_web2_sha=""
+
+[[ "$ROOT" == /* ]] || {
+  echo "SHARIPOVAI_DEPLOY_ROOT must be an absolute path." >&2
+  exit 64
+}
+[[ -d "$ROOT/.git" ]] || {
+  echo "Deployment root is not a Git checkout: $ROOT" >&2
+  exit 66
+}
 
 cd "$DEPLOY"
 
@@ -129,8 +138,9 @@ docker_config_tmp="$(mktemp -d /tmp/sharipovai-docker-config-XXXXXX)"
 chmod 0700 "$docker_config_tmp"
 export DOCKER_CONFIG="$docker_config_tmp"
 
-# Trust only the fixed canonical deployment checkout for these read-only Git
-# identity checks. Do not mutate global/system Git safe.directory settings.
+# Trust only the selected deployment checkout for read-only Git identity checks.
+# Production uses /opt/sharipovai-repo by default; tests may explicitly point at
+# their isolated checkout without mutating global/system Git configuration.
 git_repo() {
   git -c safe.directory="$ROOT" -C "$ROOT" "$@"
 }
