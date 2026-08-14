@@ -112,8 +112,10 @@ def test_candidate_identity_is_proven_before_production_replacement() -> None:
     replaced = source.index("production_replaced=1")
 
     assert revision_check < web2_check < identity_ok < replaced
-    assert 'git -C "$ROOT" show "${head_sha}:dashboard/static/web2/index.html"' in source
+    assert 'git -c safe.directory="$ROOT" -C "$ROOT" "$@"' in source
+    assert 'git_repo show "${head_sha}:dashboard/static/web2/index.html"' in source
     assert 'docker run --rm --entrypoint sha256sum "$candidate_image_ref"' in source
+    assert "git config --global" not in source
 
 
 def test_running_container_image_id_must_match_verified_candidate() -> None:
