@@ -10,6 +10,7 @@ PUBLIC_HEALTH="https://85-137-88-17.sslip.io/health"
 DEPLOY_PROFILE="${SHARIPOVAI_DEPLOY_PROFILE:-}"
 
 production_replaced=0
+candidate_committed=0
 backup_container=""
 old_network=""
 proxy_network=""
@@ -19,16 +20,23 @@ docker_config_tmp=""
 runtime_project="sharipovai-runtime-$(date +%s)-$$"
 head_sha=""
 candidate_image_ref=""
+candidate_image_id=""
 expected_web2_sha=""
 BUILD_TIMEOUT_SECONDS="${SHARIPOVAI_DEPLOY_BUILD_TIMEOUT_SECONDS:-900}"
 CANDIDATE_TEST_TIMEOUT_SECONDS="${SHARIPOVAI_DEPLOY_CANDIDATE_TEST_TIMEOUT_SECONDS:-900}"
 CANDIDATE_PROBE_TIMEOUT_SECONDS="${SHARIPOVAI_DEPLOY_CANDIDATE_PROBE_TIMEOUT_SECONDS:-180}"
+CANDIDATE_HEALTH_WAIT_SECONDS="${SHARIPOVAI_DEPLOY_CANDIDATE_HEALTH_WAIT_SECONDS:-120}"
 RUNTIME_UP_TIMEOUT_SECONDS="${SHARIPOVAI_DEPLOY_RUNTIME_UP_TIMEOUT_SECONDS:-120}"
 RUNTIME_VERIFY_TIMEOUT_SECONDS="${SHARIPOVAI_DEPLOY_RUNTIME_VERIFY_TIMEOUT_SECONDS:-180}"
+MIN_FREE_DISK_GB="${SHARIPOVAI_DEPLOY_MIN_FREE_DISK_GB:-20}"
 
-for limit in "$BUILD_TIMEOUT_SECONDS" "$CANDIDATE_TEST_TIMEOUT_SECONDS" "$CANDIDATE_PROBE_TIMEOUT_SECONDS" "$RUNTIME_UP_TIMEOUT_SECONDS" "$RUNTIME_VERIFY_TIMEOUT_SECONDS"; do
-  [[ "$limit" =~ ^[1-9][0-9]*$ ]] || { echo "Deploy timeout values must be positive integers." >&2; exit 64; }
+for limit in "$BUILD_TIMEOUT_SECONDS" "$CANDIDATE_TEST_TIMEOUT_SECONDS" "$CANDIDATE_PROBE_TIMEOUT_SECONDS" "$CANDIDATE_HEALTH_WAIT_SECONDS" "$RUNTIME_UP_TIMEOUT_SECONDS" "$RUNTIME_VERIFY_TIMEOUT_SECONDS" "$MIN_FREE_DISK_GB"; do
+  [[ "$limit" =~ ^[1-9][0-9]*$ ]] || { echo "Deploy timeout/resource values must be positive integers." >&2; exit 64; }
 done
+if (( CANDIDATE_HEALTH_WAIT_SECONDS >= CANDIDATE_PROBE_TIMEOUT_SECONDS )); then
+  echo "Candidate health wait must be shorter than the outer candidate probe timeout." >&2
+  exit 64
+fi
 
 run_bounded() {
   local limit="$1"
@@ -82,6 +90,11 @@ cleanup() {
   fi
   if [[ -n "$docker_config_tmp" ]]; then
     rm -rf "$docker_config_tmp"
+  fi
+  # A failed candidate must not accumulate multi-gigabyte deploy tags and refill
+  # the VPS. A committed production candidate is deliberately retained.
+  if [[ "$candidate_committed" != "1" && -n "$candidate_image_ref" ]]; then
+    docker image rm "$candidate_image_ref" >/dev/null 2>&1 || true
   fi
 }
 trap cleanup EXIT
@@ -168,9 +181,18 @@ head_sha="$(git_repo rev-parse HEAD)"
   exit 66
 }
 
-# Give this build a unique tag and use the same tag for candidate tests and
-# production replacement. This prevents a stale legacy image tag from being
-# substituted after the candidate has already passed its checks.
+available_kb="$(df -Pk "$ROOT" | awk 'NR==2 {print $4}')"
+minimum_kb="$((MIN_FREE_DISK_GB * 1024 * 1024))"
+if [[ ! "$available_kb" =~ ^[0-9]+$ ]] || (( available_kb < minimum_kb )); then
+  echo "DEPLOY_DISK_PREFLIGHT_FAILED: require at least ${MIN_FREE_DISK_GB} GiB free before candidate build." >&2
+  df -h "$ROOT" >&2 || true
+  exit 70
+fi
+echo "DEPLOY_DISK_PREFLIGHT_OK available_kb=$available_kb minimum_kb=$minimum_kb"
+
+# Give this build a unique tag and use the same exact image identity for candidate
+# tests and production replacement. This prevents a stale legacy image tag from
+# being substituted after the candidate has already passed its checks.
 export SHARIPOVAI_RELEASE_TAG="deploy-${head_sha:0:12}-$(date +%s)-$$"
 export SHARIPOVAI_RELEASE_SHA="$head_sha"
 export SHARIPOVAI_BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -179,15 +201,20 @@ candidate_image_ref="sharipovai:${SHARIPOVAI_RELEASE_TAG}"
 echo "[1/6] Building exact candidate image $candidate_image_ref..."
 run_bounded "$BUILD_TIMEOUT_SECONDS" docker compose build "$SERVICE"
 docker image inspect "$candidate_image_ref" >/dev/null
+candidate_image_id="$(docker image inspect -f '{{.Id}}' "$candidate_image_ref")"
+[[ "$candidate_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+  echo "Cannot resolve immutable candidate image ID." >&2
+  exit 67
+}
 
-candidate_revision="$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$candidate_image_ref")"
+candidate_revision="$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$candidate_image_id")"
 if [[ "$candidate_revision" != "$head_sha" ]]; then
   echo "Candidate image revision mismatch: expected $head_sha, got $candidate_revision" >&2
   exit 67
 fi
 
 expected_web2_sha="$(git_repo show "${head_sha}:dashboard/static/web2/index.html" | sha256sum | awk '{print $1}')"
-actual_web2_sha="$(docker run --rm --entrypoint sha256sum "$candidate_image_ref" /app/dashboard/static/web2/index.html | awk '{print $1}')"
+actual_web2_sha="$(docker run --rm --entrypoint sha256sum "$candidate_image_id" /app/dashboard/static/web2/index.html | awk '{print $1}')"
 if [[ -z "$expected_web2_sha" || "$actual_web2_sha" != "$expected_web2_sha" ]]; then
   echo "Candidate Web2 index does not match exact Git HEAD." >&2
   echo "Expected: ${expected_web2_sha:-missing}" >&2
@@ -195,12 +222,48 @@ if [[ -z "$expected_web2_sha" || "$actual_web2_sha" != "$expected_web2_sha" ]]; 
   exit 68
 fi
 
-echo "CANDIDATE_IMAGE_IDENTITY_OK $head_sha $expected_web2_sha"
+echo "CANDIDATE_IMAGE_IDENTITY_OK $head_sha $candidate_image_id $expected_web2_sha"
+
+# Candidate validation must never inherit the production sharipovai_data volume.
+# Run the exact image ID with an isolated tmpfs data directory and no external
+# network. Explicit safety overrides take precedence over values in .env.vps.
+candidate_run_base=(
+  docker run --rm
+  --network none
+  --security-opt no-new-privileges
+  --cap-drop ALL
+  --pids-limit 512
+  --tmpfs /var/lib/sharipovai:rw,nosuid,nodev,noexec,size=268435456,uid=10001,gid=10001,mode=0700
+  --tmpfs /tmp:rw,nosuid,nodev,size=134217728,mode=1777
+  --env-file "$DEPLOY/.env.vps"
+  -e ENVIRONMENT=production
+  -e PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  -e PORT=8000
+  -e SHARIPOVAI_DATA_DIR=/var/lib/sharipovai
+  -e BYBIT_ACCOUNT_STATE_FILE=/var/lib/sharipovai/bybit_account.json
+  -e PAPER_ACTIVITY_AUTORUN_ENABLED=0
+  -e FEATURE_BYBIT_WEBSOCKET=0
+  -e PHASE7_CAMPAIGN_MONITOR_ENABLED=0
+  -e CRITICAL_ALERT_MONITOR_ENABLED=0
+  -e SELF_LEARNING_ENABLED=0
+  -e EXCHANGE_MODE=sandbox
+  -e EXCHANGE_LIVE_TRADING_ENABLED=0
+  -e FEATURE_BYBIT_LIVE_EXECUTION=0
+  -e EXECUTION_KILL_SWITCH=1
+  -e TESTNET_EXECUTION_ENABLED=0
+  -e AUTONOMOUS_TESTNET_ENABLED=0
+  -e AUTONOMOUS_TESTNET_BRIDGE_ENABLED=0
+  -e FEATURE_BYBIT_TESTNET=0
+  -e FEATURE_BYBIT_PRIVATE_ORDER_WS=0
+  -e RUNTIME_FILL_HARVESTER_ENABLED=0
+  -e SCHEDULED_CAMPAIGN_ORCHESTRATOR_ENABLED=0
+  -e PHASE6_TESTNET_RELEASE_GATE=blocked
+)
+echo "CANDIDATE_DATA_ISOLATED tmpfs=/var/lib/sharipovai network=none"
 
 echo "[2/6] Running focused tests and importing the complete FastAPI graph..."
-run_bounded "$CANDIDATE_TEST_TIMEOUT_SECONDS" docker compose run --rm --no-deps \
-  -e PAPER_ACTIVITY_AUTORUN_ENABLED=0 \
-  --entrypoint sh "$SERVICE" -lc '
+run_bounded "$CANDIDATE_TEST_TIMEOUT_SECONDS" "${candidate_run_base[@]}" \
+  --entrypoint sh "$candidate_image_id" -lc '
 set -Eeuo pipefail
 export PYTHONPATH="/app${PYTHONPATH:+:$PYTHONPATH}"
 cd /app
@@ -255,10 +318,10 @@ print("FULL_APP_IMPORT_OK")
 PY
 '
 
-echo "[3/6] Probing candidate /health in isolation..."
-run_bounded "$CANDIDATE_PROBE_TIMEOUT_SECONDS" docker compose run --rm --no-deps \
-  -e PAPER_ACTIVITY_AUTORUN_ENABLED=0 \
-  --entrypoint sh "$SERVICE" -lc '
+echo "[3/6] Probing candidate /health with isolated data and bounded startup..."
+run_bounded "$CANDIDATE_PROBE_TIMEOUT_SECONDS" "${candidate_run_base[@]}" \
+  -e CANDIDATE_HEALTH_WAIT_SECONDS="$CANDIDATE_HEALTH_WAIT_SECONDS" \
+  --entrypoint sh "$candidate_image_id" -lc '
 set -Eeuo pipefail
 export PYTHONPATH="/app${PYTHONPATH:+:$PYTHONPATH}"
 cd /app
@@ -270,7 +333,8 @@ cleanup_candidate() {
   wait "$pid" 2>/dev/null || true
 }
 trap cleanup_candidate EXIT
-for _ in $(seq 1 60); do
+deadline=$(( $(date +%s) + CANDIDATE_HEALTH_WAIT_SECONDS ))
+while [ "$(date +%s)" -lt "$deadline" ]; do
   if curl --connect-timeout 3 --max-time 10 --fail --silent --show-error http://127.0.0.1:8000/health >/tmp/health.json 2>/tmp/curl.err; then
     echo "CANDIDATE_HEALTH_OK"
     cat /tmp/health.json
@@ -325,7 +389,6 @@ run_bounded "$RUNTIME_UP_TIMEOUT_SECONDS" docker compose -p "$runtime_project" \
   up -d --no-deps --no-build "$SERVICE"
 
 running_image_id="$(docker inspect -f '{{.Image}}' "$SERVICE")"
-candidate_image_id="$(docker image inspect -f '{{.Id}}' "$candidate_image_ref")"
 if [[ -z "$candidate_image_id" || "$running_image_id" != "$candidate_image_id" ]]; then
   echo "Production container is not running the verified candidate image." >&2
   echo "Expected image ID: ${candidate_image_id:-missing}" >&2
@@ -373,6 +436,7 @@ if [[ -n "$backup_container" ]] && docker container inspect "$backup_container" 
   docker rm "$backup_container" >/dev/null
 fi
 
+candidate_committed=1
 production_replaced=0
 trap - ERR
 echo "Market-backed virtual account deployed and verified."
