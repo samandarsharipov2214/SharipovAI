@@ -4,8 +4,23 @@ set -Eeuo pipefail
 ROOT="/opt/sharipovai-repo"
 PUBLIC_URL="https://85-137-88-17.sslip.io"
 ENV_FILE="$ROOT/deploy/vps/.env.vps"
+STORAGE_GUARD="$ROOT/scripts/deploy_storage_guard.sh"
 
 [[ -f "$ENV_FILE" ]] || { echo "Missing $ENV_FILE" >&2; exit 1; }
+[[ -x "$STORAGE_GUARD" ]] || { echo "Missing executable storage guard: $STORAGE_GUARD" >&2; exit 65; }
+
+post_deploy_storage_cleanup() {
+  status=$?
+  trap - EXIT
+  bash "$STORAGE_GUARD" cleanup || true
+  exit "$status"
+}
+trap post_deploy_storage_cleanup EXIT
+
+# Recover deployment headroom before the transactional build. The guard may
+# reclaim only unused Docker build cache and fails closed if 20 GiB cannot be
+# restored; production images, volumes and persistent data are never pruned.
+bash "$STORAGE_GUARD" preflight
 
 configured_url="$(python3 - "$ENV_FILE" <<'PY'
 from pathlib import Path
