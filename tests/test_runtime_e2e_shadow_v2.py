@@ -289,6 +289,7 @@ def test_real_canonical_tick_invokes_shadow_with_the_exact_proposal_packet():
 def test_shadow_exception_and_timeout_are_isolated_from_the_canonical_path():
     loop = object.__new__(CouncilAuthorizedPaperLoop)
     loop._state = {"v2_shadow_records": {}, "v2_shadow_errors": []}
+    loop.initial_cash = 10_000.0
     loop.shadow_timeout_seconds = 0.01
     loop._now_ms = lambda: 1_000_200
     loop._trace = lambda *args, **kwargs: {}
