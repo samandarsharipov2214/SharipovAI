@@ -101,8 +101,9 @@ def test_quantity_price_and_minimum_constraints_fail_closed() -> None:
     with pytest.raises(ValueError, match="qty_step"):
         _intent(quantity=Decimal("0.0105"))
 
+    minimum_constraints = replace(_constraints(), min_qty=Decimal("0.002"))
     with pytest.raises(ValueError, match="min_qty"):
-        _intent(quantity=Decimal("0.000"))
+        _intent(constraints=minimum_constraints, quantity=Decimal("0.001"))
 
     expensive_minimum = replace(_constraints(), min_notional=Decimal("1000"))
     with pytest.raises(ValueError, match="min_notional"):
