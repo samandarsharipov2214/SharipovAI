@@ -7,6 +7,7 @@ capital preservation must not wait for a new council round.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from threading import Thread
 from typing import Any, Callable, Mapping, Sequence
 
 from decision_quality import CandidateEvidencePacket
@@ -14,7 +15,14 @@ from trading_candidate import TradingDecision
 
 from .canonical_runtime import CanonicalPaperDecisionRuntime, PaperDecisionAuthorization
 from .decision_trace import persist_decision_trace, read_decision_trace, read_decision_traces
+from .general_controller_v2 import GateSignal
 from .loop import AutonomousPaperLoop
+from .runtime_e2e_shadow_v2 import (
+    attach_paper_settlement,
+    build_runtime_shadow_record,
+    idempotent_upsert_record,
+)
+from .runtime_shadow_integration_v2 import RuntimeShadowV2
 from .trade_identity import new_trade_id
 
 
@@ -28,6 +36,10 @@ class CouncilEntryProposal:
 
 
 ProposalProvider = Callable[[str, Any, Mapping[str, Any]], CouncilEntryProposal | None]
+ShadowGateProvider = Callable[
+    [PaperDecisionAuthorization, CandidateEvidencePacket, Mapping[str, Any]],
+    Sequence[GateSignal],
+]
 
 
 class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
@@ -40,18 +52,32 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         decision_runtime: CanonicalPaperDecisionRuntime,
         proposal_provider: ProposalProvider,
         database=None,
+        shadow_runtime: RuntimeShadowV2 | None = None,
+        shadow_gate_provider: ShadowGateProvider | None = None,
+        shadow_timeout_seconds: float = 0.05,
     ) -> None:
         super().__init__(stream, database=database or decision_runtime.database)
         if decision_runtime.database.dsn != self.database.dsn:
             raise ValueError("paper loop and decision runtime must use the same database")
+        if float(shadow_timeout_seconds) <= 0:
+            raise ValueError("shadow_timeout_seconds must be positive")
         self.decision_runtime = decision_runtime
         self.proposal_provider = proposal_provider
+        self.shadow_runtime = shadow_runtime or RuntimeShadowV2()
+        # No gate is fabricated. Until the runtime supplies explicit Risk,
+        # Portfolio and Security evidence, GeneralControllerV2 fails closed to WAIT.
+        self.shadow_gate_provider = shadow_gate_provider or (lambda _auth, _packet, _state: ())
+        self.shadow_timeout_seconds = float(shadow_timeout_seconds)
         self._pending_authorization: PaperDecisionAuthorization | None = None
-        self._pending_exit_context: dict[str, str] | None = None
+        self._pending_exit_context: dict[str, Any] | None = None
         self._state["peak_equity"] = max(
             float(self._state.get("peak_equity", 0.0) or 0.0),
             float(self._state.get("equity", 0.0) or 0.0),
         )
+        if not isinstance(self._state.get("v2_shadow_records"), dict):
+            self._state["v2_shadow_records"] = {}
+        if not isinstance(self._state.get("v2_shadow_errors"), list):
+            self._state["v2_shadow_errors"] = []
 
     def _trace(self, symbol: str, status: str, reason: str, **extra: Any) -> dict[str, Any]:
         return persist_decision_trace(
@@ -114,13 +140,14 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                     self._event(action, reason, symbol)
                     continue
 
+                decision_ts_ms = self._now_ms()
                 try:
                     authorization = self.decision_runtime.assess_entry(
                         proposal.decision_id,
                         proposal.agent_payloads,
                         proposal.evidence_packet,
                         general_controller_decision=proposal.general_controller_decision,
-                        now_ms=self._now_ms(),
+                        now_ms=decision_ts_ms,
                         regime=proposal.regime,
                     )
                 except Exception as exc:
@@ -134,6 +161,16 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                     )
                     self._event("BLOCK", reason, symbol)
                     continue
+
+                # Architecture V2 observes the exact canonical decision path. This
+                # call is bounded and exception-isolated: champion authorization is
+                # never changed by shadow success, failure or timeout.
+                self._evaluate_v2_shadow(
+                    symbol=symbol,
+                    proposal=proposal,
+                    authorization=authorization,
+                    decision_ts_ms=decision_ts_ms,
+                )
 
                 validation = authorization.candidate_result.validation
                 assessment = authorization.assessment
@@ -154,6 +191,7 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                     candidate_validation_errors=list(validation.errors),
                     final_decision=authorization.decision.value,
                     authorized=authorization.authorized,
+                    v2_shadow_execution_authority=False,
                 )
 
                 if not authorization.authorized:
@@ -202,6 +240,10 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                     position["evidence_class"] = "verified_market"
                     position["verified_market_data"] = True
                     position["regime"] = authorization.assessment.regime
+                    shadow = self._state.get("v2_shadow_records", {}).get(authorization.decision_id)
+                    if isinstance(shadow, Mapping):
+                        position["v2_shadow_snapshot_id"] = shadow.get("snapshot_id")
+                        position["v2_shadow_evidence_hash"] = shadow.get("evidence_hash")
                     self._trace(
                         symbol,
                         "BUY",
@@ -219,6 +261,119 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                 float(self._state.get("equity", 0.0) or 0.0),
             )
             self._persist()
+
+    def _evaluate_v2_shadow(
+        self,
+        *,
+        symbol: str,
+        proposal: CouncilEntryProposal,
+        authorization: PaperDecisionAuthorization,
+        decision_ts_ms: int,
+    ) -> None:
+        holder: dict[str, Any] = {}
+        state_snapshot = self._proposal_state_snapshot()
+
+        def evaluate() -> None:
+            try:
+                gates = tuple(
+                    self.shadow_gate_provider(
+                        authorization,
+                        proposal.evidence_packet,
+                        state_snapshot,
+                    )
+                )
+                result = self.shadow_runtime.evaluate(
+                    authorization=authorization,
+                    evidence_packet=proposal.evidence_packet,
+                    agent_payloads=proposal.agent_payloads,
+                    gates=gates,
+                )
+                holder["record"] = build_runtime_shadow_record(
+                    decision_id=authorization.decision_id,
+                    symbol=symbol,
+                    decision_ts_ms=decision_ts_ms,
+                    evidence_packet=proposal.evidence_packet,
+                    gates=gates,
+                    result=result,
+                )
+            except Exception as exc:  # shadow failures can never affect champion
+                holder["error"] = f"{type(exc).__name__}: {exc}"
+
+        worker = Thread(target=evaluate, name="gc-v2-shadow-eval", daemon=True)
+        worker.start()
+        worker.join(self.shadow_timeout_seconds)
+        if worker.is_alive():
+            self._record_v2_shadow_error(
+                authorization.decision_id,
+                symbol,
+                "TimeoutError: GC V2 shadow evaluation exceeded bounded timeout",
+            )
+            return
+        if "error" in holder:
+            self._record_v2_shadow_error(
+                authorization.decision_id,
+                symbol,
+                str(holder["error"]),
+            )
+            return
+
+        record = holder.get("record")
+        if not isinstance(record, Mapping):
+            self._record_v2_shadow_error(
+                authorization.decision_id,
+                symbol,
+                "RuntimeError: GC V2 shadow evaluation returned no auditable record",
+            )
+            return
+        try:
+            records, inserted = idempotent_upsert_record(
+                self._state.get("v2_shadow_records"),
+                record,
+            )
+            self._state["v2_shadow_records"] = records
+            if inserted:
+                self._trace(
+                    symbol,
+                    "OBSERVE",
+                    "GC V2 shadow decision recorded; paper champion authority unchanged",
+                    phase="v2_shadow",
+                    decision_id=authorization.decision_id,
+                    snapshot_id=record.get("snapshot_id"),
+                    evidence_hash=record.get("evidence_hash"),
+                    champion_action=record.get("champion_action"),
+                    challenger_action=record.get("challenger_action"),
+                    execution_authority=False,
+                )
+        except Exception as exc:
+            self._record_v2_shadow_error(
+                authorization.decision_id,
+                symbol,
+                f"{type(exc).__name__}: {exc}",
+            )
+
+    def _record_v2_shadow_error(self, decision_id: str, symbol: str, error: str) -> None:
+        errors = self._state.setdefault("v2_shadow_errors", [])
+        if not isinstance(errors, list):
+            errors = []
+            self._state["v2_shadow_errors"] = errors
+        row = {
+            "decision_id": str(decision_id),
+            "symbol": str(symbol).upper(),
+            "created_at_ms": self._now_ms(),
+            "error": str(error),
+            "execution_authority": False,
+        }
+        if not errors or errors[-1].get("decision_id") != row["decision_id"] or errors[-1].get("error") != row["error"]:
+            errors.append(row)
+            del errors[:-100]
+        self._trace(
+            symbol,
+            "OBSERVE",
+            f"GC V2 shadow unavailable; champion path unaffected: {error}",
+            phase="v2_shadow",
+            decision_id=decision_id,
+            execution_authority=False,
+        )
 
     def _manage_protective_exit(self, symbol: str, quote: Any) -> None:
         position = self._state["positions"].get(symbol)
@@ -239,6 +394,8 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         self._pending_exit_context = {
             "decision_id": str(position.get("decision_id") or "").strip(),
             "candidate_id": str(position.get("candidate_id") or "").strip(),
+            "entry_price": float(position.get("entry_price", 0.0) or 0.0),
+            "entry_fee": float(position.get("entry_fee", 0.0) or 0.0),
         }
         try:
             super()._close(symbol, price, reason)
@@ -296,6 +453,11 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                     "authorization_single_use": True,
                 }
             )
+            shadow = self._state.get("v2_shadow_records", {}).get(authorization.decision_id)
+            if isinstance(shadow, Mapping):
+                item["v2_shadow_snapshot_id"] = shadow.get("snapshot_id")
+                item["v2_shadow_evidence_hash"] = shadow.get("evidence_hash")
+                item["v2_shadow_execution_authority"] = False
 
         if side == "SELL" and self._pending_exit_context:
             decision_id = self._pending_exit_context.get("decision_id", "")
@@ -321,6 +483,31 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                     item["reputation_recorded"] = bool(settlement.get("reputation_recorded"))
                 except Exception as exc:
                     item["decision_settlement_error"] = f"{type(exc).__name__}: {exc}"
+
+                shadow = self._state.get("v2_shadow_records", {}).get(decision_id)
+                if isinstance(shadow, Mapping):
+                    try:
+                        settled_shadow = attach_paper_settlement(
+                            shadow,
+                            settled_at_ms=item["created_at_ms"],
+                            side=side,
+                            quantity=float(quantity),
+                            entry_price=float(self._pending_exit_context.get("entry_price", 0.0) or 0.0),
+                            exit_price=float(price),
+                            entry_fee=float(self._pending_exit_context.get("entry_fee", 0.0) or 0.0),
+                            exit_fee=float(fee),
+                            net_pnl=net,
+                            # Current paper execution fills at the supplied verified quote;
+                            # there is no separate simulated slippage charge in this loop.
+                            slippage_cost=0.0,
+                        )
+                        self._state["v2_shadow_records"][decision_id] = settled_shadow
+                        item["v2_shadow_snapshot_id"] = settled_shadow["snapshot_id"]
+                        item["v2_shadow_evidence_hash"] = settled_shadow["evidence_hash"]
+                        item["v2_shadow_execution_authority"] = False
+                        item["v2_learning_candidate_stage"] = "candidate"
+                    except Exception as exc:
+                        item["v2_shadow_settlement_error"] = f"{type(exc).__name__}: {exc}"
 
         self._state["trades"].append(item)
         self._state["trades"] = self._state["trades"][-500:]
@@ -394,6 +581,9 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
     def snapshot(self) -> dict[str, Any]:
         state = super().snapshot()
         traces = read_decision_traces(self.database, self.stream.symbols)
+        shadow_records = state.get("v2_shadow_records", {})
+        if not isinstance(shadow_records, dict):
+            shadow_records = {}
         state["decision_mode"] = "CANONICAL_COUNCIL_REQUIRED"
         state["entry_without_authorization_allowed"] = False
         state["protective_exit_without_new_council_allowed"] = True
@@ -402,7 +592,20 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         state["decision_runtime"] = self.decision_runtime.status()
         state["decision_traces"] = traces
         state["latest_decision_trace"] = traces[0] if traces else None
+        state["v2_shadow_enabled"] = True
+        state["v2_shadow_execution_authority"] = False
+        state["v2_shadow_record_count"] = len(shadow_records)
+        state["v2_shadow_latest"] = max(
+            shadow_records.values(),
+            key=lambda row: int(row.get("decision_ts_ms", 0) or 0),
+            default=None,
+        )
         return state
 
 
-__all__ = ["CouncilAuthorizedPaperLoop", "CouncilEntryProposal", "ProposalProvider"]
+__all__ = [
+    "CouncilAuthorizedPaperLoop",
+    "CouncilEntryProposal",
+    "ProposalProvider",
+    "ShadowGateProvider",
+]
