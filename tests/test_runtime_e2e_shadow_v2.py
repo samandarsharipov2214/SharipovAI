@@ -22,6 +22,7 @@ from autonomous_trading.runtime_e2e_shadow_v2 import (
     build_runtime_shadow_record,
     idempotent_upsert_record,
 )
+from autonomous_trading.runtime_gate_provider_v2 import CanonicalShadowGateProvider
 from autonomous_trading.runtime_shadow_integration_v2 import RuntimeShadowV2
 from autonomous_trading.shadow_dual_run_v2 import Decision
 
@@ -60,7 +61,14 @@ def _candidate():
     )
 
 
-def _authorization(*, authorized: bool = True):
+def _authorization(
+    *,
+    authorized: bool = True,
+    validation_valid: bool | None = None,
+    validation_errors: tuple[str, ...] = (),
+):
+    if validation_valid is None:
+        validation_valid = authorized
     return SimpleNamespace(
         decision_id="decision-1",
         authorized=authorized,
@@ -68,7 +76,7 @@ def _authorization(*, authorized: bool = True):
         reason="canonical paper authorization" if authorized else "canonical wait",
         candidate_result=SimpleNamespace(
             candidate=_candidate(),
-            validation=SimpleNamespace(valid=authorized, errors=()),
+            validation=SimpleNamespace(valid=validation_valid, errors=validation_errors),
             general_controller_decision=TradingDecision.ALLOW if authorized else TradingDecision.WAIT,
         ),
         assessment=SimpleNamespace(
@@ -165,6 +173,86 @@ def test_missing_mandatory_gate_fails_closed_to_wait():
     assert record["champion_action"] == "BUY"
     assert record["challenger_action"] == "WAIT"
     assert "missing mandatory gate" in record["controller"]["reason"]
+
+
+def test_stale_canonical_candidate_forces_challenger_wait_even_if_directional_agents_buy():
+    authorization = _authorization(
+        authorized=True,
+        validation_valid=False,
+        validation_errors=("candidate is expired", "market data is stale"),
+    )
+    result = RuntimeShadowV2().evaluate(
+        authorization=authorization,
+        evidence_packet=_packet(),
+        agent_payloads=_payloads(),
+        gates=_gates(),
+    )
+
+    assert result.comparison.authoritative.decision is Decision.BUY
+    assert result.comparison.challenger.decision is Decision.WAIT
+    assert result.controller.execution_authority is False
+    assert "freshness validation failed" in result.controller.reason
+
+
+def test_canonical_gate_provider_uses_persisted_risk_portfolio_and_paper_validation():
+    records = {
+        ("risk_assessments", "risk-decision-1"): {
+            "value": {
+                "decision_id": "decision-1",
+                "risk_score": 20.0,
+                "blocks": [],
+                "assessment": {
+                    "allowed_virtual": True,
+                    "blockers": [],
+                    "hard_blocks": [],
+                },
+            }
+        },
+        ("portfolio_snapshots", "portfolio-1"): {
+            "value": {
+                "decision_id": "decision-1",
+                "cash": 10_000.0,
+                "equity": 9_800.0,
+                "environment": "paper",
+            }
+        },
+    }
+
+    class FakeDatabase:
+        def get_json(self, namespace, key):
+            return records.get((namespace, key))
+
+    provider = CanonicalShadowGateProvider(FakeDatabase())
+    gates = provider(_authorization(), _packet(), {"cash": 10_000.0})
+    by_name = {gate.gate: gate for gate in gates}
+
+    assert by_name["risk_engine"].verdict is GateVerdict.PASS
+    assert by_name["portfolio_engine"].verdict is GateVerdict.PASS
+    assert by_name["portfolio_engine"].max_notional_usdt == pytest.approx(9_800.0)
+    assert by_name["security_guard"].verdict is GateVerdict.PASS
+    assert all("BUY" not in " ".join(gate.reasons) for gate in gates)
+
+
+def test_canonical_gate_provider_never_fabricates_missing_or_conflicting_evidence():
+    class MissingDatabase:
+        def get_json(self, namespace, key):
+            if namespace == "portfolio_snapshots":
+                return {"value": {"decision_id": "other", "cash": 1_000.0, "equity": 1_000.0, "environment": "paper"}}
+            return None
+
+    gates = CanonicalShadowGateProvider(MissingDatabase())(_authorization(), _packet(), {})
+    by_name = {gate.gate: gate for gate in gates}
+
+    assert by_name["risk_engine"].verdict is GateVerdict.WAIT
+    assert by_name["portfolio_engine"].verdict is GateVerdict.WAIT
+    assert by_name["security_guard"].verdict is GateVerdict.PASS
+
+    stale_security = CanonicalShadowGateProvider(MissingDatabase())(
+        _authorization(validation_valid=False, validation_errors=("candidate is expired",)),
+        _packet(),
+        {},
+    )
+    assert {gate.gate: gate for gate in stale_security}["security_guard"].verdict is GateVerdict.BLOCK
 
 
 def test_idempotent_retry_does_not_duplicate_shadow_record_and_conflict_fails_closed():
