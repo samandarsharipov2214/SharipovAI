@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 import stat
 import subprocess
@@ -60,17 +59,26 @@ def _config(tmp_path: Path, repo: Path) -> agent.Config:
     )
 
 
-def test_trusted_copy_never_traverses_protected_host_git(tmp_path: Path) -> None:
+def test_trusted_copy_never_traverses_protected_host_git(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     source = tmp_path / "source"
     destination = tmp_path / "destination"
+    trusted_git = tmp_path / "trusted-git"
     (source / ".git").mkdir(parents=True)
+    trusted_git.mkdir()
+
     packed_refs = source / ".git" / "packed-refs"
-    packed_refs.write_text("protected\n", encoding="utf-8")
+    packed_refs.write_text("protected-host-metadata\n", encoding="utf-8")
     packed_refs.chmod(0)
+    (trusted_git / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    (trusted_git / "packed-refs").write_text("sanitized-snapshot\n", encoding="utf-8")
     (source / "module.py").write_text("VALUE = 1\n", encoding="utf-8")
     (source / ".env.production").write_text("SECRET=do-not-copy\n", encoding="utf-8")
     (source / "deploy" / "vps" / "backups").mkdir(parents=True)
     (source / "deploy" / "vps" / "backups" / "latest.tar.gz").write_bytes(b"backup")
+    monkeypatch.setenv("GIT_DIR", str(trusted_git))
 
     try:
         runner._trusted_copy_repository_snapshot(source, destination)
@@ -78,7 +86,10 @@ def test_trusted_copy_never_traverses_protected_host_git(tmp_path: Path) -> None
         packed_refs.chmod(stat.S_IRUSR | stat.S_IWUSR)
 
     assert (destination / "module.py").is_file()
-    assert not (destination / ".git").exists()
+    assert (destination / ".git" / "HEAD").is_file()
+    assert (destination / ".git" / "packed-refs").read_text(encoding="utf-8") == (
+        "sanitized-snapshot\n"
+    )
     assert not (destination / ".env.production").exists()
     assert not (destination / "deploy" / "vps" / "backups").exists()
 
@@ -135,12 +146,14 @@ def test_agent_uses_external_git_snapshot_when_host_packed_refs_is_unreadable(
 def test_production_supervisor_wires_snapshot_without_relaxing_host_git_permissions() -> None:
     supervisor = ROOT / "deploy" / "vps" / "self-healing-run.sh"
     helper = ROOT / "tools" / "self_healing_git_snapshot.sh"
+    runner_path = ROOT / "tools" / "self_healing_runner.py"
 
     subprocess.run(["bash", "-n", str(supervisor)], check=True)
     subprocess.run(["bash", "-n", str(helper)], check=True)
 
     supervisor_text = supervisor.read_text(encoding="utf-8")
     helper_text = helper.read_text(encoding="utf-8")
+    runner_text = runner_path.read_text(encoding="utf-8")
 
     assert "prepare_git_snapshot" in supervisor_text
     assert '-e GIT_DIR="$GIT_SNAPSHOT_DIR"' in supervisor_text
@@ -148,7 +161,9 @@ def test_production_supervisor_wires_snapshot_without_relaxing_host_git_permissi
     assert 'python "$AGENT_RUNNER_PATH"' in supervisor_text
     assert "--no-hardlinks" in helper_text
     assert 'docker exec -i --user "$CONTAINER_USER"' in helper_text
-    assert 'chmod -R u+rwX,go-rwx "\\$next"' in helper_text
+    assert "chmod -R u+rwX,go-rwx" in helper_text
+    assert "\\$next" in helper_text
+    assert 'destination / ".git"' in runner_text
 
     # The fix is a private readable copy. It must never broaden ownership or
     # mode bits on the real host repository metadata.
