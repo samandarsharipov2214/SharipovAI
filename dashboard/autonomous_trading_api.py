@@ -15,6 +15,7 @@ from autonomous_trading import (
     CouncilAuthorizedPaperLoop,
     SharedVerifiedMarketStream,
 )
+from autonomous_trading.runtime_gate_provider_v2 import CanonicalShadowGateProvider
 from exchange_connector.market_data import MarketDataService
 from exchange_connector.multi_exchange_consensus import MultiExchangeConsensus
 from storage import ProjectDatabase, list_json_items
@@ -62,11 +63,13 @@ def install_autonomous_trading_api(app: FastAPI) -> None:
         stream,
         news_reader=_database_news_reader(database),
     )
+    shadow_gate_provider = CanonicalShadowGateProvider(database)
     loop = CouncilAuthorizedPaperLoop(
         stream,
         decision_runtime=decision_runtime,
         proposal_provider=proposal_provider,
         database=database,
+        shadow_gate_provider=shadow_gate_provider,
     )
     testnet_bridge = AutonomousTestnetBridge(database=database)
     app.state.market_stream = stream

@@ -50,7 +50,10 @@ def _authorization():
         authorized=True,
         decision=TradingDecision.ALLOW,
         reason="canonical paper authorization",
-        candidate_result=SimpleNamespace(candidate=candidate),
+        candidate_result=SimpleNamespace(
+            candidate=candidate,
+            validation=SimpleNamespace(errors=()),
+        ),
         assessment=SimpleNamespace(
             blocked=False,
             quality_score=90.0,

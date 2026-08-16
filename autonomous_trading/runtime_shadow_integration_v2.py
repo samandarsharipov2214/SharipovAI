@@ -67,11 +67,17 @@ class RuntimeShadowV2:
         shadow_input = immutable_shadow_input(evidence_packet)
         recommendations = _recommendations(agent_payloads)
         assessment = authorization.assessment
+        validation = authorization.candidate_result.validation
+        freshness_errors = _freshness_errors(getattr(validation, "errors", ()))
+        quality_blocked = bool(assessment.blocked) or bool(freshness_errors)
+        quality_reason = str(assessment.reason or "")
+        if freshness_errors:
+            quality_reason = "canonical candidate freshness validation failed: " + "; ".join(freshness_errors)
         quality = DecisionQualitySignal(
-            blocked=bool(assessment.blocked),
+            blocked=quality_blocked,
             quality_score=_percent(assessment.quality_score),
             agreement=_percent(assessment.agreement),
-            reason=str(assessment.reason or ""),
+            reason=quality_reason,
         )
         controller = self.controller.decide(
             recommendations,
@@ -162,6 +168,17 @@ def _authoritative_direction(authorization: PaperDecisionAuthorization) -> Decis
     if side is TradingSide.SELL:
         return Decision.SELL
     return Decision.WAIT
+
+
+def _freshness_errors(errors: Any) -> tuple[str, ...]:
+    freshness_markers = (
+        "candidate is expired",
+        "market data is stale",
+        "market_timestamp_ms is too far in the future",
+        "received_timestamp_ms is too far in the future",
+    )
+    rows = tuple(str(item) for item in (errors or ()) if str(item).strip())
+    return tuple(item for item in rows if any(marker in item for marker in freshness_markers))
 
 
 def _percent(value: Any) -> float:
