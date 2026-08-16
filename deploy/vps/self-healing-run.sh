@@ -9,8 +9,10 @@ COMPOSE_FILE="$COMPOSE_DIR/docker-compose.yml"
 ENV_FILE="$COMPOSE_DIR/.env.vps"
 LOCK_FILE="/run/sharipovai-self-healing.lock"
 HOST_LOG="/var/log/sharipovai-self-healing-host.log"
-AGENT_PATH="/workspace/tools/self_healing_agent.py"
+AGENT_RUNNER_PATH="/workspace/tools/self_healing_runner.py"
+GIT_SNAPSHOT_HELPER="$REPO_DIR/tools/self_healing_git_snapshot.sh"
 RUNTIME_DIR="/var/lib/sharipovai/.self_healing"
+GIT_SNAPSHOT_DIR="$RUNTIME_DIR/git-metadata"
 CONTAINER_USER="${SELF_HEALING_CONTAINER_USER:-10001:10001}"
 
 mkdir -p "$(dirname "$HOST_LOG")"
@@ -79,6 +81,24 @@ ensure_stack() {
     return 1
 }
 
+prepare_git_snapshot() {
+    if [ ! -r "$GIT_SNAPSHOT_HELPER" ]; then
+        log "Trusted Git snapshot helper is missing: $GIT_SNAPSHOT_HELPER"
+        return 1
+    fi
+    if ! env \
+        SHARIPOVAI_REPO_DIR="$REPO_DIR" \
+        SELF_HEALING_CONTAINER_NAME=sharipovai \
+        SELF_HEALING_CONTAINER_USER="$CONTAINER_USER" \
+        SELF_HEALING_RUNTIME_DIR="$RUNTIME_DIR" \
+        SELF_HEALING_WORK_TREE=/workspace \
+        bash "$GIT_SNAPSHOT_HELPER" >/dev/null; then
+        log "Unable to prepare trusted read-only Git metadata snapshot."
+        return 1
+    fi
+    return 0
+}
+
 write_runtime_input() {
     local app_exists=false app_running=false app_health=missing
     local caddy_exists=false caddy_running=false caddy_health=missing
@@ -132,7 +152,10 @@ run_agent() {
         -e SELF_HEALING_BACKUP_PATH=/workspace/deploy/vps/backups/latest.tar.gz \
         -e SELF_HEALING_DATABASE_PATH=/var/lib/sharipovai/sharipovai_shared.db \
         -e SELF_HEALING_STDERR=0 \
-        sharipovai python "$AGENT_PATH"
+        -e GIT_DIR="$GIT_SNAPSHOT_DIR" \
+        -e GIT_WORK_TREE=/workspace \
+        -e GIT_OPTIONAL_LOCKS=0 \
+        sharipovai python "$AGENT_RUNNER_PATH"
 }
 
 read_agent_file() {
@@ -320,6 +343,10 @@ main() {
         log "Unable to bring SharipovAI stack to a running state."
         exit 1
     }
+    prepare_git_snapshot || {
+        log "Git verification remains fail-closed because the trusted snapshot is unavailable."
+        exit 1
+    }
     write_runtime_input || {
         log "Unable to provide runtime input to the in-container agent."
         exit 1
@@ -339,13 +366,20 @@ main() {
 
     if [ "$action_ok" -eq 1 ] && [ "${action:-none}" != "none" ] && container_running sharipovai; then
         write_runtime_input || true
-        docker exec \
-            --user "$CONTAINER_USER" \
-            -e SELF_HEALING_REPO_DIR=/workspace \
-            -e SELF_HEALING_BACKUP_PATH=/workspace/deploy/vps/backups/latest.tar.gz \
-            -e SELF_HEALING_DATABASE_PATH=/var/lib/sharipovai/sharipovai_shared.db \
-            sharipovai python "$AGENT_PATH" --verify-only \
-            >/dev/null 2>&1 || true
+        if prepare_git_snapshot; then
+            docker exec \
+                --user "$CONTAINER_USER" \
+                -e SELF_HEALING_REPO_DIR=/workspace \
+                -e SELF_HEALING_BACKUP_PATH=/workspace/deploy/vps/backups/latest.tar.gz \
+                -e SELF_HEALING_DATABASE_PATH=/var/lib/sharipovai/sharipovai_shared.db \
+                -e GIT_DIR="$GIT_SNAPSHOT_DIR" \
+                -e GIT_WORK_TREE=/workspace \
+                -e GIT_OPTIONAL_LOCKS=0 \
+                sharipovai python "$AGENT_RUNNER_PATH" --verify-only \
+                >/dev/null 2>&1 || true
+        else
+            log "Post-action verification skipped because trusted Git snapshot refresh failed."
+        fi
     fi
     exit 0
 }
