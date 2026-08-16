@@ -4,8 +4,8 @@
 The production worktree is bind-mounted read-only at /workspace while the real
 host .git directory intentionally remains protected. The host supervisor creates
 a sanitized Git metadata snapshot in the private runtime volume and points Git
-at it through GIT_DIR/GIT_WORK_TREE. This runner also prevents temporary pytest
-snapshots from traversing the protected host .git directory.
+at it through GIT_DIR/GIT_WORK_TREE. Temporary pytest snapshots reuse that
+sanitized metadata instead of traversing the protected host .git directory.
 """
 from __future__ import annotations
 
@@ -21,8 +21,27 @@ if str(TOOLS_DIR) not in sys.path:
 import self_healing_agent as agent  # noqa: E402
 
 
+def _trusted_git_dir() -> Path:
+    git_dir_text = os.getenv("GIT_DIR", "").strip()
+    if not git_dir_text:
+        raise RuntimeError("trusted Git snapshot environment is incomplete")
+    git_dir = Path(git_dir_text)
+    if not git_dir.is_dir() or not (git_dir / "HEAD").is_file():
+        raise RuntimeError(f"trusted Git snapshot is unavailable at {git_dir}")
+    return git_dir
+
+
 def _trusted_copy_repository_snapshot(source: Path, destination: Path) -> None:
-    """Copy source for tests without traversing host Git metadata or secrets."""
+    """Copy source for tests using sanitized Git metadata, never host .git."""
+
+    trusted_git = _trusted_git_dir().resolve()
+    source_resolved = source.resolve()
+    try:
+        trusted_git.relative_to(source_resolved)
+    except ValueError:
+        pass
+    else:
+        raise RuntimeError("trusted Git snapshot must be outside the protected worktree")
 
     def ignore(directory: str, names: list[str]) -> set[str]:
         directory_path = Path(directory)
@@ -39,9 +58,8 @@ def _trusted_copy_repository_snapshot(source: Path, destination: Path) -> None:
             or name.endswith((".pem", ".key", ".p12", ".pfx"))
         }
         if relative in {"", "."}:
-            # The active Git repository is supplied through GIT_DIR. Reading
-            # source/.git would defeat the host permission boundary we are
-            # explicitly preserving.
+            # Never traverse source/.git: that is the protected host metadata
+            # that caused the original packed-refs permission failure.
             ignored.add(".git")
         if relative == "deploy/vps":
             ignored.update(
@@ -69,25 +87,31 @@ def _trusted_copy_repository_snapshot(source: Path, destination: Path) -> None:
         return ignored
 
     shutil.copytree(source, destination, ignore=ignore, symlinks=False)
+    # Some regression/audit tests intentionally require repository metadata.
+    # Supply only the sanitized private snapshot; never copy the host .git tree.
+    shutil.copytree(trusted_git, destination / ".git", symlinks=False)
 
 
 def install_trusted_git_snapshot() -> None:
-    git_dir_text = os.getenv("GIT_DIR", "").strip()
+    git_dir = _trusted_git_dir()
     work_tree_text = os.getenv("GIT_WORK_TREE", "").strip()
     repo_dir_text = os.getenv("SELF_HEALING_REPO_DIR", "/workspace").strip()
 
-    if not git_dir_text or not work_tree_text:
+    if not work_tree_text:
         raise RuntimeError("trusted Git snapshot environment is incomplete")
 
-    git_dir = Path(git_dir_text)
     work_tree = Path(work_tree_text)
     repo_dir = Path(repo_dir_text)
-    if not git_dir.is_dir() or not (git_dir / "HEAD").is_file():
-        raise RuntimeError(f"trusted Git snapshot is unavailable at {git_dir}")
     if work_tree.resolve() != repo_dir.resolve():
         raise RuntimeError(
             f"trusted Git worktree mismatch: GIT_WORK_TREE={work_tree} repo={repo_dir}"
         )
+    try:
+        git_dir.resolve().relative_to(repo_dir.resolve())
+    except ValueError:
+        pass
+    else:
+        raise RuntimeError("trusted Git snapshot must be outside the protected worktree")
 
     # Keep the original agent implementation unchanged for all other callers.
     # Only this production runner swaps the temporary source copier so the
