@@ -40,10 +40,6 @@ HOST_CHANGES="$TEMP_DIR/worktree-changes"
     git -C "$REPO_DIR" ls-files --others --exclude-standard
 } | LC_ALL=C sort -u >"$HOST_CHANGES"
 
-if grep -q $'\0' "$HOST_CHANGES" 2>/dev/null; then
-    fail "NUL byte found in host change manifest"
-fi
-
 if [ -f "$REPO_DIR/.git/index" ]; then
     INDEX_SHA256="$(sha256sum "$REPO_DIR/.git/index" | awk '{print $1}')"
 else
