@@ -8,6 +8,7 @@ CONTAINER_USER="${SELF_HEALING_CONTAINER_USER:-10001:10001}"
 RUNTIME_DIR="${SELF_HEALING_RUNTIME_DIR:-/var/lib/sharipovai/.self_healing}"
 SNAPSHOT_DIR="$RUNTIME_DIR/git-metadata"
 MARKER_FILE="$RUNTIME_DIR/git-metadata.marker"
+CHANGES_FILE="$RUNTIME_DIR/git-worktree-changes"
 WORK_TREE="${SELF_HEALING_WORK_TREE:-/workspace}"
 
 fail() {
@@ -27,12 +28,29 @@ docker inspect "$CONTAINER_NAME" >/dev/null 2>&1 || fail "container is unavailab
 HEAD_SHA="$(git -C "$REPO_DIR" rev-parse --verify HEAD)"
 [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "invalid HEAD SHA: $HEAD_SHA"
 
+TEMP_DIR="$(mktemp -d -t sharipovai-self-healing-git.XXXXXX)"
+trap 'rm -rf "$TEMP_DIR"' EXIT
+HOST_CHANGES="$TEMP_DIR/worktree-changes"
+
+# Resolve real source changes on the trusted host as root. The same tracked file
+# can look modified inside the container solely because UID 10001 cannot read it,
+# so container-side `git diff` is not authoritative for this boundary.
+{
+    git -C "$REPO_DIR" diff --name-only --no-ext-diff HEAD --
+    git -C "$REPO_DIR" ls-files --others --exclude-standard
+} | LC_ALL=C sort -u >"$HOST_CHANGES"
+
+if grep -q $'\0' "$HOST_CHANGES" 2>/dev/null; then
+    fail "NUL byte found in host change manifest"
+fi
+
 if [ -f "$REPO_DIR/.git/index" ]; then
     INDEX_SHA256="$(sha256sum "$REPO_DIR/.git/index" | awk '{print $1}')"
 else
     INDEX_SHA256="missing"
 fi
-MARKER="$HEAD_SHA:$INDEX_SHA256"
+CHANGES_SHA256="$(sha256sum "$HOST_CHANGES" | awk '{print $1}')"
+MARKER="$HEAD_SHA:$INDEX_SHA256:$CHANGES_SHA256"
 
 verify_snapshot() {
     local actual
@@ -47,11 +65,16 @@ verify_snapshot() {
 
     docker exec \
         --user "$CONTAINER_USER" \
+        "$CONTAINER_NAME" \
+        sh -ec "test -r '$CHANGES_FILE'" || return 1
+
+    docker exec \
+        --user "$CONTAINER_USER" \
         -e GIT_DIR="$SNAPSHOT_DIR" \
         -e GIT_WORK_TREE="$WORK_TREE" \
         -e GIT_OPTIONAL_LOCKS=0 \
         "$CONTAINER_NAME" \
-        git -c "safe.directory=$WORK_TREE" -c core.filemode=false status --porcelain --untracked-files=no \
+        git -c "safe.directory=$WORK_TREE" -c core.filemode=false rev-parse --verify HEAD \
         >/dev/null 2>&1
 }
 
@@ -62,9 +85,6 @@ if [ "$EXISTING_MARKER" = "$MARKER" ] && verify_snapshot; then
     exit 0
 fi
 
-TEMP_DIR="$(mktemp -d -t sharipovai-self-healing-git.XXXXXX)"
-trap 'rm -rf "$TEMP_DIR"' EXIT
-
 # --no-hardlinks is deliberate: permissions on the sanitized snapshot must never
 # affect the protected host .git object database through shared inodes.
 git clone --quiet --no-checkout --no-hardlinks "$REPO_DIR" "$TEMP_DIR/repo"
@@ -73,15 +93,12 @@ SNAPSHOT_GIT="$TEMP_DIR/repo/.git"
 git --git-dir="$SNAPSHOT_GIT" update-ref refs/heads/self-healing "$HEAD_SHA"
 printf 'ref: refs/heads/self-healing\n' >"$SNAPSHOT_GIT/HEAD"
 
-# Always use a clean HEAD index. The runtime worktree is compared against this
-# immutable baseline, so staged and unstaged content changes remain detectable
-# without importing host index stat/mode metadata into the unprivileged runtime.
+# Always use a clean HEAD index. Runtime file-mode/permission differences are not
+# allowed to become source changes; the trusted host manifest records real paths.
 rm -f "$SNAPSHOT_GIT/index"
 GIT_INDEX_FILE="$SNAPSHOT_GIT/index" git --git-dir="$SNAPSHOT_GIT" read-tree "$HEAD_SHA"
 
 # Do not copy host remote/credential configuration into the runtime snapshot.
-# filemode=false is intentional: image/bind-mount permission differences must
-# not become fake source changes. Content changes remain fully detectable.
 cat >"$SNAPSHOT_GIT/config" <<'EOF'
 [core]
     repositoryformatversion = 0
@@ -129,6 +146,8 @@ tar -C "$SNAPSHOT_GIT" -cf - . | docker exec -i --user "$CONTAINER_USER" "$CONTA
     rm -rf \"\$old\"
 "
 
+cat "$HOST_CHANGES" | docker exec -i --user "$CONTAINER_USER" "$CONTAINER_NAME" sh -ec \
+    "cat > '$CHANGES_FILE'; chmod 0600 '$CHANGES_FILE'"
 printf '%s\n' "$MARKER" | docker exec -i --user "$CONTAINER_USER" "$CONTAINER_NAME" sh -ec \
     "cat > '$MARKER_FILE'; chmod 0600 '$MARKER_FILE'"
 
