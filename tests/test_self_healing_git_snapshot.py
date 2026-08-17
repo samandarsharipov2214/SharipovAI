@@ -5,6 +5,8 @@ import stat
 import subprocess
 import sys
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS = ROOT / "tools"
@@ -26,6 +28,30 @@ def _git(repo: Path, *args: str, env: dict[str, str] | None = None) -> str:
         check=True,
     )
     return result.stdout.strip()
+
+
+def _trusted_clone(source: Path, destination: Path) -> tuple[Path, str]:
+    head = _git(source, "rev-parse", "HEAD")
+    subprocess.run(
+        ["git", "clone", "--quiet", "--no-checkout", "--no-hardlinks", str(source), str(destination)],
+        check=True,
+    )
+    git_dir = destination / ".git"
+    subprocess.run(
+        ["git", f"--git-dir={git_dir}", "read-tree", head],
+        check=True,
+    )
+    subprocess.run(
+        ["git", f"--git-dir={git_dir}", "config", "core.filemode", "false"],
+        check=True,
+    )
+    return git_dir, head
+
+
+def _write_manifest(tmp_path: Path, *paths: str) -> Path:
+    manifest = tmp_path / "git-worktree-changes"
+    manifest.write_text("".join(f"{path}\n" for path in paths), encoding="utf-8")
+    return manifest
 
 
 def _config(tmp_path: Path, repo: Path) -> agent.Config:
@@ -59,39 +85,117 @@ def _config(tmp_path: Path, repo: Path) -> agent.Config:
     )
 
 
-def test_trusted_copy_never_traverses_protected_host_git(
+def test_trusted_copy_materializes_git_head_without_recursive_source_copy(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     source = tmp_path / "source"
     destination = tmp_path / "destination"
-    trusted_git = tmp_path / "trusted-git"
-    (source / ".git").mkdir(parents=True)
-    trusted_git.mkdir()
+    trusted = tmp_path / "trusted"
+    source.mkdir()
+    _git(source, "init", "-b", "main")
+    _git(source, "config", "user.name", "SharipovAI CI")
+    _git(source, "config", "user.email", "ci@example.invalid")
+    (source / "module.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (source / "unchanged.py").write_text("UNCHANGED = True\n", encoding="utf-8")
+    _git(source, "add", "module.py", "unchanged.py")
+    _git(source, "commit", "-m", "initial")
+    _git(source, "pack-refs", "--all", "--prune")
+
+    trusted_git, _head = _trusted_clone(source, trusted)
+    (source / "module.py").write_text("VALUE = 2\n", encoding="utf-8")
+    (source / ".env.production").write_text("SECRET=do-not-copy\n", encoding="utf-8")
+    manifest = _write_manifest(tmp_path, "module.py", ".env.production")
 
     packed_refs = source / ".git" / "packed-refs"
-    packed_refs.write_text("protected-host-metadata\n", encoding="utf-8")
+    original_mode = stat.S_IMODE(packed_refs.stat().st_mode)
     packed_refs.chmod(0)
-    (trusted_git / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
-    (trusted_git / "packed-refs").write_text("sanitized-snapshot\n", encoding="utf-8")
-    (source / "module.py").write_text("VALUE = 1\n", encoding="utf-8")
-    (source / ".env.production").write_text("SECRET=do-not-copy\n", encoding="utf-8")
-    (source / "deploy" / "vps" / "backups").mkdir(parents=True)
-    (source / "deploy" / "vps" / "backups" / "latest.tar.gz").write_bytes(b"backup")
-    monkeypatch.setenv("GIT_DIR", str(trusted_git))
 
+    original_copytree = runner.shutil.copytree
+
+    def guarded_copytree(src, dst, *args, **kwargs):
+        if Path(src).resolve() == source.resolve():
+            raise AssertionError("production source tree must never be recursively copied")
+        return original_copytree(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(runner.shutil, "copytree", guarded_copytree)
+    monkeypatch.setenv("GIT_DIR", str(trusted_git))
+    monkeypatch.setenv("GIT_WORK_TREE", str(source))
+    monkeypatch.setenv("SELF_HEALING_CHANGED_PATHS_FILE", str(manifest))
     try:
         runner._trusted_copy_repository_snapshot(source, destination)
     finally:
-        packed_refs.chmod(stat.S_IRUSR | stat.S_IWUSR)
+        packed_refs.chmod(original_mode)
 
-    assert (destination / "module.py").is_file()
+    assert (destination / "module.py").read_text(encoding="utf-8") == "VALUE = 2\n"
+    assert (destination / "unchanged.py").read_text(encoding="utf-8") == "UNCHANGED = True\n"
     assert (destination / ".git" / "HEAD").is_file()
-    assert (destination / ".git" / "packed-refs").read_text(encoding="utf-8") == (
-        "sanitized-snapshot\n"
-    )
     assert not (destination / ".env.production").exists()
-    assert not (destination / "deploy" / "vps" / "backups").exists()
+
+
+def test_trusted_copy_does_not_need_to_open_unrelated_unreadable_tracked_file(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    trusted = tmp_path / "trusted"
+    source.mkdir()
+    _git(source, "init", "-b", "main")
+    _git(source, "config", "user.name", "SharipovAI CI")
+    _git(source, "config", "user.email", "ci@example.invalid")
+    (source / "changed.py").write_text("VALUE = 1\n", encoding="utf-8")
+    locked = source / "locked.py"
+    locked.write_text("LOCKED = True\n", encoding="utf-8")
+    _git(source, "add", "changed.py", "locked.py")
+    _git(source, "commit", "-m", "initial")
+
+    trusted_git, _head = _trusted_clone(source, trusted)
+    (source / "changed.py").write_text("VALUE = 2\n", encoding="utf-8")
+    manifest = _write_manifest(tmp_path, "changed.py")
+    original_mode = stat.S_IMODE(locked.stat().st_mode)
+    locked.chmod(0)
+    monkeypatch.setenv("GIT_DIR", str(trusted_git))
+    monkeypatch.setenv("GIT_WORK_TREE", str(source))
+    monkeypatch.setenv("SELF_HEALING_CHANGED_PATHS_FILE", str(manifest))
+    try:
+        runner._trusted_copy_repository_snapshot(source, destination)
+    finally:
+        locked.chmod(original_mode)
+
+    assert (destination / "changed.py").read_text(encoding="utf-8") == "VALUE = 2\n"
+    assert (destination / "locked.py").read_text(encoding="utf-8") == "LOCKED = True\n"
+
+
+def test_changed_unreadable_file_fails_closed_with_precise_reason(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    trusted = tmp_path / "trusted"
+    source.mkdir()
+    _git(source, "init", "-b", "main")
+    _git(source, "config", "user.name", "SharipovAI CI")
+    _git(source, "config", "user.email", "ci@example.invalid")
+    changed = source / "changed.py"
+    changed.write_text("VALUE = 1\n", encoding="utf-8")
+    _git(source, "add", "changed.py")
+    _git(source, "commit", "-m", "initial")
+
+    trusted_git, _head = _trusted_clone(source, trusted)
+    changed.write_text("VALUE = 2\n", encoding="utf-8")
+    manifest = _write_manifest(tmp_path, "changed.py")
+    original_mode = stat.S_IMODE(changed.stat().st_mode)
+    changed.chmod(0)
+    monkeypatch.setenv("GIT_DIR", str(trusted_git))
+    monkeypatch.setenv("GIT_WORK_TREE", str(source))
+    monkeypatch.setenv("SELF_HEALING_CHANGED_PATHS_FILE", str(manifest))
+    try:
+        with pytest.raises(RuntimeError, match="unreadable|Git inspection failed"):
+            runner._trusted_copy_repository_snapshot(source, destination)
+    finally:
+        changed.chmod(original_mode)
 
 
 def test_agent_uses_external_git_snapshot_when_host_packed_refs_is_unreadable(
@@ -106,30 +210,24 @@ def test_agent_uses_external_git_snapshot_when_host_packed_refs_is_unreadable(
     (repo / "module.py").write_text("VALUE = 1\n", encoding="utf-8")
     _git(repo, "add", "module.py")
     _git(repo, "commit", "-m", "initial")
-    head = _git(repo, "rev-parse", "HEAD")
     _git(repo, "pack-refs", "--all", "--prune")
 
     trusted = tmp_path / "trusted"
-    subprocess.run(
-        ["git", "clone", "--quiet", "--no-checkout", "--no-hardlinks", str(repo), str(trusted)],
-        check=True,
-    )
-    subprocess.run(
-        ["git", f"--git-dir={trusted / '.git'}", "read-tree", head],
-        check=True,
-    )
+    trusted_git, head = _trusted_clone(repo, trusted)
 
     # Create an actual worktree change that Self-Healing must discover and
     # compile. The protected host metadata is then made unreadable.
     (repo / "module.py").write_text("VALUE = 2\n", encoding="utf-8")
+    manifest = _write_manifest(tmp_path, "module.py")
     packed_refs = repo / ".git" / "packed-refs"
     original_mode = stat.S_IMODE(packed_refs.stat().st_mode)
     packed_refs.chmod(0)
 
     original_copy = agent.copy_repository_snapshot
-    monkeypatch.setenv("GIT_DIR", str(trusted / ".git"))
+    monkeypatch.setenv("GIT_DIR", str(trusted_git))
     monkeypatch.setenv("GIT_WORK_TREE", str(repo))
     monkeypatch.setenv("SELF_HEALING_REPO_DIR", str(repo))
+    monkeypatch.setenv("SELF_HEALING_CHANGED_PATHS_FILE", str(manifest))
     try:
         runner.install_trusted_git_snapshot()
         instance = agent.SelfHealingAgent(_config(tmp_path, repo))
@@ -163,7 +261,14 @@ def test_production_supervisor_wires_snapshot_without_relaxing_host_git_permissi
     assert 'docker exec -i --user "$CONTAINER_USER"' in helper_text
     assert "chmod -R u+rwX,go-rwx" in helper_text
     assert "\\$next" in helper_text
+    assert "filemode = false" in helper_text
+    assert 'read-tree "$HEAD_SHA"' in helper_text
+    assert 'CHANGES_FILE="$RUNTIME_DIR/git-worktree-changes"' in helper_text
+    assert 'git -C "$REPO_DIR" diff --name-only --no-ext-diff HEAD --' in helper_text
+    assert 'SELF_HEALING_CHANGED_PATHS_FILE' in runner_text
     assert 'destination / ".git"' in runner_text
+    assert '"checkout-index"' in runner_text
+    assert "shutil.copytree(source" not in runner_text
 
     # The fix is a private readable copy. It must never broaden ownership or
     # mode bits on the real host repository metadata.
