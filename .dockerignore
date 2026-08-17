@@ -46,6 +46,14 @@ backups/
 *.sqlite3-wal
 *.sqlite3-shm
 
+# VPS host-only recovery/rollback working material must never enter an image.
+# These paths can contain multi-gigabyte restore copies that are intentionally
+# kept on the host but have no place in the immutable application image.
+deploy/vps/backups/
+deploy/vps/emergency-recovery/
+deploy/vps/docker-compose.yml.bak-*
+deploy/vps/*.bak-*
+
 # OS and editor noise
 .DS_Store
 Thumbs.db
