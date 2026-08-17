@@ -4,14 +4,19 @@
 The production worktree is bind-mounted read-only at /workspace while the real
 host .git directory intentionally remains protected. The host supervisor creates
 a sanitized Git metadata snapshot in the private runtime volume and points Git
-at it through GIT_DIR/GIT_WORK_TREE. Temporary pytest snapshots reuse that
-sanitized metadata instead of traversing the protected host .git directory.
+at it through GIT_DIR/GIT_WORK_TREE.
+
+Temporary pytest snapshots are materialized from the trusted Git object/index
+baseline and then overlay only real readable worktree content changes. This
+avoids traversing unrelated production files whose host permissions intentionally
+make them unreadable to the unprivileged Self-Healing UID.
 """
 from __future__ import annotations
 
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 
 TOOLS_DIR = Path(__file__).resolve().parent
@@ -20,19 +25,174 @@ if str(TOOLS_DIR) not in sys.path:
 
 import self_healing_agent as agent  # noqa: E402
 
+_SECRET_SUFFIXES = (".pem", ".key", ".p12", ".pfx")
+_RUNTIME_SUFFIXES = (".db", ".db-wal", ".db-shm", ".sqlite", ".sqlite3", ".log", ".pyc")
+_RUNTIME_PREFIXES = (
+    "deploy/vps/backups/",
+    "deploy/vps/emergency-recovery/",
+)
+
 
 def _trusted_git_dir() -> Path:
     git_dir_text = os.getenv("GIT_DIR", "").strip()
     if not git_dir_text:
         raise RuntimeError("trusted Git snapshot environment is incomplete")
     git_dir = Path(git_dir_text)
-    if not git_dir.is_dir() or not (git_dir / "HEAD").is_file():
+    if not git_dir.is_dir() or not (git_dir / "HEAD").is_file() or not (git_dir / "index").is_file():
         raise RuntimeError(f"trusted Git snapshot is unavailable at {git_dir}")
     return git_dir
 
 
+def _git_environment(*, git_dir: Path, work_tree: Path) -> dict[str, str]:
+    env = os.environ.copy()
+    env.update(
+        {
+            "GIT_DIR": str(git_dir),
+            "GIT_WORK_TREE": str(work_tree),
+            "GIT_OPTIONAL_LOCKS": "0",
+        }
+    )
+    return env
+
+
+def _git_lines(*, git_dir: Path, work_tree: Path, args: tuple[str, ...]) -> tuple[str, ...]:
+    result = subprocess.run(
+        [
+            "git",
+            "-c",
+            f"safe.directory={work_tree}",
+            "-c",
+            "core.filemode=false",
+            *args,
+        ],
+        cwd=work_tree,
+        env=_git_environment(git_dir=git_dir, work_tree=work_tree),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "git command failed").strip()
+        raise RuntimeError(f"trusted worktree Git inspection failed: {detail[-1200:]}")
+    return tuple(line.strip() for line in result.stdout.splitlines() if line.strip())
+
+
+def _overlay_allowed(relative: str) -> bool:
+    clean = relative.replace("\\", "/").lstrip("./")
+    if not clean or clean == ".git" or clean.startswith(".git/"):
+        return False
+    if clean.startswith(_RUNTIME_PREFIXES):
+        return False
+    name = Path(clean).name
+    if name in agent.RUNTIME_IGNORES or name.startswith(".env"):
+        return False
+    if clean.startswith("deploy/vps/docker-compose.yml.bak-"):
+        return False
+    if name.endswith(_SECRET_SUFFIXES) or name.endswith(_RUNTIME_SUFFIXES):
+        return False
+    return True
+
+
+def _safe_destination(root: Path, relative: str) -> Path:
+    candidate = root / relative
+    resolved_root = root.resolve()
+    resolved_parent = candidate.parent.resolve(strict=False)
+    try:
+        resolved_parent.relative_to(resolved_root)
+    except ValueError as exc:
+        raise RuntimeError(f"unsafe changed path outside snapshot: {relative}") from exc
+    return candidate
+
+
+def _materialize_trusted_head(*, trusted_git: Path, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=False)
+    destination_git = destination / ".git"
+    shutil.copytree(trusted_git, destination_git, symlinks=False)
+
+    result = subprocess.run(
+        [
+            "git",
+            "-c",
+            f"safe.directory={destination}",
+            "-c",
+            "core.filemode=false",
+            "checkout-index",
+            "-a",
+            "-f",
+        ],
+        cwd=destination,
+        env=_git_environment(git_dir=destination_git, work_tree=destination),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "checkout-index failed").strip()
+        raise RuntimeError(f"trusted Git HEAD materialization failed: {detail[-1200:]}")
+
+
+def _worktree_overlays(*, trusted_git: Path, source: Path) -> tuple[str, ...]:
+    # The trusted index is deliberately HEAD, so a normal `git diff` sees both
+    # staged and unstaged worktree content deviations from that immutable base.
+    changed = set(
+        _git_lines(
+            git_dir=trusted_git,
+            work_tree=source,
+            args=("diff", "--name-only", "--no-ext-diff"),
+        )
+    )
+    changed.update(
+        _git_lines(
+            git_dir=trusted_git,
+            work_tree=source,
+            args=("ls-files", "--others", "--exclude-standard"),
+        )
+    )
+    return tuple(sorted(path for path in changed if _overlay_allowed(path)))
+
+
+def _overlay_changed_worktree(*, trusted_git: Path, source: Path, destination: Path) -> None:
+    source_root = source.resolve()
+    for relative in _worktree_overlays(trusted_git=trusted_git, source=source):
+        source_path = source / relative
+        destination_path = _safe_destination(destination, relative)
+
+        # A tracked deletion must also be represented in the test snapshot.
+        if not source_path.exists() and not source_path.is_symlink():
+            if destination_path.is_dir() and not destination_path.is_symlink():
+                shutil.rmtree(destination_path)
+            else:
+                destination_path.unlink(missing_ok=True)
+            continue
+
+        try:
+            resolved_source = source_path.resolve(strict=True)
+            resolved_source.relative_to(source_root)
+        except (FileNotFoundError, ValueError) as exc:
+            raise RuntimeError(f"unsafe changed worktree path: {relative}") from exc
+
+        if source_path.is_symlink():
+            raise RuntimeError(f"changed worktree symlink requires manual verification: {relative}")
+        if not source_path.is_file():
+            raise RuntimeError(f"changed worktree path is not a regular file: {relative}")
+
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with source_path.open("rb") as source_handle, destination_path.open("wb") as destination_handle:
+                shutil.copyfileobj(source_handle, destination_handle)
+        except PermissionError as exc:
+            raise RuntimeError(
+                f"changed worktree file is unreadable to Self-Healing and cannot be verified safely: {relative}"
+            ) from exc
+
+        source_mode = source_path.stat().st_mode
+        destination_path.chmod(0o700 if source_mode & 0o111 else 0o600)
+
+
 def _trusted_copy_repository_snapshot(source: Path, destination: Path) -> None:
-    """Copy source for tests using sanitized Git metadata, never host .git."""
+    """Create a test snapshot without recursively reading the production tree."""
 
     trusted_git = _trusted_git_dir().resolve()
     source_resolved = source.resolve()
@@ -43,53 +203,12 @@ def _trusted_copy_repository_snapshot(source: Path, destination: Path) -> None:
     else:
         raise RuntimeError("trusted Git snapshot must be outside the protected worktree")
 
-    def ignore(directory: str, names: list[str]) -> set[str]:
-        directory_path = Path(directory)
-        try:
-            relative = directory_path.relative_to(source).as_posix()
-        except ValueError:
-            relative = ""
-
-        ignored = {
-            name
-            for name in names
-            if name in agent.RUNTIME_IGNORES
-            or name.startswith(".env")
-            or name.endswith((".pem", ".key", ".p12", ".pfx"))
-        }
-        if relative in {"", "."}:
-            # Never traverse source/.git: that is the protected host metadata
-            # that caused the original packed-refs permission failure.
-            ignored.add(".git")
-        if relative == "deploy/vps":
-            ignored.update(
-                name
-                for name in names
-                if name in {"backups", "emergency-recovery"}
-                or name.startswith("docker-compose.yml.bak-")
-                or name.startswith(".env")
-            )
-        ignored.update(
-            name
-            for name in names
-            if name.endswith(
-                (
-                    ".db",
-                    ".db-wal",
-                    ".db-shm",
-                    ".sqlite",
-                    ".sqlite3",
-                    ".log",
-                    ".pyc",
-                )
-            )
-        )
-        return ignored
-
-    shutil.copytree(source, destination, ignore=ignore, symlinks=False)
-    # Some regression/audit tests intentionally require repository metadata.
-    # Supply only the sanitized private snapshot; never copy the host .git tree.
-    shutil.copytree(trusted_git, destination / ".git", symlinks=False)
+    _materialize_trusted_head(trusted_git=trusted_git, destination=destination)
+    _overlay_changed_worktree(
+        trusted_git=trusted_git,
+        source=source,
+        destination=destination,
+    )
 
 
 def install_trusted_git_snapshot() -> None:
@@ -115,7 +234,7 @@ def install_trusted_git_snapshot() -> None:
 
     # Keep the original agent implementation unchanged for all other callers.
     # Only this production runner swaps the temporary source copier so the
-    # protected host .git tree is never traversed during related-test snapshots.
+    # protected host .git tree and unrelated unreadable files are never traversed.
     agent.copy_repository_snapshot = _trusted_copy_repository_snapshot
 
 
