@@ -7,9 +7,10 @@ a sanitized Git metadata snapshot in the private runtime volume and points Git
 at it through GIT_DIR/GIT_WORK_TREE.
 
 Temporary pytest snapshots are materialized from the trusted Git object/index
-baseline and then overlay only real readable worktree content changes. This
-avoids traversing unrelated production files whose host permissions intentionally
-make them unreadable to the unprivileged Self-Healing UID.
+baseline and then overlay only real worktree content changes identified by the
+trusted host supervisor. This avoids traversing unrelated production files whose
+host permissions intentionally make them unreadable to the unprivileged
+Self-Healing UID.
 """
 from __future__ import annotations
 
@@ -30,6 +31,9 @@ _RUNTIME_SUFFIXES = (".db", ".db-wal", ".db-shm", ".sqlite", ".sqlite3", ".log",
 _RUNTIME_PREFIXES = (
     "deploy/vps/backups/",
     "deploy/vps/emergency-recovery/",
+)
+_DEFAULT_CHANGED_PATHS_FILE = Path(
+    "/var/lib/sharipovai/.self_healing/git-worktree-changes"
 )
 
 
@@ -79,8 +83,10 @@ def _git_lines(*, git_dir: Path, work_tree: Path, args: tuple[str, ...]) -> tupl
 
 
 def _overlay_allowed(relative: str) -> bool:
-    clean = relative.replace("\\", "/").lstrip("./")
-    if not clean or clean == ".git" or clean.startswith(".git/"):
+    clean = relative.replace("\\", "/")
+    while clean.startswith("./"):
+        clean = clean[2:]
+    if not clean or clean.startswith("/") or clean == ".git" or clean.startswith(".git/"):
         return False
     if clean.startswith(_RUNTIME_PREFIXES):
         return False
@@ -133,23 +139,51 @@ def _materialize_trusted_head(*, trusted_git: Path, destination: Path) -> None:
         raise RuntimeError(f"trusted Git HEAD materialization failed: {detail[-1200:]}")
 
 
+def _changed_paths_manifest() -> Path | None:
+    configured = os.getenv("SELF_HEALING_CHANGED_PATHS_FILE", "").strip()
+    if configured:
+        return Path(configured)
+    return _DEFAULT_CHANGED_PATHS_FILE if _DEFAULT_CHANGED_PATHS_FILE.is_file() else None
+
+
+def _manifest_lines(path: Path) -> tuple[str, ...]:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError(f"trusted host worktree change manifest is unreadable: {path}") from exc
+    values: list[str] = []
+    for raw in text.splitlines():
+        relative = raw.strip()
+        if not relative:
+            continue
+        if "\x00" in relative or relative.startswith("/"):
+            raise RuntimeError(f"unsafe path in trusted host worktree change manifest: {relative!r}")
+        values.append(relative)
+    return tuple(values)
+
+
 def _worktree_overlays(*, trusted_git: Path, source: Path) -> tuple[str, ...]:
-    # The trusted index is deliberately HEAD, so a normal `git diff` sees both
-    # staged and unstaged worktree content deviations from that immutable base.
-    changed = set(
-        _git_lines(
-            git_dir=trusted_git,
-            work_tree=source,
-            args=("diff", "--name-only", "--no-ext-diff"),
+    manifest = _changed_paths_manifest()
+    if manifest is not None:
+        changed = set(_manifest_lines(manifest))
+    else:
+        # Test/development fallback. Production always supplies the host-created
+        # manifest because container permission differences can make an
+        # unchanged unreadable tracked file look modified to container Git.
+        changed = set(
+            _git_lines(
+                git_dir=trusted_git,
+                work_tree=source,
+                args=("diff", "--name-only", "--no-ext-diff"),
+            )
         )
-    )
-    changed.update(
-        _git_lines(
-            git_dir=trusted_git,
-            work_tree=source,
-            args=("ls-files", "--others", "--exclude-standard"),
+        changed.update(
+            _git_lines(
+                git_dir=trusted_git,
+                work_tree=source,
+                args=("ls-files", "--others", "--exclude-standard"),
+            )
         )
-    )
     return tuple(sorted(path for path in changed if _overlay_allowed(path)))
 
 
