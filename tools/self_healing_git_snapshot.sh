@@ -42,7 +42,7 @@ verify_snapshot() {
         -e GIT_WORK_TREE="$WORK_TREE" \
         -e GIT_OPTIONAL_LOCKS=0 \
         "$CONTAINER_NAME" \
-        git -c "safe.directory=$WORK_TREE" rev-parse --verify HEAD 2>/dev/null || true)"
+        git -c "safe.directory=$WORK_TREE" -c core.filemode=false rev-parse --verify HEAD 2>/dev/null || true)"
     [ "$actual" = "$HEAD_SHA" ] || return 1
 
     docker exec \
@@ -51,7 +51,7 @@ verify_snapshot() {
         -e GIT_WORK_TREE="$WORK_TREE" \
         -e GIT_OPTIONAL_LOCKS=0 \
         "$CONTAINER_NAME" \
-        git -c "safe.directory=$WORK_TREE" status --porcelain --untracked-files=no \
+        git -c "safe.directory=$WORK_TREE" -c core.filemode=false status --porcelain --untracked-files=no \
         >/dev/null 2>&1
 }
 
@@ -73,23 +73,44 @@ SNAPSHOT_GIT="$TEMP_DIR/repo/.git"
 git --git-dir="$SNAPSHOT_GIT" update-ref refs/heads/self-healing "$HEAD_SHA"
 printf 'ref: refs/heads/self-healing\n' >"$SNAPSHOT_GIT/HEAD"
 
-# Preserve the host index so staged and unstaged paths are both visible to the
-# read-only verification. The snapshot itself never writes back to host .git.
-if [ -f "$REPO_DIR/.git/index" ]; then
-    cp --no-preserve=ownership,mode "$REPO_DIR/.git/index" "$SNAPSHOT_GIT/index"
-else
-    GIT_INDEX_FILE="$SNAPSHOT_GIT/index" git --git-dir="$SNAPSHOT_GIT" read-tree "$HEAD_SHA"
-fi
+# Always use a clean HEAD index. The runtime worktree is compared against this
+# immutable baseline, so staged and unstaged content changes remain detectable
+# without importing host index stat/mode metadata into the unprivileged runtime.
+rm -f "$SNAPSHOT_GIT/index"
+GIT_INDEX_FILE="$SNAPSHOT_GIT/index" git --git-dir="$SNAPSHOT_GIT" read-tree "$HEAD_SHA"
 
 # Do not copy host remote/credential configuration into the runtime snapshot.
+# filemode=false is intentional: image/bind-mount permission differences must
+# not become fake source changes. Content changes remain fully detectable.
 cat >"$SNAPSHOT_GIT/config" <<'EOF'
 [core]
     repositoryformatversion = 0
-    filemode = true
+    filemode = false
     bare = false
     logallrefupdates = false
 EOF
 rm -rf "$SNAPSHOT_GIT/hooks" "$SNAPSHOT_GIT/logs"
+mkdir -p "$SNAPSHOT_GIT/info"
+cat >"$SNAPSHOT_GIT/info/exclude" <<'EOF'
+# Host/runtime-only paths. These are never source changes for Self-Healing.
+deploy/vps/backups/
+deploy/vps/emergency-recovery/
+deploy/vps/docker-compose.yml.bak-*
+deploy/vps/.env*
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.log
+*.pyc
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+EOF
 
 # Extract as the unprivileged runtime UID. No chmod/chown is ever performed on
 # the real repository metadata; only this private copy is made readable.
