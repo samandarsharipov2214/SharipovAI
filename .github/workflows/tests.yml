@@ -36,13 +36,9 @@ concurrency:
 
 jobs:
   test:
-    if: >-
-      ${{
-        vars.SHARIPOVAI_SELF_HOSTED_CI == '1' &&
-        (github.event_name != 'pull_request' ||
-         github.event.pull_request.head.repo.full_name == github.repository)
-      }}
-    runs-on: [self-hosted, linux, x64, sharipovai-ci]
+    # This suite is intentionally GitHub-hosted. It is too heavy to share
+    # CPU/RAM/I/O with the production VPS.
+    runs-on: ubuntu-latest
     timeout-minutes: 50
     env:
       PYTHONUNBUFFERED: '1'
