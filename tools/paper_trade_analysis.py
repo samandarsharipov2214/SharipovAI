@@ -213,12 +213,12 @@ def analyze_trades(trades: list[Mapping[str, Any]], state: Mapping[str, Any] | N
         shadow_rows = []
     challenger = Counter(str(row.get("challenger_action") or "UNKNOWN").upper() for row in shadow_rows)
     champion = Counter(str(row.get("champion_action") or "UNKNOWN").upper() for row in shadow_rows)
-    disagreements = sum(
-        1
-        for row in shadow_rows
-        if str(row.get("challenger_action") or "UNKNOWN").upper()
-        != str(row.get("champion_action") or "UNKNOWN").upper()
-    )
+    disagreements = 0
+    for row in shadow_rows:
+        champion_action = str(row.get("champion_action") or "UNKNOWN").upper()
+        challenger_action = str(row.get("challenger_action") or "UNKNOWN").upper()
+        if champion_action != "UNKNOWN" and challenger_action != "UNKNOWN" and champion_action != challenger_action:
+            disagreements += 1
     settled_shadow = sum(1 for row in shadow_rows if row.get("paper_settlement") or row.get("settlement") or row.get("settled_at_ms"))
 
     summary = _aggregate(closed)
@@ -286,7 +286,6 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     database = ProjectDatabase()
-    database.initialize()
     report = load_production_analysis(database, scope=args.scope)
     print(json.dumps(report, ensure_ascii=False, indent=None if args.compact else 2, sort_keys=True, allow_nan=False))
     return 0
