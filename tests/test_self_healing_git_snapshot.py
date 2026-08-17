@@ -48,6 +48,12 @@ def _trusted_clone(source: Path, destination: Path) -> tuple[Path, str]:
     return git_dir, head
 
 
+def _write_manifest(tmp_path: Path, *paths: str) -> Path:
+    manifest = tmp_path / "git-worktree-changes"
+    manifest.write_text("".join(f"{path}\n" for path in paths), encoding="utf-8")
+    return manifest
+
+
 def _config(tmp_path: Path, repo: Path) -> agent.Config:
     data = tmp_path / "data"
     work = data / ".self_healing"
@@ -99,6 +105,7 @@ def test_trusted_copy_materializes_git_head_without_recursive_source_copy(
     trusted_git, _head = _trusted_clone(source, trusted)
     (source / "module.py").write_text("VALUE = 2\n", encoding="utf-8")
     (source / ".env.production").write_text("SECRET=do-not-copy\n", encoding="utf-8")
+    manifest = _write_manifest(tmp_path, "module.py", ".env.production")
 
     packed_refs = source / ".git" / "packed-refs"
     original_mode = stat.S_IMODE(packed_refs.stat().st_mode)
@@ -114,6 +121,7 @@ def test_trusted_copy_materializes_git_head_without_recursive_source_copy(
     monkeypatch.setattr(runner.shutil, "copytree", guarded_copytree)
     monkeypatch.setenv("GIT_DIR", str(trusted_git))
     monkeypatch.setenv("GIT_WORK_TREE", str(source))
+    monkeypatch.setenv("SELF_HEALING_CHANGED_PATHS_FILE", str(manifest))
     try:
         runner._trusted_copy_repository_snapshot(source, destination)
     finally:
@@ -144,10 +152,12 @@ def test_trusted_copy_does_not_need_to_open_unrelated_unreadable_tracked_file(
 
     trusted_git, _head = _trusted_clone(source, trusted)
     (source / "changed.py").write_text("VALUE = 2\n", encoding="utf-8")
+    manifest = _write_manifest(tmp_path, "changed.py")
     original_mode = stat.S_IMODE(locked.stat().st_mode)
     locked.chmod(0)
     monkeypatch.setenv("GIT_DIR", str(trusted_git))
     monkeypatch.setenv("GIT_WORK_TREE", str(source))
+    monkeypatch.setenv("SELF_HEALING_CHANGED_PATHS_FILE", str(manifest))
     try:
         runner._trusted_copy_repository_snapshot(source, destination)
     finally:
@@ -175,10 +185,12 @@ def test_changed_unreadable_file_fails_closed_with_precise_reason(
 
     trusted_git, _head = _trusted_clone(source, trusted)
     changed.write_text("VALUE = 2\n", encoding="utf-8")
+    manifest = _write_manifest(tmp_path, "changed.py")
     original_mode = stat.S_IMODE(changed.stat().st_mode)
     changed.chmod(0)
     monkeypatch.setenv("GIT_DIR", str(trusted_git))
     monkeypatch.setenv("GIT_WORK_TREE", str(source))
+    monkeypatch.setenv("SELF_HEALING_CHANGED_PATHS_FILE", str(manifest))
     try:
         with pytest.raises(RuntimeError, match="unreadable|Git inspection failed"):
             runner._trusted_copy_repository_snapshot(source, destination)
@@ -206,6 +218,7 @@ def test_agent_uses_external_git_snapshot_when_host_packed_refs_is_unreadable(
     # Create an actual worktree change that Self-Healing must discover and
     # compile. The protected host metadata is then made unreadable.
     (repo / "module.py").write_text("VALUE = 2\n", encoding="utf-8")
+    manifest = _write_manifest(tmp_path, "module.py")
     packed_refs = repo / ".git" / "packed-refs"
     original_mode = stat.S_IMODE(packed_refs.stat().st_mode)
     packed_refs.chmod(0)
@@ -214,6 +227,7 @@ def test_agent_uses_external_git_snapshot_when_host_packed_refs_is_unreadable(
     monkeypatch.setenv("GIT_DIR", str(trusted_git))
     monkeypatch.setenv("GIT_WORK_TREE", str(repo))
     monkeypatch.setenv("SELF_HEALING_REPO_DIR", str(repo))
+    monkeypatch.setenv("SELF_HEALING_CHANGED_PATHS_FILE", str(manifest))
     try:
         runner.install_trusted_git_snapshot()
         instance = agent.SelfHealingAgent(_config(tmp_path, repo))
@@ -249,6 +263,9 @@ def test_production_supervisor_wires_snapshot_without_relaxing_host_git_permissi
     assert "\\$next" in helper_text
     assert "filemode = false" in helper_text
     assert 'read-tree "$HEAD_SHA"' in helper_text
+    assert 'CHANGES_FILE="$RUNTIME_DIR/git-worktree-changes"' in helper_text
+    assert 'git -C "$REPO_DIR" diff --name-only --no-ext-diff HEAD --' in helper_text
+    assert 'SELF_HEALING_CHANGED_PATHS_FILE' in runner_text
     assert 'destination / ".git"' in runner_text
     assert '"checkout-index"' in runner_text
     assert "shutil.copytree(source" not in runner_text
