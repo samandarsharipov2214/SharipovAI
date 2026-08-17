@@ -5,9 +5,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 
-LINUX_WORKFLOWS = (
+# Repository-wide Python suites are intentionally isolated from the production
+# VPS.  The production self-hosted runner remains reserved for narrow
+# operational/VPS checks only.
+HEAVY_GITHUB_HOSTED_WORKFLOWS = (
     "ci.yml",
     "tests.yml",
+)
+
+SELF_HOSTED_LINUX_WORKFLOWS = (
     "project-guardrails.yml",
     "full-stabilization.yml",
     "stabilization-dashboard.yml",
@@ -21,15 +27,26 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_automatic_workflows_do_not_use_github_hosted_runners() -> None:
+def test_heavy_repository_wide_ci_runs_off_production_vps() -> None:
+    for name in HEAVY_GITHUB_HOSTED_WORKFLOWS:
+        text = _read(WORKFLOWS / name)
+        assert "runs-on: ubuntu-latest" in text, name
+        assert "runs-on: [self-hosted, linux, x64, sharipovai-ci]" not in text, name
+        assert "SHARIPOVAI_SELF_HOSTED_CI" not in text, name
+
+
+def test_other_automatic_workflows_do_not_use_github_hosted_runners() -> None:
+    hosted = set(HEAVY_GITHUB_HOSTED_WORKFLOWS)
     for path in WORKFLOWS.glob("*.yml"):
+        if path.name in hosted:
+            continue
         text = _read(path)
         assert "ubuntu-latest" not in text, path
         assert "windows-latest" not in text, path
 
 
-def test_linux_workflows_require_enabled_self_hosted_runner() -> None:
-    for name in LINUX_WORKFLOWS:
+def test_operational_linux_workflows_require_enabled_self_hosted_runner() -> None:
+    for name in SELF_HOSTED_LINUX_WORKFLOWS:
         text = _read(WORKFLOWS / name)
         assert "SHARIPOVAI_SELF_HOSTED_CI" in text, name
         assert "runs-on: [self-hosted, linux, x64, sharipovai-ci]" in text, name
