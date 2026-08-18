@@ -57,6 +57,7 @@ def test_backup_helper_is_bounded_identifiable_and_still_isolated() -> None:
 
 def test_helper_cleanup_requires_exact_role_and_run_labels() -> None:
     text = _script()
+    assert 'helper_id=$(docker inspect --format \'{{.Id}}\' "$helper_name"' in text
     assert 'role=$(docker inspect --format \'{{index .Config.Labels "com.sharipovai.role"}}\'' in text
     assert 'helper_run=$(docker inspect --format \'{{index .Config.Labels "com.sharipovai.run"}}\'' in text
     assert "[[ \"$role\" == 'backup-helper' && \"$helper_run\" == \"$run_id\" ]]" in text
@@ -70,4 +71,14 @@ def test_hashing_is_streaming_and_host_heavy_work_is_deprioritized() -> None:
     assert 'handle.read(1024 * 1024)' in text
     assert "ionice -c2 -n7 nice -n 10" in text
     assert 'run_low_priority tar -C "$work"' in text
-    assert 'run_low_priority sha256sum "$archive"' in text
+    assert 'run_low_priority sha256sum "$archive_tmp"' in text
+
+
+def test_archive_is_published_only_after_complete_partial_file() -> None:
+    text = _script()
+    assert 'archive_tmp=$(mktemp "$BACKUP_DIR/.sharipovai-$stamp.tar.gz.partial-XXXXXX")' in text
+    assert 'run_low_priority tar -C "$work" -czf "$archive_tmp"' in text
+    assert 'mv "$archive_checksum_tmp" "$archive.sha256"' in text
+    assert 'mv "$archive_tmp" "$archive"' in text
+    assert '[[ "$candidate" == "$BACKUP_DIR"/.sharipovai-*.partial-* ]]' in text
+    assert 'rm -f -- "$candidate"' in text
