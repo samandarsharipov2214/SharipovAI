@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 
 from autonomous_trading.canonical_runtime import CanonicalPaperDecisionRuntime
@@ -35,6 +36,7 @@ def _payload(agent_id: str, action: str, *, confidence: float = 90.0):
 
 
 def _prepare_evidence(database: ProjectDatabase, decision_id: str) -> CandidateEvidencePacket:
+    now_ms = int(time.time() * 1000)
     risk_id = f"risk-{decision_id}"
     portfolio_id = f"portfolio-{decision_id}"
     database.put_json(
@@ -68,8 +70,8 @@ def _prepare_evidence(database: ProjectDatabase, decision_id: str) -> CandidateE
         category=TradingCategory.SPOT,
         side=TradingSide.SELL,  # legacy/provider side must not own V2 direction
         environment=TradingEnvironment.PAPER,
-        market_timestamp_ms=1_000_000,
-        received_timestamp_ms=1_000_100,
+        market_timestamp_ms=now_ms - 200,
+        received_timestamp_ms=now_ms - 100,
         reference_price=50_000.0,
         data_sources=("bybit", "bitget", "mexc"),
         market_regime=MarketRegime.TREND,
@@ -82,8 +84,12 @@ def _prepare_evidence(database: ProjectDatabase, decision_id: str) -> CandidateE
         estimated_slippage=0.05,
         risk_score=20.0,
         risk_blocks=(),
-        expires_at_ms=1_008_000,
+        expires_at_ms=now_ms + 8_000,
     )
+
+
+def _assessment_time(packet: CandidateEvidencePacket) -> int:
+    return packet.received_timestamp_ms + 100
 
 
 def test_gc_v2_overrides_legacy_wait_and_provider_side_for_paper(tmp_path):
@@ -103,7 +109,7 @@ def test_gc_v2_overrides_legacy_wait_and_provider_side_for_paper(tmp_path):
         payloads,
         packet,
         general_controller_decision=TradingDecision.WAIT,
-        now_ms=1_000_200,
+        now_ms=_assessment_time(packet),
         regime="bull",
     )
 
@@ -141,7 +147,7 @@ def test_v2_loss_does_not_become_realized_sell_or_reward_opposite_agents(tmp_pat
         payloads,
         packet,
         general_controller_decision=TradingDecision.WAIT,
-        now_ms=1_000_200,
+        now_ms=_assessment_time(packet),
         regime="bull",
     )
     assert authorization.authorized is True
