@@ -1,8 +1,9 @@
 """Runtime adapter that observes the authoritative paper path with GC V2.
 
-This module is deliberately non-executing. The existing canonical paper runtime
-remains authoritative; the General Controller V2 result is evaluated on the
-same immutable evidence packet and recorded only as a shadow comparison.
+The challenger consumes the same immutable evidence packet as the canonical
+paper runtime, but its directional quality is computed independently from the
+legacy consensus path. Risk/Portfolio/Security remain explicit non-directional
+gates and the challenger never has execution authority.
 """
 from __future__ import annotations
 
@@ -12,18 +13,11 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Any, Mapping, Sequence
 
-from meta_ai_adapter import opinions_from_payloads
 from trading_candidate import TradingDecision, TradingSide
 
 from .canonical_runtime import PaperDecisionAuthorization
-from .general_controller_v2 import (
-    DecisionQualitySignal,
-    GateSignal,
-    GeneralControllerDecision,
-    GeneralControllerV2,
-    SpecialistRecommendation,
-    TradingIntent,
-)
+from .general_controller_v2 import GateSignal, GeneralControllerDecision, GeneralControllerV2
+from .runtime_decision_v2 import evaluate_controller_v2
 from .shadow_dual_run_v2 import (
     Decision,
     PathDecision,
@@ -43,7 +37,7 @@ class RuntimeShadowResult:
 
 
 class RuntimeShadowV2:
-    """Evaluate GC V2 beside the current paper authorization without mutation."""
+    """Evaluate independent GC V2 beside the current paper authorization."""
 
     def __init__(self, controller: GeneralControllerV2 | None = None) -> None:
         self.controller = controller or GeneralControllerV2()
@@ -65,25 +59,15 @@ class RuntimeShadowV2:
             raise ValueError("shadow and authoritative paths must use the same market timestamp")
 
         shadow_input = immutable_shadow_input(evidence_packet)
-        recommendations = _recommendations(agent_payloads)
-        assessment = authorization.assessment
         validation = authorization.candidate_result.validation
         freshness_errors = _freshness_errors(getattr(validation, "errors", ()))
-        quality_blocked = bool(assessment.blocked) or bool(freshness_errors)
-        quality_reason = str(assessment.reason or "")
-        if freshness_errors:
-            quality_reason = "canonical candidate freshness validation failed: " + "; ".join(freshness_errors)
-        quality = DecisionQualitySignal(
-            blocked=quality_blocked,
-            quality_score=_percent(assessment.quality_score),
-            agreement=_percent(assessment.agreement),
-            reason=quality_reason,
-        )
-        controller = self.controller.decide(
-            recommendations,
-            decision_quality=quality,
+        evaluated = evaluate_controller_v2(
+            agent_payloads,
             gates=gates,
+            freshness_errors=freshness_errors,
+            controller=self.controller,
         )
+        controller = evaluated.controller
 
         authoritative = PathDecision(
             path="canonical_paper_runtime",
@@ -132,33 +116,6 @@ def immutable_shadow_input(evidence_packet: Any) -> ShadowInput:
     )
 
 
-def _recommendations(payloads: Sequence[Mapping[str, Any]]) -> tuple[SpecialistRecommendation, ...]:
-    opinions = opinions_from_payloads(payloads)
-    recommendations: list[SpecialistRecommendation] = []
-    for payload, opinion in zip(payloads, opinions, strict=True):
-        action = str(opinion.action or "WAIT").upper()
-        intent = TradingIntent(action) if action in {"BUY", "SELL", "WAIT"} else TradingIntent.WAIT
-        verified = bool(payload.get("verified_market_data") is True or payload.get("data_verified") is True)
-        evidence_ids = payload.get("evidence_ids") or payload.get("signal_evidence") or ()
-        if isinstance(evidence_ids, str):
-            evidence_ids = (evidence_ids,)
-        elif not isinstance(evidence_ids, (list, tuple)):
-            evidence_ids = ()
-        recommendations.append(
-            SpecialistRecommendation(
-                agent_id=opinion.agent_id,
-                intent=intent,
-                confidence=_percent(opinion.confidence),
-                evidence_score=_percent(opinion.evidence_score),
-                risk_score=_percent(opinion.risk_score),
-                verified=verified,
-                rationale=opinion.rationale,
-                evidence_ids=tuple(str(item) for item in evidence_ids if str(item).strip()),
-            )
-        )
-    return tuple(recommendations)
-
-
 def _authoritative_direction(authorization: PaperDecisionAuthorization) -> Decision:
     if not authorization.authorized or authorization.decision is not TradingDecision.ALLOW:
         return Decision.WAIT
@@ -179,15 +136,6 @@ def _freshness_errors(errors: Any) -> tuple[str, ...]:
     )
     rows = tuple(str(item) for item in (errors or ()) if str(item).strip())
     return tuple(item for item in rows if any(marker in item for marker in freshness_markers))
-
-
-def _percent(value: Any) -> float:
-    parsed = float(value)
-    if 0.0 <= parsed <= 1.0:
-        return parsed * 100.0
-    if 0.0 <= parsed <= 100.0:
-        return parsed
-    raise ValueError("percentage signal must be within 0..1 or 0..100")
 
 
 def _jsonable(value: Any) -> Any:
