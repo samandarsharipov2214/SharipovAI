@@ -71,8 +71,36 @@ def _payloads():
     ]
 
 
-def _proposal(decision_id: str, price: float) -> CouncilEntryProposal:
+def _proposal(database: ProjectDatabase, decision_id: str, price: float) -> CouncilEntryProposal:
     now_ms = int(time.time() * 1000)
+    portfolio_id = f"portfolio-{decision_id}"
+    database.put_json(
+        "risk_assessments",
+        f"risk-{decision_id}",
+        {
+            "decision_id": decision_id,
+            "risk_score": 20.0,
+            "blocks": [],
+            "assessment": {
+                "allowed_virtual": True,
+                "blockers": [],
+                "hard_blocks": [],
+            },
+        },
+        expected_version=0,
+    )
+    database.put_json(
+        "portfolio_snapshots",
+        portfolio_id,
+        {
+            "decision_id": decision_id,
+            "cash": 10_000.0,
+            "equity": 10_000.0,
+            "open_symbols": [],
+            "environment": "paper",
+        },
+        expected_version=0,
+    )
     return CouncilEntryProposal(
         decision_id=decision_id,
         agent_payloads=_payloads(),
@@ -89,10 +117,10 @@ def _proposal(decision_id: str, price: float) -> CouncilEntryProposal:
             reference_price=price,
             data_sources=("bybit_ws", "binance_ws", "coinbase_ws"),
             market_regime=MarketRegime.TREND,
-            signal_evidence=("market-signal-1",),
+            signal_evidence=("market-signal-1", f"risk-{decision_id}", portfolio_id),
             news_evidence=("news-assessment-1",),
             news_assessment_id="news-assessment-1",
-            portfolio_snapshot_id="portfolio-1",
+            portfolio_snapshot_id=portfolio_id,
             cost_snapshot_id="cost-1",
             estimated_fees=0.1,
             estimated_slippage=0.05,
@@ -127,7 +155,7 @@ def test_authorized_council_decision_opens_traceable_position(tmp_path, monkeypa
     monkeypatch.setenv("AUTONOMOUS_PAPER_STATE_FILE", str(tmp_path / "paper.json"))
     database = _database(tmp_path)
     stream = _Stream()
-    proposal = _proposal("paper-council-1", stream.current.price)
+    proposal = _proposal(database, "paper-council-1", stream.current.price)
     loop = CouncilAuthorizedPaperLoop(
         stream,
         decision_runtime=CanonicalPaperDecisionRuntime(database),
@@ -152,7 +180,7 @@ def test_protective_stop_loss_does_not_wait_for_new_council(tmp_path, monkeypatc
     monkeypatch.setenv("AUTONOMOUS_PAPER_STATE_FILE", str(tmp_path / "paper.json"))
     database = _database(tmp_path)
     stream = _Stream()
-    proposal = _proposal("paper-council-stop", stream.current.price)
+    proposal = _proposal(database, "paper-council-stop", stream.current.price)
     calls = {"count": 0}
 
     def provider(symbol, quote, state):
