@@ -92,11 +92,13 @@ stamp=$(date -u +%Y%m%dT%H%M%SZ)
 run_id="${stamp}-$$"
 helper_name="sharipovai-backup-helper-${run_id}"
 work=''
+archive_tmp=''
+archive_checksum_tmp=''
 
 cleanup_backup_helper() {
   local helper_id role helper_run
   [[ -n "${helper_name:-}" && -n "${run_id:-}" ]] || return 0
-  helper_id=$(docker ps -a -q --filter "name=^/${helper_name}$" 2>/dev/null | head -n 1 || true)
+  helper_id=$(docker inspect --format '{{.Id}}' "$helper_name" 2>/dev/null || true)
   [[ -n "$helper_id" ]] || return 0
   role=$(docker inspect --format '{{index .Config.Labels "com.sharipovai.role"}}' "$helper_id" 2>/dev/null || true)
   helper_run=$(docker inspect --format '{{index .Config.Labels "com.sharipovai.run"}}' "$helper_id" 2>/dev/null || true)
@@ -108,6 +110,7 @@ cleanup_backup_helper() {
 }
 
 cleanup() {
+  local candidate
   cleanup_backup_helper
   if [[ -n "${work:-}" ]]; then
     if [[ "$work" == "$BACKUP_DIR"/.staging-* ]]; then
@@ -115,6 +118,17 @@ cleanup() {
     else
       log "refusing unsafe work cleanup path: $work"
     fi
+  fi
+  for candidate in "${archive_tmp:-}" "${archive_checksum_tmp:-}"; do
+    [[ -n "$candidate" ]] || continue
+    if [[ "$candidate" == "$BACKUP_DIR"/.sharipovai-*.partial-* ]]; then
+      rm -f -- "$candidate"
+    else
+      log "refusing unsafe partial archive cleanup path: $candidate"
+    fi
+  done
+  if [[ -n "${archive:-}" && ! -e "$archive" && -e "$archive.sha256" ]]; then
+    rm -f -- "$archive.sha256"
   fi
 }
 trap cleanup EXIT
@@ -141,7 +155,7 @@ else
   log 'application container is stopped; creating read-only backup directly from persistent volume'
 fi
 
-rendered=$(mktemp)
+rendered=$(mktemp "$work/compose-config.XXXXXX")
 docker compose config --format json >"$rendered"
 readarray -t backup_runtime < <(python3 - "$rendered" "$CONTAINER" <<'PY'
 import json
@@ -305,8 +319,20 @@ fi
 [[ "$staged_bytes" =~ ^[0-9]+$ ]] || fail 'staged backup size probe returned an invalid value'
 require_free_space "$staged_bytes" 'before archive creation'
 
-run_low_priority tar -C "$work" -czf "$archive" manifest.json data
-run_low_priority sha256sum "$archive" > "$archive.sha256"
+archive_tmp=$(mktemp "$BACKUP_DIR/.sharipovai-$stamp.tar.gz.partial-XXXXXX")
+archive_checksum_tmp="${archive_tmp}.sha256"
+run_low_priority tar -C "$work" -czf "$archive_tmp" manifest.json data
+archive_digest=$(run_low_priority sha256sum "$archive_tmp" | awk 'NR == 1 {print $1}')
+[[ "$archive_digest" =~ ^[0-9a-fA-F]{64}$ ]] || fail 'archive SHA-256 generation failed'
+printf '%s  %s\n' "$archive_digest" "$(basename "$archive")" >"$archive_checksum_tmp"
+chmod 600 "$archive_tmp" "$archive_checksum_tmp"
+mv "$archive_checksum_tmp" "$archive.sha256"
+archive_checksum_tmp=''
+if ! mv "$archive_tmp" "$archive"; then
+  rm -f -- "$archive.sha256"
+  fail 'atomic backup archive publication failed'
+fi
+archive_tmp=''
 ln -sfn "$(basename "$archive")" "$BACKUP_DIR/latest.tar.gz"
 ln -sfn "$(basename "$archive.sha256")" "$BACKUP_DIR/latest.tar.gz.sha256"
 
