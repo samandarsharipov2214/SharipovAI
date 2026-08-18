@@ -29,6 +29,16 @@ _NON_DIRECTIONAL_AGENTS = frozenset(
         "security_guard",
     }
 )
+_NEWS_DIRECTIONAL_AGENTS = frozenset(
+    {
+        "news_intelligence",
+        "crypto_ai",
+        "finance_ai",
+        "economy_ai",
+        "security_ai",
+        "world_ai",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,8 +89,10 @@ def directional_quality_signal(
 
     Risk, Portfolio, Security and Decision Quality remain gates/advisors. WAIT
     opinions are abstentions rather than directional votes, so they cannot dilute
-    BUY/SELL agreement. Missing or stale evidence still fails closed later in the
-    General Controller thresholds/gates.
+    BUY/SELL agreement. Missing/stale evidence still fails closed later in the
+    General Controller thresholds/gates. A trade also requires at least one
+    verified directional News Intelligence recommendation; absence/neutral news
+    is abstention for direction but cannot be silently upgraded into an entry.
     """
 
     freshness = tuple(str(item).strip() for item in freshness_errors if str(item).strip())
@@ -105,6 +117,14 @@ def directional_quality_signal(
             quality_score=0.0,
             agreement=0.0,
             reason="no verified directional specialist evidence",
+        )
+
+    if not any(item.agent_id.strip() in _NEWS_DIRECTIONAL_AGENTS for item in rows):
+        return DecisionQualitySignal(
+            blocked=False,
+            quality_score=0.0,
+            agreement=0.0,
+            reason="missing verified directional News Intelligence confirmation",
         )
 
     strengths: list[tuple[TradingIntent, float]] = []
