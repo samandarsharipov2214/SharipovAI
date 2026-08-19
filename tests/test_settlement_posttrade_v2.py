@@ -52,6 +52,8 @@ def test_long_settlement_preserves_side_and_cost_adjusted_pnl() -> None:
     assert review.fill.net_pnl == Decimal("17.5")
     assert review.outcome is ReviewOutcome.PROFIT
     assert review.to_dict()["lineage"]["final_intent"] == "BUY"
+    assert review.to_dict()["lineage"]["entry_intent"] == "BUY"
+    assert review.to_dict()["lineage"]["exit_intent"] is None
     assert review.to_dict()["execution_authority"] is False
 
 
@@ -106,6 +108,92 @@ def test_loss_does_not_change_original_direction() -> None:
 
     assert review.outcome is ReviewOutcome.LOSS
     assert review.lineage.final_intent is TradingIntent.BUY
+
+
+def test_losing_long_preserves_buy_entry_and_sell_exit_separately_from_outcome() -> None:
+    fill = SettlementFill(
+        side=PositionSide.LONG,
+        quantity=Decimal("1"),
+        entry_price=Decimal("100"),
+        exit_price=Decimal("95"),
+        entry_fee=Decimal("0.1"),
+        exit_fee=Decimal("0.1"),
+        realized_slippage_cost=Decimal("0.2"),
+        opened_at_ms=1000,
+        closed_at_ms=2000,
+        entry_order_id="entry-long",
+        exit_order_id="exit-long",
+    )
+    lineage = DecisionLineage(
+        decision_id="entry-decision",
+        candidate_id="entry-candidate",
+        final_intent=TradingIntent.BUY,
+        contributing_agents=("technical_analyst", "news_intelligence"),
+        gate_verdicts=(("portfolio_engine", "PASS"), ("risk_engine", "PASS"), ("security_guard", "PASS")),
+        evidence_ids=("entry-market", "entry-news"),
+        exit_decision_id="exit-decision",
+        exit_intent=TradingIntent.SELL,
+        exit_evidence_ids=("exit-market", "exit-risk"),
+    )
+    review = build_review(
+        settlement_id="settlement-long-loss",
+        symbol="BTCUSDT",
+        fill=fill,
+        lineage=lineage,
+    )
+
+    payload = review.to_dict()
+    assert review.outcome is ReviewOutcome.LOSS
+    assert review.lineage.entry_intent is TradingIntent.BUY
+    assert review.lineage.exit_intent is TradingIntent.SELL
+    assert payload["lineage"]["entry_intent"] == "BUY"
+    assert payload["lineage"]["exit_intent"] == "SELL"
+    assert payload["outcome"] == "LOSS"
+
+
+def test_exit_lineage_is_atomic_and_must_close_the_position_side() -> None:
+    with pytest.raises(ValueError, match="requires exit_decision_id, exit_intent and exit_evidence_ids together"):
+        DecisionLineage(
+            decision_id="entry-decision",
+            candidate_id="entry-candidate",
+            final_intent=TradingIntent.BUY,
+            contributing_agents=("technical_analyst",),
+            gate_verdicts=(("risk_engine", "PASS"),),
+            evidence_ids=("entry-market",),
+            exit_intent=TradingIntent.SELL,
+        )
+
+    fill = SettlementFill(
+        side=PositionSide.LONG,
+        quantity=Decimal("1"),
+        entry_price=Decimal("100"),
+        exit_price=Decimal("101"),
+        entry_fee=Decimal("0"),
+        exit_fee=Decimal("0"),
+        realized_slippage_cost=Decimal("0"),
+        opened_at_ms=1000,
+        closed_at_ms=2000,
+        entry_order_id="entry",
+        exit_order_id="exit",
+    )
+    bad_exit = DecisionLineage(
+        decision_id="entry-decision",
+        candidate_id="entry-candidate",
+        final_intent=TradingIntent.BUY,
+        contributing_agents=("technical_analyst",),
+        gate_verdicts=(("risk_engine", "PASS"),),
+        evidence_ids=("entry-market",),
+        exit_decision_id="exit-decision",
+        exit_intent=TradingIntent.BUY,
+        exit_evidence_ids=("exit-market",),
+    )
+    with pytest.raises(ValueError, match="exit_intent must close the actual opened position side"):
+        build_review(
+            settlement_id="settlement-bad-exit",
+            symbol="BTCUSDT",
+            fill=fill,
+            lineage=bad_exit,
+        )
 
 
 def test_lineage_must_match_actual_position_side() -> None:
