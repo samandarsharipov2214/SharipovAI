@@ -42,7 +42,7 @@ def _payloads(action: str = "BUY") -> list[dict[str, object]]:
             "risk_score": 22,
             "evidence_class": "verified_market",
             "verified_market_data": True,
-            "rationale": "no adverse verified news shock",
+            "rationale": "verified directional news confirmation",
         },
         {
             "agent_id": "portfolio_engine",
@@ -84,10 +84,41 @@ def _packet(decision_id: str, *, environment: TradingEnvironment = TradingEnviro
     return packet, now_ms
 
 
+def _persist_v2_gates(database: ProjectDatabase, decision_id: str, packet: CandidateEvidencePacket) -> None:
+    database.put_json(
+        "risk_assessments",
+        f"risk-{decision_id}",
+        {
+            "decision_id": decision_id,
+            "risk_score": packet.risk_score,
+            "blocks": [],
+            "assessment": {
+                "allowed_virtual": True,
+                "blockers": [],
+                "hard_blocks": [],
+            },
+        },
+        expected_version=0,
+    )
+    database.put_json(
+        "portfolio_snapshots",
+        packet.portfolio_snapshot_id,
+        {
+            "decision_id": decision_id,
+            "cash": 10_000.0,
+            "equity": 10_000.0,
+            "open_symbols": [],
+            "environment": "paper",
+        },
+        expected_version=0,
+    )
+
+
 def test_verified_council_can_authorize_paper_candidate(tmp_path) -> None:
     database = _database(tmp_path)
     runtime = CanonicalPaperDecisionRuntime(database)
     packet, now_ms = _packet("paper-decision-allow")
+    _persist_v2_gates(database, "paper-decision-allow", packet)
 
     result = runtime.assess_entry(
         "paper-decision-allow",
@@ -106,9 +137,11 @@ def test_verified_council_can_authorize_paper_candidate(tmp_path) -> None:
     assert stored["value"]["decision"] == "ALLOW"
 
 
-def test_general_controller_wait_prevents_authorization(tmp_path) -> None:
-    runtime = CanonicalPaperDecisionRuntime(_database(tmp_path))
+def test_legacy_general_controller_wait_has_no_v2_direction_authority(tmp_path) -> None:
+    database = _database(tmp_path)
+    runtime = CanonicalPaperDecisionRuntime(database)
     packet, now_ms = _packet("paper-decision-wait")
+    _persist_v2_gates(database, "paper-decision-wait", packet)
 
     result = runtime.assess_entry(
         "paper-decision-wait",
@@ -119,9 +152,13 @@ def test_general_controller_wait_prevents_authorization(tmp_path) -> None:
         regime="bull",
     )
 
-    assert result.authorized is False
-    assert result.decision is TradingDecision.WAIT
-    assert "general_controller_wait" in result.reason
+    assert result.authorized is True
+    assert result.decision is TradingDecision.ALLOW
+    stored = database.get_json(runtime.v2_decision_namespace, "paper-decision-wait")
+    assert stored is not None
+    assert stored["value"]["legacy_provider_directive"] == "WAIT"
+    assert stored["value"]["legacy_provider_directive_authority"] is False
+    assert stored["value"]["paper_decision_owner"] == "general_controller_v2"
 
 
 def test_runtime_rejects_non_paper_environment(tmp_path) -> None:
@@ -156,8 +193,10 @@ def test_runtime_fails_closed_without_agent_opinions(tmp_path) -> None:
 def test_unverified_agent_payloads_cannot_authorize_paper_candidate(tmp_path) -> None:
     """Missing verification must not be treated as verified market evidence."""
 
-    runtime = CanonicalPaperDecisionRuntime(_database(tmp_path))
+    database = _database(tmp_path)
+    runtime = CanonicalPaperDecisionRuntime(database)
     packet, now_ms = _packet("paper-decision-unverified")
+    _persist_v2_gates(database, "paper-decision-unverified", packet)
     unverified = [
         {
             key: value

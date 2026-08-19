@@ -103,7 +103,7 @@ def _payloads():
             "evidence_ids": ("signal-1",),
         },
         {
-            "agent_id": "news_analyst",
+            "agent_id": "news_intelligence",
             "action": "BUY",
             "confidence": 85,
             "evidence_score": 80,

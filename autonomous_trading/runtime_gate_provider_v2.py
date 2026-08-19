@@ -1,7 +1,7 @@
-"""Canonical fail-closed gate adapter for the Architecture V2 shadow runtime.
+"""Canonical fail-closed gate adapter for Architecture V2 paper decisions.
 
 The adapter translates already-persisted canonical paper evidence into the
-mandatory General Controller V2 Risk / Portfolio / Security gates.  It never
+mandatory General Controller V2 Risk / Portfolio / Security gates. It never
 creates trading direction and never grants execution authority.
 """
 from __future__ import annotations
@@ -16,12 +16,30 @@ from .general_controller_v2 import GateSignal, GateVerdict
 
 
 class CanonicalShadowGateProvider:
-    """Build mandatory V2 gates from the canonical paper decision evidence."""
+    """Build mandatory V2 gates from canonical paper decision evidence."""
 
     def __init__(self, database: Any) -> None:
         if database is None or not callable(getattr(database, "get_json", None)):
-            raise ValueError("canonical shadow gates require a project database")
+            raise ValueError("canonical V2 gates require a project database")
         self.database = database
+
+    def pre_decision(self, packet: Any) -> tuple[GateSignal, ...]:
+        """Evaluate gates before GC V2 chooses direction.
+
+        Security at this stage proves only that the candidate is PAPER-only and
+        carries no live approval identity. Structural TradingCandidate validation
+        remains mandatory after the controller decision and may still downgrade
+        the result fail-closed.
+        """
+
+        decision_id = str(getattr(packet, "candidate_id", "") or "").strip()
+        if not decision_id:
+            return self._all_wait("missing decision/evidence identity")
+        return (
+            self._risk_gate(decision_id, packet),
+            self._portfolio_gate(decision_id, packet),
+            self._security_gate(None, packet),
+        )
 
     def __call__(self, authorization: Any, packet: Any, state: Mapping[str, Any]) -> tuple[GateSignal, ...]:
         del state  # Portfolio evidence is the immutable snapshot captured for this decision.
@@ -96,9 +114,7 @@ class CanonicalShadowGateProvider:
                 max_notional_usdt=0.0,
             )
 
-        # This is a hard solvency ceiling, not a direction or strategy size.  The
-        # authoritative paper loop remains responsible for its smaller position
-        # sizing.  GC V2 may only observe that a positive position is possible.
+        # Hard solvency ceiling only. Portfolio cannot create BUY/SELL direction.
         max_notional = min(cash, equity)
         return GateSignal(
             "portfolio_engine",
@@ -107,13 +123,26 @@ class CanonicalShadowGateProvider:
             max_notional_usdt=max_notional,
         )
 
-    def _security_gate(self, authorization: Any, packet: Any) -> GateSignal:
+    def _security_gate(self, authorization: Any | None, packet: Any) -> GateSignal:
         environment = getattr(packet, "environment", None)
         if environment is not TradingEnvironment.PAPER:
             return GateSignal(
                 "security_guard",
                 GateVerdict.BLOCK,
-                reasons=("V2 shadow gate provider is restricted to PAPER environment",),
+                reasons=("V2 paper gate provider is restricted to PAPER environment",),
+            )
+        if str(getattr(packet, "security_approval_id", "") or "").strip():
+            return GateSignal(
+                "security_guard",
+                GateVerdict.BLOCK,
+                reasons=("PAPER candidate must not carry a live security approval identity",),
+            )
+
+        if authorization is None:
+            return GateSignal(
+                "security_guard",
+                GateVerdict.PASS,
+                reasons=("PAPER-only pre-decision boundary; structural validation still required",),
             )
 
         candidate_result = getattr(authorization, "candidate_result", None)
