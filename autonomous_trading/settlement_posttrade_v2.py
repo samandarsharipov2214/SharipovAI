@@ -141,7 +141,13 @@ class DecisionLineage:
 
 @dataclass(frozen=True, slots=True)
 class CounterfactualAttribution:
-    """Role-aware attribution inputs for learning; never mutates policy itself."""
+    """Role-aware attribution inputs for learning; never mutates policy itself.
+
+    The canonical role fields let post-trade review distinguish directional
+    Market/News evidence from controller synthesis and from non-directional
+    Risk/Security/Portfolio responsibilities. Legacy generic flags are retained
+    for backward compatibility while callers migrate to the canonical roles.
+    """
 
     direction_error: bool = False
     timing_error: bool = False
@@ -150,11 +156,18 @@ class CounterfactualAttribution:
     risk_error: bool = False
     evidence_error: bool = False
     controller_synthesis_error: bool = False
+    market_intelligence_error: bool = False
+    news_intelligence_error: bool = False
+    security_error: bool = False
     notes: tuple[str, ...] = ()
 
     @property
     def implicated_roles(self) -> tuple[str, ...]:
         roles: list[str] = []
+        if self.market_intelligence_error:
+            roles.append("market_intelligence")
+        if self.news_intelligence_error:
+            roles.append("news_intelligence")
         if self.direction_error:
             roles.append("direction")
         if self.timing_error:
@@ -165,6 +178,8 @@ class CounterfactualAttribution:
             roles.append("execution_costs")
         if self.risk_error:
             roles.append("risk_engine")
+        if self.security_error:
+            roles.append("security_guard")
         if self.evidence_error:
             roles.append("evidence")
         if self.controller_synthesis_error:

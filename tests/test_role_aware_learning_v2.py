@@ -3,7 +3,14 @@ from decimal import Decimal
 import pytest
 
 from autonomous_trading.general_controller_v2 import TradingIntent
-from autonomous_trading.role_aware_learning_v2 import LessonStage, promote_lesson, propose_lesson
+from autonomous_trading.role_aware_learning_v2 import (
+    LearningObjective,
+    LessonStage,
+    directional_correctness_eligible,
+    learning_objective_for_role,
+    promote_lesson,
+    propose_lesson,
+)
 from autonomous_trading.settlement_posttrade_v2 import (
     CounterfactualAttribution,
     DecisionLineage,
@@ -31,9 +38,9 @@ def _review(*, attribution: CounterfactualAttribution):
         decision_id="decision-1",
         candidate_id="candidate-1",
         final_intent=TradingIntent.BUY,
-        contributing_agents=("direction", "risk_engine"),
-        gate_verdicts=(("risk_engine", "PASS"), ("security", "PASS")),
-        evidence_ids=("market-1",),
+        contributing_agents=("market_intelligence", "news_intelligence"),
+        gate_verdicts=(("risk_engine", "PASS"), ("security_guard", "PASS")),
+        evidence_ids=("market-1", "news-1"),
     )
     return build_review(
         settlement_id="settlement-1",
@@ -57,6 +64,7 @@ def test_propose_lesson_only_for_implicated_role() -> None:
 
     assert lesson.stage is LessonStage.CANDIDATE
     assert lesson.role == "direction"
+    assert lesson.objective is LearningObjective.DIRECTIONAL_QUALITY
     assert lesson.source_review_ids == ("settlement-1",)
     assert lesson.evidence_ids == ("learning-evidence-1",)
     assert lesson.execution_authority is False
@@ -71,6 +79,63 @@ def test_propose_lesson_only_for_implicated_role() -> None:
         )
 
 
+def test_canonical_market_news_and_gate_roles_keep_separate_learning_objectives() -> None:
+    attribution = CounterfactualAttribution(
+        market_intelligence_error=True,
+        news_intelligence_error=True,
+        risk_error=True,
+        security_error=True,
+        sizing_error=True,
+        controller_synthesis_error=True,
+    )
+    assert attribution.implicated_roles == (
+        "market_intelligence",
+        "news_intelligence",
+        "portfolio_engine",
+        "risk_engine",
+        "security_guard",
+        "general_controller",
+    )
+
+    assert learning_objective_for_role("market_intelligence") is LearningObjective.DIRECTIONAL_QUALITY
+    assert learning_objective_for_role("news_intelligence") is LearningObjective.DIRECTIONAL_QUALITY
+    assert learning_objective_for_role("general_controller") is LearningObjective.CONTROLLER_SYNTHESIS
+    assert learning_objective_for_role("risk_engine") is LearningObjective.VETO_QUALITY
+    assert learning_objective_for_role("security_guard") is LearningObjective.VETO_QUALITY
+    assert learning_objective_for_role("portfolio_engine") is LearningObjective.POSITION_SIZING
+
+    assert directional_correctness_eligible("market_intelligence") is True
+    assert directional_correctness_eligible("news_intelligence") is True
+    assert directional_correctness_eligible("risk_engine") is False
+    assert directional_correctness_eligible("security_guard") is False
+    assert directional_correctness_eligible("portfolio_engine") is False
+    assert directional_correctness_eligible("general_controller") is False
+
+
+def test_veto_role_lesson_cannot_be_misclassified_as_directional_learning() -> None:
+    review = _review(attribution=CounterfactualAttribution(risk_error=True, security_error=True))
+
+    risk_lesson = propose_lesson(
+        lesson_id="lesson-risk",
+        review=review,
+        role="risk_engine",
+        hypothesis="tighten veto evidence under this failure mode",
+        evidence_id="learning-evidence-risk",
+    )
+    security_lesson = propose_lesson(
+        lesson_id="lesson-security",
+        review=review,
+        role="security_guard",
+        hypothesis="improve security veto coverage",
+        evidence_id="learning-evidence-security",
+    )
+
+    assert risk_lesson.objective is LearningObjective.VETO_QUALITY
+    assert security_lesson.objective is LearningObjective.VETO_QUALITY
+    assert directional_correctness_eligible(risk_lesson.role) is False
+    assert directional_correctness_eligible(security_lesson.role) is False
+
+
 def test_lesson_requires_ordered_positive_validation_before_activation() -> None:
     review = _review(attribution=CounterfactualAttribution(controller_synthesis_error=True))
     candidate = propose_lesson(
@@ -80,6 +145,8 @@ def test_lesson_requires_ordered_positive_validation_before_activation() -> None
         hypothesis="prefer WAIT under this contradiction",
         evidence_id="learning-evidence-1",
     )
+
+    assert candidate.objective is LearningObjective.CONTROLLER_SYNTHESIS
 
     with pytest.raises(ValueError, match="invalid lesson transition"):
         promote_lesson(candidate, target=LessonStage.SHADOW_VALIDATED, shadow_score_delta=0.2)
@@ -128,6 +195,8 @@ def test_active_lesson_cannot_be_promoted_again() -> None:
         hypothesis="avoid high realized slippage regimes",
         evidence_id="learning-evidence-cost",
     )
+    assert candidate.objective is LearningObjective.EXECUTION_COST
+
     replay_validated = promote_lesson(
         candidate,
         target=LessonStage.REPLAY_VALIDATED,
