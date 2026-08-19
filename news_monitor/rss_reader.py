@@ -16,6 +16,7 @@ from typing import Any
 import feedparser
 import httpx
 
+from .provenance import provenance_fields
 from .sources import default_sources
 
 USER_AGENT = os.getenv(
@@ -143,9 +144,19 @@ def _read_one_source(source: Any, limit: int) -> dict[str, object]:
             "error": f"RSS parse empty: {parse_error}" if parse_error else "RSS/Atom feed contains no entries",
         }
 
+    fetched_at = datetime.now(tz=UTC)
     normalized: list[dict[str, object]] = []
     for entry in entries[:limit]:
         title = str(entry.get("title", "") or "Untitled RSS item")
+        item_url = str(entry.get("link", source.url) or source.url)
+        provenance = provenance_fields(
+            source_id=source.id,
+            source_name=source.name,
+            source_feed_url=source.url,
+            item_url=item_url,
+            published_at=_published_iso(entry),
+            fetched_at=fetched_at,
+        )
         normalized.append(
             {
                 "source_id": source.id,
@@ -153,9 +164,9 @@ def _read_one_source(source: Any, limit: int) -> dict[str, object]:
                 "kind": "rss",
                 "title": title,
                 "summary": _entry_text(entry),
-                "url": str(entry.get("link", source.url) or source.url),
-                "published_at": _published_iso(entry),
+                "url": item_url,
                 "trust_score": source.trust_score,
+                **provenance,
             }
         )
     return {
@@ -177,10 +188,16 @@ def _entry_text(entry: Any) -> str:
 
 
 def _published_iso(entry: Any) -> str:
+    """Return the source-provided publication timestamp or an empty marker.
+
+    Missing timestamps are deliberately not replaced here.  The provenance
+    layer records that fallback explicitly using the fetch time.
+    """
+
     parsed = entry.get("published_parsed") or entry.get("updated_parsed")
     if parsed:
         try:
             return datetime(*parsed[:6], tzinfo=UTC).isoformat()
         except Exception:
             pass
-    return datetime.now(tz=UTC).isoformat()
+    return ""
