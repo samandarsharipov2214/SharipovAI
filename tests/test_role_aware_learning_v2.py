@@ -4,8 +4,10 @@ import pytest
 
 from autonomous_trading.general_controller_v2 import TradingIntent
 from autonomous_trading.role_aware_learning_v2 import (
+    LearningEvidence,
     LearningObjective,
     LessonStage,
+    ValidationGate,
     directional_correctness_eligible,
     learning_objective_for_role,
     promote_lesson,
@@ -48,6 +50,30 @@ def _review(*, attribution: CounterfactualAttribution):
         fill=fill,
         lineage=lineage,
         attribution=attribution,
+    )
+
+
+def _validation_evidence(
+    *,
+    lesson,
+    gate: ValidationGate,
+    evidence_id: str,
+    replay_delta: float | None = None,
+    shadow_delta: float | None = None,
+    accepted: bool = True,
+    role: str | None = None,
+) -> LearningEvidence:
+    return LearningEvidence(
+        evidence_id=evidence_id,
+        review_id=lesson.source_review_ids[0],
+        role=role or lesson.role,
+        hypothesis=lesson.hypothesis,
+        sample_count=25,
+        replay_score_delta=replay_delta,
+        shadow_score_delta=shadow_delta,
+        validation_gate=gate,
+        validation_protocol_id=f"{gate.value}-protocol-v1",
+        accepted=accepted,
     )
 
 
@@ -136,7 +162,7 @@ def test_veto_role_lesson_cannot_be_misclassified_as_directional_learning() -> N
     assert directional_correctness_eligible(security_lesson.role) is False
 
 
-def test_lesson_requires_ordered_positive_validation_before_activation() -> None:
+def test_lesson_requires_ordered_explicit_validation_evidence_before_activation() -> None:
     review = _review(attribution=CounterfactualAttribution(controller_synthesis_error=True))
     candidate = propose_lesson(
         lesson_id="lesson-1",
@@ -149,29 +175,45 @@ def test_lesson_requires_ordered_positive_validation_before_activation() -> None
     assert candidate.objective is LearningObjective.CONTROLLER_SYNTHESIS
 
     with pytest.raises(ValueError, match="invalid lesson transition"):
-        promote_lesson(candidate, target=LessonStage.SHADOW_VALIDATED, shadow_score_delta=0.2)
+        promote_lesson(candidate, target=LessonStage.SHADOW_VALIDATED)
 
-    with pytest.raises(ValueError, match="positive replay_score_delta"):
-        promote_lesson(candidate, target=LessonStage.REPLAY_VALIDATED, replay_score_delta=0)
+    with pytest.raises(ValueError, match="explicit LearningEvidence"):
+        promote_lesson(candidate, target=LessonStage.REPLAY_VALIDATED, replay_score_delta=0.15)
 
+    replay_evidence = _validation_evidence(
+        lesson=candidate,
+        gate=ValidationGate.REPLAY,
+        evidence_id="replay-evidence-1",
+        replay_delta=0.15,
+    )
     replay_validated = promote_lesson(
         candidate,
         target=LessonStage.REPLAY_VALIDATED,
+        validation_evidence=replay_evidence,
         replay_score_delta=0.15,
     )
     assert replay_validated.stage is LessonStage.REPLAY_VALIDATED
     assert replay_validated.replay_score_delta == 0.15
+    assert replay_validated.replay_validation_evidence_ids == ("replay-evidence-1",)
 
-    with pytest.raises(ValueError, match="positive shadow_score_delta"):
-        promote_lesson(replay_validated, target=LessonStage.SHADOW_VALIDATED, shadow_score_delta=-0.01)
+    with pytest.raises(ValueError, match="explicit LearningEvidence"):
+        promote_lesson(replay_validated, target=LessonStage.SHADOW_VALIDATED, shadow_score_delta=0.05)
 
+    shadow_evidence = _validation_evidence(
+        lesson=replay_validated,
+        gate=ValidationGate.SHADOW,
+        evidence_id="shadow-evidence-1",
+        shadow_delta=0.05,
+    )
     shadow_validated = promote_lesson(
         replay_validated,
         target=LessonStage.SHADOW_VALIDATED,
+        validation_evidence=shadow_evidence,
         shadow_score_delta=0.05,
     )
     assert shadow_validated.stage is LessonStage.SHADOW_VALIDATED
     assert shadow_validated.shadow_score_delta == 0.05
+    assert shadow_validated.shadow_validation_evidence_ids == ("shadow-evidence-1",)
 
     with pytest.raises(ValueError, match="activation requires a reason"):
         promote_lesson(shadow_validated, target=LessonStage.ACTIVE)
@@ -184,6 +226,51 @@ def test_lesson_requires_ordered_positive_validation_before_activation() -> None
     assert active.stage is LessonStage.ACTIVE
     assert active.activation_reason == "replay and shadow both improved net score"
     assert active.execution_authority is False
+
+
+def test_validation_evidence_must_match_role_gate_acceptance_and_score() -> None:
+    review = _review(attribution=CounterfactualAttribution(controller_synthesis_error=True))
+    candidate = propose_lesson(
+        lesson_id="lesson-controller",
+        review=review,
+        role="general_controller",
+        hypothesis="wait under unresolved contradiction",
+        evidence_id="learning-evidence-controller",
+    )
+
+    wrong_role = _validation_evidence(
+        lesson=candidate,
+        gate=ValidationGate.REPLAY,
+        evidence_id="replay-wrong-role",
+        replay_delta=0.2,
+        role="risk_engine",
+    )
+    with pytest.raises(ValueError, match="role must match"):
+        promote_lesson(candidate, target=LessonStage.REPLAY_VALIDATED, validation_evidence=wrong_role)
+
+    rejected = _validation_evidence(
+        lesson=candidate,
+        gate=ValidationGate.REPLAY,
+        evidence_id="replay-rejected",
+        replay_delta=0.2,
+        accepted=False,
+    )
+    with pytest.raises(ValueError, match="explicitly accepted"):
+        promote_lesson(candidate, target=LessonStage.REPLAY_VALIDATED, validation_evidence=rejected)
+
+    accepted = _validation_evidence(
+        lesson=candidate,
+        gate=ValidationGate.REPLAY,
+        evidence_id="replay-accepted",
+        replay_delta=0.2,
+    )
+    with pytest.raises(ValueError, match="must match validation evidence"):
+        promote_lesson(
+            candidate,
+            target=LessonStage.REPLAY_VALIDATED,
+            validation_evidence=accepted,
+            replay_score_delta=0.3,
+        )
 
 
 def test_active_lesson_cannot_be_promoted_again() -> None:
@@ -200,12 +287,22 @@ def test_active_lesson_cannot_be_promoted_again() -> None:
     replay_validated = promote_lesson(
         candidate,
         target=LessonStage.REPLAY_VALIDATED,
-        replay_score_delta=0.1,
+        validation_evidence=_validation_evidence(
+            lesson=candidate,
+            gate=ValidationGate.REPLAY,
+            evidence_id="replay-cost",
+            replay_delta=0.1,
+        ),
     )
     shadow_validated = promote_lesson(
         replay_validated,
         target=LessonStage.SHADOW_VALIDATED,
-        shadow_score_delta=0.1,
+        validation_evidence=_validation_evidence(
+            lesson=replay_validated,
+            gate=ValidationGate.SHADOW,
+            evidence_id="shadow-cost",
+            shadow_delta=0.1,
+        ),
     )
     active = promote_lesson(
         shadow_validated,
