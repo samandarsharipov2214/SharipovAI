@@ -12,7 +12,7 @@ from enum import StrEnum
 import math
 
 from .models import TickerInfo
-from .order_book_evidence import OrderBookEvidence
+from .order_book_evidence import BookEvidenceQuality, OrderBookEvidence
 
 
 class MarketEvidenceQuality(StrEnum):
@@ -111,7 +111,7 @@ def evaluate_cross_source_market_evidence(
                 reasons.append("cross_source_midpoint_conflict")
 
     deduplicated_reasons = tuple(dict.fromkeys(reasons))
-    if "stale_ticker" in deduplicated_reasons:
+    if "stale_ticker" in deduplicated_reasons or order_book.quality is BookEvidenceQuality.STALE:
         quality = MarketEvidenceQuality.STALE
     elif "cross_source_midpoint_conflict" in deduplicated_reasons:
         quality = MarketEvidenceQuality.CONFLICTING

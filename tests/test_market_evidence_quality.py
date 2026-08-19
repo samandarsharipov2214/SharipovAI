@@ -78,7 +78,7 @@ def test_material_cross_source_midpoint_conflict_fails_closed() -> None:
     assert "cross_source_midpoint_conflict" in evidence.quality_reasons
 
 
-def test_unusable_order_book_propagates_fail_closed_reasons() -> None:
+def test_stale_order_book_propagates_stale_fail_closed_quality() -> None:
     stale_book = _book(received_at_ms=5_000, observed_at_ms=1_000)
     evidence = evaluate_cross_source_market_evidence(
         ticker=_ticker(),
@@ -87,7 +87,7 @@ def test_unusable_order_book_propagates_fail_closed_reasons() -> None:
         evaluated_at_ms=5_000,
     )
 
-    assert evidence.quality is MarketEvidenceQuality.INVALID
+    assert evidence.quality is MarketEvidenceQuality.STALE
     assert evidence.usable_for_decision is False
     assert "order_book_unusable" in evidence.quality_reasons
     assert "order_book:stale_book" in evidence.quality_reasons
