@@ -13,6 +13,7 @@ from .final_ci_contracts import install_final_ci_contracts
 from .lifecycle_compat import ensure_event_handler_compat
 from .market_context_api import install_market_context_api
 from .release_status_api import install_release_status_api
+from .release_truth_api import install_release_truth_api
 from .telegram_restore_compat import install_telegram_restore_compat
 
 install_admin_auth_compat(force=True)
@@ -30,6 +31,7 @@ def create_app(*args: Any, **kwargs: Any):
     install_saas_billing_api(instance)
     install_market_context_api(instance)
     install_release_status_api(instance)
+    install_release_truth_api(instance)
     install_gemini_chat_api(instance)
     install_internal_ai_code_fix_api(instance)
     install_internal_agent_decisions_api(instance)
@@ -98,6 +100,7 @@ install_saas_auth_api(app)
 install_saas_billing_api(app)
 install_market_context_api(app)
 install_release_status_api(app)
+install_release_truth_api(app)
 install_gemini_chat_api(app)
 install_internal_ai_code_fix_api(app)
 install_internal_agent_decisions_api(app)
