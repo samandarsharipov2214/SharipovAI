@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from autonomous_trading import (
     CanonicalPaperDecisionRuntime,
@@ -68,6 +68,38 @@ def _payloads():
             ("news_intelligence", 80),
             ("portfolio_engine", 82),
         )
+    ]
+
+
+def _sell_payloads():
+    return [
+        {
+            "agent_id": "market_intelligence",
+            "action": "SELL",
+            "confidence": 84,
+            "evidence_score": 90,
+            "risk_score": 20,
+            "evidence_class": "verified_market",
+            "verified_market_data": True,
+        },
+        {
+            "agent_id": "news_intelligence",
+            "action": "SELL",
+            "confidence": 80,
+            "evidence_score": 90,
+            "risk_score": 20,
+            "evidence_class": "verified_market",
+            "verified_market_data": True,
+        },
+        {
+            "agent_id": "portfolio_engine",
+            "action": "WAIT",
+            "confidence": 82,
+            "evidence_score": 90,
+            "risk_score": 20,
+            "evidence_class": "verified_market",
+            "verified_market_data": True,
+        },
     ]
 
 
@@ -174,6 +206,35 @@ def test_authorized_council_decision_opens_traceable_position(tmp_path, monkeypa
     assert trade["canonical_entry_authorized"] is True
     assert trade["evidence_class"] == "verified_market"
     assert trade["verified_market_data"] is True
+
+
+def test_spot_sell_signal_does_not_open_short_when_flat(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("AUTONOMOUS_PAPER_STATE_FILE", str(tmp_path / "paper.json"))
+    database = _database(tmp_path)
+    stream = _Stream()
+    proposal = _proposal(database, "paper-council-sell-flat", stream.current.price)
+    proposal = replace(proposal, agent_payloads=_sell_payloads())
+    loop = CouncilAuthorizedPaperLoop(
+        stream,
+        decision_runtime=CanonicalPaperDecisionRuntime(database),
+        proposal_provider=lambda symbol, quote, state: proposal,
+        database=database,
+    )
+
+    loop.tick()
+    snapshot = loop.snapshot()
+
+    assert snapshot["positions"] == {}
+    assert snapshot["trades"] == []
+    assert snapshot["last_action"] == "WAIT"
+
+    stored = database.get_json(
+        CanonicalPaperDecisionRuntime.v2_decision_namespace,
+        "paper-council-sell-flat",
+    )
+    assert stored is not None
+    assert stored["value"]["controller"]["final_intent"] == "SELL"
+    assert stored["value"]["execution_authority"] is False
 
 
 def test_protective_stop_loss_does_not_wait_for_new_council(tmp_path, monkeypatch) -> None:
