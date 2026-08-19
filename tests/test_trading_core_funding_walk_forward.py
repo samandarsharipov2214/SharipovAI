@@ -99,6 +99,19 @@ def test_market_impact_increases_slippage_with_participation() -> None:
     assert large.participation_rate == pytest.approx(0.10)
 
 
+def test_walk_forward_config_rejects_overlapping_oos_windows() -> None:
+    with pytest.raises(
+        ValueError,
+        match="step_events must be >= test_events for non-overlapping out-of-sample windows",
+    ):
+        WalkForwardConfig(
+            train_events=30,
+            test_events=20,
+            step_events=10,
+            minimum_windows=2,
+        )
+
+
 def test_walk_forward_uses_sequential_out_of_sample_windows() -> None:
     events = tuple(
         MarketEvent(
@@ -130,5 +143,6 @@ def test_walk_forward_uses_sequential_out_of_sample_windows() -> None:
     assert len(result.windows) == 2
     assert result.windows[0].train_end_ms < result.windows[0].test_start_ms
     assert result.windows[1].train_end_ms < result.windows[1].test_start_ms
+    assert result.windows[0].test_end_ms < result.windows[1].test_start_ms
     assert result.metadata["out_of_sample_only"] is True
     assert result.metadata["lookahead_allowed"] is False

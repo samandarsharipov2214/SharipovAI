@@ -147,6 +147,20 @@ class WalkForwardConfig:
     chain_capital: bool = True
     minimum_windows: int = 2
 
+    def __post_init__(self) -> None:
+        if self.train_events <= 0:
+            raise ValueError("train_events must be positive")
+        if self.test_events <= 0:
+            raise ValueError("test_events must be positive")
+        if self.step_events <= 0:
+            raise ValueError("step_events must be positive")
+        if self.step_events < self.test_events:
+            raise ValueError(
+                "step_events must be >= test_events for non-overlapping out-of-sample windows"
+            )
+        if self.minimum_windows <= 0:
+            raise ValueError("minimum_windows must be positive")
+
 
 @dataclass(frozen=True, slots=True)
 class WalkForwardWindowResult:
