@@ -34,6 +34,7 @@ from .models import (
     WalkForwardWindowResult,
 )
 from .paper_broker import PaperBrokerConfig, RestartSafePaperBroker
+from .performance_statistics import PerformanceStatistics, summarize_performance
 from .purged_walk_forward import PurgedWalkForwardBacktester, PurgedWalkForwardConfig
 from .strategies import (
     BreakoutStrategy,
@@ -64,6 +65,7 @@ __all__ = [
     "MarketEvent",
     "MeanReversionStrategy",
     "PaperBrokerConfig",
+    "PerformanceStatistics",
     "PortfolioSnapshot",
     "Position",
     "PurgedWalkForwardBacktester",
@@ -89,4 +91,5 @@ __all__ = [
     "evaluate_strategy_suite",
     "evaluate_transaction_cost_scenarios",
     "run_benchmark_suite",
+    "summarize_performance",
 ]
