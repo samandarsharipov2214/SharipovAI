@@ -5,16 +5,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 
-# Repository-wide Python suites are intentionally isolated from the production
-# VPS.  The production self-hosted runner remains reserved for narrow
-# operational/VPS checks only.
+# Repository-wide Python suites and approved CI verification workflows are
+# intentionally isolated from the production VPS. The production self-hosted
+# runner remains reserved for narrow operational/VPS checks only.
 HEAVY_GITHUB_HOSTED_WORKFLOWS = (
     "ci.yml",
     "tests.yml",
+    "project-guardrails.yml",
+    "phase13-trading.yml",
 )
 
 SELF_HOSTED_LINUX_WORKFLOWS = (
-    "project-guardrails.yml",
     "full-stabilization.yml",
     "stabilization-dashboard.yml",
     "production-smoke.yml",
