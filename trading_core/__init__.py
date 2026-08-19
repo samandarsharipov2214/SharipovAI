@@ -13,6 +13,11 @@ from .benchmarks import (
     compare_strategy_to_benchmarks,
     run_benchmark_suite,
 )
+from .cost_scenarios import (
+    TransactionCostScenario,
+    TransactionCostScenarioResult,
+    evaluate_transaction_cost_scenarios,
+)
 from .costs import ExecutionCost, ExecutionCostModel
 from .models import (
     BacktestConfig,
@@ -73,6 +78,8 @@ __all__ = [
     "StrategyFactory",
     "StrategySuiteConfig",
     "StrategySuiteReport",
+    "TransactionCostScenario",
+    "TransactionCostScenarioResult",
     "TrendFollowingStrategy",
     "WalkForwardBacktester",
     "WalkForwardConfig",
@@ -80,5 +87,6 @@ __all__ = [
     "WalkForwardWindowResult",
     "compare_strategy_to_benchmarks",
     "evaluate_strategy_suite",
+    "evaluate_transaction_cost_scenarios",
     "run_benchmark_suite",
 ]
