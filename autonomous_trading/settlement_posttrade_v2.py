@@ -10,7 +10,6 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
-from typing import Mapping
 
 from autonomous_trading.general_controller_v2 import TradingIntent
 
@@ -102,7 +101,12 @@ class SettlementFill:
 
 @dataclass(frozen=True, slots=True)
 class DecisionLineage:
-    """Evidence lineage preserved exactly as it existed before execution."""
+    """Evidence lineage for entry and, when available, the separate exit decision.
+
+    ``final_intent`` remains the entry/opening intent for backward compatibility.
+    Exit intent is recorded independently so a SPOT long closed by SELL is never
+    mistaken for a short entry or for a learning label derived from PnL.
+    """
 
     decision_id: str
     candidate_id: str
@@ -110,6 +114,9 @@ class DecisionLineage:
     contributing_agents: tuple[str, ...]
     gate_verdicts: tuple[tuple[str, str], ...]
     evidence_ids: tuple[str, ...]
+    exit_decision_id: str | None = None
+    exit_intent: TradingIntent | None = None
+    exit_evidence_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.final_intent is TradingIntent.WAIT:
@@ -118,6 +125,18 @@ class DecisionLineage:
             raise ValueError("decision_id and candidate_id must not be empty")
         if not self.evidence_ids:
             raise ValueError("evidence_ids must not be empty")
+        has_exit_id = bool((self.exit_decision_id or "").strip())
+        has_exit_intent = self.exit_intent is not None
+        has_exit_evidence = bool(self.exit_evidence_ids)
+        if has_exit_id or has_exit_intent or has_exit_evidence:
+            if not has_exit_id or not has_exit_intent or not has_exit_evidence:
+                raise ValueError("exit lineage requires exit_decision_id, exit_intent and exit_evidence_ids together")
+            if self.exit_intent is TradingIntent.WAIT:
+                raise ValueError("completed position exit_intent cannot be WAIT")
+
+    @property
+    def entry_intent(self) -> TradingIntent:
+        return self.final_intent
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,9 +192,13 @@ class PostTradeReview:
         )
         if self.execution_authority:
             raise ValueError("post-trade review cannot grant execution authority")
-        expected_intent = TradingIntent.BUY if self.fill.side is PositionSide.LONG else TradingIntent.SELL
-        if self.lineage.final_intent is not expected_intent:
+        expected_entry_intent = TradingIntent.BUY if self.fill.side is PositionSide.LONG else TradingIntent.SELL
+        if self.lineage.entry_intent is not expected_entry_intent:
             raise ValueError("lineage final_intent must match the actual opened position side")
+        if self.lineage.exit_intent is not None:
+            expected_exit_intent = TradingIntent.SELL if self.fill.side is PositionSide.LONG else TradingIntent.BUY
+            if self.lineage.exit_intent is not expected_exit_intent:
+                raise ValueError("lineage exit_intent must close the actual opened position side")
 
     @property
     def outcome(self) -> ReviewOutcome:
@@ -199,6 +222,8 @@ class PostTradeReview:
         ):
             payload["fill"][field] = str(getattr(self.fill, field))
         payload["lineage"]["final_intent"] = self.lineage.final_intent.value
+        payload["lineage"]["entry_intent"] = self.lineage.entry_intent.value
+        payload["lineage"]["exit_intent"] = self.lineage.exit_intent.value if self.lineage.exit_intent is not None else None
         payload["lineage"]["gate_verdicts"] = dict(self.lineage.gate_verdicts)
         payload["max_drawdown_quote"] = str(self.max_drawdown_quote)
         payload["gross_pnl"] = str(self.fill.gross_pnl)
