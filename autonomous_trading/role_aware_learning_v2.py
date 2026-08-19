@@ -29,6 +29,11 @@ class LearningObjective(StrEnum):
     TIMING = "timing"
 
 
+class ValidationGate(StrEnum):
+    REPLAY = "replay"
+    SHADOW = "shadow"
+
+
 _ALLOWED_TRANSITIONS: dict[LessonStage, tuple[LessonStage, ...]] = {
     LessonStage.CANDIDATE: (LessonStage.REPLAY_VALIDATED,),
     LessonStage.REPLAY_VALIDATED: (LessonStage.SHADOW_VALIDATED,),
@@ -61,6 +66,9 @@ class LearningEvidence:
     sample_count: int
     replay_score_delta: float | None = None
     shadow_score_delta: float | None = None
+    validation_gate: ValidationGate | None = None
+    validation_protocol_id: str | None = None
+    accepted: bool | None = None
 
     def __post_init__(self) -> None:
         if not self.evidence_id.strip() or not self.review_id.strip():
@@ -69,6 +77,8 @@ class LearningEvidence:
             raise ValueError("role and hypothesis must not be empty")
         if self.sample_count <= 0:
             raise ValueError("sample_count must be positive")
+        if self.validation_protocol_id is not None and not self.validation_protocol_id.strip():
+            raise ValueError("validation_protocol_id must not be blank")
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +92,8 @@ class ValidatedLesson:
     objective: LearningObjective = LearningObjective.EVIDENCE_QUALITY
     replay_score_delta: float | None = None
     shadow_score_delta: float | None = None
+    replay_validation_evidence_ids: tuple[str, ...] = ()
+    shadow_validation_evidence_ids: tuple[str, ...] = ()
     activation_reason: str | None = None
     execution_authority: bool = False
 
@@ -141,33 +153,90 @@ def propose_lesson(*, lesson_id: str, review: PostTradeReview, role: str, hypoth
     )
 
 
+def _validated_gate_evidence(
+    *,
+    lesson: ValidatedLesson,
+    evidence: LearningEvidence | None,
+    expected_gate: ValidationGate,
+) -> LearningEvidence:
+    if evidence is None:
+        raise ValueError(f"{expected_gate.value} validation requires explicit LearningEvidence")
+    if evidence.role != lesson.role:
+        raise ValueError("validation evidence role must match lesson role")
+    if evidence.hypothesis != lesson.hypothesis:
+        raise ValueError("validation evidence hypothesis must match lesson hypothesis")
+    if evidence.validation_gate is not expected_gate:
+        raise ValueError(f"validation evidence gate must be {expected_gate.value}")
+    if not (evidence.validation_protocol_id or "").strip():
+        raise ValueError("validation evidence requires validation_protocol_id")
+    if evidence.accepted is not True:
+        raise ValueError("validation evidence must be explicitly accepted")
+    return evidence
+
+
 def promote_lesson(
     lesson: ValidatedLesson,
     *,
     target: LessonStage,
+    validation_evidence: LearningEvidence | None = None,
     replay_score_delta: float | None = None,
     shadow_score_delta: float | None = None,
     activation_reason: str | None = None,
 ) -> ValidatedLesson:
-    """Promote exactly one lifecycle step after explicit validation evidence."""
+    """Promote exactly one lifecycle step after explicit validation evidence.
+
+    Replay and shadow promotion are evidence-bound. Score deltas are retained as
+    compatibility inputs, but when supplied they must exactly match the
+    immutable validation evidence instead of acting as standalone authority.
+    """
     if target not in _ALLOWED_TRANSITIONS[lesson.stage]:
         raise ValueError(f"invalid lesson transition: {lesson.stage.value} -> {target.value}")
 
     if target is LessonStage.REPLAY_VALIDATED:
-        if replay_score_delta is None or replay_score_delta <= 0:
+        evidence = _validated_gate_evidence(
+            lesson=lesson,
+            evidence=validation_evidence,
+            expected_gate=ValidationGate.REPLAY,
+        )
+        evidence_delta = evidence.replay_score_delta
+        if evidence_delta is None or evidence_delta <= 0:
             raise ValueError("replay validation requires positive replay_score_delta")
-        return replace(lesson, stage=target, replay_score_delta=float(replay_score_delta))
+        if replay_score_delta is not None and float(replay_score_delta) != float(evidence_delta):
+            raise ValueError("replay_score_delta must match validation evidence")
+        return replace(
+            lesson,
+            stage=target,
+            replay_score_delta=float(evidence_delta),
+            replay_validation_evidence_ids=(evidence.evidence_id,),
+        )
 
     if target is LessonStage.SHADOW_VALIDATED:
         if lesson.replay_score_delta is None or lesson.replay_score_delta <= 0:
             raise ValueError("shadow validation requires prior positive replay validation")
-        if shadow_score_delta is None or shadow_score_delta <= 0:
+        if not lesson.replay_validation_evidence_ids:
+            raise ValueError("shadow validation requires prior replay validation evidence")
+        evidence = _validated_gate_evidence(
+            lesson=lesson,
+            evidence=validation_evidence,
+            expected_gate=ValidationGate.SHADOW,
+        )
+        evidence_delta = evidence.shadow_score_delta
+        if evidence_delta is None or evidence_delta <= 0:
             raise ValueError("shadow validation requires positive shadow_score_delta")
-        return replace(lesson, stage=target, shadow_score_delta=float(shadow_score_delta))
+        if shadow_score_delta is not None and float(shadow_score_delta) != float(evidence_delta):
+            raise ValueError("shadow_score_delta must match validation evidence")
+        return replace(
+            lesson,
+            stage=target,
+            shadow_score_delta=float(evidence_delta),
+            shadow_validation_evidence_ids=(evidence.evidence_id,),
+        )
 
     if target is LessonStage.ACTIVE:
         if lesson.shadow_score_delta is None or lesson.shadow_score_delta <= 0:
             raise ValueError("activation requires prior positive shadow validation")
+        if not lesson.replay_validation_evidence_ids or not lesson.shadow_validation_evidence_ids:
+            raise ValueError("activation requires replay and shadow validation evidence")
         if not (activation_reason or "").strip():
             raise ValueError("activation requires a reason")
         return replace(lesson, stage=target, activation_reason=activation_reason.strip())
@@ -180,6 +249,7 @@ __all__ = [
     "LearningObjective",
     "LessonStage",
     "ValidatedLesson",
+    "ValidationGate",
     "directional_correctness_eligible",
     "implicated_roles",
     "learning_objective_for_role",
