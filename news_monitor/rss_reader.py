@@ -16,6 +16,7 @@ from typing import Any
 import feedparser
 import httpx
 
+from .event_identity import cluster_news_events
 from .provenance import provenance_fields
 from .sources import default_sources
 
@@ -43,7 +44,14 @@ def rss_status() -> dict[str, object]:
 
 
 def read_rss_items(limit_per_source: int = 8) -> dict[str, object]:
-    """Read latest items from allowlisted RSS sources with diagnostics."""
+    """Read latest items from allowlisted RSS sources with diagnostics.
+
+    The response preserves the existing flat ``items`` list for backward
+    compatibility and also exposes a compact bounded ``events`` view. Repeated
+    RSS copies from the same source family therefore remain auditable as raw
+    items without inflating the event-level family count consumed by newer
+    evidence paths.
+    """
 
     limit = max(int(limit_per_source), 1)
     sources = [source for source in default_sources() if source.kind == "rss" and source.enabled]
@@ -78,17 +86,25 @@ def read_rss_items(limit_per_source: int = 8) -> dict[str, object]:
 
     source_results.sort(key=lambda item: str(item.get("source_id", "")))
     working_sources = sum(1 for result in source_results if int(result.get("item_count", 0) or 0) > 0)
+    event_view = cluster_news_events(items)
+    events = event_view["events"]
+    assert isinstance(events, list)
     return {
         "status": "ok" if items else "empty",
         "generated_at": datetime.now(tz=UTC).isoformat(),
         "rss": rss_status(),
         "items": items,
+        "events": events,
         "errors": errors,
         "diagnostics": {
             "source_count": len(sources),
             "working_sources": working_sources,
             "failed_or_empty_sources": len(sources) - working_sources,
             "item_count": len(items),
+            "event_count": int(event_view["event_count"]),
+            "event_items_processed": int(event_view["processed_item_count"]),
+            "event_items_truncated": bool(event_view["truncated"]),
+            "event_max_items": int(event_view["max_items"]),
             "source_results": source_results,
         },
     }
