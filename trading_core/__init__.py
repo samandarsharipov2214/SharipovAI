@@ -29,6 +29,7 @@ from .models import (
     WalkForwardWindowResult,
 )
 from .paper_broker import PaperBrokerConfig, RestartSafePaperBroker
+from .purged_walk_forward import PurgedWalkForwardBacktester, PurgedWalkForwardConfig
 from .strategies import (
     BreakoutStrategy,
     BuyAndHoldStrategy,
@@ -60,6 +61,8 @@ __all__ = [
     "PaperBrokerConfig",
     "PortfolioSnapshot",
     "Position",
+    "PurgedWalkForwardBacktester",
+    "PurgedWalkForwardConfig",
     "RegimeFilteredBreakoutConfig",
     "RegimeFilteredBreakoutStrategy",
     "RestartSafePaperBroker",
