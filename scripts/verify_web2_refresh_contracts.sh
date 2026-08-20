@@ -153,7 +153,17 @@ curl --connect-timeout 5 --max-time 15 --fail --silent --show-error "$PUBLIC_URL
 echo
 
 echo "[verify 3/3] Verifying Telegram webhook and Mini App menu..."
-docker exec -i -e PYTHONPATH=/app -e EXPECTED_PUBLIC_URL="$PUBLIC_URL" "$SERVICE" python - <<'PY'
+# A container cutover can produce one short-lived Telegram delivery error while
+# Caddy swaps the upstream. Keep normal Telegram health conservative (300 s),
+# but for this transactional cutover require a 30 s quiet period. Repeated real
+# failures refresh last_error_date and therefore remain fail-closed. The longer
+# polling window lets a single transient error age out without rolling back an
+# otherwise healthy candidate.
+docker exec -i \
+  -e PYTHONPATH=/app \
+  -e EXPECTED_PUBLIC_URL="$PUBLIC_URL" \
+  -e TELEGRAM_WEBHOOK_ERROR_MAX_AGE_SECONDS=30 \
+  "$SERVICE" python - <<'PY'
 import os
 import time
 from dashboard.telegram_webhook_api import _set_webhook, _telegram
@@ -168,17 +178,20 @@ assert main_keyboard()["inline_keyboard"][-1][0]["web_app"]["url"] == expected
 assert _set_webhook().get("status") == "ok"
 
 last_evidence = {}
-for _ in range(10):
+for _ in range(30):
     health = telegram_health()
     info = health.get("webhook_info", {}).get("result", {})
     menu = _telegram("getChatMenuButton").get("result", {})
     menu_url = ((menu.get("web_app") or {}).get("url") or "").rstrip("/")
+    pending_updates = int(info.get("pending_update_count") or 0)
     last_evidence = {
         "verdict": health.get("verdict"),
         "webhook_url": info.get("url"),
         "last_error_date": health.get("last_error_date"),
+        "last_error_age_seconds": health.get("last_error_age_seconds"),
         "last_error_is_current": bool(health.get("last_error_is_current")),
         "stale_webhook_error_ignored": bool(health.get("stale_webhook_error_ignored")),
+        "pending_update_count": pending_updates,
         "menu_type": menu.get("type"),
         "menu_url": menu_url,
     }
@@ -186,6 +199,7 @@ for _ in range(10):
         health.get("verdict") == "working"
         and info.get("url") == f"{expected}/telegram/webhook"
         and not health.get("last_error_is_current")
+        and pending_updates == 0
         and menu.get("type") == "web_app"
         and menu_url == expected
     ):
