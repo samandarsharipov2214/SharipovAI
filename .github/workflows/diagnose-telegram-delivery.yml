@@ -1,9 +1,7 @@
 name: Diagnose Telegram Delivery
 
 on:
-  pull_request:
-    paths:
-      - .github/workflows/diagnose-telegram-delivery.yml
+  workflow_dispatch:
 
 permissions:
   contents: read
