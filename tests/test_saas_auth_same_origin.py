@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from dashboard.auth_saas import ensure_same_origin
@@ -8,7 +8,7 @@ def _app() -> FastAPI:
     app = FastAPI()
 
     @app.post("/check-origin")
-    def check_origin(request):
+    def check_origin(request: Request):
         ensure_same_origin(request)
         return {"status": "ok"}
 
