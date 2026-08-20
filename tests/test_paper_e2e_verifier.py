@@ -59,6 +59,29 @@ def test_complete_verified_round_trip_and_restart_recovery(tmp_path: Path, monke
         },
     )
     database.put_json(
+        "paper_v2_decisions",
+        "decision-1",
+        {
+            "decision_id": "decision-1",
+            "decided_at_ms": 900,
+            "paper_decision_owner": "general_controller_v2",
+            "authorized": True,
+            "controller": {"final_intent": "BUY"},
+            "execution_authority": False,
+        },
+    )
+    database.put_json(
+        "paper_authorization_consumption",
+        "decision-1",
+        {
+            "decision_id": "decision-1",
+            "decision": "ALLOW",
+            "consumed_at_ms": 950,
+            "paper_decision_owner": "general_controller_v2",
+            "execution_authority": False,
+        },
+    )
+    database.put_json(
         f"paper_trades:{scope}",
         "buy-1",
         {
@@ -93,8 +116,12 @@ def test_complete_verified_round_trip_and_restart_recovery(tmp_path: Path, monke
         "decision-1",
         {
             "decision_id": "decision-1",
-            "reputation_recorded": True,
-            "lessons": ["verified lesson"],
+            "selected_action": "BUY",
+            "realized_outcome": "PROFIT",
+            "reputation_recorded": False,
+            "legacy_direction_labeling_disabled": True,
+            "learning_mode": "v2_role_aware_pending_replay",
+            "verified_market_data": True,
             "net_pnl": 5.0,
         },
     )
@@ -118,10 +145,12 @@ def test_complete_verified_round_trip_and_restart_recovery(tmp_path: Path, monke
     assert snapshot["e2e_chain_complete"] is True
     assert snapshot["release_evidence_complete"] is True
     assert snapshot["round_trip"]["decision_id"] == "decision-1"
+    assert snapshot["round_trip"]["paper_decision_owner"] == "general_controller_v2"
     assert all(snapshot["round_trip"]["chain"].values())
 
     baseline = write_restart_baseline(database)
     assert baseline["buy_trade_id"] == "buy-1"
+    assert baseline["paper_decision_owner"] == "general_controller_v2"
     recovered = verify_restart_recovery(database)
     assert recovered["recovery_verified"] is True
     assert all(recovered["checks"].values())

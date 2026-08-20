@@ -19,6 +19,10 @@ from storage import ProjectDatabase, list_json_items
 
 BASELINE_NAMESPACE = "paper_e2e_verification"
 BASELINE_KEY = "restart_baseline"
+V2_DECISION_NAMESPACE = "paper_v2_decisions"
+AUTHORIZATION_NAMESPACE = "paper_authorization_consumption"
+V2_DECISION_OWNER = "general_controller_v2"
+V2_LEARNING_MODE = "v2_role_aware_pending_replay"
 
 
 def _truthy(name: str) -> bool:
@@ -33,6 +37,13 @@ def _paper_scope() -> str:
 def _values(database: ProjectDatabase, namespace: str) -> list[dict[str, Any]]:
     rows = list_json_items(database, namespace, limit=10_000, newest_first=False)
     return [dict(row["value"]) for row in rows if isinstance(row.get("value"), Mapping)]
+
+
+def _json_value(database: ProjectDatabase, namespace: str, key: str) -> dict[str, Any]:
+    row = database.get_json(namespace, key)
+    if not isinstance(row, Mapping) or not isinstance(row.get("value"), Mapping):
+        return {}
+    return dict(row["value"])
 
 
 def _financial_locks() -> dict[str, bool]:
@@ -94,7 +105,32 @@ def _decision_traces(database: ProjectDatabase) -> list[dict[str, Any]]:
     ]
 
 
-def _completed_round_trip(database: ProjectDatabase, scope: str) -> dict[str, Any] | None:
+def _v2_learning_settled(settlement: Mapping[str, Any]) -> bool:
+    return bool(
+        settlement.get("learning_mode") == V2_LEARNING_MODE
+        and settlement.get("legacy_direction_labeling_disabled") is True
+        and settlement.get("verified_market_data") is True
+    )
+
+
+def _completed_round_trip(
+    database: ProjectDatabase,
+    scope: str,
+    *,
+    since_ms: int = 0,
+) -> dict[str, Any] | None:
+    """Return the newest fully linked V2 PAPER BUY -> SELL settlement.
+
+    Historical legacy PAPER rows are deliberately ineligible even when they
+    have canonical_entry_authorized=True. A release proof must link the BUY to
+    an immutable General Controller V2 decision and to a single-use consumed
+    V2 authorization. ``since_ms`` optionally restricts the proof to decisions,
+    authorizations and BUYs created at or after a deployment/baseline boundary.
+    """
+
+    if since_ms < 0:
+        raise ValueError("since_ms must be non-negative")
+
     trades = _values(database, f"paper_trades:{scope}")
     buys = [
         item
@@ -103,10 +139,35 @@ def _completed_round_trip(database: ProjectDatabase, scope: str) -> dict[str, An
         and str(item.get("decision_id") or "").strip()
         and item.get("canonical_entry_authorized") is True
         and item.get("verified_market_data") is True
+        and int(item.get("created_at_ms") or 0) >= since_ms
     ]
+
     for buy in reversed(buys):
         decision_id = str(buy.get("decision_id") or "").strip()
         buy_ms = int(buy.get("created_at_ms") or 0)
+
+        v2_decision = _json_value(database, V2_DECISION_NAMESPACE, decision_id)
+        if v2_decision.get("paper_decision_owner") != V2_DECISION_OWNER:
+            continue
+        if v2_decision.get("authorized") is not True:
+            continue
+        decided_at_ms = int(v2_decision.get("decided_at_ms") or 0)
+        if decided_at_ms < since_ms:
+            continue
+
+        consumed = _json_value(database, AUTHORIZATION_NAMESPACE, decision_id)
+        if consumed.get("paper_decision_owner") != V2_DECISION_OWNER:
+            continue
+        if str(consumed.get("decision") or "").upper() != "ALLOW":
+            continue
+        if str(consumed.get("decision_id") or decision_id).strip() != decision_id:
+            continue
+        consumed_at_ms = int(consumed.get("consumed_at_ms") or 0)
+        if consumed_at_ms < since_ms or consumed_at_ms < decided_at_ms:
+            continue
+        if buy_ms < consumed_at_ms:
+            continue
+
         sells = [
             item
             for item in trades
@@ -118,14 +179,16 @@ def _completed_round_trip(database: ProjectDatabase, scope: str) -> dict[str, An
         if not sells:
             continue
         sell = sells[-1]
-        settlement_row = database.get_json("paper_decision_settlements", decision_id)
-        settlement = (
-            dict(settlement_row.get("value") or {})
-            if isinstance(settlement_row, Mapping)
+
+        settlement = _json_value(database, "paper_decision_settlements", decision_id)
+        if not settlement or not _v2_learning_settled(settlement):
+            continue
+
+        controller = (
+            dict(v2_decision.get("controller") or {})
+            if isinstance(v2_decision.get("controller"), Mapping)
             else {}
         )
-        if not settlement:
-            continue
         return {
             "decision_id": decision_id,
             "candidate_id": str(buy.get("candidate_id") or ""),
@@ -134,6 +197,10 @@ def _completed_round_trip(database: ProjectDatabase, scope: str) -> dict[str, An
             "sell_trade_id": str(sell.get("trade_id") or ""),
             "buy_created_at_ms": buy_ms,
             "sell_created_at_ms": int(sell.get("created_at_ms") or 0),
+            "v2_decided_at_ms": decided_at_ms,
+            "authorization_consumed_at_ms": consumed_at_ms,
+            "paper_decision_owner": v2_decision.get("paper_decision_owner"),
+            "controller_final_intent": controller.get("final_intent"),
             "net_pnl": sell.get("net_pnl"),
             "decision_quality_confidence": buy.get("decision_quality_confidence"),
             "decision_quality_agreement": buy.get("decision_quality_agreement"),
@@ -141,6 +208,9 @@ def _completed_round_trip(database: ProjectDatabase, scope: str) -> dict[str, An
             "settlement": settlement,
             "chain": {
                 "market_verified": buy.get("verified_market_data") is True,
+                "v2_decision_owned": v2_decision.get("paper_decision_owner") == V2_DECISION_OWNER,
+                "v2_decision_authorized": v2_decision.get("authorized") is True,
+                "v2_authorization_consumed": consumed.get("paper_decision_owner") == V2_DECISION_OWNER,
                 "council_authorized": buy.get("canonical_entry_authorized") is True,
                 "decision_quality_recorded": bool(
                     buy.get("decision_quality_confidence") is not None
@@ -150,28 +220,32 @@ def _completed_round_trip(database: ProjectDatabase, scope: str) -> dict[str, An
                 "paper_sell": True,
                 "pnl_recorded": sell.get("net_pnl") is not None,
                 "evidence_persisted": bool(settlement),
-                "learning_settled": bool(
-                    settlement.get("reputation_recorded") is True
-                    or settlement.get("lessons")
-                ),
+                "learning_settled": _v2_learning_settled(settlement),
             },
         }
     return None
 
 
-def collect_snapshot(database: ProjectDatabase | None = None) -> dict[str, Any]:
+def collect_snapshot(
+    database: ProjectDatabase | None = None,
+    *,
+    since_ms: int = 0,
+) -> dict[str, Any]:
+    if since_ms < 0:
+        raise ValueError("since_ms must be non-negative")
     database = database or ProjectDatabase()
     database.initialize()
     scope = _paper_scope()
     state_row = database.get_json("autonomous_paper_state", scope)
     state = dict(state_row.get("value") or {}) if isinstance(state_row, Mapping) else {}
-    round_trip = _completed_round_trip(database, scope)
+    round_trip = _completed_round_trip(database, scope, since_ms=since_ms)
     organs = _organ_snapshot(database)
     locks = _financial_locks()
     chain = dict((round_trip or {}).get("chain") or {})
     chain_complete = bool(chain) and all(chain.values())
     return {
         "generated_at_ms": int(time.time() * 1000),
+        "evidence_since_ms": int(since_ms),
         "database": database.health(),
         "paper_scope": scope,
         "financial_locks": locks,
@@ -199,10 +273,11 @@ def write_restart_baseline(database: ProjectDatabase | None = None) -> dict[str,
     snapshot = collect_snapshot(database)
     round_trip = snapshot.get("round_trip")
     if not snapshot.get("e2e_chain_complete") or not isinstance(round_trip, Mapping):
-        raise RuntimeError("a complete verified Paper BUY->SELL settlement is required before restart")
+        raise RuntimeError("a complete verified V2 Paper BUY->SELL settlement is required before restart")
     baseline = {
         "created_at_ms": int(time.time() * 1000),
         "decision_id": str(round_trip.get("decision_id") or ""),
+        "paper_decision_owner": str(round_trip.get("paper_decision_owner") or ""),
         "buy_trade_id": str(round_trip.get("buy_trade_id") or ""),
         "sell_trade_id": str(round_trip.get("sell_trade_id") or ""),
         "symbol": str(round_trip.get("symbol") or ""),
@@ -228,9 +303,13 @@ def verify_restart_recovery(database: ProjectDatabase | None = None) -> dict[str
     trade_ids = {str(item.get("trade_id") or "") for item in trades}
     decision_id = str(baseline.get("decision_id") or "")
     settlement = database.get_json("paper_decision_settlements", decision_id)
+    v2_decision = _json_value(database, V2_DECISION_NAMESPACE, decision_id)
+    consumed = _json_value(database, AUTHORIZATION_NAMESPACE, decision_id)
     state = database.get_json("autonomous_paper_state", scope)
     checks = {
         "paper_state_reloaded": bool(state and isinstance(state.get("value"), Mapping)),
+        "v2_decision_recovered": v2_decision.get("paper_decision_owner") == V2_DECISION_OWNER,
+        "v2_authorization_recovered": consumed.get("paper_decision_owner") == V2_DECISION_OWNER,
         "buy_history_recovered": str(baseline.get("buy_trade_id") or "") in trade_ids,
         "sell_history_recovered": str(baseline.get("sell_trade_id") or "") in trade_ids,
         "settlement_recovered": bool(settlement and isinstance(settlement.get("value"), Mapping)),
@@ -246,19 +325,21 @@ def verify_restart_recovery(database: ProjectDatabase | None = None) -> dict[str
 
 def _print_human(snapshot: Mapping[str, Any]) -> None:
     print(f"PAPER_E2E_COMPLETE={str(bool(snapshot.get('e2e_chain_complete'))).lower()}")
+    print(f"EVIDENCE_SINCE_MS={int(snapshot.get('evidence_since_ms') or 0)}")
     organs = snapshot.get("ai_organs") or {}
     print(f"AI_ORGANS={organs.get('healthy', 0)}/{organs.get('total', 9)}")
     print(f"FINANCIAL_LOCKS_SAFE={str(bool(snapshot.get('financial_locks_safe'))).lower()}")
     round_trip = snapshot.get("round_trip")
     if isinstance(round_trip, Mapping):
         print(
-            "ROUND_TRIP="
+            "V2_ROUND_TRIP="
             f"{round_trip.get('symbol')} decision={round_trip.get('decision_id')} "
+            f"owner={round_trip.get('paper_decision_owner')} "
             f"buy={round_trip.get('buy_trade_id')} sell={round_trip.get('sell_trade_id')} "
             f"net_pnl={round_trip.get('net_pnl')}"
         )
     else:
-        print("ROUND_TRIP=waiting for a natural canonical Paper BUY -> SELL")
+        print("V2_ROUND_TRIP=waiting for a natural General Controller V2 Paper BUY -> SELL")
     for trace in list(snapshot.get("decision_traces") or [])[:10]:
         print(
             "TRACE "
@@ -277,11 +358,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--watch-seconds", type=int, default=0)
     parser.add_argument("--interval-seconds", type=int, default=10)
+    parser.add_argument("--since-ms", type=int, default=0)
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--prepare-restart", action="store_true")
     parser.add_argument("--verify-restart", action="store_true")
     args = parser.parse_args(argv)
 
+    if args.since_ms < 0:
+        parser.error("--since-ms must be non-negative")
     if args.prepare_restart and args.verify_restart:
         parser.error("choose only one restart mode")
 
@@ -297,7 +381,7 @@ def main(argv: list[str] | None = None) -> int:
 
     deadline = time.monotonic() + max(args.watch_seconds, 0)
     while True:
-        snapshot = collect_snapshot(database)
+        snapshot = collect_snapshot(database, since_ms=args.since_ms)
         if args.json:
             print(json.dumps(snapshot, ensure_ascii=False, indent=2))
         else:
