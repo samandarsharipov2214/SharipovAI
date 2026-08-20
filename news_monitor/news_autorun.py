@@ -74,11 +74,52 @@ def refresh_news_now(*, reason: str = "manual", limit_per_source: int | None = N
             limit = int(limit_per_source or news_limit_per_source())
             result = read_rss_items(limit_per_source=limit)
             raw_items = list(result.get("items", []))
-            analyzed = analyzed_news_payload(raw_items)
-            agents = run_news_agents(raw_items)
             diagnostics = result.get("diagnostics", {})
             errors = result.get("errors", [])
+            working_sources = int(diagnostics.get("working_sources", 0) or 0) if isinstance(diagnostics, dict) else 0
             state = load_news_state()
+
+            # An empty result is only a successful refresh when at least one RSS
+            # source was actually reachable. If every source failed, advancing
+            # ``last_refresh_at`` would make old/unknown news look fresh merely
+            # because a failed network attempt completed without raising.
+            if not raw_items and working_sources <= 0:
+                last_successful_refresh_at = int(state.get("last_refresh_at", 0) or 0)
+                state["last_refresh_attempt_at"] = started
+                state["last_refresh_attempt_reason"] = reason
+                state["last_refresh_errors"] = errors
+                state["rss_diagnostics"] = diagnostics
+                state["rss_reader"] = result.get("rss", rss_status())
+                state["rss_enabled"] = True
+                state["source_mode"] = "rss_unavailable_no_verified_source"
+                save_news_state(state)
+                _LAST_STATUS = {
+                    "status": "error",
+                    "error": "rss_unavailable_no_verified_source",
+                    "last_refresh_attempt_at": started,
+                    "last_successful_refresh_at": last_successful_refresh_at,
+                    "reason": reason,
+                    "item_count": 0,
+                    "working_sources": 0,
+                    "error_count": len(errors),
+                    "errors": errors[:10],
+                    "refresh_seconds": news_refresh_seconds(),
+                }
+                return {
+                    "status": "error",
+                    "reason": reason,
+                    "error": "rss_unavailable_no_verified_source",
+                    "rss": result.get("rss", {}),
+                    "item_count": 0,
+                    "working_sources": 0,
+                    "errors": errors,
+                    "diagnostics": diagnostics,
+                    "last_refresh_attempt_at": started,
+                    "last_successful_refresh_at": last_successful_refresh_at,
+                }
+
+            analyzed = analyzed_news_payload(raw_items)
+            agents = run_news_agents(raw_items)
             state["news"] = analyzed
             state["agents"] = agents
             state["rss_reader"] = result.get("rss", rss_status())
@@ -88,9 +129,8 @@ def refresh_news_now(*, reason: str = "manual", limit_per_source: int | None = N
             state["last_refresh_item_count"] = len(raw_items)
             state["last_refresh_errors"] = errors
             state["rss_diagnostics"] = diagnostics
-            state["source_mode"] = "real_rss" if raw_items else "rss_empty_real_fetch_failed_or_empty"
+            state["source_mode"] = "real_rss" if raw_items else "rss_verified_empty"
             save_news_state(state)
-            working_sources = int(diagnostics.get("working_sources", 0) or 0) if isinstance(diagnostics, dict) else 0
             _LAST_STATUS = {
                 "status": "running" if reason == "autorun" else "refreshed",
                 "last_refresh_at": started,
