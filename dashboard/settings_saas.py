@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
 
 _TRUE = {"1", "true", "yes", "on"}
 
@@ -36,6 +37,11 @@ def _bool_env(name: str, default: bool) -> bool:
     return raw.strip().lower() in _TRUE
 
 
+def _default_database_url() -> str:
+    data_dir = Path(os.getenv("SHARIPOVAI_DATA_DIR", "data"))
+    return f"sqlite:///{data_dir / 'sharipovai_shared.db'}"
+
+
 @lru_cache(maxsize=1)
 def get_saas_settings() -> SaaSSettings:
     environment = os.getenv("ENVIRONMENT", "").strip().lower()
@@ -43,7 +49,7 @@ def get_saas_settings() -> SaaSSettings:
     auth_secret = os.getenv("AUTH_SECRET", "").strip()
     jwt_secret = os.getenv("JWT_SECRET", "").strip() or auth_secret or "local-dev-jwt-secret-change-me"
     return SaaSSettings(
-        database_url=os.getenv("DATABASE_URL", "sqlite:///./data/sharipovai_saas.sqlite3").strip(),
+        database_url=os.getenv("DATABASE_URL", _default_database_url()).strip(),
         jwt_secret=jwt_secret,
         jwt_algorithm=os.getenv("JWT_ALGORITHM", "HS256").strip() or "HS256",
         jwt_ttl_seconds=max(900, int(os.getenv("JWT_TTL_SECONDS", str(60 * 60 * 24 * 7)))),
