@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import urlsplit
 
 import jwt
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -47,7 +48,21 @@ def ensure_same_origin(request: Request) -> None:
     if not origin:
         return
     host = request.headers.get("host", "").split(",", 1)[0].strip().lower()
-    if not origin.lower().startswith((f"http://{host}", f"https://{host}")):
+    try:
+        parsed = urlsplit(origin)
+    except ValueError:
+        parsed = None
+    if (
+        not host
+        or parsed is None
+        or parsed.scheme.lower() not in {"http", "https"}
+        or parsed.netloc.lower() != host
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
         raise HTTPException(status_code=403, detail={"status": "cross_origin_blocked"})
 
 
