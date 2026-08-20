@@ -47,7 +47,7 @@ class AutonomousCouncilProposalProvider(_BaseProvider):
             cash=_finite_or_none(state.get("cash")),
             entry_threshold=self.entry_change_percent,
         )
-        market = self.stream.evidence(clean_symbol)
+        market = self.last_market_evidence(clean_symbol)
         sources = _sources(market)
         quote_ts = int(getattr(quote, "received_at_unix_ms", 0) or 0)
         persist_decision_trace(
@@ -103,16 +103,15 @@ class AutonomousCouncilProposalProvider(_BaseProvider):
             )
             return
 
-        try:
-            market = self.stream.evidence(symbol)
-        except Exception as exc:
+        market = self.last_market_evidence(symbol)
+        if not market:
             persist_decision_trace(
                 self.database,
                 symbol,
                 {
                     "status": "BLOCK",
                     "phase": "market_evidence",
-                    "reason": f"market evidence unavailable: {type(exc).__name__}",
+                    "reason": "market evidence unavailable: canonical provider did not capture evidence",
                     "market_verified": False,
                 },
                 now_ms=now_ms,
