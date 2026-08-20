@@ -20,13 +20,7 @@ class AdminPrincipal:
 def admin_principal(request: Request) -> AdminPrincipal:
     """Require an authenticated administrator and return bounded identity."""
 
-    require_admin(request)
-    try:
-        from dashboard.app import _session_username
-
-        username = _session_username(request) or "admin"
-    except Exception:
-        username = "admin"
+    username = require_admin(request)
     return AdminPrincipal(username=str(username)[:128])
 
 
