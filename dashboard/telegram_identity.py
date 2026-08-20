@@ -16,7 +16,7 @@ class TelegramIdentityConflict(RuntimeError):
 @dataclass(frozen=True)
 class TelegramIdentityBinding:
     telegram_user_id: int
-    canonical_user_id: int
+    canonical_user_id: str
 
 
 def _telegram_key(telegram_user_id: int) -> str:
@@ -24,6 +24,13 @@ def _telegram_key(telegram_user_id: int) -> str:
     if parsed <= 0:
         raise ValueError("telegram_user_id must be positive")
     return f"telegram:{parsed}"
+
+
+def _canonical_user_id(value: object) -> str:
+    parsed = str(value).strip()
+    if not parsed or len(parsed) > 200:
+        raise ValueError("canonical_user_id must contain 1..200 characters")
+    return parsed
 
 
 def get_telegram_identity_binding(
@@ -45,24 +52,23 @@ def get_telegram_identity_binding(
         raise RuntimeError("telegram identity binding is malformed")
     if value.get("provider") != _PROVIDER or int(value.get("telegram_user_id", 0)) != parsed:
         raise RuntimeError("telegram identity binding provenance mismatch")
-    canonical_user_id = int(value.get("canonical_user_id", 0))
-    if canonical_user_id <= 0:
-        raise RuntimeError("telegram identity binding has invalid canonical user")
+    try:
+        canonical_user_id = _canonical_user_id(value.get("canonical_user_id"))
+    except ValueError as exc:
+        raise RuntimeError("telegram identity binding has invalid canonical user") from exc
     return TelegramIdentityBinding(parsed, canonical_user_id)
 
 
 def bind_telegram_identity(
     telegram_user_id: int,
-    canonical_user_id: int,
+    canonical_user_id: str,
     *,
     database: ProjectDatabase | None = None,
 ) -> TelegramIdentityBinding:
     """Bind once without allowing a Telegram subject to be silently reassigned."""
 
     parsed_telegram_id = int(telegram_user_id)
-    parsed_user_id = int(canonical_user_id)
-    if parsed_user_id <= 0:
-        raise ValueError("canonical_user_id must be positive")
+    parsed_user_id = _canonical_user_id(canonical_user_id)
     key = _telegram_key(parsed_telegram_id)
     db = database or ProjectDatabase()
     db.initialize()
