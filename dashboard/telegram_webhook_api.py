@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 
 from telegram_system_adapter import CANONICAL_WEBAPP_URL, handle_callback, handle_message, main_keyboard, send_message, setup_bot_commands
 from telegram_health import telegram_health
+from dashboard.telegram_update_idempotency import claim_telegram_update
 
 TELEGRAM_API_TIMEOUT = 20.0
 MINIAPP_MAX_AGE_SECONDS = int(os.getenv("TELEGRAM_INIT_DATA_MAX_AGE", "3600"))
@@ -49,6 +50,12 @@ def install_telegram_webhook_api(app: FastAPI) -> None:
             raise HTTPException(status_code=403, detail="invalid_webhook_secret")
         if not isinstance(update, dict) or "update_id" not in update:
             raise HTTPException(status_code=400, detail="invalid_telegram_update")
+        try:
+            update_id = int(update["update_id"])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="invalid_telegram_update_id")
+        if not claim_telegram_update(update_id):
+            return {"ok": True, "duplicate": True, "update_id": update_id, "adapter": "shared_website_system"}
         # Проверяем, не development callback ли это
         if 'callback_query' in update:
             from telegram_development_control import handle_development_callback
