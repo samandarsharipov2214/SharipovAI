@@ -112,7 +112,7 @@ def _session_username(app_module: Any, request: Any) -> str | None:
 
         user = app_module._user_record(app_module._load_users(), normalized)
         if not user:
-            return normalized
+            return None
         if not bool(user.get("active", True)):
             return None
         if str(user.get("role", "")).lower() not in {"admin", "user"}:
