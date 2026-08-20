@@ -11,6 +11,8 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from storage.web_chat_persistence import persist_web_chat_completion
+
 from .auth_saas import ensure_same_origin, require_current_user
 from .db_saas import SessionLocal
 from .models_saas import ChatMessageLog, Subscription, User
@@ -135,6 +137,14 @@ def record_chat_completion(
         )
     )
     db.flush()
+    persist_web_chat_completion(
+        user_id=user.id,
+        user_email=user.email,
+        user_message=user_message,
+        assistant_message=assistant_message,
+        model_name=model_name,
+        request_id=request_id,
+    )
 
 
 def _subscription_from_provider_id(db: Session, provider_subscription_id: str) -> Subscription | None:
