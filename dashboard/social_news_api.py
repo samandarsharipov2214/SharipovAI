@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import Body, FastAPI
+from fastapi import Body, FastAPI, HTTPException
 
 from news_monitor.agents import agent_configs_payload, run_news_agents
 from news_monitor.analyzer import analyzed_news_payload
@@ -77,7 +77,11 @@ def install_social_news_api(app: FastAPI) -> None:
 
     @app.get("/api/social-news/rss/refresh")
     def social_news_rss_refresh_get() -> dict[str, object]:
-        return refresh_news_now(reason="manual_get_rss_refresh")
+        raise HTTPException(
+            status_code=405,
+            detail={"status": "method_not_allowed", "message": "Use POST to refresh RSS state."},
+            headers={"Allow": "POST"},
+        )
 
     @app.get("/api/social-news/telegram/status")
     def social_news_telegram_status() -> dict[str, object]:
