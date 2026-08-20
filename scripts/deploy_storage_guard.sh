@@ -26,12 +26,31 @@ print_disk() {
 }
 
 prune_build_cache() {
+  local docker_config_tmp status
   if ! command -v docker >/dev/null 2>&1; then
     echo "STORAGE_GUARD_PRUNE_UNAVAILABLE docker command is missing." >&2
     return 1
   fi
+
+  # The deploy watcher runs in a hardened systemd unit where /root can be
+  # read-only. Docker CLI otherwise attempts to create /root/.docker even for a
+  # harmless builder-prune operation. Give this one bounded command its own
+  # writable, ephemeral client config and always remove it afterwards.
+  docker_config_tmp="$(mktemp -d /tmp/sharipovai-storage-guard-docker-config-XXXXXX)" || {
+    echo "STORAGE_GUARD_PRUNE_UNAVAILABLE cannot create temporary Docker config." >&2
+    return 1
+  }
+  chmod 0700 "$docker_config_tmp"
+
   echo "STORAGE_GUARD_PRUNE_BUILD_CACHE starting disposable BuildKit cache cleanup."
-  timeout --signal=TERM --kill-after=30s "${PRUNE_TIMEOUT_SECONDS}s" docker builder prune -af
+  if DOCKER_CONFIG="$docker_config_tmp" \
+    timeout --signal=TERM --kill-after=30s "${PRUNE_TIMEOUT_SECONDS}s" docker builder prune -af; then
+    status=0
+  else
+    status=$?
+  fi
+  rm -rf "$docker_config_tmp"
+  return "$status"
 }
 
 case "$MODE" in
