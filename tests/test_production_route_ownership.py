@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import Counter
+from collections import defaultdict
 
 from fastapi import FastAPI
 
@@ -21,16 +21,21 @@ def _route_owners(app: FastAPI) -> list[tuple[str, str, str]]:
     return owners
 
 
-def test_production_routes_have_single_method_path_owner() -> None:
-    app = dashboard.create_production_app()
-    signatures = [(method, path) for method, path, _module in _route_owners(app)]
-    duplicates = {
-        signature: count
-        for signature, count in Counter(signatures).items()
-        if count > 1
+def _duplicate_owners(app: FastAPI) -> dict[tuple[str, str], list[str]]:
+    grouped: dict[tuple[str, str], list[str]] = defaultdict(list)
+    for method, path, module in _route_owners(app):
+        grouped[(method, path)].append(module)
+    return {
+        signature: modules
+        for signature, modules in grouped.items()
+        if len(modules) > 1
     }
 
-    assert duplicates == {}
+
+def test_production_routes_have_single_method_path_owner() -> None:
+    app = dashboard.create_production_app()
+
+    assert _duplicate_owners(app) == {}
 
 
 def test_critical_production_routes_have_exactly_one_owner() -> None:
