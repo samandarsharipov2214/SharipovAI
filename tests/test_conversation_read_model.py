@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from storage.conversation_read_model import ConversationReadModel
 from storage.project_database import ProjectDatabase
 
@@ -18,6 +20,7 @@ def _append(
     role: str,
     content: str,
     created_at_ms: int,
+    metadata: dict[str, Any] | None = None,
 ) -> None:
     database.append_message(
         project_id="sharipovai",
@@ -25,7 +28,7 @@ def _append(
         message_id=message_id,
         role=role,
         content=content,
-        metadata={"source": "test"},
+        metadata=metadata or {"source": "test"},
         created_at_ms=created_at_ms,
     )
 
@@ -47,6 +50,76 @@ def test_conversation_index_is_derived_from_existing_canonical_messages(tmp_path
     assert web.last_message_at_ms == 300
     assert web.last_role == "assistant"
     assert web.last_content == "world"
+    assert web.channels == ()
+    assert web.actor_ids == ()
+    assert web.actor_types == ()
+
+
+def test_conversation_index_exposes_stored_cross_channel_actor_provenance(tmp_path) -> None:
+    database = _database(tmp_path)
+    _append(
+        database,
+        chat_id="shared-user-1",
+        message_id="m1",
+        role="user",
+        content="web question",
+        created_at_ms=100,
+        metadata={"channel": "web", "actor_id": "user-1", "actor_type": "user"},
+    )
+    _append(
+        database,
+        chat_id="shared-user-1",
+        message_id="m2",
+        role="assistant",
+        content="web answer",
+        created_at_ms=200,
+        metadata={"channel": "web", "actor_id": "system-gemini", "actor_type": "system"},
+    )
+    _append(
+        database,
+        chat_id="shared-user-1",
+        message_id="m3",
+        role="user",
+        content="telegram follow-up",
+        created_at_ms=300,
+        metadata={"channel": "telegram", "actor_id": "user-1", "actor_type": "user"},
+    )
+    _append(
+        database,
+        chat_id="shared-user-1",
+        message_id="m4",
+        role="assistant",
+        content="mini app answer",
+        created_at_ms=400,
+        metadata={"channel": "miniapp", "actor_id": "system-gemini", "actor_type": "system"},
+    )
+
+    index = ConversationReadModel(database).list_conversations(project_id="sharipovai")
+
+    assert len(index.conversations) == 1
+    conversation = index.conversations[0]
+    assert conversation.channels == ("miniapp", "telegram", "web")
+    assert conversation.actor_ids == ("system-gemini", "user-1")
+    assert conversation.actor_types == ("system", "user")
+
+
+def test_missing_provenance_is_not_guessed_from_chat_id(tmp_path) -> None:
+    database = _database(tmp_path)
+    _append(
+        database,
+        chat_id="telegram-424242",
+        message_id="m1",
+        role="user",
+        content="no metadata provenance",
+        created_at_ms=100,
+        metadata={"source": "legacy"},
+    )
+
+    conversation = ConversationReadModel(database).list_conversations(project_id="sharipovai").conversations[0]
+
+    assert conversation.channels == ()
+    assert conversation.actor_ids == ()
+    assert conversation.actor_types == ()
 
 
 def test_history_delegates_to_project_database_and_preserves_order(tmp_path) -> None:
