@@ -31,7 +31,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: tests-${{ github.event.pull_request.number || github.ref }}
+  # Cancel superseded runs for the same PR, but keep each distinct pushed
+  # commit independently verifiable on main instead of cancelling older pushes.
+  group: tests-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
 jobs:

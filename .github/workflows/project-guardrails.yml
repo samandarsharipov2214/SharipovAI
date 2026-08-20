@@ -57,7 +57,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: guardrails-${{ github.event.pull_request.number || github.ref }}
+  # A newer commit may supersede the same PR run, but a pushed main commit must
+  # keep its own immutable verification result instead of being cancelled.
+  group: guardrails-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
 jobs:
