@@ -13,17 +13,44 @@ _I18N_DIR = Path(__file__).parent
 
 
 def normalize_language(language: str | None) -> str:
-    """Normalize a requested language code.
+    """Normalize a requested language or ``Accept-Language`` value.
+
+    Regional locale tags are mapped onto the three canonical UI catalogs. When
+    several language ranges are supplied, the first supported range with a
+    non-zero quality value wins. Unknown or empty input falls back to Russian.
 
     Args:
-        language: Requested language code.
+        language: Requested language code or ``Accept-Language`` value.
 
     Returns:
-        Supported language code, falling back to Russian.
+        Canonical supported language code, falling back to Russian.
     """
 
-    if language in SUPPORTED_LANGUAGES:
-        return language
+    if not language:
+        return DEFAULT_LANGUAGE
+
+    for raw_range in str(language).split(","):
+        parts = [part.strip() for part in raw_range.split(";") if part.strip()]
+        if not parts:
+            continue
+
+        quality = 1.0
+        for parameter in parts[1:]:
+            name, separator, value = parameter.partition("=")
+            if separator and name.strip().lower() == "q":
+                try:
+                    quality = float(value.strip())
+                except ValueError:
+                    quality = 0.0
+                break
+        if quality <= 0:
+            continue
+
+        locale = parts[0].lower().replace("_", "-")
+        primary_language = locale.split("-", 1)[0]
+        if primary_language in SUPPORTED_LANGUAGES:
+            return primary_language
+
     return DEFAULT_LANGUAGE
 
 
