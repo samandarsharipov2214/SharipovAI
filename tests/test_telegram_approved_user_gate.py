@@ -61,13 +61,15 @@ def test_unbound_or_malformed_identity_fails_closed(monkeypatch):
     assert telegram_api._approved_telegram_user_id({"message": {"from": {"id": 101}}}) is None
 
 
-def test_webhook_ignores_unapproved_actor_before_idempotency_claim(monkeypatch):
+def test_webhook_claims_but_does_not_dispatch_unapproved_actor(monkeypatch):
     app = _app(monkeypatch)
     monkeypatch.setattr(telegram_api, "_webhook_secret", lambda: "secret")
     monkeypatch.setattr(telegram_api, "_approved_telegram_user_id", lambda _update: None)
 
     claims = []
+    processed = []
     monkeypatch.setattr(telegram_api, "claim_telegram_update", lambda update_id: claims.append(update_id) or True)
+    monkeypatch.setattr(telegram_api, "_process_update_safely", lambda update: processed.append(update))
 
     with TestClient(app) as client:
         response = client.post(
@@ -84,7 +86,8 @@ def test_webhook_ignores_unapproved_actor_before_idempotency_claim(monkeypatch):
         "update_id": 7001,
         "adapter": "shared_website_system",
     }
-    assert claims == []
+    assert claims == [7001]
+    assert processed == []
 
 
 def test_webhook_queues_only_approved_actor(monkeypatch):
