@@ -59,9 +59,10 @@ def install_telegram_webhook_api(app: FastAPI) -> None:
             update_id = int(update["update_id"])
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="invalid_telegram_update_id")
+        if not claim_telegram_update(update_id):
+            return {"ok": True, "duplicate": True, "update_id": update_id, "adapter": "shared_website_system"}
 
-        canonical_user_id = _approved_telegram_user_id(update)
-        if canonical_user_id is None:
+        if _approved_telegram_user_id(update) is None:
             return {
                 "ok": True,
                 "ignored": True,
@@ -70,8 +71,6 @@ def install_telegram_webhook_api(app: FastAPI) -> None:
                 "adapter": "shared_website_system",
             }
 
-        if not claim_telegram_update(update_id):
-            return {"ok": True, "duplicate": True, "update_id": update_id, "adapter": "shared_website_system"}
         # Проверяем, не development callback ли это
         if 'callback_query' in update:
             from telegram_development_control import handle_development_callback
