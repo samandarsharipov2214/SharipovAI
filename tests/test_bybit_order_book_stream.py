@@ -67,6 +67,26 @@ def test_new_snapshot_replaces_local_book_instead_of_merging() -> None:
     assert book.level_counts == (1, 1)
 
 
+def test_service_restart_update_id_one_replaces_book_even_if_labeled_delta() -> None:
+    """A Bybit ``u=1`` restart marker must never retain pre-restart levels."""
+
+    book = BoundedBybitOrderBook("BTCUSDT", max_levels=5)
+    book.apply_message(
+        _message(kind="snapshot", u=100, bids=(("100", "1"),), asks=(("101", "1"),)),
+        received_at_ms=1_000,
+    )
+
+    restarted = book.apply_message(
+        _message(kind="delta", u=1, ts=1_100, bids=(("90", "2"),), asks=(("110", "2"),)),
+        received_at_ms=1_100,
+    )
+
+    assert restarted.usable_for_decision is True
+    assert restarted.best_bid == 90.0
+    assert restarted.best_ask == 110.0
+    assert book.level_counts == (1, 1)
+
+
 def test_delta_before_snapshot_and_sequence_gap_fail_closed_and_reset() -> None:
     book = BoundedBybitOrderBook("BTCUSDT")
     with pytest.raises(ValueError, match="missing_snapshot"):
