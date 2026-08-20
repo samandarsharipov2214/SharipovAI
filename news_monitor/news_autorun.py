@@ -114,10 +114,20 @@ def refresh_news_now(*, reason: str = "manual", limit_per_source: int | None = N
                 "agents": agents,
             }
         except Exception as exc:  # pragma: no cover - production safety
-            _LAST_STATUS = {"status": "error", "error": f"{type(exc).__name__}: {exc}", "last_refresh_at": started, "reason": reason}
             state = load_news_state()
-            state["last_refresh_at"] = started
-            state["last_refresh_reason"] = reason
+            last_successful_refresh_at = int(state.get("last_refresh_at", 0) or 0)
+            _LAST_STATUS = {
+                "status": "error",
+                "error": f"{type(exc).__name__}: {exc}",
+                "last_refresh_attempt_at": started,
+                "last_successful_refresh_at": last_successful_refresh_at,
+                "reason": reason,
+            }
+            # A failed attempt is not a successful refresh. Preserve the last
+            # successful timestamp so freshness checks cannot label old data as
+            # fresh merely because a new attempt failed.
+            state["last_refresh_attempt_at"] = started
+            state["last_refresh_attempt_reason"] = reason
             state["last_refresh_errors"] = [{"source_id": "news_autorun", "error": _LAST_STATUS["error"]}]
             state["source_mode"] = "rss_refresh_runtime_error"
             save_news_state(state)
