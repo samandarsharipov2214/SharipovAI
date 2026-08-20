@@ -17,6 +17,7 @@ def test_web2_news_has_truthful_empty_state_and_only_renders_received_impact():
     source = PAGE.read_text(encoding="utf-8")
 
     assert "Нет подтверждённых новостей" in source
-    assert "Интерфейс не подставляет демонстрационные события вместо данных API." in source
+    assert "Нет подтверждённых данных API" in source
+    assert "Интерфейс не подставляет демонстрационные значения." in source
     assert "x.ai_impact ?? x.impact ?? ''" in source
     assert "n.impact && <p>AI влияние: {n.impact}</p>" in source
