@@ -237,6 +237,46 @@ def test_spot_sell_signal_does_not_open_short_when_flat(tmp_path, monkeypatch) -
     assert stored["value"]["execution_authority"] is False
 
 
+def test_spot_sell_signal_closes_existing_long_with_single_use_authorization(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("AUTONOMOUS_PAPER_STATE_FILE", str(tmp_path / "paper.json"))
+    database = _database(tmp_path)
+    stream = _Stream()
+    buy = _proposal(database, "paper-council-buy-long", stream.current.price)
+    sell = _proposal(database, "paper-council-sell-long", stream.current.price)
+    sell = replace(sell, agent_payloads=_sell_payloads())
+    proposals = iter((buy, sell, sell))
+    loop = CouncilAuthorizedPaperLoop(
+        stream,
+        decision_runtime=CanonicalPaperDecisionRuntime(database),
+        proposal_provider=lambda _symbol, _quote, _state: next(proposals),
+        database=database,
+    )
+
+    loop.tick()
+    loop.tick()
+    loop.tick()  # retry of the consumed SELL must not mutate PAPER twice.
+    snapshot = loop.snapshot()
+
+    assert snapshot["positions"] == {}
+    assert [item["side"] for item in snapshot["trades"]] == ["BUY", "SELL"]
+    exit_trade = snapshot["trades"][-1]
+    assert exit_trade["decision_id"] == "paper-council-buy-long"
+    assert exit_trade["exit_authorization_decision_id"] == "paper-council-sell-long"
+    assert exit_trade["exit_authorization_single_use"] is True
+    assert exit_trade["canonical_exit_protective"] is False
+
+    consumed = database.get_json(
+        CanonicalPaperDecisionRuntime.consumption_namespace,
+        "paper-council-sell-long",
+    )
+    assert consumed is not None
+    assert consumed["value"]["paper_decision_owner"] == "general_controller_v2"
+    assert database.get_json(
+        CanonicalPaperDecisionRuntime.settlement_namespace,
+        "paper-council-buy-long",
+    ) is not None
+
+
 def test_protective_stop_loss_does_not_wait_for_new_council(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("AUTONOMOUS_PAPER_STATE_FILE", str(tmp_path / "paper.json"))
     database = _database(tmp_path)

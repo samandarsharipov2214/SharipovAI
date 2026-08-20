@@ -118,8 +118,13 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
 
                 position = self._state["positions"].get(symbol)
                 if position:
+                    # Capital-preservation exits are intentionally local and
+                    # immediate.  If none fires, keep the position available
+                    # for a fresh, canonical GC V2 SELL decision below.
                     self._manage_protective_exit(symbol, quote)
-                    continue
+                    position = self._state["positions"].get(symbol)
+                    if position is None:
+                        continue
 
                 try:
                     proposal = self.proposal_provider(
@@ -174,7 +179,8 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
 
                 validation = authorization.candidate_result.validation
                 assessment = authorization.assessment
-                decision_action = "BUY" if authorization.authorized else (
+                candidate_side = authorization.candidate_result.candidate.side.value.upper()
+                decision_action = candidate_side if authorization.authorized else (
                     "BLOCK" if authorization.decision is TradingDecision.BLOCK else "WAIT"
                 )
                 self._trace(
@@ -205,7 +211,41 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                     self._event("BLOCK", reason, symbol)
                     continue
 
-                if authorization.candidate_result.candidate.side.value != "Buy":
+                if position is not None and candidate_side == "SELL":
+                    try:
+                        self.decision_runtime.consume_authorization(
+                            authorization,
+                            consumed_at_ms=self._now_ms(),
+                        )
+                    except Exception as exc:
+                        reason = f"authorization_consumption_error:{type(exc).__name__}: {exc}"
+                        self._trace(symbol, "BLOCK", reason, phase="authorization_consumption")
+                        self._event("BLOCK", reason, symbol)
+                        continue
+
+                    self._close(
+                        symbol,
+                        quote.price,
+                        f"canonical_council_sell:{authorization.decision_id}",
+                        exit_authorization=authorization,
+                    )
+                    self._trace(
+                        symbol,
+                        "SELL",
+                        f"canonical council authorization consumed and paper SELL closed long: {authorization.decision_id}",
+                        phase="virtual_execution",
+                        decision_id=authorization.decision_id,
+                        authorized=True,
+                    )
+                    continue
+
+                if position is not None:
+                    reason = "spot paper loop already has a long position; BUY cannot increase exposure"
+                    self._trace(symbol, "WAIT", reason, phase="execution_gate")
+                    self._event("WAIT", reason, symbol)
+                    continue
+
+                if candidate_side != "BUY":
                     reason = "spot paper loop does not open a short position"
                     self._trace(symbol, "WAIT", reason, phase="execution_gate")
                     self._event("WAIT", reason, symbol)
@@ -389,13 +429,28 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         elif change is not None and change <= self.exit_change_percent:
             self._close(symbol, quote.price, "protective_momentum_exit")
 
-    def _close(self, symbol: str, price: float, reason: str) -> None:
+    def _close(
+        self,
+        symbol: str,
+        price: float,
+        reason: str,
+        *,
+        exit_authorization: PaperDecisionAuthorization | None = None,
+    ) -> None:
         position = dict(self._state["positions"].get(symbol) or {})
         self._pending_exit_context = {
             "decision_id": str(position.get("decision_id") or "").strip(),
             "candidate_id": str(position.get("candidate_id") or "").strip(),
             "entry_price": float(position.get("entry_price", 0.0) or 0.0),
             "entry_fee": float(position.get("entry_fee", 0.0) or 0.0),
+            "exit_decision_id": (
+                exit_authorization.decision_id if exit_authorization is not None else ""
+            ),
+            "exit_candidate_id": (
+                exit_authorization.candidate_result.candidate.candidate_id
+                if exit_authorization is not None
+                else ""
+            ),
         }
         try:
             super()._close(symbol, price, reason)
@@ -472,6 +527,18 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                         "canonical_exit_protective": True,
                     }
                 )
+                exit_decision_id = self._pending_exit_context.get("exit_decision_id", "")
+                if exit_decision_id:
+                    item.update(
+                        {
+                            "exit_authorization_decision_id": exit_decision_id,
+                            "exit_authorization_candidate_id": self._pending_exit_context.get(
+                                "exit_candidate_id", exit_decision_id
+                            ),
+                            "exit_authorization_single_use": True,
+                            "canonical_exit_protective": False,
+                        }
+                    )
                 net = float(net_pnl or 0.0)
                 try:
                     settlement = self.decision_runtime.settle_exit(
