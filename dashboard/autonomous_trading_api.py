@@ -16,6 +16,7 @@ from autonomous_trading import (
     SharedVerifiedMarketStream,
 )
 from autonomous_trading.runtime_gate_provider_v2 import CanonicalShadowGateProvider
+from autonomous_trading.status_snapshot import nonblocking_loop_snapshot
 from exchange_connector.market_data import MarketDataService
 from exchange_connector.multi_exchange_consensus import MultiExchangeConsensus
 from storage import ProjectDatabase, list_json_items
@@ -99,7 +100,7 @@ def install_autonomous_trading_api(app: FastAPI) -> None:
 
     @app.get("/api/autonomous-paper/status")
     def autonomous_paper_status() -> dict[str, Any]:
-        return loop.snapshot()
+        return nonblocking_loop_snapshot(loop)
 
     @app.post("/api/autonomous-paper/tick")
     def autonomous_paper_tick() -> dict[str, Any]:

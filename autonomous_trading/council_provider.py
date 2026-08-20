@@ -78,6 +78,7 @@ class AutonomousCouncilProposalProvider:
             max(float(os.getenv("COUNCIL_ESTIMATED_SLIPPAGE_PERCENT", "0.05")), 0.0),
             2.0,
         )
+        self._last_market_evidence: dict[str, dict[str, Any]] = {}
 
     def __call__(self, symbol: str, quote: Any, state: Mapping[str, Any]) -> CouncilEntryProposal | None:
         now_ms = int(time.time() * 1000)
@@ -89,6 +90,7 @@ class AutonomousCouncilProposalProvider:
                 return None
 
         market = self.stream.evidence(clean_symbol)
+        self._last_market_evidence[clean_symbol] = dict(market) if isinstance(market, Mapping) else {}
         if market.get("verified") is not True or market.get("synthetic_fallback_used") is True:
             return None
         sources = tuple(str(item) for item in market.get("consensus_sources", ()) if str(item).strip())
@@ -289,6 +291,10 @@ class AutonomousCouncilProposalProvider:
             general_controller_decision=directive,
             regime=_meta_regime(regime),
         )
+
+    def last_market_evidence(self, symbol: str) -> dict[str, Any]:
+        """Return the exact evidence snapshot consumed by the latest provider call."""
+        return dict(self._last_market_evidence.get(_symbol(symbol), {}))
 
     def _news_opinion(self, agent_id: str, *, now_ms: int) -> tuple[dict[str, Any] | None, list[str]]:
         try:
