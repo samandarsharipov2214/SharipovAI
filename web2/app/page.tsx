@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 
 type Json = Record<string, unknown>;
+type ChatMessage = {from:'user'|'ai'; text:string};
 type Section = 'Обзор'|'Рынок'|'AI-решение'|'Портфель'|'Сделки'|'AI-боты'|'AI-чат'|'Новости'|'Risk Center'|'Bybit'|'Настройки';
 
 const NAV: Array<[Section, React.ComponentType<{size?: number}>]> = [
@@ -61,9 +62,7 @@ export default function Home() {
   const [bots, setBots] = useState<Json | null>(null);
   const [news, setNews] = useState<Json | null>(null);
   const [error, setError] = useState('');
-  const [chat, setChat] = useState<Array<{from:'user'|'ai'; text:string}>>([
-    { from:'ai', text:'Я онлайн. Могу объяснить доступные подтверждённые данные и состояние системы.' }
-  ]);
+  const [chat, setChat] = useState<ChatMessage[]>([]);
   const [message, setMessage] = useState('');
 
   const load = useCallback(async () => {
@@ -100,16 +99,25 @@ export default function Home() {
     e.preventDefault();
     const text = message.trim();
     if (!text) return;
+    const history = chat.slice(-20).map(item => ({
+      role: item.from === 'ai' ? 'assistant' : 'user',
+      content: item.text,
+    }));
     setChat(v => [...v, { from:'user', text }]);
     setMessage('');
     try {
-      const r = await fetch(apiUrl('/api/chat/message'), {
-        method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({message:text})
+      const r = await fetch(apiUrl('/api/ai/chat'), {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({message:text, history}),
       });
+      if (!r.ok) throw new Error(`chat ${r.status}`);
       const out = await r.json() as Json;
-      setChat(v => [...v, { from:'ai', text:String(out.reply ?? 'Ответ не получен') }]);
+      const reply = String(out.text ?? '').trim();
+      if (!reply) throw new Error('chat empty response');
+      setChat(v => [...v, { from:'ai', text:reply }]);
     } catch {
-      setChat(v => [...v, { from:'ai', text:'Не удалось связаться с AI API.' }]);
+      setChat(v => [...v, { from:'ai', text:'Не удалось получить подтверждённый ответ AI API.' }]);
     }
   }
 
@@ -192,8 +200,8 @@ function BotsPage({rows,active,total}:{rows:Json[];active:number|null;total:numb
   </>;
 }
 
-function ChatPage({chat,message,setMessage,send}:{chat:Array<{from:'user'|'ai';text:string}>;message:string;setMessage:(v:string)=>void;send:(e:React.FormEvent)=>void}) {
-  return <article className="panel chatPage"><h2>Чат с SharipoAI</h2><div className="chatLog">{chat.map((m,i)=><div key={i} className={`bubble ${m.from}`}><b>{m.from==='ai'?'SharipoAI':'Пользователь'}</b><p>{m.text}</p></div>)}</div><form onSubmit={send}><textarea value={message} onChange={e=>setMessage(e.target.value)} placeholder="Напиши команду или вопрос…"/><button>Отправить</button></form></article>;
+function ChatPage({chat,message,setMessage,send}:{chat:ChatMessage[];message:string;setMessage:(v:string)=>void;send:(e:React.FormEvent)=>void}) {
+  return <article className="panel chatPage"><h2>Чат с SharipoAI</h2><div className="chatLog">{chat.length ? chat.map((m,i)=><div key={i} className={`bubble ${m.from}`}><b>{m.from==='ai'?'SharipoAI':'Пользователь'}</b><p>{m.text}</p></div>) : <p>История этого сеанса пока пуста. Отправь вопрос, чтобы получить ответ через канонический AI API.</p>}</div><form onSubmit={send}><textarea value={message} onChange={e=>setMessage(e.target.value)} placeholder="Напиши команду или вопрос…"/><button>Отправить</button></form></article>;
 }
 
 function NewsPage({rows}:{rows:Json[]}) {
