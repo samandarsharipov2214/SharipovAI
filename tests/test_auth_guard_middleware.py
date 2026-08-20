@@ -29,6 +29,18 @@ def _app(monkeypatch, *, username: str | None = None) -> FastAPI:
     def miniapp_auth():
         return {"ok": True}
 
+    @app.post("/api/telegram/set-webhook")
+    def set_webhook():
+        return {"ok": True}
+
+    @app.post("/api/telegram/delete-webhook")
+    def delete_webhook():
+        return {"ok": True}
+
+    @app.post("/api/telegram/test-message")
+    def test_message():
+        return {"ok": True}
+
     @app.get("/api/check-ai")
     def public_check():
         return {"status": "ok"}
@@ -61,6 +73,19 @@ def test_self_authenticated_telegram_routes_remain_public(monkeypatch) -> None:
         assert client.post("/telegram/webhook").status_code == 200
         assert client.post("/api/telegram/miniapp-auth").status_code == 200
         assert client.get("/api/check-ai").status_code == 200
+
+
+def test_telegram_admin_mutations_require_factory_session(monkeypatch) -> None:
+    monkeypatch.delenv("SHARIPOVAI_DISABLE_AUTH", raising=False)
+    with TestClient(_app(monkeypatch)) as client:
+        assert client.post("/api/telegram/set-webhook").status_code == 401
+        assert client.post("/api/telegram/delete-webhook").status_code == 401
+        assert client.post("/api/telegram/test-message").status_code == 401
+
+    with TestClient(_app(monkeypatch, username="verified-admin")) as client:
+        assert client.post("/api/telegram/set-webhook").status_code == 200
+        assert client.post("/api/telegram/delete-webhook").status_code == 200
+        assert client.post("/api/telegram/test-message").status_code == 200
 
 
 def test_auth_bypass_requires_explicit_truthy_value(monkeypatch) -> None:
