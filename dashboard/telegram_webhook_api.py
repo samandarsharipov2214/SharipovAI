@@ -16,6 +16,7 @@ from sqlalchemy import select
 
 from telegram_system_adapter import CANONICAL_WEBAPP_URL, handle_callback, handle_message, main_keyboard, send_message, setup_bot_commands
 from telegram_health import telegram_health
+from dashboard.admin_guard import require_admin
 from dashboard.auth_saas import ensure_same_origin, get_current_user, issue_access_token, serialize_user, set_auth_cookie
 from dashboard.db_saas import SessionLocal
 from dashboard.models_saas import User
@@ -83,27 +84,27 @@ def install_telegram_webhook_api(app: FastAPI) -> None:
 
     @app.get("/api/telegram/set-webhook")
     def set_webhook_get() -> JSONResponse:
-        return JSONResponse(status_code=405, content={"status": "method_not_allowed", "use": "POST /api/telegram/set-webhook with X-SharipovAI-Admin"})
+        return JSONResponse(status_code=405, content={"status": "method_not_allowed", "use": "POST /api/telegram/set-webhook as an authenticated admin"})
 
     @app.post("/api/telegram/set-webhook")
-    def set_webhook_post(x_sharipovai_admin: str | None = Header(default=None)) -> dict[str, Any]:
-        _require_admin_token(x_sharipovai_admin)
+    def set_webhook_post(request: Request) -> dict[str, Any]:
+        require_admin(request)
         result = _set_webhook()
         app.state.telegram_webhook_autoconfigure = result
         return result
 
     @app.get("/api/telegram/delete-webhook")
     def delete_webhook_get() -> JSONResponse:
-        return JSONResponse(status_code=405, content={"status": "method_not_allowed", "use": "POST /api/telegram/delete-webhook with X-SharipovAI-Admin"})
+        return JSONResponse(status_code=405, content={"status": "method_not_allowed", "use": "POST /api/telegram/delete-webhook as an authenticated admin"})
 
     @app.post("/api/telegram/delete-webhook")
-    def delete_webhook_post(x_sharipovai_admin: str | None = Header(default=None)) -> dict[str, Any]:
-        _require_admin_token(x_sharipovai_admin)
+    def delete_webhook_post(request: Request) -> dict[str, Any]:
+        require_admin(request)
         return _delete_webhook()
 
     @app.post("/api/telegram/test-message")
-    def telegram_test_message(payload: dict[str, Any] | None = Body(default=None), x_sharipovai_admin: str | None = Header(default=None)) -> dict[str, Any]:
-        _require_admin_token(x_sharipovai_admin)
+    def telegram_test_message(request: Request, payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
+        require_admin(request)
         chat_id = (payload or {}).get("chat_id")
         if not chat_id:
             raise HTTPException(status_code=400, detail="chat_id_required")
@@ -331,15 +332,3 @@ def _webhook_secret() -> str:
         return configured
     source = os.getenv("AUTH_SECRET", "").strip() or _bot_token()
     return hashlib.sha256(f"sharipovai-webhook:{source}".encode("utf-8")).hexdigest()
-
-
-def _admin_token() -> str:
-    return os.getenv("TELEGRAM_ADMIN_SECRET", "").strip() or os.getenv("AUTH_SECRET", "").strip()
-
-
-def _require_admin_token(provided: str | None) -> None:
-    expected = _admin_token()
-    if not expected:
-        raise HTTPException(status_code=503, detail="TELEGRAM_ADMIN_SECRET_or_AUTH_SECRET_missing")
-    if not hmac.compare_digest(provided or "", expected):
-        raise HTTPException(status_code=403, detail="admin_token_invalid")
