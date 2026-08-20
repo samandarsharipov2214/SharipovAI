@@ -118,19 +118,38 @@ def format_news_time(value: str | None) -> str:
         return raw
 
 
+def _news_credibility_text(item: dict[str, Any]) -> str:
+    credibility = item.get("credibility_percent")
+    if credibility in (None, ""):
+        credibility = item.get("trust_score")
+    if credibility in (None, ""):
+        return "достоверность не указана"
+    try:
+        value = float(credibility)
+    except (TypeError, ValueError):
+        return "достоверность не указана"
+    if not 0 <= value <= 100:
+        return "достоверность не указана"
+    rendered = f"{value:g}"
+    return f"достоверность <b>{_safe_html(rendered)}%</b>"
+
+
 def format_news_item(item: dict[str, Any], *, index: int) -> str:
-    title = news_title_ru(str(item.get("title", "Новость")))
-    source = str(item.get("source_name", "Источник"))
-    credibility = item.get("credibility_percent", item.get("trust_score", 0))
-    published = format_news_time(str(item.get("published_at", "")))
-    url = str(item.get("url", "")).strip()
-    needs_confirmation = bool(item.get("needs_confirmation", False))
-    action = str(item.get("ai_action", "WATCH"))
-    status = "нужно подтверждение" if needs_confirmation else "подтверждение не требуется"
+    raw_title = str(item.get("title") or "").strip()
+    title = news_title_ru(raw_title) if raw_title else "Заголовок не передан источником"
+    source = str(item.get("source_name") or "").strip() or "Источник не указан"
+    credibility = _news_credibility_text(item)
+    published = format_news_time(str(item.get("published_at") or ""))
+    url = str(item.get("url") or "").strip()
+    if "needs_confirmation" in item and item.get("needs_confirmation") is not None:
+        status = "нужно подтверждение" if bool(item.get("needs_confirmation")) else "подтверждение не требуется"
+    else:
+        status = "статус подтверждения не указан"
+    action = str(item.get("ai_action") or "").strip() or "не указано"
     link = f"\n   🔗 <a href=\"{_html_attr(url)}\">Открыть источник</a>" if url else "\n   🔗 ссылка не передана источником"
     return (
         f"{index}. <b>{_safe_html(title)}</b>\n"
-        f"   Источник: <b>{_safe_html(source)}</b> · достоверность <b>{_safe_html(credibility)}%</b>\n"
+        f"   Источник: <b>{_safe_html(source)}</b> · {credibility}\n"
         f"   Время: <b>{_safe_html(published)}</b>\n"
         f"   Статус: <b>{_safe_html(status)}</b> · AI: <b>{_safe_html(action)}</b>"
         f"{link}"
