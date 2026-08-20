@@ -113,8 +113,17 @@ def resolve_authenticated_principal(request: Request) -> str | None:
     token = request.cookies.get(settings.auth_cookie_name, "")
     if token:
         payload = decode_access_token(token)
-        if payload:
-            return str(payload["sub"])
+        if not payload:
+            return None
+        db = SessionLocal()
+        try:
+            stmt = select(User).where(User.email == normalize_email(str(payload["sub"])))
+            user = db.scalar(stmt)
+            if not user or not user.is_active:
+                return None
+            return user.email
+        finally:
+            db.close()
     return _legacy_session_identity(request)
 
 
@@ -186,17 +195,16 @@ def install_saas_auth_api(app: FastAPI) -> None:
                 email=email,
                 display_name=payload.display_name.strip(),
                 password_hash=hash_password(payload.password),
+                is_active=False,
                 free_messages_limit=settings.free_messages_per_month,
             )
             db.add(user)
-            db.flush()
-            _ensure_free_subscription(db, user)
             db.commit()
-            response = JSONResponse(
-                AuthResponse(status="ok", authenticated=True, user=serialize_user(user)).model_dump()
+            return AuthResponse(
+                status="pending_approval",
+                authenticated=False,
+                user=serialize_user(user),
             )
-            set_auth_cookie(response, issue_access_token(user))
-            return response
         finally:
             db.close()
 
