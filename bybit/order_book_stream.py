@@ -88,7 +88,12 @@ class BoundedBybitOrderBook:
         bids = _parse_updates(data.get("b"), side="bid")
         asks = _parse_updates(data.get("a"), side="ask")
 
-        if message_type == "snapshot":
+        # Bybit uses ``u == 1`` to signal a service-restart snapshot.  Although
+        # a normal snapshot has ``type == snapshot``, treating the restart
+        # marker as a delta would merge a new server book with stale levels from
+        # the pre-restart connection.  Sequence validation already establishes
+        # a new baseline for this marker; reconstruction must do the same.
+        if message_type == "snapshot" or update_id == 1:
             self._bids = {price: size for price, size in bids if size > 0}
             self._asks = {price: size for price, size in asks if size > 0}
         else:
