@@ -8,6 +8,8 @@ from fastapi import FastAPI, HTTPException, Request
 
 from control_plane import ControlPlane
 
+from .admin_guard import require_admin
+
 
 def install_control_plane_api(app: FastAPI) -> None:
     if getattr(app.state, "control_plane_api_installed", False):
@@ -32,9 +34,10 @@ def install_control_plane_api(app: FastAPI) -> None:
 
     @app.post("/api/control-plane/commands/{action}")
     def queue_command(action: str, request: Request) -> dict[str, Any]:
-        # Global auth guard protects this endpoint. Commands are strictly allow-listed;
-        # arbitrary shell execution is intentionally impossible.
-        requested_by = request.headers.get("x-sharipovai-user", "dashboard")
+        # Control-plane mutations are privileged operations. The actor is derived
+        # from the authenticated server-side admin session; client headers are
+        # never accepted as an authority or audit identity.
+        requested_by = require_admin(request)
         try:
             command = plane().enqueue(action, requested_by=requested_by)
         except ValueError as exc:
