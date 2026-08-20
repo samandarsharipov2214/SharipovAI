@@ -74,7 +74,9 @@ export default function Home() {
   const [error, setError] = useState('');
   const [chat, setChat] = useState<ChatMessage[]>([]);
   const [message, setMessage] = useState('');
+  const [chatPending, setChatPending] = useState(false);
   const loadInFlight = useRef(false);
+  const chatInFlight = useRef(false);
 
   const load = useCallback(async () => {
     if (loadInFlight.current) return;
@@ -127,7 +129,9 @@ export default function Home() {
   async function sendMessage(e: React.FormEvent) {
     e.preventDefault();
     const text = message.trim();
-    if (!text) return;
+    if (!text || chatInFlight.current) return;
+    chatInFlight.current = true;
+    setChatPending(true);
     const history = chat.slice(-20).map(item => ({
       role: item.from === 'ai' ? 'assistant' : 'user',
       content: item.text,
@@ -147,6 +151,9 @@ export default function Home() {
       setChat(v => [...v, { from:'ai', text:reply }]);
     } catch {
       setChat(v => [...v, { from:'ai', text:'Не удалось получить подтверждённый ответ AI API.' }]);
+    } finally {
+      chatInFlight.current = false;
+      setChatPending(false);
     }
   }
 
@@ -179,7 +186,7 @@ export default function Home() {
         {active === 'Портфель' && <PortfolioPage equity={equity} available={available} positions={positions}/>} 
         {active === 'Сделки' && <EmptyEvidence title="История сделок"/>}
         {active === 'AI-боты' && <BotsPage rows={botRows} active={activeBots} total={totalBots}/>} 
-        {active === 'AI-чат' && <ChatPage chat={chat} message={message} setMessage={setMessage} send={sendMessage}/>} 
+        {active === 'AI-чат' && <ChatPage chat={chat} message={message} setMessage={setMessage} send={sendMessage} pending={chatPending}/>} 
         {active === 'Новости' && <NewsPage rows={newsRows}/>} 
         {active === 'Risk Center' && <EmptyEvidence title="Risk Center"/>}
         {active === 'Bybit' && <BybitPage account={account}/>} 
@@ -230,8 +237,8 @@ function BotsPage({rows,active,total}:{rows:Json[];active:number|null;total:numb
   </>;
 }
 
-function ChatPage({chat,message,setMessage,send}:{chat:ChatMessage[];message:string;setMessage:(v:string)=>void;send:(e:React.FormEvent)=>void}) {
-  return <article className="panel chatPage"><h2>Чат с SharipoAI</h2><div className="chatLog">{chat.length ? chat.map((m,i)=><div key={i} className={`bubble ${m.from}`}><b>{m.from==='ai'?'SharipoAI':'Пользователь'}</b><p>{m.text}</p></div>) : <p>История этого сеанса пока пуста. Отправь вопрос, чтобы получить ответ через канонический AI API.</p>}</div><form onSubmit={send}><textarea value={message} onChange={e=>setMessage(e.target.value)} placeholder="Напиши команду или вопрос…"/><button>Отправить</button></form></article>;
+function ChatPage({chat,message,setMessage,send,pending}:{chat:ChatMessage[];message:string;setMessage:(v:string)=>void;send:(e:React.FormEvent)=>void;pending:boolean}) {
+  return <article className="panel chatPage"><h2>Чат с SharipoAI</h2><div className="chatLog">{chat.length ? chat.map((m,i)=><div key={i} className={`bubble ${m.from}`}><b>{m.from==='ai'?'SharipoAI':'Пользователь'}</b><p>{m.text}</p></div>) : <p>История этого сеанса пока пуста. Отправь вопрос, чтобы получить ответ через канонический AI API.</p>}</div><form onSubmit={send} aria-busy={pending}><textarea value={message} onChange={e=>setMessage(e.target.value)} placeholder="Напиши команду или вопрос…" disabled={pending}/><button disabled={pending}>{pending ? 'Отправляется…' : 'Отправить'}</button></form></article>;
 }
 
 function NewsPage({rows}:{rows:Json[]}) {
