@@ -88,6 +88,19 @@ from .system_watchdog import install_system_watchdog
 from .web2_host import install_web2_host
 
 
+def _remove_route_owner(app: Any, *, method: str, path: str, module: str) -> None:
+    """Remove one superseded compatibility owner before canonical installers run."""
+    app.router.routes[:] = [
+        route
+        for route in app.router.routes
+        if not (
+            getattr(route, "path", None) == path
+            and method in (getattr(route, "methods", None) or set())
+            and getattr(getattr(route, "endpoint", None), "__module__", None) == module
+        )
+    ]
+
+
 def _install_production_runtime_apis(app: Any) -> None:
     """Install the canonical production route/middleware graph on one app instance.
 
@@ -95,6 +108,12 @@ def _install_production_runtime_apis(app: Any) -> None:
     graph. The historical ``create_app`` factory remains temporarily compatible
     with legacy tests until those contracts are migrated deliberately.
     """
+    # The base factory still carries two migration-era owners. Keep them available
+    # to legacy factories, but remove them from the canonical production graph so
+    # request dispatch has exactly one owner for each method/path contract.
+    _remove_route_owner(app, method="GET", path="/login", module="dashboard.demo_api")
+    _remove_route_owner(app, method="GET", path="/api/auth/me", module="dashboard.app")
+
     install_database_api(app)
     install_news_agent_network_api(app)
     install_market_data_api(app)
