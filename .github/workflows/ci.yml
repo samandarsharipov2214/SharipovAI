@@ -25,7 +25,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: sharipovai-check-${{ github.event.pull_request.number || github.ref }}
+  # Supersede stale runs for the same PR, but never cancel verification of a
+  # distinct commit already merged to main. Historical main commits must retain
+  # a truthful completed check instead of a red concurrency cancellation.
+  group: sharipovai-check-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
 jobs:
