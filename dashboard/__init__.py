@@ -25,6 +25,7 @@ init_saas_database()
 
 
 def create_app(*args: Any, **kwargs: Any):
+    """Build the legacy integration factory while migration to the production graph is staged."""
     install_final_ci_contracts()
     instance = importlib.import_module("dashboard.app").create_app(*args, **kwargs)
     init_saas_database()
@@ -41,6 +42,15 @@ def create_app(*args: Any, **kwargs: Any):
     if getattr(instance.state, "autonomous_paper_loop", None) is not None:
         install_canonical_runtime_compat_api(instance)
     install_security_headers(instance)
+    return instance
+
+
+def create_production_app(*args: Any, **kwargs: Any):
+    """Build a fresh app with the same runtime graph as the production ``dashboard:app`` object."""
+    install_final_ci_contracts()
+    instance = importlib.import_module("dashboard.app").create_app(*args, **kwargs)
+    init_saas_database()
+    _install_production_runtime_apis(instance)
     return instance
 
 
@@ -77,43 +87,54 @@ from .system_health_api import install_system_health_api
 from .system_watchdog import install_system_watchdog
 from .web2_host import install_web2_host
 
-install_database_api(app)
-install_news_agent_network_api(app)
-install_market_data_api(app)
-install_autonomous_trading_api(app)
-install_canonical_runtime_compat_api(app)
-install_execution_stages_api(app)
-install_bybit_account_api(app)
-install_currency_api(app)
-install_control_plane_api(app)
-install_dashboard2_api(app)
-install_private_order_ws_api(app)
-install_fill_harvester_api(app)
-install_campaign_api(app)
-install_phase7_campaign_api(app)
-install_phase8_campaign_api(app)
-install_phase9_campaign_api(app)
-install_phase10_scaling_api(app)
-install_self_learning_api(app)
-install_source_status_compat_api(app)
-install_operational_routers(app)
-install_web2_host(app)
-install_saas_auth_api(app)
-install_saas_billing_api(app)
-install_market_context_api(app)
-install_release_status_api(app)
-install_release_truth_api(app)
-install_release_truth_page(app)
-install_gemini_chat_api(app)
-install_internal_ai_code_fix_api(app)
-install_internal_agent_decisions_api(app)
-install_memory_api(app)
-install_global_auth_guard(app)
-install_security_headers(app)
-install_observability(app)
-install_ai_organ_state_api(app)
-install_system_health_api(app)
-install_system_watchdog(app)
+
+def _install_production_runtime_apis(app: Any) -> None:
+    """Install the canonical production route/middleware graph on one app instance.
+
+    The production global app and ``create_production_app`` share this installer
+    graph. The historical ``create_app`` factory remains temporarily compatible
+    with legacy tests until those contracts are migrated deliberately.
+    """
+    install_database_api(app)
+    install_news_agent_network_api(app)
+    install_market_data_api(app)
+    install_autonomous_trading_api(app)
+    install_canonical_runtime_compat_api(app)
+    install_execution_stages_api(app)
+    install_bybit_account_api(app)
+    install_currency_api(app)
+    install_control_plane_api(app)
+    install_dashboard2_api(app)
+    install_private_order_ws_api(app)
+    install_fill_harvester_api(app)
+    install_campaign_api(app)
+    install_phase7_campaign_api(app)
+    install_phase8_campaign_api(app)
+    install_phase9_campaign_api(app)
+    install_phase10_scaling_api(app)
+    install_self_learning_api(app)
+    install_source_status_compat_api(app)
+    install_operational_routers(app)
+    install_web2_host(app)
+    install_saas_auth_api(app)
+    install_saas_billing_api(app)
+    install_market_context_api(app)
+    install_release_status_api(app)
+    install_release_truth_api(app)
+    install_release_truth_page(app)
+    install_gemini_chat_api(app)
+    install_internal_ai_code_fix_api(app)
+    install_internal_agent_decisions_api(app)
+    install_memory_api(app)
+    install_global_auth_guard(app)
+    install_security_headers(app)
+    install_observability(app)
+    install_ai_organ_state_api(app)
+    install_system_health_api(app)
+    install_system_watchdog(app)
+
+
+_install_production_runtime_apis(app)
 
 try:
     from .telegram_news_agents import install_telegram_news_agent_commands
@@ -125,4 +146,4 @@ except Exception as exc:
         "error": f"{type(exc).__name__}: {exc}",
     }
 
-__all__ = ("DashboardError", "app", "create_app")
+__all__ = ("DashboardError", "app", "create_app", "create_production_app")
