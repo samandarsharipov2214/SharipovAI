@@ -17,7 +17,7 @@ import feedparser
 import httpx
 
 from .event_identity import cluster_news_events
-from .provenance import provenance_fields
+from .provenance import normalize_public_url, provenance_fields
 from .sources import default_sources
 
 USER_AGENT = os.getenv(
@@ -164,7 +164,8 @@ def _read_one_source(source: Any, limit: int) -> dict[str, object]:
     normalized: list[dict[str, object]] = []
     for entry in entries[:limit]:
         title = str(entry.get("title", "") or "Untitled RSS item")
-        item_url = str(entry.get("link", source.url) or source.url)
+        raw_item_url = str(entry.get("link", source.url) or source.url)
+        item_url = normalize_public_url(raw_item_url)
         provenance = provenance_fields(
             source_id=source.id,
             source_name=source.name,
@@ -206,7 +207,7 @@ def _entry_text(entry: Any) -> str:
 def _published_iso(entry: Any) -> str:
     """Return the source-provided publication timestamp or an empty marker.
 
-    Missing timestamps are deliberately not replaced here.  The provenance
+    Missing timestamps are deliberately not replaced here. The provenance
     layer records that fallback explicitly using the fetch time.
     """
 
