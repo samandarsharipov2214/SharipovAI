@@ -6,12 +6,14 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
-from fastapi import Body, FastAPI
+from fastapi import Body, FastAPI, Request
 from fastapi.responses import HTMLResponse
 
 from ai_chat_orchestrator import AGENTS, answer_chat, detect_agent
 from learning.ai_learning_core import BOT_NAMES
 from learning.bot_communication import BotCommunicationNetwork
+
+from .admin_guard import require_admin
 
 CHAT_BOT_ALIASES = {
     "general_controller": "general_controller", "general controller": "general_controller",
@@ -26,6 +28,19 @@ CHAT_BOT_ALIASES = {
     "learning_engine": "learning_engine", "learning engine": "learning_engine",
     "security_guard": "security_guard", "security guard": "security_guard",
 }
+
+
+def _server_provenance_payload(data: dict[str, Any], actor: str) -> dict[str, Any]:
+    """Return message payload with server-derived mutation provenance.
+
+    Client-supplied ``requested_by`` is intentionally overwritten so audit identity
+    cannot be forged through the Bot Network API.
+    """
+
+    payload = data.get("payload", {})
+    safe_payload = dict(payload) if isinstance(payload, dict) else {}
+    safe_payload["requested_by"] = actor
+    return safe_payload
 
 
 def install_bot_communication_api(app: FastAPI) -> None:
@@ -49,20 +64,22 @@ def install_bot_communication_api(app: FastAPI) -> None:
         return network().communication_matrix()
 
     @app.post("/api/bot-network/messages")
-    def send_message_api(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
+    def send_message_api(request: Request, payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
+        actor = require_admin(request)
         data = payload or {}
         return network().send_message(
             sender=str(data.get("sender", "general_controller")),
             recipient=str(data.get("recipient", "learning_engine")),
             message_type=str(data.get("message_type", "question")),
             topic=str(data.get("topic", "general")),
-            payload=data.get("payload", {}) if isinstance(data.get("payload", {}), dict) else {},
+            payload=_server_provenance_payload(data, actor),
             thread_id=str(data.get("thread_id")) if data.get("thread_id") else None,
             priority=str(data.get("priority", "normal")),
         )
 
     @app.post("/api/bot-network/broadcast")
-    def broadcast_api(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
+    def broadcast_api(request: Request, payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
+        actor = require_admin(request)
         data = payload or {}
         recipients = data.get("recipients")
         return network().broadcast(
@@ -70,12 +87,13 @@ def install_bot_communication_api(app: FastAPI) -> None:
             recipients=recipients if isinstance(recipients, list) else None,
             message_type=str(data.get("message_type", "status_update")),
             topic=str(data.get("topic", "general")),
-            payload=data.get("payload", {}) if isinstance(data.get("payload", {}), dict) else {},
+            payload=_server_provenance_payload(data, actor),
             priority=str(data.get("priority", "normal")),
         )
 
     @app.post("/api/bot-network/consensus")
-    def consensus_api(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
+    def consensus_api(request: Request, payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
+        require_admin(request)
         data = payload or {}
         participants = data.get("participants")
         return network().request_consensus(
@@ -155,17 +173,20 @@ def install_bot_communication_api(app: FastAPI) -> None:
         return {"status": answer.get("status", "ok"), "bot": bot, "reply": answer.get("reply", ""), "messages": answer.get("data", {}).get("messages", [])}
 
     @app.post("/api/bot-network/agent/{bot_name}/self-check")
-    def self_check_api(bot_name: str) -> dict[str, Any]:
+    def self_check_api(bot_name: str, request: Request) -> dict[str, Any]:
+        require_admin(request)
         bot = _chat_bot(bot_name)
         return answer_chat(f"{bot} проведи тест адекватности и проверь себя", {})
 
     @app.post("/api/bot-network/agent/{bot_name}/pause")
-    def pause_api(bot_name: str) -> dict[str, Any]:
+    def pause_api(bot_name: str, request: Request) -> dict[str, Any]:
+        require_admin(request)
         bot = _chat_bot(bot_name)
         return answer_chat(f"{bot} поставь paper действия на паузу", {})
 
     @app.post("/api/bot-network/agent/{bot_name}/learn")
-    def learn_api(bot_name: str) -> dict[str, Any]:
+    def learn_api(bot_name: str, request: Request) -> dict[str, Any]:
+        require_admin(request)
         bot = _chat_bot(bot_name)
         return answer_chat(f"{bot} отправь последние ошибки в Learning Engine", {})
 
