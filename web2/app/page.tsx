@@ -1,7 +1,7 @@
 'use client';
 
 import Image from 'next/image';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   Bell,
@@ -24,6 +24,8 @@ import {
 type Json = Record<string, unknown>;
 type ChatMessage = {from:'user'|'ai'; text:string};
 type Section = 'Обзор'|'Рынок'|'AI-решение'|'Портфель'|'Сделки'|'AI-боты'|'AI-чат'|'Новости'|'Risk Center'|'Bybit'|'Настройки';
+type SnapshotSource = 'health'|'account'|'bots'|'news';
+type Freshness = Record<SnapshotSource, { stale:boolean; lastSuccessAt:string|null }>;
 
 const NAV: Array<[Section, React.ComponentType<{size?: number}>]> = [
   ['Обзор', LayoutDashboard], ['Рынок', CandlestickChart], ['AI-решение', BrainCircuit],
@@ -31,6 +33,13 @@ const NAV: Array<[Section, React.ComponentType<{size?: number}>]> = [
   ['AI-чат', MessageSquareText], ['Новости', Newspaper], ['Risk Center', ShieldCheck],
   ['Bybit', WalletCards], ['Настройки', Settings],
 ];
+
+const INITIAL_FRESHNESS: Freshness = {
+  health: { stale:true, lastSuccessAt:null },
+  account: { stale:true, lastSuccessAt:null },
+  bots: { stale:true, lastSuccessAt:null },
+  news: { stale:true, lastSuccessAt:null },
+};
 
 function apiUrl(path: string) {
   const base = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, '') ?? '';
@@ -61,29 +70,49 @@ export default function Home() {
   const [account, setAccount] = useState<Json | null>(null);
   const [bots, setBots] = useState<Json | null>(null);
   const [news, setNews] = useState<Json | null>(null);
+  const [freshness, setFreshness] = useState<Freshness>(INITIAL_FRESHNESS);
   const [error, setError] = useState('');
   const [chat, setChat] = useState<ChatMessage[]>([]);
   const [message, setMessage] = useState('');
+  const loadInFlight = useRef(false);
 
   const load = useCallback(async () => {
+    if (loadInFlight.current) return;
+    loadInFlight.current = true;
     setError('');
-    const results = await Promise.allSettled([
-      fetch(apiUrl('/api/health')).then(r => r.ok ? r.json() : Promise.reject(new Error(`health ${r.status}`))),
-      fetch(apiUrl('/api/exchange/account/snapshot')).then(r => r.ok ? r.json() : Promise.reject(new Error(`account ${r.status}`))),
-      fetch(apiUrl('/api/ai-bots')).then(r => r.ok ? r.json() : Promise.reject(new Error(`bots ${r.status}`))),
-      fetch(apiUrl('/api/social-news')).then(r => r.ok ? r.json() : Promise.reject(new Error(`news ${r.status}`))),
-    ]);
-    setHealth(results[0].status === 'fulfilled' ? results[0].value as Json : null);
-    setAccount(results[1].status === 'fulfilled' ? results[1].value as Json : null);
-    setBots(results[2].status === 'fulfilled' ? results[2].value as Json : null);
-    setNews(results[3].status === 'fulfilled' ? results[3].value as Json : null);
-    if (results.every(x => x.status === 'rejected')) setError('Backend временно недоступен');
+    try {
+      const results = await Promise.allSettled([
+        fetch(apiUrl('/api/health')).then(r => r.ok ? r.json() : Promise.reject(new Error(`health ${r.status}`))),
+        fetch(apiUrl('/api/exchange/account/snapshot')).then(r => r.ok ? r.json() : Promise.reject(new Error(`account ${r.status}`))),
+        fetch(apiUrl('/api/ai-bots')).then(r => r.ok ? r.json() : Promise.reject(new Error(`bots ${r.status}`))),
+        fetch(apiUrl('/api/social-news')).then(r => r.ok ? r.json() : Promise.reject(new Error(`news ${r.status}`))),
+      ]);
+      const now = new Date().toISOString();
+      if (results[0].status === 'fulfilled') setHealth(results[0].value as Json);
+      if (results[1].status === 'fulfilled') setAccount(results[1].value as Json);
+      if (results[2].status === 'fulfilled') setBots(results[2].value as Json);
+      if (results[3].status === 'fulfilled') setNews(results[3].value as Json);
+      setFreshness(previous => ({
+        health: results[0].status === 'fulfilled' ? { stale:false, lastSuccessAt:now } : { ...previous.health, stale:true },
+        account: results[1].status === 'fulfilled' ? { stale:false, lastSuccessAt:now } : { ...previous.account, stale:true },
+        bots: results[2].status === 'fulfilled' ? { stale:false, lastSuccessAt:now } : { ...previous.bots, stale:true },
+        news: results[3].status === 'fulfilled' ? { stale:false, lastSuccessAt:now } : { ...previous.news, stale:true },
+      }));
+      if (results.every(x => x.status === 'rejected')) setError('Backend временно недоступен');
+    } finally {
+      loadInFlight.current = false;
+    }
   }, []);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => { void load(); }, 0);
-    return () => window.clearTimeout(timer);
+    void load();
+    const timer = window.setInterval(() => { void load(); }, 30_000);
+    return () => window.clearInterval(timer);
   }, [load]);
+
+  const staleSources = (Object.entries(freshness) as Array<[SnapshotSource, Freshness[SnapshotSource]]>)
+    .filter(([, state]) => state.stale && state.lastSuccessAt)
+    .map(([source]) => source);
 
   const equity = useMemo(() => finiteNumber(account?.total_equity), [account]);
   const available = finiteNumber(account?.total_available_balance);
@@ -142,6 +171,7 @@ export default function Home() {
         </header>
 
         {error && <div className="alert">{error}. Демонстрационные торговые значения не показываются.</div>}
+        {staleSources.length > 0 && <div className="alert">Последнее подтверждённое значение сохранено, но обновление не удалось. Устаревшие источники: {staleSources.join(', ')}.</div>}
 
         {active === 'Обзор' && <Overview equity={equity} available={available} positions={positions} activeBots={activeBots} totalBots={totalBots}/>} 
         {active === 'Рынок' && <EmptyEvidence title="Рынок"/>}
