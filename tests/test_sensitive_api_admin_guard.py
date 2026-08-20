@@ -6,7 +6,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from dashboard.bybit_account_api import install_bybit_account_api
+from dashboard.control_plane_api import install_control_plane_api
 from dashboard.execution_stages_api import install_execution_stages_api
+from dashboard.global_auth_guard import install_global_auth_guard
 
 
 def _patch_identity(monkeypatch, *, username: str | None, is_admin: bool) -> None:
@@ -46,6 +48,15 @@ def _execution_app(monkeypatch, tmp_path, *, username: str | None, is_admin: boo
     monkeypatch.setenv("EXCHANGE_MODE", "sandbox")
     app = FastAPI()
     install_execution_stages_api(app)
+    return app
+
+
+def _control_plane_app(monkeypatch, tmp_path, *, username: str | None, is_admin: bool) -> FastAPI:
+    _patch_identity(monkeypatch, username=username, is_admin=is_admin)
+    _configure_auth(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    app = FastAPI()
+    install_control_plane_api(app)
     return app
 
 
@@ -131,3 +142,48 @@ def test_admin_raw_order_endpoint_is_an_authenticated_tombstone(monkeypatch, tmp
 
     assert response.status_code == 410
     assert "ApprovedExecutionRequest" in response.json()["detail"]
+
+
+def test_control_plane_commands_reject_non_admin_even_with_spoofed_actor_header(monkeypatch, tmp_path) -> None:
+    app = _control_plane_app(monkeypatch, tmp_path, username="member", is_admin=False)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/control-plane/commands/restart_web",
+            headers={"X-SharipovAI-User": "admin"},
+        )
+
+    assert response.status_code == 403
+    assert not list((tmp_path / "runtime" / "commands").glob("*.json"))
+
+
+def test_control_plane_command_uses_authenticated_admin_as_audit_actor(monkeypatch, tmp_path) -> None:
+    app = _control_plane_app(monkeypatch, tmp_path, username="admin", is_admin=True)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/control-plane/commands/run_health_check",
+            headers={"X-SharipovAI-User": "spoofed-user"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "accepted"
+    assert payload["command"]["requested_by"] == "admin"
+    assert payload["command"]["action"] == "run_health_check"
+
+
+def test_global_auth_guard_allows_local_readonly_route_from_private_peer(monkeypatch) -> None:
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "0")
+    app = FastAPI()
+
+    @app.get("/api/market/bybit-websocket/status")
+    def websocket_status() -> dict[str, str]:
+        return {"status": "ok"}
+
+    install_global_auth_guard(app)
+
+    with TestClient(app, client=("10.20.30.40", 43210)) as client:
+        response = client.get("/api/market/bybit-websocket/status")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}

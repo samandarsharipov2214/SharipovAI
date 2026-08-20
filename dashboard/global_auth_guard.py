@@ -36,13 +36,12 @@ _LOCAL_READONLY_EXACT = {"/api/market/bybit-websocket/status"}
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 
 
-
 def _is_private_ip(host: str) -> bool:
     """Проверяет, принадлежит ли IP частной сети (RFC 1918)."""
-    if host.startswith('10.') or host.startswith('192.168.'):
+    if host.startswith("10.") or host.startswith("192.168."):
         return True
-    if host.startswith('172.'):
-        parts = host.split('.')
+    if host.startswith("172."):
+        parts = host.split(".")
         if len(parts) == 4:
             try:
                 second = int(parts[1])
@@ -52,11 +51,18 @@ def _is_private_ip(host: str) -> bool:
                 pass
     return False
 
+
+def _client_host(request: Request) -> str:
+    """Return the direct ASGI peer host without trusting proxy headers."""
+    if not request.client or not request.client.host:
+        return ""
+    return request.client.host.strip().split("%", 1)[0]
+
+
 def _is_loopback_request(request: Request) -> bool:
-    host = request.client.host if request.client else None
-    if not host:
+    value = _client_host(request)
+    if not value:
         return False
-    value = host.strip().split("%", 1)[0]
     if value.lower() == "localhost":
         return True
     try:
@@ -117,7 +123,10 @@ def install_global_auth_guard(app: FastAPI) -> None:
                 )
             return await call_next(request)
 
-        if path in _LOCAL_READONLY_EXACT and (_is_loopback_request(request) or _is_private_ip(host)):
+        client_host = _client_host(request)
+        if path in _LOCAL_READONLY_EXACT and (
+            _is_loopback_request(request) or _is_private_ip(client_host)
+        ):
             return await call_next(request)
 
         if auth_disabled():
@@ -143,4 +152,10 @@ def install_global_auth_guard(app: FastAPI) -> None:
         )
 
 
-__all__ = ["_is_loopback_request", "auth_disabled", "install_global_auth_guard"]
+__all__ = [
+    "_client_host",
+    "_is_loopback_request",
+    "_is_private_ip",
+    "auth_disabled",
+    "install_global_auth_guard",
+]
