@@ -50,6 +50,7 @@ def test_registration_is_pending_and_does_not_issue_session(monkeypatch):
     assert response.json()["status"] == "pending_approval"
     assert response.json()["authenticated"] is False
     assert auth_saas.settings.auth_cookie_name not in response.cookies
+    assert "set-cookie" not in response.headers
 
     with session_factory() as db:
         user = db.scalar(select(User).where(User.email == "pending@example.com"))
