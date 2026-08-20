@@ -12,7 +12,6 @@ from urllib.parse import parse_qsl, urlparse
 import httpx
 from fastapi import BackgroundTasks, Body, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
-
 from sqlalchemy import select
 
 from telegram_system_adapter import CANONICAL_WEBAPP_URL, handle_callback, handle_message, main_keyboard, send_message, setup_bot_commands
@@ -126,7 +125,7 @@ def install_telegram_webhook_api(app: FastAPI) -> None:
                 if current_user is None:
                     raise HTTPException(status_code=403, detail="telegram_identity_not_linked")
                 try:
-                    bind_telegram_identity(telegram_user_id, int(current_user.id))
+                    bind_telegram_identity(telegram_user_id, str(current_user.id))
                 except TelegramIdentityConflict:
                     raise HTTPException(status_code=409, detail="telegram_identity_conflict")
                 canonical_user = current_user
@@ -134,7 +133,7 @@ def install_telegram_webhook_api(app: FastAPI) -> None:
                 canonical_user = db.scalar(select(User).where(User.id == binding.canonical_user_id))
                 if not canonical_user or not canonical_user.is_active:
                     raise HTTPException(status_code=403, detail="telegram_identity_not_approved")
-                if current_user is not None and int(current_user.id) != int(canonical_user.id):
+                if current_user is not None and str(current_user.id) != str(canonical_user.id):
                     raise HTTPException(status_code=409, detail="telegram_identity_conflict")
 
             response = JSONResponse(
