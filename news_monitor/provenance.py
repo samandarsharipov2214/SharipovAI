@@ -1,16 +1,19 @@
 """Canonical, bounded provenance helpers for news ingress.
 
-This module is intentionally pure and side-effect free.  It normalizes source
-publication timestamps against the local fetch time and creates a compact stable
-provenance identifier without storing raw feed payloads.
+This module is intentionally pure and side-effect free. It normalizes source
+publication timestamps against the local fetch time, validates public news URLs,
+and creates a compact stable provenance identifier without storing raw feed
+payloads.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 import hashlib
+from urllib.parse import urlsplit
 
 MAX_FUTURE_SKEW = timedelta(minutes=5)
+SAFE_PUBLIC_URL_SCHEMES = frozenset({"http", "https"})
 
 
 def utc_iso(value: datetime) -> str:
@@ -38,6 +41,31 @@ def parse_timestamp(value: str) -> datetime | None:
     return parsed.astimezone(UTC)
 
 
+def normalize_public_url(value: str) -> str:
+    """Return a safe absolute HTTP(S) URL or an empty marker.
+
+    RSS entry links are external input. Reject non-web schemes, relative URLs,
+    hostless URLs and malformed values instead of carrying them into canonical
+    news evidence as if they were safe public links.
+    """
+
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = urlsplit(text)
+        port = parsed.port
+    except (TypeError, ValueError):
+        return ""
+    if parsed.scheme.lower() not in SAFE_PUBLIC_URL_SCHEMES:
+        return ""
+    if not parsed.hostname:
+        return ""
+    if port is not None and not (0 < port <= 65535):
+        return ""
+    return text
+
+
 def normalize_publication_timestamp(
     published_at: str,
     *,
@@ -46,7 +74,7 @@ def normalize_publication_timestamp(
     """Return canonical publication time and a truthful timestamp quality.
 
     Feed timestamps that are missing, malformed, or implausibly in the future
-    are not trusted.  They fail closed to the known fetch time instead of
+    are not trusted. They fail closed to the known fetch time instead of
     pretending to be source-origin timestamps.
     """
 
@@ -76,17 +104,19 @@ def provenance_fields(
     )
     fetched_iso = utc_iso(fetched_at)
     family = str(source_id or "unknown").strip() or "unknown"
+    safe_item_url = normalize_public_url(item_url)
+    safe_feed_url = normalize_public_url(source_feed_url)
     identity = "\n".join(
         (
             family,
-            str(item_url or "").strip(),
+            safe_item_url,
             canonical_published_at,
         )
     ).encode("utf-8")
     provenance_id = hashlib.sha256(identity).hexdigest()
     return {
         "source_family": family,
-        "source_feed_url": str(source_feed_url or "").strip(),
+        "source_feed_url": safe_feed_url,
         "source_name": str(source_name or "").strip(),
         "published_at": canonical_published_at,
         "fetched_at": fetched_iso,
@@ -97,6 +127,8 @@ def provenance_fields(
 
 __all__ = [
     "MAX_FUTURE_SKEW",
+    "SAFE_PUBLIC_URL_SCHEMES",
+    "normalize_public_url",
     "normalize_publication_timestamp",
     "parse_timestamp",
     "provenance_fields",
