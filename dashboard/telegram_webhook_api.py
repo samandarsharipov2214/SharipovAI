@@ -10,11 +10,16 @@ from typing import Any
 from urllib.parse import parse_qsl, urlparse
 
 import httpx
-from fastapi import BackgroundTasks, Body, FastAPI, Header, HTTPException
+from fastapi import BackgroundTasks, Body, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
+from sqlalchemy import select
 
 from telegram_system_adapter import CANONICAL_WEBAPP_URL, handle_callback, handle_message, main_keyboard, send_message, setup_bot_commands
 from telegram_health import telegram_health
+from dashboard.auth_saas import ensure_same_origin, get_current_user, issue_access_token, serialize_user, set_auth_cookie
+from dashboard.db_saas import SessionLocal
+from dashboard.models_saas import User
+from dashboard.telegram_identity import TelegramIdentityConflict, bind_telegram_identity, get_telegram_identity_binding
 from dashboard.telegram_update_idempotency import claim_telegram_update
 
 TELEGRAM_API_TIMEOUT = 20.0
@@ -96,12 +101,54 @@ def install_telegram_webhook_api(app: FastAPI) -> None:
         return {"status": "ok", "sent": True, "adapter": "shared_website_system"}
 
     @app.post("/api/telegram/miniapp-auth")
-    def miniapp_auth(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
+    def miniapp_auth(request: Request, payload: dict[str, Any] | None = Body(default=None)) -> JSONResponse:
+        ensure_same_origin(request)
         init_data = str((payload or {}).get("init_data", ""))
         validation = validate_miniapp_init_data(init_data)
         if not validation["ok"]:
             raise HTTPException(status_code=401, detail=validation["error"])
-        return {"status": "ok", "authenticated": True, "user": validation.get("user"), "auth_date": validation.get("auth_date")}
+        telegram_user = validation.get("user")
+        if not isinstance(telegram_user, dict):
+            raise HTTPException(status_code=401, detail="telegram_user_missing")
+        try:
+            telegram_user_id = int(telegram_user.get("id"))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=401, detail="invalid_telegram_user_id")
+        if telegram_user_id <= 0:
+            raise HTTPException(status_code=401, detail="invalid_telegram_user_id")
+
+        db = SessionLocal()
+        try:
+            current_user = get_current_user(request, db)
+            binding = get_telegram_identity_binding(telegram_user_id)
+            if binding is None:
+                if current_user is None:
+                    raise HTTPException(status_code=403, detail="telegram_identity_not_linked")
+                try:
+                    bind_telegram_identity(telegram_user_id, str(current_user.id))
+                except TelegramIdentityConflict:
+                    raise HTTPException(status_code=409, detail="telegram_identity_conflict")
+                canonical_user = current_user
+            else:
+                canonical_user = db.scalar(select(User).where(User.id == binding.canonical_user_id))
+                if not canonical_user or not canonical_user.is_active:
+                    raise HTTPException(status_code=403, detail="telegram_identity_not_approved")
+                if current_user is not None and str(current_user.id) != str(canonical_user.id):
+                    raise HTTPException(status_code=409, detail="telegram_identity_conflict")
+
+            response = JSONResponse(
+                {
+                    "status": "ok",
+                    "authenticated": True,
+                    "user": serialize_user(canonical_user),
+                    "telegram_user": telegram_user,
+                    "auth_date": validation.get("auth_date"),
+                }
+            )
+            set_auth_cookie(response, issue_access_token(canonical_user))
+            return response
+        finally:
+            db.close()
 
 
 def validate_miniapp_init_data(init_data: str) -> dict[str, Any]:
