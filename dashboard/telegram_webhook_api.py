@@ -59,6 +59,17 @@ def install_telegram_webhook_api(app: FastAPI) -> None:
             update_id = int(update["update_id"])
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="invalid_telegram_update_id")
+
+        canonical_user_id = _approved_telegram_user_id(update)
+        if canonical_user_id is None:
+            return {
+                "ok": True,
+                "ignored": True,
+                "reason": "telegram_user_not_approved",
+                "update_id": update_id,
+                "adapter": "shared_website_system",
+            }
+
         if not claim_telegram_update(update_id):
             return {"ok": True, "duplicate": True, "update_id": update_id, "adapter": "shared_website_system"}
         # Проверяем, не development callback ли это
@@ -149,6 +160,47 @@ def install_telegram_webhook_api(app: FastAPI) -> None:
             return response
         finally:
             db.close()
+
+
+def _telegram_update_user_id(update: dict[str, Any]) -> int | None:
+    """Return the Telegram actor id for supported user-originated updates."""
+
+    for key in ("message", "callback_query"):
+        envelope = update.get(key)
+        if not isinstance(envelope, dict):
+            continue
+        actor = envelope.get("from")
+        if not isinstance(actor, dict):
+            continue
+        try:
+            telegram_user_id = int(actor.get("id"))
+        except (TypeError, ValueError):
+            return None
+        return telegram_user_id if telegram_user_id > 0 else None
+    return None
+
+
+def _approved_telegram_user_id(update: dict[str, Any]) -> str | None:
+    """Resolve a Telegram actor to an active canonical user, fail closed."""
+
+    telegram_user_id = _telegram_update_user_id(update)
+    if telegram_user_id is None:
+        return None
+    try:
+        binding = get_telegram_identity_binding(telegram_user_id)
+    except (RuntimeError, TypeError, ValueError):
+        return None
+    if binding is None:
+        return None
+
+    db = SessionLocal()
+    try:
+        canonical_user = db.scalar(select(User).where(User.id == binding.canonical_user_id))
+        if canonical_user is None or not canonical_user.is_active:
+            return None
+        return str(canonical_user.id)
+    finally:
+        db.close()
 
 
 def validate_miniapp_init_data(init_data: str) -> dict[str, Any]:
