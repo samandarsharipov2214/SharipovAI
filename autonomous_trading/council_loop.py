@@ -78,6 +78,10 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
             self._state["v2_shadow_records"] = {}
         if not isinstance(self._state.get("v2_shadow_errors"), list):
             self._state["v2_shadow_errors"] = []
+        # A close is already an immutable PAPER fact when the process comes
+        # back.  Recover only explicitly marked, previously failed settlement
+        # writes; do not infer settlements from arbitrary historical trades.
+        self._recover_pending_settlements()
 
     def _trace(self, symbol: str, status: str, reason: str, **extra: Any) -> dict[str, Any]:
         return persist_decision_trace(
@@ -540,16 +544,7 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                         }
                     )
                 net = float(net_pnl or 0.0)
-                try:
-                    settlement = self.decision_runtime.settle_exit(
-                        decision_id,
-                        net_pnl=net,
-                        drawdown_contribution=max(0.0, -net),
-                    )
-                    item["decision_settlement"] = settlement
-                    item["reputation_recorded"] = bool(settlement.get("reputation_recorded"))
-                except Exception as exc:
-                    item["decision_settlement_error"] = f"{type(exc).__name__}: {exc}"
+                self._settle_or_mark_pending(item, decision_id=decision_id, net_pnl=net)
 
                 shadow = self._state.get("v2_shadow_records", {}).get(decision_id)
                 if isinstance(shadow, Mapping):
@@ -579,6 +574,54 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         self._state["trades"].append(item)
         self._state["trades"] = self._state["trades"][-500:]
         self._event(side, reason, symbol)
+
+    def _settle_or_mark_pending(
+        self,
+        trade: dict[str, Any],
+        *,
+        decision_id: str,
+        net_pnl: float,
+    ) -> None:
+        """Persist V2 settlement, retaining a retry marker on transient failure."""
+
+        try:
+            settlement = self.decision_runtime.settle_exit(
+                decision_id,
+                net_pnl=net_pnl,
+                drawdown_contribution=max(0.0, -net_pnl),
+            )
+        except Exception as exc:
+            trade["decision_settlement_error"] = f"{type(exc).__name__}: {exc}"
+            trade["settlement_retry_pending"] = True
+            return
+
+        trade["decision_settlement"] = settlement
+        trade["reputation_recorded"] = bool(settlement.get("reputation_recorded"))
+        trade.pop("decision_settlement_error", None)
+        trade.pop("settlement_retry_pending", None)
+
+    def _recover_pending_settlements(self) -> None:
+        """Retry explicitly durable pending settlements once after a restart."""
+
+        trades = self._state.get("trades")
+        if not isinstance(trades, list):
+            return
+        for trade in trades:
+            if not isinstance(trade, dict) or trade.get("settlement_retry_pending") is not True:
+                continue
+            decision_id = str(trade.get("decision_id") or "").strip()
+            net_pnl = trade.get("net_pnl")
+            if not decision_id or net_pnl is None:
+                continue
+            try:
+                parsed_net_pnl = float(net_pnl)
+            except (TypeError, ValueError):
+                continue
+            self._settle_or_mark_pending(
+                trade,
+                decision_id=decision_id,
+                net_pnl=parsed_net_pnl,
+            )
 
     def _suppress_wait_event(
         self,
