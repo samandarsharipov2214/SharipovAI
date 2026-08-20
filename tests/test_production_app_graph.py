@@ -4,6 +4,9 @@ from fastapi import FastAPI
 
 import dashboard
 
+# Integrated-main regression probe: this branch intentionally runs the full CI suite
+# against the exact post-merge application graph before any corrective change.
+
 
 def _route_signatures(app: FastAPI) -> set[tuple[str, str]]:
     signatures: set[tuple[str, str]] = set()
