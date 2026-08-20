@@ -16,8 +16,9 @@ def normalize_language(language: str | None) -> str:
     """Normalize a requested language or ``Accept-Language`` value.
 
     Regional locale tags are mapped onto the three canonical UI catalogs. When
-    several language ranges are supplied, the first supported range with a
-    non-zero quality value wins. Unknown or empty input falls back to Russian.
+    several language ranges are supplied, the supported range with the highest
+    non-zero quality value wins; original order breaks equal-quality ties.
+    Unknown or empty input falls back to Russian.
 
     Args:
         language: Requested language code or ``Accept-Language`` value.
@@ -29,7 +30,8 @@ def normalize_language(language: str | None) -> str:
     if not language:
         return DEFAULT_LANGUAGE
 
-    for raw_range in str(language).split(","):
+    candidates: list[tuple[float, int, str]] = []
+    for index, raw_range in enumerate(str(language).split(",")):
         parts = [part.strip() for part in raw_range.split(";") if part.strip()]
         if not parts:
             continue
@@ -42,6 +44,8 @@ def normalize_language(language: str | None) -> str:
                     quality = float(value.strip())
                 except ValueError:
                     quality = 0.0
+                if not 0.0 <= quality <= 1.0:
+                    quality = 0.0
                 break
         if quality <= 0:
             continue
@@ -49,9 +53,11 @@ def normalize_language(language: str | None) -> str:
         locale = parts[0].lower().replace("_", "-")
         primary_language = locale.split("-", 1)[0]
         if primary_language in SUPPORTED_LANGUAGES:
-            return primary_language
+            candidates.append((quality, -index, primary_language))
 
-    return DEFAULT_LANGUAGE
+    if not candidates:
+        return DEFAULT_LANGUAGE
+    return max(candidates)[2]
 
 
 def load_translations(language: str | None) -> dict[str, str]:
