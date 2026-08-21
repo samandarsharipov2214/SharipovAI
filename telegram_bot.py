@@ -308,8 +308,11 @@ def news_text() -> str:
         raw_items = news.get("items", []) if isinstance(news, dict) else None
         average_credibility = summary.get("average_credibility_percent") if isinstance(summary, dict) else None
         needs_confirmation = summary.get("needs_confirmation") if isinstance(summary, dict) else None
+        total = summary.get("total") if isinstance(summary, dict) else None
+        has_live_items = summary.get("has_live_items") if isinstance(summary, dict) else None
 
-        if average_credibility in (None, "") or isinstance(average_credibility, bool):
+        summary_is_empty = (isinstance(total, int) and not isinstance(total, bool) and total == 0) or has_live_items is False
+        if summary_is_empty or average_credibility in (None, "") or isinstance(average_credibility, bool):
             average_text = "не указана"
         else:
             try:
@@ -335,7 +338,8 @@ def news_text() -> str:
             "",
         ]
         footer = "Правило: один источник не даёт разрешение на сделку."
-        overflow_notice = "…остальные новости не показаны: ответ достиг безопасного лимита Telegram."
+        overflow_notice = "…часть новостей не показана: отдельные карточки не помещаются в безопасный лимит Telegram."
+        count_limit_notice = "…остальные новости не показаны: достигнут лимит 5 карточек в Telegram-ответе."
         text_limit = 3800
 
         if raw_items is None or not isinstance(raw_items, list):
@@ -350,19 +354,26 @@ def news_text() -> str:
                     lines.append("Новостей пока нет. BUY по слухам запрещён.")
             else:
                 rendered_count = 0
-                display_items = valid_items[:5]
-                for item_offset, item in enumerate(display_items):
-                    card = format_news_item(item, index=rendered_count + 1)
-                    has_more = item_offset < len(display_items) - 1 or len(valid_items) > len(display_items)
-                    reserve = [overflow_notice] if has_more else []
-                    candidate = "\n".join([*lines, card, *reserve, "", footer]).strip()
-                    if len(candidate) > text_limit:
-                        lines.append(overflow_notice)
+                processed_count = 0
+                oversized_count = 0
+                for item in valid_items:
+                    if rendered_count >= 5:
                         break
+                    processed_count += 1
+                    card = format_news_item(item, index=rendered_count + 1)
+                    candidate = "\n".join(
+                        [*lines, card, overflow_notice, count_limit_notice, "", footer]
+                    ).strip()
+                    if len(candidate) > text_limit:
+                        oversized_count += 1
+                        continue
                     lines.append(card)
                     rendered_count += 1
-                    if item_offset == len(display_items) - 1 and len(valid_items) > len(display_items):
-                        lines.append(overflow_notice)
+
+                if oversized_count:
+                    lines.append(overflow_notice)
+                if processed_count < len(valid_items):
+                    lines.append(count_limit_notice)
 
         lines.append(f"\n{footer}")
         rendered = "\n".join(lines).strip()
