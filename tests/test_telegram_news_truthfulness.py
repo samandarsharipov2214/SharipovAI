@@ -57,6 +57,20 @@ def test_invalid_credibility_does_not_render_as_a_real_percentage() -> None:
         assert "достоверность <b>1%</b>" not in rendered
 
 
+def test_source_trust_is_not_presented_as_item_credibility() -> None:
+    rendered = format_news_item(
+        {
+            "title": "Market update",
+            "source_name": "Example Wire",
+            "trust_score": 95,
+        },
+        index=4,
+    )
+
+    assert "достоверность не указана" in rendered
+    assert "достоверность <b>95%</b>" not in rendered
+
+
 def test_live_telegram_news_path_uses_truthful_formatter(monkeypatch) -> None:
     payload = {
         "summary": {},
@@ -85,3 +99,55 @@ def test_live_telegram_news_path_uses_truthful_formatter(monkeypatch) -> None:
     assert "Новость</b>" not in rendered
     assert "unknown" not in rendered
     assert "доверие 0%" not in rendered
+
+
+def test_live_telegram_news_path_reports_malformed_items(monkeypatch) -> None:
+    payload = {
+        "summary": {},
+        "items": ["broken", {"title": "Valid item", "source_name": "Wire"}, 42],
+    }
+    monkeypatch.setattr("news_monitor.analyzer.analyzed_news_payload", lambda: payload)
+
+    rendered = telegram_bot.news_text()
+
+    assert "Некорректных записей новостей: 2" in rendered
+    assert "Valid item" in rendered
+    assert "Заголовок не передан источником" not in rendered
+
+
+def test_live_telegram_news_path_reports_non_list_items(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "news_monitor.analyzer.analyzed_news_payload",
+        lambda: {"summary": {}, "items": "not-a-list"},
+    )
+
+    rendered = telegram_bot.news_text()
+
+    assert "поле items должно быть списком" in rendered
+    assert "Заголовок не передан источником" not in rendered
+
+
+def test_live_telegram_news_path_stays_below_html_clip_limit(monkeypatch) -> None:
+    payload = {
+        "summary": {"average_credibility_percent": 80, "needs_confirmation": False},
+        "items": [
+            {
+                "title": "&" * 5000,
+                "source_name": "Wire",
+                "credibility_percent": 80,
+                "published_at": "2026-08-20T12:00:00Z",
+                "url": "https://example.com/" + "x" * 5000,
+                "needs_confirmation": False,
+                "ai_action": "WAIT",
+            }
+        ],
+    }
+    monkeypatch.setattr("news_monitor.analyzer.analyzed_news_payload", lambda: payload)
+
+    rendered = telegram_bot.news_text()
+
+    assert len(rendered) <= 3800
+    assert telegram_bot._clip(rendered) == rendered
+    assert rendered.count("<b>") == rendered.count("</b>")
+    assert rendered.count("<a href=") == rendered.count("</a>")
+    assert "ответ достиг безопасного лимита Telegram" in rendered
