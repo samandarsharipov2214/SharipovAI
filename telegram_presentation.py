@@ -119,7 +119,7 @@ def format_news_time(value: str | None) -> str:
 
 
 def _news_credibility_text(item: dict[str, Any]) -> str:
-    credibility = item.get("credibility_percent")
+    credibility = item.get("credibility_percent") if "credibility_percent" in item else item.get("credibility")
     if credibility in (None, "") or isinstance(credibility, bool):
         return "достоверность не указана"
     try:
@@ -133,9 +133,9 @@ def _news_credibility_text(item: dict[str, Any]) -> str:
 
 
 def format_news_item(item: dict[str, Any], *, index: int) -> str:
-    raw_title = str(item.get("title") or "").strip()
+    raw_title = str(item.get("title") or item.get("headline") or "").strip()
     title = news_title_ru(raw_title) if raw_title else "Заголовок не передан источником"
-    source = str(item.get("source_name") or "").strip() or "Источник не указан"
+    source = str(item.get("source_name") or item.get("source") or "").strip() or "Источник не указан"
     credibility = _news_credibility_text(item)
     published = format_news_time(str(item.get("published_at") or ""))
     url = str(item.get("url") or "").strip()
