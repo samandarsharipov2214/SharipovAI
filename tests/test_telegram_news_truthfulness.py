@@ -74,6 +74,22 @@ def test_invalid_credibility_does_not_render_as_a_real_percentage() -> None:
         assert "достоверность <b>1%</b>" not in rendered
 
 
+def test_invalid_confirmation_flags_do_not_render_definitive_status() -> None:
+    for confirmation in ("false", "true", 0, 1, [], {}):
+        rendered = format_news_item(
+            {
+                "title": "Market update",
+                "source_name": "Example Wire",
+                "needs_confirmation": confirmation,
+            },
+            index=5,
+        )
+
+        assert "статус подтверждения не указан" in rendered
+        assert "нужно подтверждение" not in rendered
+        assert "подтверждение не требуется" not in rendered
+
+
 def test_source_trust_is_not_presented_as_item_credibility() -> None:
     rendered = format_news_item(
         {
@@ -81,7 +97,7 @@ def test_source_trust_is_not_presented_as_item_credibility() -> None:
             "source_name": "Example Wire",
             "trust_score": 95,
         },
-        index=5,
+        index=6,
     )
 
     assert "достоверность не указана" in rendered
@@ -128,6 +144,27 @@ def test_live_telegram_news_path_preserves_numeric_confirmation_count(monkeypatc
 
     assert "Нужно подтверждение: <b>3</b>" in rendered
     assert "Нужно подтверждение: <b>не указано</b>" not in rendered
+
+
+def test_live_telegram_news_path_treats_empty_average_as_unavailable(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "news_monitor.analyzer.analyzed_news_payload",
+        lambda: {
+            "summary": {
+                "total": 0,
+                "has_live_items": False,
+                "average_credibility_percent": 0.0,
+                "needs_confirmation": 0,
+            },
+            "items": [],
+        },
+    )
+
+    rendered = telegram_bot.news_text()
+
+    assert "Средняя достоверность: <b>не указана</b>" in rendered
+    assert "Средняя достоверность: <b>0%" not in rendered
+    assert "Новостей пока нет" in rendered
 
 
 def test_live_telegram_news_path_reports_malformed_items(monkeypatch) -> None:
@@ -179,7 +216,7 @@ def test_live_telegram_news_path_stays_below_html_clip_limit(monkeypatch) -> Non
     assert telegram_bot._clip(rendered) == rendered
     assert rendered.count("<b>") == rendered.count("</b>")
     assert rendered.count("<a href=") == rendered.count("</a>")
-    assert "ответ достиг безопасного лимита Telegram" in rendered
+    assert "не помещаются в безопасный лимит Telegram" in rendered
 
 
 def test_live_telegram_news_path_reserves_room_for_overflow_notice(monkeypatch) -> None:
@@ -207,5 +244,54 @@ def test_live_telegram_news_path_reserves_room_for_overflow_notice(monkeypatch) 
     assert len(rendered) <= 3800
     assert "Один внутренний модуль упал" not in rendered
     assert "Нужно подтверждение: <b>2</b>" in rendered
-    assert "ответ достиг безопасного лимита Telegram" in rendered
+    assert "не помещаются в безопасный лимит Telegram" in rendered
     assert rendered.count("<b>") == rendered.count("</b>")
+
+
+def test_live_telegram_news_path_skips_oversized_card_and_keeps_later_news(monkeypatch) -> None:
+    payload = {
+        "summary": {"total": 2, "has_live_items": True, "average_credibility_percent": 80},
+        "items": [
+            {
+                "title": "X" * 5000,
+                "source_name": "Huge Wire",
+                "credibility_percent": 80,
+            },
+            {
+                "title": "Short valid item",
+                "source_name": "Small Wire",
+                "credibility_percent": 80,
+            },
+        ],
+    }
+    monkeypatch.setattr("news_monitor.analyzer.analyzed_news_payload", lambda: payload)
+
+    rendered = telegram_bot.news_text()
+
+    assert "Short valid item" in rendered
+    assert "Small Wire" in rendered
+    assert "не помещаются в безопасный лимит Telegram" in rendered
+    assert "Один внутренний модуль упал" not in rendered
+
+
+def test_live_telegram_news_path_distinguishes_five_card_cap_from_size_limit(monkeypatch) -> None:
+    payload = {
+        "summary": {"total": 6, "has_live_items": True, "average_credibility_percent": 80},
+        "items": [
+            {
+                "title": f"Short item {index}",
+                "source_name": "Wire",
+                "credibility_percent": 80,
+            }
+            for index in range(6)
+        ],
+    }
+    monkeypatch.setattr("news_monitor.analyzer.analyzed_news_payload", lambda: payload)
+
+    rendered = telegram_bot.news_text()
+
+    assert "достигнут лимит 5 карточек" in rendered
+    assert "не помещаются в безопасный лимит Telegram" not in rendered
+    assert "Short item 0" in rendered
+    assert "Short item 4" in rendered
+    assert "Short item 5" not in rendered
