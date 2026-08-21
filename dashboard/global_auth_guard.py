@@ -73,7 +73,7 @@ def _is_loopback_request(request: Request) -> bool:
 
 def auth_disabled() -> bool:
     """Return True only after an explicit test/development bypass."""
-    if os.getenv("ENVIRONMENT", "").lower() == "production":
+    if bool(os.getenv("RENDER")) or os.getenv("ENVIRONMENT", "").lower() in {"production", "prod"}:
         return False
     return os.getenv("SHARIPOVAI_DISABLE_AUTH", "0").strip().lower() in _TRUE_VALUES
 
