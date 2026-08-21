@@ -52,15 +52,29 @@ class _FakeNetwork:
         return {"status": "ok", "message_id": message_id}
 
 
-def _client(monkeypatch: pytest.MonkeyPatch, network: _FakeNetwork) -> TestClient:
+def _client(monkeypatch: pytest.MonkeyPatch, network: _FakeNetwork, *, base_url: str = "http://testserver") -> TestClient:
     app = FastAPI()
     monkeypatch.setattr(bot_api, "BotCommunicationNetwork", lambda _path=None: network)
     bot_api.install_bot_communication_api(app)
-    return TestClient(app)
+    return TestClient(app, base_url=base_url)
 
 
 def _deny(_request: Any) -> str:
     raise HTTPException(status_code=403, detail={"status": "forbidden"})
+
+
+def _request(path: str = "/api/bot-network/messages") -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": path,
+            "headers": [],
+            "scheme": "https",
+            "server": ("example.test", 443),
+            "client": ("127.0.0.1", 12345),
+        }
+    )
 
 
 def test_bot_network_mutations_require_admin(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -152,6 +166,7 @@ def test_shared_admin_guard_accepts_active_canonical_saas_admin(monkeypatch: pyt
         def close(self) -> None:
             return None
 
+    monkeypatch.setenv("JWT_SECRET", "explicit-test-jwt-secret")
     monkeypatch.setattr(db_saas, "SessionLocal", lambda: _DB())
     monkeypatch.setattr(
         auth_saas,
@@ -162,25 +177,69 @@ def test_shared_admin_guard_accepts_active_canonical_saas_admin(monkeypatch: pyt
             is_active=True,
         ),
     )
-    request = Request(
-        {
-            "type": "http",
-            "method": "POST",
-            "path": "/api/bot-network/messages",
-            "headers": [],
-            "scheme": "https",
-            "server": ("example.test", 443),
-            "client": ("127.0.0.1", 12345),
-        }
+
+    assert admin_guard.require_admin(_request()) == "saas-admin@example.test"
+
+
+def test_shared_admin_guard_rejects_default_or_missing_canonical_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("JWT_SECRET", raising=False)
+    monkeypatch.delenv("AUTH_SECRET", raising=False)
+    monkeypatch.delenv("ADMIN_USERNAME", raising=False)
+    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+    monkeypatch.setattr(
+        auth_saas,
+        "get_current_user",
+        lambda _request, _db: SimpleNamespace(email="forged@example.test", role="admin", is_active=True),
     )
 
-    assert admin_guard.require_admin(request) == "saas-admin@example.test"
+    with pytest.raises(HTTPException) as exc_info:
+        admin_guard.require_admin(_request())
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == {"status": "auth_not_configured"}
 
 
-def test_standalone_bot_network_mutations_require_admin(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_shared_admin_guard_returns_forbidden_for_canonical_non_admin(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _DB:
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setenv("JWT_SECRET", "explicit-test-jwt-secret")
+    monkeypatch.setattr(db_saas, "SessionLocal", lambda: _DB())
+    monkeypatch.setattr(
+        auth_saas,
+        "get_current_user",
+        lambda _request, _db: SimpleNamespace(
+            email="member@example.test",
+            role="user",
+            is_active=True,
+        ),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        admin_guard.require_admin(_request())
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == {"status": "forbidden"}
+
+
+def test_bot_network_mutation_blocks_cross_origin_cookie_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    network = _FakeNetwork()
+    monkeypatch.setattr(bot_api, "require_admin", lambda _request: "owner-admin")
+    client = _client(monkeypatch, network, base_url="https://example.test")
+
+    response = client.post(
+        "/api/bot-network/agent/risk_engine/pause",
+        headers={"Origin": "https://evil.example"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["status"] == "cross_origin_blocked"
+
+
+def test_standalone_bot_network_mutations_are_retired(monkeypatch: pytest.MonkeyPatch) -> None:
     network = _FakeNetwork()
     monkeypatch.setattr(standalone_bot_api, "network", lambda: network)
-    monkeypatch.setattr(standalone_bot_api, "require_admin", _deny)
     client = TestClient(standalone_bot_api.app)
 
     requests = [
@@ -191,24 +250,9 @@ def test_standalone_bot_network_mutations_require_admin(monkeypatch: pytest.Monk
     ]
     for path, payload in requests:
         response = client.post(path, json=payload) if payload is not None else client.post(path)
-        assert response.status_code == 403, path
+        assert response.status_code == 410, path
+        assert response.json()["detail"]["status"] == "standalone_mutations_retired"
 
-
-def test_standalone_message_provenance_is_server_derived(monkeypatch: pytest.MonkeyPatch) -> None:
-    network = _FakeNetwork()
-    monkeypatch.setattr(standalone_bot_api, "network", lambda: network)
-    monkeypatch.setattr(standalone_bot_api, "require_admin", lambda _request: "owner-admin")
-    client = TestClient(standalone_bot_api.app)
-
-    response = client.post(
-        "/api/bot-network/messages",
-        json={
-            "sender": "general_controller",
-            "recipient": "learning_engine",
-            "payload": {"requested_by": "spoofed-user", "value": 9},
-        },
-    )
-
-    assert response.status_code == 200
-    assert network.sent is not None
-    assert network.sent["payload"] == {"requested_by": "owner-admin", "value": 9}
+    assert network.sent is None
+    assert network.broadcasted is None
+    assert network.marked_read is None
