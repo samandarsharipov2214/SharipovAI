@@ -66,6 +66,7 @@ def analyze_items(raw_items: Iterable[dict[str, object]], sources: list[NewsSour
                 title=title,
                 url=str(raw.get("url", source.url if source else "")),
                 published_at=str(raw.get("published_at", _now_iso())),
+                timestamp_quality=str(raw.get("timestamp_quality") or "unknown"),
                 summary=summary,
                 symbols=symbols,
                 tags=tags,
