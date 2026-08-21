@@ -301,25 +301,38 @@ def orchestrated_reply(message: str) -> str:
 def news_text() -> str:
     def build() -> str:
         from news_monitor.analyzer import analyzed_news_payload
+        from telegram_presentation import format_news_item
 
         news = analyzed_news_payload()
         summary = news.get("summary", {}) if isinstance(news, dict) else {}
         items = list(news.get("items", [])) if isinstance(news, dict) else []
+        average_credibility = summary.get("average_credibility_percent") if isinstance(summary, dict) else None
+        needs_confirmation = summary.get("needs_confirmation") if isinstance(summary, dict) else None
+        average_text = (
+            f"{_safe_html(average_credibility)}%"
+            if average_credibility not in (None, "") and not isinstance(average_credibility, bool)
+            else "не указана"
+        )
+        confirmation_text = (
+            _safe_html(needs_confirmation)
+            if needs_confirmation not in (None, "") and not isinstance(needs_confirmation, bool)
+            else "не указано"
+        )
         lines = [
             "📰 <b>Новости: источники и время</b>",
             "",
             f"Проверено: <b>{_safe_html(now_iso())}</b>",
-            f"Средняя достоверность: <b>{_safe_html(summary.get('average_credibility_percent', 0))}%</b>",
-            f"Нужно подтверждение: <b>{_safe_html(summary.get('needs_confirmation', 0))}</b>",
+            f"Средняя достоверность: <b>{average_text}</b>",
+            f"Нужно подтверждение: <b>{confirmation_text}</b>",
             "",
         ]
         if not items:
             lines.append("Новостей пока нет. BUY по слухам запрещён.")
         for idx, item in enumerate(items[:5], start=1):
-            title = item.get("title") or item.get("headline") or "Новость"
-            source = item.get("source_name") or item.get("source") or "unknown"
-            credibility = item.get("credibility_percent", item.get("credibility", 0))
-            lines.append(f"{idx}. <b>{_safe_html(title)}</b>\nИсточник: {_safe_html(source)} · доверие {credibility}%")
+            if isinstance(item, dict):
+                lines.append(format_news_item(item, index=idx))
+            else:
+                lines.append(format_news_item({}, index=idx))
         lines.append("\nПравило: один источник не даёт разрешение на сделку.")
         return "\n".join(lines).strip()
 
