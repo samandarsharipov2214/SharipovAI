@@ -35,14 +35,17 @@ def test_existing_legacy_fallback_database_is_preserved(monkeypatch, tmp_path) -
         get_saas_settings.cache_clear()
 
 
-def test_explicit_database_url_still_wins(monkeypatch) -> None:
+def test_explicit_database_url_still_wins_without_creating_fallback_dir(monkeypatch, tmp_path) -> None:
+    monkeypatch.chdir(tmp_path)
     explicit = "sqlite:///explicit-test.db"
+    fallback_dir = tmp_path / "ignored-shared-data"
     monkeypatch.setenv("DATABASE_URL", explicit)
     monkeypatch.setenv("SHARIPOVAI_DATABASE_REQUIRED", "1")
-    monkeypatch.setenv("SHARIPOVAI_DATA_DIR", "ignored-shared-data")
+    monkeypatch.setenv("SHARIPOVAI_DATA_DIR", str(fallback_dir))
     get_saas_settings.cache_clear()
     try:
         assert get_saas_settings().database_url == explicit
         assert ProjectDatabase().dsn == explicit
+        assert not fallback_dir.exists()
     finally:
         get_saas_settings.cache_clear()
