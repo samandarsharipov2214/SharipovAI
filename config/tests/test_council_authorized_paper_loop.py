@@ -277,6 +277,61 @@ def test_spot_sell_signal_closes_existing_long_with_single_use_authorization(tmp
     ) is not None
 
 
+def test_restart_recovers_a_pending_settlement_once_after_transient_failure(tmp_path, monkeypatch) -> None:
+    state_path = tmp_path / "paper.json"
+    monkeypatch.setenv("AUTONOMOUS_PAPER_STATE_FILE", str(state_path))
+    database = _database(tmp_path)
+    stream = _Stream()
+    proposal = _proposal(database, "paper-council-settlement-retry", stream.current.price)
+    runtime = CanonicalPaperDecisionRuntime(database)
+    loop = CouncilAuthorizedPaperLoop(
+        stream,
+        decision_runtime=runtime,
+        proposal_provider=lambda _symbol, _quote, _state: proposal,
+        database=database,
+    )
+
+    loop.tick()
+    runtime.settle_exit = lambda *_args, **_kwargs: (_ for _ in ()).throw(  # type: ignore[method-assign]
+        RuntimeError("transient settlement persistence failure")
+    )
+    stream.current = _Quote(58_000.0, change_24h_percent=-2.0)
+    loop.tick()
+    failed = loop.snapshot()
+    assert failed["positions"] == {}
+    assert failed["trades"][-1]["settlement_retry_pending"] is True
+    assert database.get_json(
+        CanonicalPaperDecisionRuntime.settlement_namespace,
+        "paper-council-settlement-retry",
+    ) is None
+
+    recovered = CouncilAuthorizedPaperLoop(
+        _Stream(58_000.0),
+        decision_runtime=CanonicalPaperDecisionRuntime(database),
+        proposal_provider=lambda _symbol, _quote, _state: None,
+        database=database,
+    )
+    recovered_snapshot = recovered.snapshot()
+    recovered_trade = recovered_snapshot["trades"][-1]
+    assert recovered_trade.get("settlement_retry_pending") is not True
+    assert "decision_settlement_error" not in recovered_trade
+    assert recovered_trade["decision_settlement"]["decision_id"] == "paper-council-settlement-retry"
+    assert len(recovered_snapshot["trades"]) == 2
+    persisted = database.get_json(
+        CanonicalPaperDecisionRuntime.settlement_namespace,
+        "paper-council-settlement-retry",
+    )
+    assert persisted is not None
+
+    restarted_again = CouncilAuthorizedPaperLoop(
+        _Stream(58_000.0),
+        decision_runtime=CanonicalPaperDecisionRuntime(database),
+        proposal_provider=lambda _symbol, _quote, _state: None,
+        database=database,
+    )
+    assert len(restarted_again.snapshot()["trades"]) == 2
+
+
 def test_protective_stop_loss_does_not_wait_for_new_council(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("AUTONOMOUS_PAPER_STATE_FILE", str(tmp_path / "paper.json"))
     database = _database(tmp_path)

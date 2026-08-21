@@ -19,11 +19,12 @@ jobs:
   build:
     if: >-
       ${{
-        vars.SHARIPOVAI_SELF_HOSTED_CI == '1' &&
-        (github.event_name != 'pull_request' ||
-         github.event.pull_request.head.repo.full_name == github.repository)
+        (github.event_name == 'pull_request' &&
+         github.event.pull_request.head.repo.full_name == github.repository) ||
+        (github.event_name != 'pull_request' &&
+         vars.SHARIPOVAI_SELF_HOSTED_CI == '1')
       }}
-    runs-on: [self-hosted, linux, x64, sharipovai-ci]
+    runs-on: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["self-hosted","linux","x64","sharipovai-ci"]') }}
     timeout-minutes: 20
     defaults:
       run:

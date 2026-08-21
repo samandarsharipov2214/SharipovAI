@@ -16,11 +16,15 @@ HEAVY_GITHUB_HOSTED_WORKFLOWS = (
     "secret-history-scan.yml",
 )
 
+HYBRID_PR_HOSTED_WORKFLOWS = (
+    "phase11-hardening.yml",
+    "stabilization-dashboard.yml",
+    "web2.yml",
+)
+
 SELF_HOSTED_LINUX_WORKFLOWS = (
     "full-stabilization.yml",
-    "stabilization-dashboard.yml",
     "production-smoke.yml",
-    "web2.yml",
     "sync-bybit-skill.yml",
 )
 
@@ -38,13 +42,25 @@ def test_heavy_repository_wide_ci_runs_off_production_vps() -> None:
 
 
 def test_other_automatic_workflows_do_not_use_github_hosted_runners() -> None:
-    hosted = set(HEAVY_GITHUB_HOSTED_WORKFLOWS)
+    hosted = set(HEAVY_GITHUB_HOSTED_WORKFLOWS) | set(HYBRID_PR_HOSTED_WORKFLOWS)
     for path in WORKFLOWS.glob("*.yml"):
         if path.name in hosted:
             continue
         text = _read(path)
         assert "ubuntu-latest" not in text, path
         assert "windows-latest" not in text, path
+
+
+def test_hybrid_pr_validation_uses_hosted_runner_without_self_hosted_gate() -> None:
+    for name in HYBRID_PR_HOSTED_WORKFLOWS:
+        text = _read(WORKFLOWS / name)
+        assert "github.event_name == 'pull_request'" in text, name
+        assert "ubuntu-latest" in text, name
+        assert '"self-hosted","linux","x64","sharipovai-ci"' in text, name
+        assert "github.event.pull_request.head.repo.full_name == github.repository" in text, name
+        assert "github.event_name != 'pull_request'" in text, name
+        assert "vars.SHARIPOVAI_SELF_HOSTED_CI == '1'" in text, name
+        assert "vars.SHARIPOVAI_SELF_HOSTED_CI == '1' &&\n        (github.event_name != 'pull_request'" not in text, name
 
 
 def test_operational_linux_workflows_require_enabled_self_hosted_runner() -> None:
