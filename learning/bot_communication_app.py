@@ -1,7 +1,11 @@
-"""AI Bot Communication Network API and dashboard.
+"""AI Bot Communication Network read-only standalone API and dashboard.
 
 Run with:
     python -m uvicorn learning.bot_communication_app:app --reload
+
+Mutation authority belongs to the canonical dashboard application where authenticated
+admin identity, provenance and origin checks are available. The standalone service
+remains intentionally read-only so it cannot become a second control plane.
 """
 
 from __future__ import annotations
@@ -11,10 +15,8 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
-from fastapi import Body, FastAPI, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
-
-from dashboard.admin_guard import require_admin
 
 from .bot_communication import BotCommunicationNetwork
 
@@ -26,16 +28,21 @@ def network() -> BotCommunicationNetwork:
     return BotCommunicationNetwork(Path(os.getenv("BOT_COMMUNICATION_DB", "data/bot_communication.sqlite3")))
 
 
-def _server_provenance_payload(data: dict[str, Any], actor: str) -> dict[str, Any]:
-    payload = data.get("payload", {})
-    safe_payload = dict(payload) if isinstance(payload, dict) else {}
-    safe_payload["requested_by"] = actor
-    return safe_payload
+def _retired_mutation() -> None:
+    raise HTTPException(
+        status_code=410,
+        detail={
+            "status": "standalone_mutations_retired",
+            "message": "Use the canonical dashboard Bot Network API for authenticated mutations.",
+        },
+    )
 
 
 @app.get("/api/bot-network/health")
 def health_api() -> dict[str, Any]:
-    return network().health()
+    health = network().health()
+    health["standalone_read_only"] = True
+    return health
 
 
 @app.get("/api/bot-network/matrix")
@@ -44,42 +51,18 @@ def matrix_api() -> dict[str, Any]:
 
 
 @app.post("/api/bot-network/messages")
-def send_message_api(request: Request, payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
-    actor = require_admin(request)
-    return network().send_message(
-        sender=str(payload.get("sender", "general_controller")),
-        recipient=str(payload.get("recipient", "learning_engine")),
-        message_type=str(payload.get("message_type", "question")),
-        topic=str(payload.get("topic", "general")),
-        payload=_server_provenance_payload(payload, actor),
-        thread_id=str(payload.get("thread_id")) if payload.get("thread_id") else None,
-        priority=str(payload.get("priority", "normal")),
-    )
+def send_message_api() -> None:
+    _retired_mutation()
 
 
 @app.post("/api/bot-network/broadcast")
-def broadcast_api(request: Request, payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
-    actor = require_admin(request)
-    recipients = payload.get("recipients")
-    return network().broadcast(
-        sender=str(payload.get("sender", "general_controller")),
-        recipients=recipients if isinstance(recipients, list) else None,
-        message_type=str(payload.get("message_type", "status_update")),
-        topic=str(payload.get("topic", "general")),
-        payload=_server_provenance_payload(payload, actor),
-        priority=str(payload.get("priority", "normal")),
-    )
+def broadcast_api() -> None:
+    _retired_mutation()
 
 
 @app.post("/api/bot-network/consensus")
-def consensus_api(request: Request, payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
-    require_admin(request)
-    participants = payload.get("participants")
-    return network().request_consensus(
-        topic=str(payload.get("topic", "general")),
-        question=str(payload.get("question", "Need consensus.")),
-        participants=participants if isinstance(participants, list) else None,
-    )
+def consensus_api() -> None:
+    _retired_mutation()
 
 
 @app.get("/api/bot-network/inbox/{bot_name}")
@@ -98,9 +81,8 @@ def thread_api(thread_id: str) -> dict[str, Any]:
 
 
 @app.post("/api/bot-network/messages/{message_id}/read")
-def mark_read_api(message_id: str, request: Request) -> dict[str, Any]:
-    require_admin(request)
-    return network().mark_read(message_id)
+def mark_read_api(message_id: str) -> None:
+    _retired_mutation()
 
 
 @app.get("/bot-network", response_class=HTMLResponse)
@@ -109,7 +91,7 @@ def bot_network_page() -> HTMLResponse:
     health = net.health()
     rows = "".join(_bot_row(bot, responsibility) for bot, responsibility in health.get("responsibilities", {}).items())
     return HTMLResponse(
-        f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SharipovAI · Bot Network</title><style>{_css()}</style></head><body><main><section class="card"><span class="ok">BOT NETWORK</span><h1>Связь AI-ботов</h1><p>Message bus для общения 11 ботов: inbox, threads, broadcast, consensus.</p><p><a href="/api/bot-network/health">JSON health</a> · <a href="/api/bot-network/matrix">JSON matrix</a></p></section><section class="card"><div class="grid"><div class="stat"><small>Ботов</small><b>{health.get('bot_count', 0)}</b></div><div class="stat"><small>Messages</small><b>{health.get('message_count', 0)}</b></div><div class="stat"><small>Unread</small><b>{health.get('unread_count', 0)}</b></div><div class="stat"><small>Threads</small><b>{health.get('thread_count', 0)}</b></div><div class="stat"><small>Full mesh</small><b>{'ДА' if health.get('full_mesh_possible') else 'НЕТ'}</b></div></div></section><section class="card"><h2>Боты и роли</h2><table><thead><tr><th>Bot</th><th>Role</th></tr></thead><tbody>{rows}</tbody></table></section></main></body></html>"""
+        f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>SharipovAI · Bot Network</title><style>{_css()}</style></head><body><main><section class="card"><span class="ok">BOT NETWORK · READ ONLY</span><h1>Связь AI-ботов</h1><p>Standalone-сервис оставлен только для чтения. Управляющие действия выполняются через канонический dashboard API с admin-auth.</p><p><a href="/api/bot-network/health">JSON health</a> · <a href="/api/bot-network/matrix">JSON matrix</a></p></section><section class="card"><div class="grid"><div class="stat"><small>Ботов</small><b>{health.get('bot_count', 0)}</b></div><div class="stat"><small>Messages</small><b>{health.get('message_count', 0)}</b></div><div class="stat"><small>Unread</small><b>{health.get('unread_count', 0)}</b></div><div class="stat"><small>Threads</small><b>{health.get('thread_count', 0)}</b></div><div class="stat"><small>Full mesh</small><b>{'ДА' if health.get('full_mesh_possible') else 'НЕТ'}</b></div></div></section><section class="card"><h2>Боты и роли</h2><table><thead><tr><th>Bot</th><th>Role</th></tr></thead><tbody>{rows}</tbody></table></section></main></body></html>"""
     )
 
 
