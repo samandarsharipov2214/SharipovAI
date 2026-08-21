@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -24,11 +25,23 @@ _SENSITIVE_PREFIXES = (
     "/api/production/phase11/",
     "/api/learning/phase12/",
 )
+_DEFAULT_LOCAL_JWT_SECRET = "local-dev-jwt-secret-change-me"
 
 
-def _canonical_saas_admin(request: Request) -> str | None:
-    """Return the active canonical SaaS administrator, if present."""
+def _explicit_canonical_jwt_secret() -> str | None:
+    """Return only an explicitly configured non-default JWT signing secret."""
 
+    configured = os.getenv("JWT_SECRET", "").strip() or os.getenv("AUTH_SECRET", "").strip()
+    if not configured or configured == _DEFAULT_LOCAL_JWT_SECRET:
+        return None
+    return configured
+
+
+def _canonical_saas_user(request: Request) -> Any | None:
+    """Return an active canonical SaaS user only when JWT auth is explicitly configured."""
+
+    if _explicit_canonical_jwt_secret() is None:
+        return None
     try:
         from .auth_saas import get_current_user
         from .db_saas import SessionLocal
@@ -36,8 +49,8 @@ def _canonical_saas_admin(request: Request) -> str | None:
         db = SessionLocal()
         try:
             user = get_current_user(request, db)
-            if user and user.is_active and str(user.role or "").lower() == "admin":
-                return str(user.email)
+            if user and user.is_active:
+                return user
         finally:
             db.close()
     except Exception:
@@ -48,9 +61,11 @@ def _canonical_saas_admin(request: Request) -> str | None:
 def require_admin(request: Request) -> str:
     """Require an active administrator from canonical SaaS or legacy auth."""
 
-    canonical_admin = _canonical_saas_admin(request)
-    if canonical_admin:
-        return canonical_admin
+    canonical_user = _canonical_saas_user(request)
+    if canonical_user is not None:
+        if str(canonical_user.role or "").lower() != "admin":
+            raise HTTPException(status_code=403, detail={"status": "forbidden"})
+        return str(canonical_user.email)
 
     if not all(os.getenv(name, "").strip() for name in ("AUTH_SECRET", "ADMIN_USERNAME", "ADMIN_PASSWORD")):
         raise HTTPException(status_code=503, detail={"status": "auth_not_configured"})
