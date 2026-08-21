@@ -177,3 +177,20 @@ def test_scan_limit_is_fail_closed_when_projection_may_be_partial(tmp_path) -> N
     assert index.scan_truncated is True
     assert index.scanned_message_count == 1
     assert len(index.conversations) == 1
+    assert index.conversations[0].chat_id == "chat-2"
+
+
+def test_bounded_conversation_scan_prefers_newest_messages(tmp_path) -> None:
+    database = _database(tmp_path)
+    _append(database, chat_id="old", message_id="m1", role="user", content="old", created_at_ms=100)
+    _append(database, chat_id="middle", message_id="m2", role="user", content="middle", created_at_ms=200)
+    _append(database, chat_id="new", message_id="m3", role="user", content="new", created_at_ms=300)
+
+    index = ConversationReadModel(database).list_conversations(
+        project_id="sharipovai",
+        message_scan_limit=2,
+    )
+
+    assert index.scan_truncated is True
+    assert index.scanned_message_count == 2
+    assert [item.chat_id for item in index.conversations] == ["new", "middle"]
