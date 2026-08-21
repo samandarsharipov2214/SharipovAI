@@ -7,6 +7,8 @@ from functools import lru_cache
 from pathlib import Path
 
 _TRUE = {"1", "true", "yes", "on"}
+_LEGACY_FALLBACK_DATABASE_URL = "sqlite:///./data/sharipovai_saas.sqlite3"
+_LEGACY_FALLBACK_DATABASE_PATH = Path("data/sharipovai_saas.sqlite3")
 
 
 @dataclass(frozen=True)
@@ -38,7 +40,10 @@ def _bool_env(name: str, default: bool) -> bool:
 
 
 def _default_database_url() -> str:
+    if _LEGACY_FALLBACK_DATABASE_PATH.is_file():
+        return _LEGACY_FALLBACK_DATABASE_URL
     data_dir = Path(os.getenv("SHARIPOVAI_DATA_DIR", "data"))
+    data_dir.mkdir(parents=True, exist_ok=True)
     return f"sqlite:///{data_dir / 'sharipovai_shared.db'}"
 
 
