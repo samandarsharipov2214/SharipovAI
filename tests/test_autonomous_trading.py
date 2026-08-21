@@ -4,6 +4,8 @@ from dataclasses import replace
 
 from autonomous_trading.loop import AutonomousPaperLoop
 from autonomous_trading.market_stream import StreamQuote
+from autonomous_trading.trade_identity import scope_for_path
+from storage import ProjectDatabase
 
 
 class FakeStream:
@@ -69,3 +71,14 @@ def test_state_survives_restart(tmp_path, monkeypatch) -> None:
     assert state_file.exists()
     second = AutonomousPaperLoop(stream)  # type: ignore[arg-type]
     assert "BTCUSDT" in second.snapshot()["positions"]
+
+
+def test_default_paper_state_uses_configured_durable_data_dir(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("AUTONOMOUS_PAPER_STATE_FILE", raising=False)
+    data_dir = tmp_path / "durable-data"
+    monkeypatch.setenv("SHARIPOVAI_DATA_DIR", str(data_dir))
+    database = ProjectDatabase(f"sqlite:///{tmp_path / 'project.db'}")
+    loop = AutonomousPaperLoop(FakeStream(_quote(100.0, 1.0)), database=database)  # type: ignore[arg-type]
+
+    assert loop.state_file == data_dir / "autonomous_paper.json"
+    assert loop.scope == scope_for_path(data_dir / "autonomous_paper.json")

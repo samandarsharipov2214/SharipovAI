@@ -3,10 +3,21 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+
+def default_paper_state_file() -> Path:
+    """Return the durable default PAPER state location for this deployment."""
+
+    configured = os.getenv("AUTONOMOUS_PAPER_STATE_FILE", "").strip()
+    if configured:
+        return Path(configured)
+    data_dir = os.getenv("SHARIPOVAI_DATA_DIR", "data").strip() or "data"
+    return Path(data_dir) / "autonomous_paper.json"
 
 
 def scope_for_path(path: str | Path) -> str:
@@ -71,6 +82,7 @@ def _validate_id(value: str, name: str) -> None:
 
 
 __all__ = [
+    "default_paper_state_file",
     "new_event_id",
     "new_trade_id",
     "normalize_event",
