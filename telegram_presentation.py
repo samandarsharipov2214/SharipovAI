@@ -9,6 +9,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
+from news_monitor.provenance import normalize_public_url
+
 
 REGIME_LABELS = {
     "mixed": "смешанный рынок",
@@ -142,6 +144,16 @@ def _bounded_text(value: object, *, limit: int) -> str:
     return clean[: max(limit - 1, 0)].rstrip() + "…"
 
 
+def _news_time_text(item: dict[str, Any]) -> str:
+    quality = str(item.get("timestamp_quality") or "").strip()
+    published_at = str(item.get("published_at") or "").strip()
+    if quality != "source_timestamp":
+        if published_at:
+            return "время публикации не подтверждено источником"
+        return "время не указано источником"
+    return format_news_time(published_at)
+
+
 def format_news_item(item: dict[str, Any], *, index: int) -> str:
     raw_title = str(item.get("title") or item.get("headline") or "").strip()
     translated_title = news_title_ru(raw_title) if raw_title else "Заголовок не передан источником"
@@ -149,16 +161,19 @@ def format_news_item(item: dict[str, Any], *, index: int) -> str:
     raw_source = str(item.get("source_name") or item.get("source") or "").strip() or "Источник не указан"
     source = _bounded_text(raw_source, limit=80)
     credibility = _news_credibility_text(item)
-    published = format_news_time(str(item.get("published_at") or ""))
-    url = str(item.get("url") or "").strip()
+    published = _news_time_text(item)
+    raw_url = str(item.get("url") or "").strip()
+    url = normalize_public_url(raw_url)
     confirmation = item.get("needs_confirmation")
     if isinstance(confirmation, bool):
         status = "нужно подтверждение" if confirmation else "подтверждение не требуется"
     else:
         status = "статус подтверждения не указан"
     action = _bounded_text(str(item.get("ai_action") or "").strip() or "не указано", limit=80)
-    if not url:
+    if not raw_url:
         link = "\n   🔗 ссылка не передана источником"
+    elif not url:
+        link = "\n   🔗 ссылка не показана: адрес источника небезопасен или некорректен"
     elif len(url) > 120:
         link = "\n   🔗 ссылка не показана: превышен безопасный лимит Telegram"
     else:
