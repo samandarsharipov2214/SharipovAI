@@ -48,6 +48,7 @@ def ensure_same_origin(request: Request) -> None:
     if not origin:
         return
     host = request.headers.get("host", "").split(",", 1)[0].strip().lower()
+    request_scheme = request.url.scheme.lower()
     try:
         parsed = urlsplit(origin)
     except ValueError:
@@ -56,6 +57,7 @@ def ensure_same_origin(request: Request) -> None:
         not host
         or parsed is None
         or parsed.scheme.lower() not in {"http", "https"}
+        or parsed.scheme.lower() != request_scheme
         or parsed.netloc.lower() != host
         or parsed.path not in {"", "/"}
         or parsed.query
