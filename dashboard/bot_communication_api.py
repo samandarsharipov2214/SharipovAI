@@ -14,6 +14,7 @@ from learning.ai_learning_core import BOT_NAMES
 from learning.bot_communication import BotCommunicationNetwork
 
 from .admin_guard import require_admin
+from .auth_saas import ensure_same_origin
 
 CHAT_BOT_ALIASES = {
     "general_controller": "general_controller", "general controller": "general_controller",
@@ -65,6 +66,7 @@ def install_bot_communication_api(app: FastAPI) -> None:
 
     @app.post("/api/bot-network/messages")
     def send_message_api(request: Request, payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
+        ensure_same_origin(request)
         actor = require_admin(request)
         data = payload or {}
         return network().send_message(
@@ -79,6 +81,7 @@ def install_bot_communication_api(app: FastAPI) -> None:
 
     @app.post("/api/bot-network/broadcast")
     def broadcast_api(request: Request, payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
+        ensure_same_origin(request)
         actor = require_admin(request)
         data = payload or {}
         recipients = data.get("recipients")
@@ -93,6 +96,7 @@ def install_bot_communication_api(app: FastAPI) -> None:
 
     @app.post("/api/bot-network/consensus")
     def consensus_api(request: Request, payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
+        ensure_same_origin(request)
         require_admin(request)
         data = payload or {}
         participants = data.get("participants")
@@ -104,6 +108,7 @@ def install_bot_communication_api(app: FastAPI) -> None:
 
     @app.post("/api/bot-network/chat")
     def bot_chat_api(request: Request, payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
+        ensure_same_origin(request)
         data = payload or {}
         requested_bot = _chat_bot(str(data.get("bot", data.get("recipient", "general_controller"))))
         text = str(data.get("message", "")).strip()
@@ -176,18 +181,21 @@ def install_bot_communication_api(app: FastAPI) -> None:
 
     @app.post("/api/bot-network/agent/{bot_name}/self-check")
     def self_check_api(bot_name: str, request: Request) -> dict[str, Any]:
+        ensure_same_origin(request)
         require_admin(request)
         bot = _chat_bot(bot_name)
         return answer_chat(f"{bot} проведи тест адекватности и проверь себя", {})
 
     @app.post("/api/bot-network/agent/{bot_name}/pause")
     def pause_api(bot_name: str, request: Request) -> dict[str, Any]:
+        ensure_same_origin(request)
         require_admin(request)
         bot = _chat_bot(bot_name)
         return answer_chat(f"{bot} поставь paper действия на паузу", {})
 
     @app.post("/api/bot-network/agent/{bot_name}/learn")
     def learn_api(bot_name: str, request: Request) -> dict[str, Any]:
+        ensure_same_origin(request)
         require_admin(request)
         bot = _chat_bot(bot_name)
         return answer_chat(f"{bot} отправь последние ошибки в Learning Engine", {})
