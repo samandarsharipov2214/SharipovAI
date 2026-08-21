@@ -35,6 +35,39 @@ def test_existing_legacy_fallback_database_is_preserved(monkeypatch, tmp_path) -
         get_saas_settings.cache_clear()
 
 
+def test_existing_legacy_database_in_custom_data_dir_is_preserved(monkeypatch, tmp_path) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    data_dir = tmp_path / "production-data"
+    legacy = data_dir / "sharipovai_saas.sqlite3"
+    legacy.parent.mkdir(parents=True)
+    legacy.touch()
+    monkeypatch.setenv("SHARIPOVAI_DATA_DIR", str(data_dir))
+    get_saas_settings.cache_clear()
+    try:
+        assert get_saas_settings().database_url == f"sqlite:///{legacy}"
+    finally:
+        get_saas_settings.cache_clear()
+
+
+def test_custom_data_dir_legacy_database_wins_over_cwd_legacy(monkeypatch, tmp_path) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    cwd_legacy = tmp_path / "data" / "sharipovai_saas.sqlite3"
+    cwd_legacy.parent.mkdir(parents=True)
+    cwd_legacy.touch()
+    data_dir = tmp_path / "production-data"
+    configured_legacy = data_dir / "sharipovai_saas.sqlite3"
+    configured_legacy.parent.mkdir(parents=True)
+    configured_legacy.touch()
+    monkeypatch.setenv("SHARIPOVAI_DATA_DIR", str(data_dir))
+    get_saas_settings.cache_clear()
+    try:
+        assert get_saas_settings().database_url == f"sqlite:///{configured_legacy}"
+    finally:
+        get_saas_settings.cache_clear()
+
+
 def test_explicit_database_url_still_wins_without_creating_fallback_dir(monkeypatch, tmp_path) -> None:
     monkeypatch.chdir(tmp_path)
     explicit = "sqlite:///explicit-test.db"
