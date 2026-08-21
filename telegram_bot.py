@@ -301,27 +301,85 @@ def orchestrated_reply(message: str) -> str:
 def news_text() -> str:
     def build() -> str:
         from news_monitor.analyzer import analyzed_news_payload
+        from telegram_presentation import format_news_item
 
         news = analyzed_news_payload()
         summary = news.get("summary", {}) if isinstance(news, dict) else {}
-        items = list(news.get("items", [])) if isinstance(news, dict) else []
+        raw_items = news.get("items", []) if isinstance(news, dict) else None
+        average_credibility = summary.get("average_credibility_percent") if isinstance(summary, dict) else None
+        needs_confirmation = summary.get("needs_confirmation") if isinstance(summary, dict) else None
+        total = summary.get("total") if isinstance(summary, dict) else None
+        has_live_items = summary.get("has_live_items") if isinstance(summary, dict) else None
+
+        summary_is_empty = (isinstance(total, int) and not isinstance(total, bool) and total == 0) or has_live_items is False
+        if summary_is_empty or average_credibility in (None, "") or isinstance(average_credibility, bool):
+            average_text = "не указана"
+        else:
+            try:
+                average_value = float(average_credibility)
+            except (TypeError, ValueError):
+                average_text = "не указана"
+            else:
+                average_text = f"{average_value:g}%" if 0 <= average_value <= 100 else "не указана"
+
+        if isinstance(needs_confirmation, bool):
+            confirmation_text = "да" if needs_confirmation else "нет"
+        elif isinstance(needs_confirmation, int) and needs_confirmation >= 0:
+            confirmation_text = str(needs_confirmation)
+        else:
+            confirmation_text = "не указано"
+
         lines = [
             "📰 <b>Новости: источники и время</b>",
             "",
             f"Проверено: <b>{_safe_html(now_iso())}</b>",
-            f"Средняя достоверность: <b>{_safe_html(summary.get('average_credibility_percent', 0))}%</b>",
-            f"Нужно подтверждение: <b>{_safe_html(summary.get('needs_confirmation', 0))}</b>",
+            f"Средняя достоверность: <b>{average_text}</b>",
+            f"Нужно подтверждение: <b>{confirmation_text}</b>",
             "",
         ]
-        if not items:
-            lines.append("Новостей пока нет. BUY по слухам запрещён.")
-        for idx, item in enumerate(items[:5], start=1):
-            title = item.get("title") or item.get("headline") or "Новость"
-            source = item.get("source_name") or item.get("source") or "unknown"
-            credibility = item.get("credibility_percent", item.get("credibility", 0))
-            lines.append(f"{idx}. <b>{_safe_html(title)}</b>\nИсточник: {_safe_html(source)} · доверие {credibility}%")
-        lines.append("\nПравило: один источник не даёт разрешение на сделку.")
-        return "\n".join(lines).strip()
+        footer = "Правило: один источник не даёт разрешение на сделку."
+        overflow_notice = "…часть новостей не показана: отдельные карточки не помещаются в безопасный лимит Telegram."
+        count_limit_notice = "…остальные новости не показаны: достигнут лимит 5 карточек в Telegram-ответе."
+        text_limit = 3800
+
+        if raw_items is None or not isinstance(raw_items, list):
+            lines.append("⚠️ Состояние новостей некорректно: поле items должно быть списком.")
+        else:
+            malformed_count = sum(1 for item in raw_items if not isinstance(item, dict))
+            valid_items = [item for item in raw_items if isinstance(item, dict)]
+            if malformed_count:
+                lines.append(f"⚠️ Некорректных записей новостей: {malformed_count}. Они не показаны.")
+            if not valid_items:
+                if malformed_count == 0:
+                    lines.append("Новостей пока нет. BUY по слухам запрещён.")
+            else:
+                rendered_count = 0
+                processed_count = 0
+                oversized_count = 0
+                for item in valid_items:
+                    if rendered_count >= 5:
+                        break
+                    processed_count += 1
+                    card = format_news_item(item, index=rendered_count + 1)
+                    candidate = "\n".join(
+                        [*lines, card, overflow_notice, count_limit_notice, "", footer]
+                    ).strip()
+                    if len(candidate) > text_limit:
+                        oversized_count += 1
+                        continue
+                    lines.append(card)
+                    rendered_count += 1
+
+                if oversized_count:
+                    lines.append(overflow_notice)
+                if processed_count < len(valid_items):
+                    lines.append(count_limit_notice)
+
+        lines.append(f"\n{footer}")
+        rendered = "\n".join(lines).strip()
+        if len(rendered) > text_limit:
+            raise RuntimeError("news response exceeded HTML-safe Telegram limit")
+        return rendered
 
     return _safe_build("Новости", build)
 
