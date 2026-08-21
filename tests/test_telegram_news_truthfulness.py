@@ -104,6 +104,20 @@ def test_source_trust_is_not_presented_as_item_credibility() -> None:
     assert "достоверность <b>95%</b>" not in rendered
 
 
+def test_future_publication_time_is_not_presented_as_just_now() -> None:
+    rendered = format_news_item(
+        {
+            "title": "Scheduled item",
+            "source_name": "Example Wire",
+            "published_at": "2999-01-01T00:00:00Z",
+        },
+        index=7,
+    )
+
+    assert "время в будущем, свежесть не подтверждена" in rendered
+    assert "только что" not in rendered
+
+
 def test_live_telegram_news_path_uses_truthful_formatter(monkeypatch) -> None:
     payload = {
         "summary": {},
@@ -216,7 +230,31 @@ def test_live_telegram_news_path_stays_below_html_clip_limit(monkeypatch) -> Non
     assert telegram_bot._clip(rendered) == rendered
     assert rendered.count("<b>") == rendered.count("</b>")
     assert rendered.count("<a href=") == rendered.count("</a>")
-    assert "не помещаются в безопасный лимит Telegram" in rendered
+    assert "ссылка не показана: превышен безопасный лимит Telegram" in rendered
+    assert "Один внутренний модуль упал" not in rendered
+
+
+def test_single_long_card_is_bounded_instead_of_hidden_by_notice_budget(monkeypatch) -> None:
+    payload = {
+        "summary": {"total": 1, "has_live_items": True, "average_credibility_percent": 80},
+        "items": [
+            {
+                "title": "A" * 3200,
+                "source_name": "Wire",
+                "credibility_percent": 80,
+                "published_at": "2026-08-20T12:00:00Z",
+            }
+        ],
+    }
+    monkeypatch.setattr("news_monitor.analyzer.analyzed_news_payload", lambda: payload)
+
+    rendered = telegram_bot.news_text()
+
+    assert "A" * 100 in rendered
+    assert "…" in rendered
+    assert "не помещаются в безопасный лимит Telegram" not in rendered
+    assert "Один внутренний модуль упал" not in rendered
+    assert len(rendered) <= 3800
 
 
 def test_live_telegram_news_path_reserves_room_for_overflow_notice(monkeypatch) -> None:
@@ -244,7 +282,8 @@ def test_live_telegram_news_path_reserves_room_for_overflow_notice(monkeypatch) 
     assert len(rendered) <= 3800
     assert "Один внутренний модуль упал" not in rendered
     assert "Нужно подтверждение: <b>2</b>" in rendered
-    assert "не помещаются в безопасный лимит Telegram" in rendered
+    assert "A" * 100 in rendered
+    assert "B" * 100 in rendered
     assert rendered.count("<b>") == rendered.count("</b>")
 
 
@@ -270,8 +309,8 @@ def test_live_telegram_news_path_skips_oversized_card_and_keeps_later_news(monke
 
     assert "Short valid item" in rendered
     assert "Small Wire" in rendered
-    assert "не помещаются в безопасный лимит Telegram" in rendered
     assert "Один внутренний модуль упал" not in rendered
+    assert len(rendered) <= 3800
 
 
 def test_live_telegram_news_path_distinguishes_five_card_cap_from_size_limit(monkeypatch) -> None:
