@@ -44,6 +44,54 @@ def _server_provenance_payload(data: dict[str, Any], actor: str) -> dict[str, An
     return safe_payload
 
 
+def _privileged_command_payload(*, text: str, action: str, actor: str) -> dict[str, Any]:
+    return {
+        "text": text,
+        "source": "dashboard",
+        "action": action,
+        "user_message": True,
+        "requested_by": actor,
+    }
+
+
+def _privileged_command_result(
+    bus: BotCommunicationNetwork,
+    *,
+    bot: str,
+    action: str,
+    text: str,
+    actor: str,
+) -> dict[str, Any]:
+    sender = "security_guard" if bot == "general_controller" else "general_controller"
+    saved = bus.send_message(
+        sender=sender,
+        recipient=bot,
+        message_type="command",
+        topic="unified_chat",
+        payload=_privileged_command_payload(text=text, action=action, actor=actor),
+        priority="high" if action in {"pause", "self_check"} else "normal",
+    )
+    meta = AGENTS.get(bot, AGENTS["general_controller"])
+    if action == "self_check":
+        reply = f"{meta['name']} принял команду самопроверки. Проверяются источник данных, last_seen, last_action, ошибки и соответствие роли. Итоговый verdict берётся из System AI Auditor, а не из самооценки бота."
+    elif action == "pause":
+        reply = f"{meta['name']}: запрос на паузу записан для paper/demo. LIVE уже заблокирован. Генеральный контролёр должен подтвердить смену состояния."
+    else:
+        reply = f"{meta['name']}: вопрос и последние ошибки отправлены в Learning Engine. Правило считается внедрённым только после evidence и повторного теста."
+    return {
+        "status": "ok" if saved.get("status") == "ok" else "persistence_error",
+        "intent": "agent_chat",
+        "source_ai": meta["name"],
+        "reply": reply,
+        "data": {
+            "agent_id": bot,
+            "role": meta["role"],
+            "action": action,
+            "message_bus": saved,
+        },
+    }
+
+
 def install_bot_communication_api(app: FastAPI) -> None:
     if getattr(app.state, "bot_communication_api_installed", False):
         return
@@ -97,13 +145,27 @@ def install_bot_communication_api(app: FastAPI) -> None:
     @app.post("/api/bot-network/consensus")
     def consensus_api(request: Request, payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
         ensure_same_origin(request)
-        require_admin(request)
+        actor = require_admin(request)
         data = payload or {}
         participants = data.get("participants")
-        return network().request_consensus(
+        targets = participants if isinstance(participants, list) else [
+            "market_agent",
+            "news_agent",
+            "risk_engine",
+            "portfolio_engine",
+            "confidence_engine",
+        ]
+        return network().broadcast(
+            sender="consensus_engine",
+            recipients=targets,
+            message_type="consensus_request",
             topic=str(data.get("topic", "general")),
-            question=str(data.get("question", "Need consensus.")),
-            participants=participants if isinstance(participants, list) else None,
+            payload={
+                "question": str(data.get("question", "Need consensus.")),
+                "required_response": "opinion,risk,confidence,source",
+                "requested_by": actor,
+            },
+            priority="high",
         )
 
     @app.post("/api/bot-network/chat")
@@ -116,10 +178,33 @@ def install_bot_communication_api(app: FastAPI) -> None:
         if not text:
             return {"status": "empty_message", "reply": "Напиши вопрос AI-боту."}
 
-        if _action(text.lower()) in {"pause", "self_check", "learn"}:
-            require_admin(request)
+        action = _action(text.lower())
+        privileged_actor: str | None = None
+        if action in {"pause", "self_check", "learn"}:
+            privileged_actor = require_admin(request)
 
         bus = network()
+        if privileged_actor is not None:
+            generated = _privileged_command_result(
+                bus,
+                bot=requested_bot,
+                action=action,
+                text=text,
+                actor=privileged_actor,
+            )
+            command = generated.get("data", {}).get("message_bus", {})
+            return {
+                "status": generated.get("status", "ok"),
+                "bot": requested_bot,
+                "reply": generated.get("reply", ""),
+                "source_ai": generated.get("source_ai", requested_bot),
+                "intent": generated.get("intent", "agent_chat"),
+                "data": generated.get("data", {}),
+                "message": command,
+                "answer": {},
+                "thread_id": command.get("thread_id"),
+            }
+
         sender = "security_guard" if requested_bot == "general_controller" else "general_controller"
         question = bus.send_message(
             sender=sender,
@@ -182,23 +267,41 @@ def install_bot_communication_api(app: FastAPI) -> None:
     @app.post("/api/bot-network/agent/{bot_name}/self-check")
     def self_check_api(bot_name: str, request: Request) -> dict[str, Any]:
         ensure_same_origin(request)
-        require_admin(request)
+        actor = require_admin(request)
         bot = _chat_bot(bot_name)
-        return answer_chat(f"{bot} проведи тест адекватности и проверь себя", {})
+        return _privileged_command_result(
+            network(),
+            bot=bot,
+            action="self_check",
+            text=f"{bot} проведи тест адекватности и проверь себя",
+            actor=actor,
+        )
 
     @app.post("/api/bot-network/agent/{bot_name}/pause")
     def pause_api(bot_name: str, request: Request) -> dict[str, Any]:
         ensure_same_origin(request)
-        require_admin(request)
+        actor = require_admin(request)
         bot = _chat_bot(bot_name)
-        return answer_chat(f"{bot} поставь paper действия на паузу", {})
+        return _privileged_command_result(
+            network(),
+            bot=bot,
+            action="pause",
+            text=f"{bot} поставь paper действия на паузу",
+            actor=actor,
+        )
 
     @app.post("/api/bot-network/agent/{bot_name}/learn")
     def learn_api(bot_name: str, request: Request) -> dict[str, Any]:
         ensure_same_origin(request)
-        require_admin(request)
+        actor = require_admin(request)
         bot = _chat_bot(bot_name)
-        return answer_chat(f"{bot} отправь последние ошибки в Learning Engine", {})
+        return _privileged_command_result(
+            network(),
+            bot=bot,
+            action="learn",
+            text=f"{bot} отправь последние ошибки в Learning Engine",
+            actor=actor,
+        )
 
     @app.get("/bot-network", response_class=HTMLResponse)
     def bot_network_page() -> HTMLResponse:
