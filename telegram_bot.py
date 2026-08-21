@@ -305,19 +305,25 @@ def news_text() -> str:
 
         news = analyzed_news_payload()
         summary = news.get("summary", {}) if isinstance(news, dict) else {}
-        items = list(news.get("items", [])) if isinstance(news, dict) else []
+        raw_items = news.get("items", []) if isinstance(news, dict) else None
         average_credibility = summary.get("average_credibility_percent") if isinstance(summary, dict) else None
         needs_confirmation = summary.get("needs_confirmation") if isinstance(summary, dict) else None
-        average_text = (
-            f"{_safe_html(average_credibility)}%"
-            if average_credibility not in (None, "") and not isinstance(average_credibility, bool)
-            else "не указана"
-        )
-        confirmation_text = (
-            _safe_html(needs_confirmation)
-            if needs_confirmation not in (None, "") and not isinstance(needs_confirmation, bool)
-            else "не указано"
-        )
+
+        if average_credibility in (None, "") or isinstance(average_credibility, bool):
+            average_text = "не указана"
+        else:
+            try:
+                average_value = float(average_credibility)
+            except (TypeError, ValueError):
+                average_text = "не указана"
+            else:
+                average_text = f"{average_value:g}%" if 0 <= average_value <= 100 else "не указана"
+
+        if isinstance(needs_confirmation, bool):
+            confirmation_text = "да" if needs_confirmation else "нет"
+        else:
+            confirmation_text = "не указано"
+
         lines = [
             "📰 <b>Новости: источники и время</b>",
             "",
@@ -326,15 +332,35 @@ def news_text() -> str:
             f"Нужно подтверждение: <b>{confirmation_text}</b>",
             "",
         ]
-        if not items:
-            lines.append("Новостей пока нет. BUY по слухам запрещён.")
-        for idx, item in enumerate(items[:5], start=1):
-            if isinstance(item, dict):
-                lines.append(format_news_item(item, index=idx))
+        footer = "Правило: один источник не даёт разрешение на сделку."
+        text_limit = 3800
+
+        if raw_items is None or not isinstance(raw_items, list):
+            lines.append("⚠️ Состояние новостей некорректно: поле items должно быть списком.")
+        else:
+            malformed_count = sum(1 for item in raw_items if not isinstance(item, dict))
+            valid_items = [item for item in raw_items if isinstance(item, dict)]
+            if malformed_count:
+                lines.append(f"⚠️ Некорректных записей новостей: {malformed_count}. Они не показаны.")
+            if not valid_items:
+                if malformed_count == 0:
+                    lines.append("Новостей пока нет. BUY по слухам запрещён.")
             else:
-                lines.append(format_news_item({}, index=idx))
-        lines.append("\nПравило: один источник не даёт разрешение на сделку.")
-        return "\n".join(lines).strip()
+                rendered_count = 0
+                for item in valid_items[:5]:
+                    card = format_news_item(item, index=rendered_count + 1)
+                    candidate = "\n".join([*lines, card, "", footer]).strip()
+                    if len(candidate) > text_limit:
+                        lines.append("…остальные новости не показаны: ответ достиг безопасного лимита Telegram.")
+                        break
+                    lines.append(card)
+                    rendered_count += 1
+
+        lines.append(f"\n{footer}")
+        rendered = "\n".join(lines).strip()
+        if len(rendered) > text_limit:
+            raise RuntimeError("news response exceeded HTML-safe Telegram limit")
+        return rendered
 
     return _safe_build("Новости", build)
 
