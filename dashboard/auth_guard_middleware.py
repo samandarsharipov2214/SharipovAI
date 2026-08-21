@@ -39,10 +39,11 @@ _PUBLIC_PREFIXES = (
     "/static/",
     "/docs",
     "/openapi.json",
-    "/api/social-news/",
     "/favicon.ico",
     "/logo.svg",
 )
+_PUBLIC_READONLY_EXACT = {"/api/social-news"}
+_PUBLIC_READONLY_PREFIXES = ("/api/social-news/",)
 
 
 def factory_auth_enabled() -> bool:
@@ -53,15 +54,33 @@ def factory_auth_enabled() -> bool:
 
 
 def session_username(request: Request) -> str | None:
-    """Resolve the existing signed dashboard session without import cycles."""
+    """Resolve the canonical SaaS principal with the legacy session fallback."""
 
-    from .app import _session_username
+    # Keep imports lazy to avoid factory/app import cycles.  Match the production
+    # guard contract: first validate the canonical SaaS JWT principal, then try
+    # the signed legacy dashboard session if the canonical resolver returns none.
+    from .auth_saas import resolve_authenticated_principal
 
-    return _session_username(request)
+    principal = resolve_authenticated_principal(request)
+    if principal:
+        return principal
+
+    try:
+        from .app import _session_username
+
+        return _session_username(request)
+    except Exception:
+        return None
 
 
-def is_public_path(path: str) -> bool:
-    return path in _PUBLIC_EXACT or any(path.startswith(prefix) for prefix in _PUBLIC_PREFIXES)
+def is_public_path(path: str, method: str = "GET") -> bool:
+    if path in _PUBLIC_EXACT or any(path.startswith(prefix) for prefix in _PUBLIC_PREFIXES):
+        return True
+    if method.upper() not in {"GET", "HEAD"}:
+        return False
+    return path in _PUBLIC_READONLY_EXACT or any(
+        path.startswith(prefix) for prefix in _PUBLIC_READONLY_PREFIXES
+    )
 
 
 class AuthGuardMiddleware:
@@ -77,7 +96,7 @@ class AuthGuardMiddleware:
 
         request = Request(scope, receive=receive)
         path = request.url.path
-        if is_public_path(path) or session_username(request):
+        if is_public_path(path, request.method) or session_username(request):
             await self.app(scope, receive, send)
             return
 
