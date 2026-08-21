@@ -78,6 +78,10 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
             self._state["v2_shadow_records"] = {}
         if not isinstance(self._state.get("v2_shadow_errors"), list):
             self._state["v2_shadow_errors"] = []
+        # A close is already an immutable PAPER fact when the process comes
+        # back.  Recover only explicitly marked, previously failed settlement
+        # writes; do not infer settlements from arbitrary historical trades.
+        self._recover_pending_settlements()
 
     def _trace(self, symbol: str, status: str, reason: str, **extra: Any) -> dict[str, Any]:
         return persist_decision_trace(
@@ -118,8 +122,13 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
 
                 position = self._state["positions"].get(symbol)
                 if position:
+                    # Capital-preservation exits are intentionally local and
+                    # immediate.  If none fires, keep the position available
+                    # for a fresh, canonical GC V2 SELL decision below.
                     self._manage_protective_exit(symbol, quote)
-                    continue
+                    position = self._state["positions"].get(symbol)
+                    if position is None:
+                        continue
 
                 try:
                     proposal = self.proposal_provider(
@@ -174,7 +183,8 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
 
                 validation = authorization.candidate_result.validation
                 assessment = authorization.assessment
-                decision_action = "BUY" if authorization.authorized else (
+                candidate_side = authorization.candidate_result.candidate.side.value.upper()
+                decision_action = candidate_side if authorization.authorized else (
                     "BLOCK" if authorization.decision is TradingDecision.BLOCK else "WAIT"
                 )
                 self._trace(
@@ -205,7 +215,41 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                     self._event("BLOCK", reason, symbol)
                     continue
 
-                if authorization.candidate_result.candidate.side.value != "Buy":
+                if position is not None and candidate_side == "SELL":
+                    try:
+                        self.decision_runtime.consume_authorization(
+                            authorization,
+                            consumed_at_ms=self._now_ms(),
+                        )
+                    except Exception as exc:
+                        reason = f"authorization_consumption_error:{type(exc).__name__}: {exc}"
+                        self._trace(symbol, "BLOCK", reason, phase="authorization_consumption")
+                        self._event("BLOCK", reason, symbol)
+                        continue
+
+                    self._close(
+                        symbol,
+                        quote.price,
+                        f"canonical_council_sell:{authorization.decision_id}",
+                        exit_authorization=authorization,
+                    )
+                    self._trace(
+                        symbol,
+                        "SELL",
+                        f"canonical council authorization consumed and paper SELL closed long: {authorization.decision_id}",
+                        phase="virtual_execution",
+                        decision_id=authorization.decision_id,
+                        authorized=True,
+                    )
+                    continue
+
+                if position is not None:
+                    reason = "spot paper loop already has a long position; BUY cannot increase exposure"
+                    self._trace(symbol, "WAIT", reason, phase="execution_gate")
+                    self._event("WAIT", reason, symbol)
+                    continue
+
+                if candidate_side != "BUY":
                     reason = "spot paper loop does not open a short position"
                     self._trace(symbol, "WAIT", reason, phase="execution_gate")
                     self._event("WAIT", reason, symbol)
@@ -389,13 +433,28 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         elif change is not None and change <= self.exit_change_percent:
             self._close(symbol, quote.price, "protective_momentum_exit")
 
-    def _close(self, symbol: str, price: float, reason: str) -> None:
+    def _close(
+        self,
+        symbol: str,
+        price: float,
+        reason: str,
+        *,
+        exit_authorization: PaperDecisionAuthorization | None = None,
+    ) -> None:
         position = dict(self._state["positions"].get(symbol) or {})
         self._pending_exit_context = {
             "decision_id": str(position.get("decision_id") or "").strip(),
             "candidate_id": str(position.get("candidate_id") or "").strip(),
             "entry_price": float(position.get("entry_price", 0.0) or 0.0),
             "entry_fee": float(position.get("entry_fee", 0.0) or 0.0),
+            "exit_decision_id": (
+                exit_authorization.decision_id if exit_authorization is not None else ""
+            ),
+            "exit_candidate_id": (
+                exit_authorization.candidate_result.candidate.candidate_id
+                if exit_authorization is not None
+                else ""
+            ),
         }
         try:
             super()._close(symbol, price, reason)
@@ -472,17 +531,20 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                         "canonical_exit_protective": True,
                     }
                 )
-                net = float(net_pnl or 0.0)
-                try:
-                    settlement = self.decision_runtime.settle_exit(
-                        decision_id,
-                        net_pnl=net,
-                        drawdown_contribution=max(0.0, -net),
+                exit_decision_id = self._pending_exit_context.get("exit_decision_id", "")
+                if exit_decision_id:
+                    item.update(
+                        {
+                            "exit_authorization_decision_id": exit_decision_id,
+                            "exit_authorization_candidate_id": self._pending_exit_context.get(
+                                "exit_candidate_id", exit_decision_id
+                            ),
+                            "exit_authorization_single_use": True,
+                            "canonical_exit_protective": False,
+                        }
                     )
-                    item["decision_settlement"] = settlement
-                    item["reputation_recorded"] = bool(settlement.get("reputation_recorded"))
-                except Exception as exc:
-                    item["decision_settlement_error"] = f"{type(exc).__name__}: {exc}"
+                net = float(net_pnl or 0.0)
+                self._settle_or_mark_pending(item, decision_id=decision_id, net_pnl=net)
 
                 shadow = self._state.get("v2_shadow_records", {}).get(decision_id)
                 if isinstance(shadow, Mapping):
@@ -512,6 +574,54 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         self._state["trades"].append(item)
         self._state["trades"] = self._state["trades"][-500:]
         self._event(side, reason, symbol)
+
+    def _settle_or_mark_pending(
+        self,
+        trade: dict[str, Any],
+        *,
+        decision_id: str,
+        net_pnl: float,
+    ) -> None:
+        """Persist V2 settlement, retaining a retry marker on transient failure."""
+
+        try:
+            settlement = self.decision_runtime.settle_exit(
+                decision_id,
+                net_pnl=net_pnl,
+                drawdown_contribution=max(0.0, -net_pnl),
+            )
+        except Exception as exc:
+            trade["decision_settlement_error"] = f"{type(exc).__name__}: {exc}"
+            trade["settlement_retry_pending"] = True
+            return
+
+        trade["decision_settlement"] = settlement
+        trade["reputation_recorded"] = bool(settlement.get("reputation_recorded"))
+        trade.pop("decision_settlement_error", None)
+        trade.pop("settlement_retry_pending", None)
+
+    def _recover_pending_settlements(self) -> None:
+        """Retry explicitly durable pending settlements once after a restart."""
+
+        trades = self._state.get("trades")
+        if not isinstance(trades, list):
+            return
+        for trade in trades:
+            if not isinstance(trade, dict) or trade.get("settlement_retry_pending") is not True:
+                continue
+            decision_id = str(trade.get("decision_id") or "").strip()
+            net_pnl = trade.get("net_pnl")
+            if not decision_id or net_pnl is None:
+                continue
+            try:
+                parsed_net_pnl = float(net_pnl)
+            except (TypeError, ValueError):
+                continue
+            self._settle_or_mark_pending(
+                trade,
+                decision_id=decision_id,
+                net_pnl=parsed_net_pnl,
+            )
 
     def _suppress_wait_event(
         self,
