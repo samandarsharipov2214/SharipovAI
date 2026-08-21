@@ -13,9 +13,21 @@ def test_regional_case_and_underscore_locales_map_to_canonical_catalogs() -> Non
     assert normalize_language("uz-UZ") == "uz"
 
 
-def test_accept_language_uses_first_supported_nonzero_quality_range() -> None:
+def test_accept_language_uses_highest_supported_quality_range() -> None:
     assert normalize_language("de-DE, en-US;q=0.8, uz;q=0.7") == "en"
+    assert normalize_language("en-US;q=0.4, uz-UZ;q=0.9") == "uz"
     assert normalize_language("fr, en;q=0, uz-UZ;q=0.6") == "uz"
+
+
+def test_accept_language_preserves_order_for_equal_quality_ranges() -> None:
+    assert normalize_language("en-US;q=0.8, uz-UZ;q=0.8") == "en"
+    assert normalize_language("uz-UZ, en-US") == "uz"
+
+
+def test_invalid_or_zero_quality_ranges_are_not_selected() -> None:
+    assert normalize_language("en;q=2, uz;q=0.7") == "uz"
+    assert normalize_language("en;q=invalid, uz;q=0.7") == "uz"
+    assert normalize_language("en;q=0, uz;q=0") == DEFAULT_LANGUAGE
 
 
 def test_unknown_or_empty_language_falls_back_to_default() -> None:
