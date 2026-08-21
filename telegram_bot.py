@@ -321,6 +321,8 @@ def news_text() -> str:
 
         if isinstance(needs_confirmation, bool):
             confirmation_text = "да" if needs_confirmation else "нет"
+        elif isinstance(needs_confirmation, int) and needs_confirmation >= 0:
+            confirmation_text = str(needs_confirmation)
         else:
             confirmation_text = "не указано"
 
@@ -333,6 +335,7 @@ def news_text() -> str:
             "",
         ]
         footer = "Правило: один источник не даёт разрешение на сделку."
+        overflow_notice = "…остальные новости не показаны: ответ достиг безопасного лимита Telegram."
         text_limit = 3800
 
         if raw_items is None or not isinstance(raw_items, list):
@@ -347,14 +350,19 @@ def news_text() -> str:
                     lines.append("Новостей пока нет. BUY по слухам запрещён.")
             else:
                 rendered_count = 0
-                for item in valid_items[:5]:
+                display_items = valid_items[:5]
+                for item_offset, item in enumerate(display_items):
                     card = format_news_item(item, index=rendered_count + 1)
-                    candidate = "\n".join([*lines, card, "", footer]).strip()
+                    has_more = item_offset < len(display_items) - 1 or len(valid_items) > len(display_items)
+                    reserve = [overflow_notice] if has_more else []
+                    candidate = "\n".join([*lines, card, *reserve, "", footer]).strip()
                     if len(candidate) > text_limit:
-                        lines.append("…остальные новости не показаны: ответ достиг безопасного лимита Telegram.")
+                        lines.append(overflow_notice)
                         break
                     lines.append(card)
                     rendered_count += 1
+                    if item_offset == len(display_items) - 1 and len(valid_items) > len(display_items):
+                        lines.append(overflow_notice)
 
         lines.append(f"\n{footer}")
         rendered = "\n".join(lines).strip()
