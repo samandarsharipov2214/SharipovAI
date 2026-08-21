@@ -101,18 +101,19 @@ def test_bot_communication_api(tmp_path, monkeypatch) -> None:
     health = client.get("/api/bot-network/health")
     assert health.status_code == 200
     assert health.json()["full_mesh_possible"] is True
+    assert health.json()["standalone_read_only"] is True
 
     sent = client.post(
         "/api/bot-network/messages",
         json={"sender": "general_controller", "recipient": "risk_engine", "message_type": "question", "topic": "risk", "payload": {"q": "risk?"}},
     )
-    assert sent.status_code == 200
-    assert sent.json()["status"] == "ok"
+    assert sent.status_code == 410
+    assert sent.json()["detail"]["status"] == "standalone_mutations_retired"
 
     inbox = client.get("/api/bot-network/inbox/risk_engine?unread_only=true")
     assert inbox.status_code == 200
-    assert len(inbox.json()["messages"]) == 1
+    assert inbox.json()["messages"] == []
 
     page = client.get("/bot-network")
     assert page.status_code == 200
-    assert "Связь AI-ботов" in page.text
+    assert "READ ONLY" in page.text

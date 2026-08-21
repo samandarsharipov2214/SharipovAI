@@ -76,34 +76,68 @@ handoff
 command
 ```
 
-## API
+## API ownership
 
-Standalone:
+### Канонический dashboard — единственный control plane
 
-```powershell
-python -m uvicorn learning.bot_communication_app:app --reload
-```
-
-Main dashboard:
+Все управляющие и изменяющие состояние операции Bot Network принадлежат основному dashboard-приложению:
 
 ```powershell
 python -m uvicorn dashboard.app:app --reload
 ```
 
-Endpoints:
+Канонические mutation endpoints требуют authenticated admin, same-origin проверку для cookie-authenticated запросов и сохраняют server-derived actor provenance:
 
 ```text
-GET  /api/bot-network/health
-GET  /api/bot-network/matrix
 POST /api/bot-network/messages
 POST /api/bot-network/broadcast
 POST /api/bot-network/consensus
-GET  /api/bot-network/inbox/{bot_name}
-GET  /api/bot-network/outbox/{bot_name}
-GET  /api/bot-network/threads/{thread_id}
-POST /api/bot-network/messages/{message_id}/read
-GET  /bot-network
+POST /api/bot-network/chat                  # privileged pause/self-check/learn требуют admin
+POST /api/bot-network/agent/{bot_name}/self-check
+POST /api/bot-network/agent/{bot_name}/pause
+POST /api/bot-network/agent/{bot_name}/learn
 ```
+
+Read endpoints dashboard:
+
+```text
+GET /api/bot-network/health
+GET /api/bot-network/matrix
+GET /api/bot-network/inbox/{bot_name}
+GET /api/bot-network/outbox/{bot_name}
+GET /api/bot-network/threads/{thread_id}
+GET /bot-network
+```
+
+### Standalone — только read-only compatibility service
+
+Standalone можно запускать для health/read диагностики:
+
+```powershell
+python -m uvicorn learning.bot_communication_app:app --reload
+```
+
+Он не является control plane. Доступны только read endpoints:
+
+```text
+GET /api/bot-network/health
+GET /api/bot-network/matrix
+GET /api/bot-network/inbox/{bot_name}
+GET /api/bot-network/outbox/{bot_name}
+GET /api/bot-network/threads/{thread_id}
+GET /bot-network
+```
+
+Старые standalone mutation endpoints намеренно retired и возвращают HTTP 410:
+
+```text
+POST /api/bot-network/messages
+POST /api/bot-network/broadcast
+POST /api/bot-network/consensus
+POST /api/bot-network/messages/{message_id}/read
+```
+
+Не переносите клиентов на отдельный standalone mutation API: для изменений используйте только канонический dashboard API. Отдельного dashboard endpoint для `mark-read` сейчас нет; вызывающий код не должен предполагать его наличие.
 
 ## Проверка связи всех ботов
 
@@ -130,7 +164,7 @@ GET /api/bot-network/health
 }
 ```
 
-Endpoint:
+Канонический endpoint:
 
 ```text
 POST /api/bot-network/consensus
@@ -161,11 +195,13 @@ confidence_engine
 }
 ```
 
-Endpoint:
+Канонический endpoint:
 
 ```text
 POST /api/bot-network/messages
 ```
+
+`requested_by` не является доверенным клиентским полем: dashboard перезаписывает provenance аутентифицированным администратором.
 
 ## Launch Check
 
@@ -188,6 +224,7 @@ full_mesh_possible = true
 ```powershell
 python -m pytest learning/tests/test_bot_communication.py
 python -m pytest dashboard/tests/test_bot_communication_dashboard_integration.py
+python -m pytest tests/test_bot_network_admin_guard.py
 python -m pytest
 ```
 
@@ -203,20 +240,11 @@ reply
 broadcast to all bots
 consensus request
 dashboard endpoints
+standalone read-only retirement contract
+admin authorization and provenance
 launch check integration
 ```
 
 ## Итог
 
-Теперь боты могут не просто существовать рядом, а обмениваться задачами и ответами.
-
-Это основа для:
-
-```text
-multi-agent debate
-consensus-based decision
-risk/legal escalation
-learning rule broadcast
-incident response
-owner command routing
-```
+Bot Communication Network остаётся единым durable message bus, но управляющая authority сосредоточена в каноническом dashboard control plane. Standalone-сервис предназначен только для чтения и диагностики.
