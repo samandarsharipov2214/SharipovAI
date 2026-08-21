@@ -4,8 +4,11 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
 
 _TRUE = {"1", "true", "yes", "on"}
+_LEGACY_FALLBACK_DATABASE_URL = "sqlite:///./data/sharipovai_saas.sqlite3"
+_LEGACY_FALLBACK_DATABASE_PATH = Path("data/sharipovai_saas.sqlite3")
 
 
 @dataclass(frozen=True)
@@ -36,14 +39,24 @@ def _bool_env(name: str, default: bool) -> bool:
     return raw.strip().lower() in _TRUE
 
 
+def _default_database_url() -> str:
+    if _LEGACY_FALLBACK_DATABASE_PATH.is_file():
+        return _LEGACY_FALLBACK_DATABASE_URL
+    data_dir = Path(os.getenv("SHARIPOVAI_DATA_DIR", "data"))
+    data_dir.mkdir(parents=True, exist_ok=True)
+    return f"sqlite:///{data_dir / 'sharipovai_shared.db'}"
+
+
 @lru_cache(maxsize=1)
 def get_saas_settings() -> SaaSSettings:
     environment = os.getenv("ENVIRONMENT", "").strip().lower()
     production = _bool_env("RENDER", False) or environment in {"prod", "production"}
     auth_secret = os.getenv("AUTH_SECRET", "").strip()
     jwt_secret = os.getenv("JWT_SECRET", "").strip() or auth_secret or "local-dev-jwt-secret-change-me"
+    configured_database_url = os.getenv("DATABASE_URL", "").strip()
+    database_url = configured_database_url or _default_database_url()
     return SaaSSettings(
-        database_url=os.getenv("DATABASE_URL", "sqlite:///./data/sharipovai_saas.sqlite3").strip(),
+        database_url=database_url,
         jwt_secret=jwt_secret,
         jwt_algorithm=os.getenv("JWT_ALGORITHM", "HS256").strip() or "HS256",
         jwt_ttl_seconds=max(900, int(os.getenv("JWT_TTL_SECONDS", str(60 * 60 * 24 * 7)))),
