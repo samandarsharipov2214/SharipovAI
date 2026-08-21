@@ -11,8 +11,10 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
-from fastapi import Body, FastAPI
+from fastapi import Body, FastAPI, Request
 from fastapi.responses import HTMLResponse
+
+from dashboard.admin_guard import require_admin
 
 from .bot_communication import BotCommunicationNetwork
 
@@ -22,6 +24,13 @@ app = FastAPI(title="SharipovAI Bot Communication Network")
 
 def network() -> BotCommunicationNetwork:
     return BotCommunicationNetwork(Path(os.getenv("BOT_COMMUNICATION_DB", "data/bot_communication.sqlite3")))
+
+
+def _server_provenance_payload(data: dict[str, Any], actor: str) -> dict[str, Any]:
+    payload = data.get("payload", {})
+    safe_payload = dict(payload) if isinstance(payload, dict) else {}
+    safe_payload["requested_by"] = actor
+    return safe_payload
 
 
 @app.get("/api/bot-network/health")
@@ -35,33 +44,36 @@ def matrix_api() -> dict[str, Any]:
 
 
 @app.post("/api/bot-network/messages")
-def send_message_api(payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+def send_message_api(request: Request, payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    actor = require_admin(request)
     return network().send_message(
         sender=str(payload.get("sender", "general_controller")),
         recipient=str(payload.get("recipient", "learning_engine")),
         message_type=str(payload.get("message_type", "question")),
         topic=str(payload.get("topic", "general")),
-        payload=payload.get("payload", {}) if isinstance(payload.get("payload", {}), dict) else {},
+        payload=_server_provenance_payload(payload, actor),
         thread_id=str(payload.get("thread_id")) if payload.get("thread_id") else None,
         priority=str(payload.get("priority", "normal")),
     )
 
 
 @app.post("/api/bot-network/broadcast")
-def broadcast_api(payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+def broadcast_api(request: Request, payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    actor = require_admin(request)
     recipients = payload.get("recipients")
     return network().broadcast(
         sender=str(payload.get("sender", "general_controller")),
         recipients=recipients if isinstance(recipients, list) else None,
         message_type=str(payload.get("message_type", "status_update")),
         topic=str(payload.get("topic", "general")),
-        payload=payload.get("payload", {}) if isinstance(payload.get("payload", {}), dict) else {},
+        payload=_server_provenance_payload(payload, actor),
         priority=str(payload.get("priority", "normal")),
     )
 
 
 @app.post("/api/bot-network/consensus")
-def consensus_api(payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+def consensus_api(request: Request, payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    require_admin(request)
     participants = payload.get("participants")
     return network().request_consensus(
         topic=str(payload.get("topic", "general")),
@@ -86,7 +98,8 @@ def thread_api(thread_id: str) -> dict[str, Any]:
 
 
 @app.post("/api/bot-network/messages/{message_id}/read")
-def mark_read_api(message_id: str) -> dict[str, Any]:
+def mark_read_api(message_id: str, request: Request) -> dict[str, Any]:
+    require_admin(request)
     return network().mark_read(message_id)
 
 
