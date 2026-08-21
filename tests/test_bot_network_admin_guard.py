@@ -186,6 +186,21 @@ def test_consensus_provenance_is_server_derived(monkeypatch: pytest.MonkeyPatch)
     }
 
 
+def test_empty_consensus_participants_use_default_subset(monkeypatch: pytest.MonkeyPatch) -> None:
+    network = _FakeNetwork()
+    monkeypatch.setattr(bot_api, "require_admin", lambda _request: "owner-admin")
+    client = _client(monkeypatch, network)
+
+    response = client.post(
+        "/api/bot-network/consensus",
+        json={"topic": "trade", "question": "check", "participants": []},
+    )
+
+    assert response.status_code == 200
+    assert network.broadcasted is not None
+    assert network.broadcasted["recipients"] == bot_api.DEFAULT_CONSENSUS_PARTICIPANTS
+
+
 @pytest.mark.parametrize(
     ("path", "expected_action"),
     [
@@ -231,6 +246,27 @@ def test_privileged_chat_persists_admin_provenance(monkeypatch: pytest.MonkeyPat
     assert network.sent["message_type"] == "command"
     assert network.sent["payload"]["action"] == "pause"
     assert network.sent["payload"]["requested_by"] == "owner-admin"
+
+
+def test_privileged_command_bus_failure_returns_structured_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    network = _FakeNetwork()
+
+    def _raise(**_kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("db locked")
+
+    monkeypatch.setattr(network, "send_message", _raise)
+    monkeypatch.setattr(bot_api, "require_admin", lambda _request: "owner-admin")
+    client = _client(monkeypatch, network)
+
+    response = client.post("/api/bot-network/agent/risk_engine/pause")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "persistence_error"
+    assert payload["data"]["message_bus"] == {
+        "status": "error",
+        "error": "RuntimeError: db locked",
+    }
 
 
 def test_shared_admin_guard_accepts_active_canonical_saas_admin(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -366,3 +402,36 @@ def test_standalone_bot_network_mutations_are_retired(monkeypatch: pytest.Monkey
     assert network.sent is None
     assert network.broadcasted is None
     assert network.marked_read is None
+
+
+def test_standalone_reads_redact_authenticated_actor_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    network = _FakeNetwork()
+    message = {
+        "message_id": "MSG-1",
+        "payload": {
+            "requested_by": "admin@example.test",
+            "nested": {"requested_by": "legacy-owner", "value": 1},
+        },
+    }
+    monkeypatch.setattr(network, "inbox", lambda *_args, **_kwargs: [message])
+    monkeypatch.setattr(network, "outbox", lambda *_args, **_kwargs: [message])
+    monkeypatch.setattr(
+        network,
+        "thread",
+        lambda thread_id: {"status": "ok", "thread_id": thread_id, "messages": [message]},
+    )
+    monkeypatch.setattr(standalone_bot_api, "network", lambda: network)
+    client = TestClient(standalone_bot_api.app)
+
+    for path in (
+        "/api/bot-network/inbox/risk_engine",
+        "/api/bot-network/outbox/general_controller",
+        "/api/bot-network/threads/THR-1",
+    ):
+        response = client.get(path)
+        assert response.status_code == 200
+        body = response.json()
+        assert "admin@example.test" not in response.text
+        assert "legacy-owner" not in response.text
+        assert "[redacted]" in response.text
+        assert body

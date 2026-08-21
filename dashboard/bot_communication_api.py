@@ -30,6 +30,14 @@ CHAT_BOT_ALIASES = {
     "security_guard": "security_guard", "security guard": "security_guard",
 }
 
+DEFAULT_CONSENSUS_PARTICIPANTS = [
+    "market_agent",
+    "news_agent",
+    "risk_engine",
+    "portfolio_engine",
+    "confidence_engine",
+]
+
 
 def _server_provenance_payload(data: dict[str, Any], actor: str) -> dict[str, Any]:
     """Return message payload with server-derived mutation provenance.
@@ -63,14 +71,17 @@ def _privileged_command_result(
     actor: str,
 ) -> dict[str, Any]:
     sender = "security_guard" if bot == "general_controller" else "general_controller"
-    saved = bus.send_message(
-        sender=sender,
-        recipient=bot,
-        message_type="command",
-        topic="unified_chat",
-        payload=_privileged_command_payload(text=text, action=action, actor=actor),
-        priority="high" if action in {"pause", "self_check"} else "normal",
-    )
+    try:
+        saved = bus.send_message(
+            sender=sender,
+            recipient=bot,
+            message_type="command",
+            topic="unified_chat",
+            payload=_privileged_command_payload(text=text, action=action, actor=actor),
+            priority="high" if action in {"pause", "self_check"} else "normal",
+        )
+    except Exception as exc:
+        saved = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
     meta = AGENTS.get(bot, AGENTS["general_controller"])
     if action == "self_check":
         reply = f"{meta['name']} принял команду самопроверки. Проверяются источник данных, last_seen, last_action, ошибки и соответствие роли. Итоговый verdict берётся из System AI Auditor, а не из самооценки бота."
@@ -148,13 +159,7 @@ def install_bot_communication_api(app: FastAPI) -> None:
         actor = require_admin(request)
         data = payload or {}
         participants = data.get("participants")
-        targets = participants if isinstance(participants, list) else [
-            "market_agent",
-            "news_agent",
-            "risk_engine",
-            "portfolio_engine",
-            "confidence_engine",
-        ]
+        targets = participants if isinstance(participants, list) and participants else DEFAULT_CONSENSUS_PARTICIPANTS
         return network().broadcast(
             sender="consensus_engine",
             recipients=targets,

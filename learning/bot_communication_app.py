@@ -38,6 +38,19 @@ def _retired_mutation() -> None:
     )
 
 
+def _redact_provenance(value: Any) -> Any:
+    """Redact authenticated actor identity from unauthenticated standalone reads."""
+
+    if isinstance(value, dict):
+        return {
+            key: "[redacted]" if key == "requested_by" else _redact_provenance(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_provenance(item) for item in value]
+    return value
+
+
 @app.get("/api/bot-network/health")
 def health_api() -> dict[str, Any]:
     health = network().health()
@@ -67,17 +80,18 @@ def consensus_api() -> None:
 
 @app.get("/api/bot-network/inbox/{bot_name}")
 def inbox_api(bot_name: str, unread_only: bool = False) -> dict[str, Any]:
-    return {"status": "ok", "bot": bot_name, "messages": network().inbox(bot_name, unread_only=unread_only)}
+    messages = network().inbox(bot_name, unread_only=unread_only)
+    return {"status": "ok", "bot": bot_name, "messages": _redact_provenance(messages)}
 
 
 @app.get("/api/bot-network/outbox/{bot_name}")
 def outbox_api(bot_name: str) -> dict[str, Any]:
-    return {"status": "ok", "bot": bot_name, "messages": network().outbox(bot_name)}
+    return {"status": "ok", "bot": bot_name, "messages": _redact_provenance(network().outbox(bot_name))}
 
 
 @app.get("/api/bot-network/threads/{thread_id}")
 def thread_api(thread_id: str) -> dict[str, Any]:
-    return network().thread(thread_id)
+    return _redact_provenance(network().thread(thread_id))
 
 
 @app.post("/api/bot-network/messages/{message_id}/read")
