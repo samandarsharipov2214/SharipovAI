@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import telegram_bot
 from telegram_presentation import format_news_item
 
 
@@ -54,3 +55,33 @@ def test_invalid_credibility_does_not_render_as_a_real_percentage() -> None:
         assert f"{credibility}%" not in rendered
         assert "достоверность <b>0%</b>" not in rendered
         assert "достоверность <b>1%</b>" not in rendered
+
+
+def test_live_telegram_news_path_uses_truthful_formatter(monkeypatch) -> None:
+    payload = {
+        "summary": {},
+        "items": [
+            {
+                "title": "",
+                "source_name": "",
+                "credibility_percent": False,
+                "published_at": "",
+                "url": "",
+            }
+        ],
+    }
+    monkeypatch.setattr("news_monitor.analyzer.analyzed_news_payload", lambda: payload)
+
+    rendered = telegram_bot.news_text()
+
+    assert "Заголовок не передан источником" in rendered
+    assert "Источник не указан" in rendered
+    assert "достоверность не указана" in rendered
+    assert "статус подтверждения не указан" in rendered
+    assert "AI: <b>не указано</b>" in rendered
+    assert "ссылка не передана источником" in rendered
+    assert "Средняя достоверность: <b>не указана</b>" in rendered
+    assert "Нужно подтверждение: <b>не указано</b>" in rendered
+    assert "Новость</b>" not in rendered
+    assert "unknown" not in rendered
+    assert "доверие 0%" not in rendered
