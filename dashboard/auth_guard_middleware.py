@@ -56,12 +56,21 @@ def factory_auth_enabled() -> bool:
 def session_username(request: Request) -> str | None:
     """Resolve the canonical SaaS principal with the legacy session fallback."""
 
-    # Keep this import lazy to avoid factory/app import cycles.  The canonical
-    # resolver validates the persisted SaaS JWT principal first and then falls
-    # back to the signed legacy dashboard session.
+    # Keep imports lazy to avoid factory/app import cycles.  Match the production
+    # guard contract: first validate the canonical SaaS JWT principal, then try
+    # the signed legacy dashboard session if the canonical resolver returns none.
     from .auth_saas import resolve_authenticated_principal
 
-    return resolve_authenticated_principal(request)
+    principal = resolve_authenticated_principal(request)
+    if principal:
+        return principal
+
+    try:
+        from .app import _session_username
+
+        return _session_username(request)
+    except Exception:
+        return None
 
 
 def is_public_path(path: str, method: str = "GET") -> bool:
