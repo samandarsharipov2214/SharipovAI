@@ -40,6 +40,23 @@ def test_provided_news_evidence_is_preserved() -> None:
     assert 'href="https://example.com/news?id=1&amp;lang=ru"' in rendered
 
 
+def test_supported_legacy_news_aliases_are_preserved() -> None:
+    rendered = format_news_item(
+        {
+            "headline": "Legacy headline",
+            "source": "Legacy Wire",
+            "credibility": 73,
+        },
+        index=3,
+    )
+
+    assert "Legacy headline" in rendered
+    assert "Legacy Wire" in rendered
+    assert "достоверность <b>73%</b>" in rendered
+    assert "Заголовок не передан источником" not in rendered
+    assert "Источник не указан" not in rendered
+
+
 def test_invalid_credibility_does_not_render_as_a_real_percentage() -> None:
     for credibility in ("unknown", False, True):
         rendered = format_news_item(
@@ -48,7 +65,7 @@ def test_invalid_credibility_does_not_render_as_a_real_percentage() -> None:
                 "source_name": "Example Wire",
                 "credibility_percent": credibility,
             },
-            index=3,
+            index=4,
         )
 
         assert "достоверность не указана" in rendered
@@ -64,7 +81,7 @@ def test_source_trust_is_not_presented_as_item_credibility() -> None:
             "source_name": "Example Wire",
             "trust_score": 95,
         },
-        index=4,
+        index=5,
     )
 
     assert "достоверность не указана" in rendered
@@ -99,6 +116,18 @@ def test_live_telegram_news_path_uses_truthful_formatter(monkeypatch) -> None:
     assert "Новость</b>" not in rendered
     assert "unknown" not in rendered
     assert "доверие 0%" not in rendered
+
+
+def test_live_telegram_news_path_preserves_numeric_confirmation_count(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "news_monitor.analyzer.analyzed_news_payload",
+        lambda: {"summary": {"needs_confirmation": 3}, "items": []},
+    )
+
+    rendered = telegram_bot.news_text()
+
+    assert "Нужно подтверждение: <b>3</b>" in rendered
+    assert "Нужно подтверждение: <b>не указано</b>" not in rendered
 
 
 def test_live_telegram_news_path_reports_malformed_items(monkeypatch) -> None:
@@ -151,3 +180,32 @@ def test_live_telegram_news_path_stays_below_html_clip_limit(monkeypatch) -> Non
     assert rendered.count("<b>") == rendered.count("</b>")
     assert rendered.count("<a href=") == rendered.count("</a>")
     assert "ответ достиг безопасного лимита Telegram" in rendered
+
+
+def test_live_telegram_news_path_reserves_room_for_overflow_notice(monkeypatch) -> None:
+    payload = {
+        "summary": {"average_credibility_percent": 80, "needs_confirmation": 2},
+        "items": [
+            {
+                "title": "A" * 3000,
+                "source_name": "Wire",
+                "credibility_percent": 80,
+                "published_at": "2026-08-20T12:00:00Z",
+            },
+            {
+                "title": "B" * 5000,
+                "source_name": "Wire",
+                "credibility_percent": 80,
+                "published_at": "2026-08-20T12:00:00Z",
+            },
+        ],
+    }
+    monkeypatch.setattr("news_monitor.analyzer.analyzed_news_payload", lambda: payload)
+
+    rendered = telegram_bot.news_text()
+
+    assert len(rendered) <= 3800
+    assert "Один внутренний модуль упал" not in rendered
+    assert "Нужно подтверждение: <b>2</b>" in rendered
+    assert "ответ достиг безопасного лимита Telegram" in rendered
+    assert rendered.count("<b>") == rendered.count("</b>")
