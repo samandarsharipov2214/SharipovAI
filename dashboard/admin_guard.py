@@ -26,8 +26,32 @@ _SENSITIVE_PREFIXES = (
 )
 
 
+def _canonical_saas_admin(request: Request) -> str | None:
+    """Return the active canonical SaaS administrator, if present."""
+
+    try:
+        from .auth_saas import get_current_user
+        from .db_saas import SessionLocal
+
+        db = SessionLocal()
+        try:
+            user = get_current_user(request, db)
+            if user and user.is_active and str(user.role or "").lower() == "admin":
+                return str(user.email)
+        finally:
+            db.close()
+    except Exception:
+        return None
+    return None
+
+
 def require_admin(request: Request) -> str:
-    """Require explicit auth configuration and an active administrator."""
+    """Require an active administrator from canonical SaaS or legacy auth."""
+
+    canonical_admin = _canonical_saas_admin(request)
+    if canonical_admin:
+        return canonical_admin
+
     if not all(os.getenv(name, "").strip() for name in ("AUTH_SECRET", "ADMIN_USERNAME", "ADMIN_PASSWORD")):
         raise HTTPException(status_code=503, detail={"status": "auth_not_configured"})
     from .app import _is_admin_request, _session_username
