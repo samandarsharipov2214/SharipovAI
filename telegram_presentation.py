@@ -104,7 +104,10 @@ def format_news_time(value: str | None) -> str:
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=UTC)
         now = datetime.now(UTC)
-        seconds = max(0, int((now - dt.astimezone(UTC)).total_seconds()))
+        seconds = int((now - dt.astimezone(UTC)).total_seconds())
+        absolute = dt.astimezone(UTC).strftime('%d.%m %H:%M UTC')
+        if seconds < 0:
+            return f"{absolute} · время в будущем, свежесть не подтверждена"
         if seconds < 90:
             age = "только что"
         elif seconds < 3600:
@@ -113,7 +116,7 @@ def format_news_time(value: str | None) -> str:
             age = f"{seconds // 3600} ч назад"
         else:
             age = f"{seconds // 86400} дн назад"
-        return f"{dt.astimezone(UTC).strftime('%d.%m %H:%M UTC')} · {age}"
+        return f"{absolute} · {age}"
     except Exception:
         return raw
 
@@ -132,10 +135,19 @@ def _news_credibility_text(item: dict[str, Any]) -> str:
     return f"достоверность <b>{_safe_html(rendered)}%</b>"
 
 
+def _bounded_text(value: object, *, limit: int) -> str:
+    clean = str(value or "").strip()
+    if len(clean) <= limit:
+        return clean
+    return clean[: max(limit - 1, 0)].rstrip() + "…"
+
+
 def format_news_item(item: dict[str, Any], *, index: int) -> str:
     raw_title = str(item.get("title") or item.get("headline") or "").strip()
-    title = news_title_ru(raw_title) if raw_title else "Заголовок не передан источником"
-    source = str(item.get("source_name") or item.get("source") or "").strip() or "Источник не указан"
+    translated_title = news_title_ru(raw_title) if raw_title else "Заголовок не передан источником"
+    title = _bounded_text(translated_title, limit=240)
+    raw_source = str(item.get("source_name") or item.get("source") or "").strip() or "Источник не указан"
+    source = _bounded_text(raw_source, limit=80)
     credibility = _news_credibility_text(item)
     published = format_news_time(str(item.get("published_at") or ""))
     url = str(item.get("url") or "").strip()
@@ -144,8 +156,13 @@ def format_news_item(item: dict[str, Any], *, index: int) -> str:
         status = "нужно подтверждение" if confirmation else "подтверждение не требуется"
     else:
         status = "статус подтверждения не указан"
-    action = str(item.get("ai_action") or "").strip() or "не указано"
-    link = f"\n   🔗 <a href=\"{_html_attr(url)}\">Открыть источник</a>" if url else "\n   🔗 ссылка не передана источником"
+    action = _bounded_text(str(item.get("ai_action") or "").strip() or "не указано", limit=80)
+    if not url:
+        link = "\n   🔗 ссылка не передана источником"
+    elif len(url) > 120:
+        link = "\n   🔗 ссылка не показана: превышен безопасный лимит Telegram"
+    else:
+        link = f"\n   🔗 <a href=\"{_html_attr(url)}\">Открыть источник</a>"
     return (
         f"{index}. <b>{_safe_html(title)}</b>\n"
         f"   Источник: <b>{_safe_html(source)}</b> · {credibility}\n"
