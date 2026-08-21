@@ -25,6 +25,7 @@ _SENSITIVE_PREFIXES = (
     "/api/production/phase11/",
     "/api/learning/phase12/",
 )
+_UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 _DEFAULT_LOCAL_JWT_SECRET = "local-dev-jwt-secret-change-me"
 
 
@@ -93,6 +94,10 @@ def install_sensitive_api_guard(app: FastAPI) -> None:
     async def sensitive_api_guard(request: Request, call_next):
         if _is_sensitive_path(request.url.path):
             try:
+                if request.method.upper() in _UNSAFE_METHODS:
+                    from .auth_saas import ensure_same_origin
+
+                    ensure_same_origin(request)
                 require_admin(request)
             except HTTPException as exc:
                 return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
