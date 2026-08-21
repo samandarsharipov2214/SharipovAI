@@ -1,18 +1,25 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
+import dashboard.admin_guard as admin_guard
+import dashboard.auth_saas as auth_saas
 import dashboard.bot_communication_api as bot_api
+import dashboard.db_saas as db_saas
+import learning.bot_communication_app as standalone_bot_api
 
 
 class _FakeNetwork:
     def __init__(self) -> None:
         self.sent: dict[str, Any] | None = None
         self.broadcasted: dict[str, Any] | None = None
+        self.marked_read: str | None = None
 
     def send_message(self, **kwargs: Any) -> dict[str, Any]:
         self.sent = kwargs
@@ -40,6 +47,10 @@ class _FakeNetwork:
     def thread(self, thread_id: str) -> dict[str, Any]:
         return {"status": "ok", "thread_id": thread_id, "messages": []}
 
+    def mark_read(self, message_id: str) -> dict[str, Any]:
+        self.marked_read = message_id
+        return {"status": "ok", "message_id": message_id}
+
 
 def _client(monkeypatch: pytest.MonkeyPatch, network: _FakeNetwork) -> TestClient:
     app = FastAPI()
@@ -48,19 +59,20 @@ def _client(monkeypatch: pytest.MonkeyPatch, network: _FakeNetwork) -> TestClien
     return TestClient(app)
 
 
+def _deny(_request: Any) -> str:
+    raise HTTPException(status_code=403, detail={"status": "forbidden"})
+
+
 def test_bot_network_mutations_require_admin(monkeypatch: pytest.MonkeyPatch) -> None:
     network = _FakeNetwork()
-
-    def deny(_request: Any) -> str:
-        raise HTTPException(status_code=403, detail={"status": "forbidden"})
-
-    monkeypatch.setattr(bot_api, "require_admin", deny)
+    monkeypatch.setattr(bot_api, "require_admin", _deny)
     client = _client(monkeypatch, network)
 
     requests = [
         ("/api/bot-network/messages", {"recipient": "learning_engine"}),
         ("/api/bot-network/broadcast", {"recipients": ["learning_engine"]}),
         ("/api/bot-network/consensus", {"question": "check"}),
+        ("/api/bot-network/chat", {"bot": "risk_engine", "message": "pause"}),
         ("/api/bot-network/agent/risk_engine/self-check", None),
         ("/api/bot-network/agent/risk_engine/pause", None),
         ("/api/bot-network/agent/risk_engine/learn", None),
@@ -68,6 +80,30 @@ def test_bot_network_mutations_require_admin(monkeypatch: pytest.MonkeyPatch) ->
     for path, payload in requests:
         response = client.post(path, json=payload) if payload is not None else client.post(path)
         assert response.status_code == 403, path
+
+
+def test_non_privileged_bot_chat_does_not_require_admin(monkeypatch: pytest.MonkeyPatch) -> None:
+    network = _FakeNetwork()
+    monkeypatch.setattr(bot_api, "require_admin", _deny)
+    monkeypatch.setattr(
+        bot_api,
+        "answer_chat",
+        lambda _message, _state: {"reply": "ok", "source_ai": "Risk Engine", "intent": "agent_chat", "data": {}},
+    )
+    monkeypatch.setattr(
+        network,
+        "reply",
+        lambda **_kwargs: {"status": "ok", "message_id": "MSG-2", "thread_id": "THR-1"},
+        raising=False,
+    )
+    client = _client(monkeypatch, network)
+
+    response = client.post(
+        "/api/bot-network/chat",
+        json={"bot": "risk_engine", "message": "покажи текущий риск"},
+    )
+
+    assert response.status_code == 200
 
 
 def test_message_provenance_is_server_derived(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -109,3 +145,70 @@ def test_broadcast_provenance_is_server_derived(monkeypatch: pytest.MonkeyPatch)
         "requested_by": "owner-admin",
         "note": "maintenance",
     }
+
+
+def test_shared_admin_guard_accepts_active_canonical_saas_admin(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _DB:
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(db_saas, "SessionLocal", lambda: _DB())
+    monkeypatch.setattr(
+        auth_saas,
+        "get_current_user",
+        lambda _request, _db: SimpleNamespace(
+            email="saas-admin@example.test",
+            role="admin",
+            is_active=True,
+        ),
+    )
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/bot-network/messages",
+            "headers": [],
+            "scheme": "https",
+            "server": ("example.test", 443),
+            "client": ("127.0.0.1", 12345),
+        }
+    )
+
+    assert admin_guard.require_admin(request) == "saas-admin@example.test"
+
+
+def test_standalone_bot_network_mutations_require_admin(monkeypatch: pytest.MonkeyPatch) -> None:
+    network = _FakeNetwork()
+    monkeypatch.setattr(standalone_bot_api, "network", lambda: network)
+    monkeypatch.setattr(standalone_bot_api, "require_admin", _deny)
+    client = TestClient(standalone_bot_api.app)
+
+    requests = [
+        ("/api/bot-network/messages", {"recipient": "learning_engine"}),
+        ("/api/bot-network/broadcast", {"recipients": ["learning_engine"]}),
+        ("/api/bot-network/consensus", {"question": "check"}),
+        ("/api/bot-network/messages/MSG-1/read", None),
+    ]
+    for path, payload in requests:
+        response = client.post(path, json=payload) if payload is not None else client.post(path)
+        assert response.status_code == 403, path
+
+
+def test_standalone_message_provenance_is_server_derived(monkeypatch: pytest.MonkeyPatch) -> None:
+    network = _FakeNetwork()
+    monkeypatch.setattr(standalone_bot_api, "network", lambda: network)
+    monkeypatch.setattr(standalone_bot_api, "require_admin", lambda _request: "owner-admin")
+    client = TestClient(standalone_bot_api.app)
+
+    response = client.post(
+        "/api/bot-network/messages",
+        json={
+            "sender": "general_controller",
+            "recipient": "learning_engine",
+            "payload": {"requested_by": "spoofed-user", "value": 9},
+        },
+    )
+
+    assert response.status_code == 200
+    assert network.sent is not None
+    assert network.sent["payload"] == {"requested_by": "owner-admin", "value": 9}
