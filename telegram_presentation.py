@@ -147,11 +147,14 @@ def _bounded_text(value: object, *, limit: int) -> str:
 def _news_time_text(item: dict[str, Any]) -> str:
     quality = str(item.get("timestamp_quality") or "").strip()
     published_at = str(item.get("published_at") or "").strip()
-    if quality != "source_timestamp":
-        if published_at:
-            return "время публикации не подтверждено источником"
-        return "время не указано источником"
-    return format_news_time(published_at)
+    if quality == "source_timestamp":
+        return format_news_time(published_at)
+    if published_at:
+        rendered = format_news_time(published_at)
+        if "время в будущем, свежесть не подтверждена" in rendered:
+            return rendered
+        return "время публикации не подтверждено источником"
+    return "время не указано источником"
 
 
 def format_news_item(item: dict[str, Any], *, index: int) -> str:
