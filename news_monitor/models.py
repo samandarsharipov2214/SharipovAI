@@ -46,6 +46,7 @@ class NewsItem:
     title: str
     url: str
     published_at: str
+    timestamp_quality: str = "unknown"
     summary: str = ""
     symbols: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
@@ -71,6 +72,7 @@ class NewsItem:
             "title": self.title,
             "url": self.url,
             "published_at": self.published_at,
+            "timestamp_quality": self.timestamp_quality,
             "summary": self.summary,
             "symbols": self.symbols,
             "tags": self.tags,
