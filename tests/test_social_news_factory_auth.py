@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import importlib
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.requests import Request
@@ -79,7 +81,7 @@ def test_social_news_mutation_accepts_canonical_saas_principal(monkeypatch) -> N
 
 
 def test_factory_session_resolver_preserves_legacy_fallback(monkeypatch) -> None:
-    import dashboard.app as app_module
+    app_module = importlib.import_module("dashboard.app")
     import dashboard.auth_guard_middleware as guard
     import dashboard.auth_saas as auth_saas
 
