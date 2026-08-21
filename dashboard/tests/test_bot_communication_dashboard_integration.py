@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from dashboard import create_app
+import dashboard.bot_communication_api as bot_api
 from learning.ai_learning_core import BOT_NAMES
 
 
@@ -14,6 +15,7 @@ class DummyRunner:
 def test_bot_network_endpoints_installed_in_dashboard(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("BOT_COMMUNICATION_DB", str(tmp_path / "bot_network.sqlite3"))
     monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "1")
+    monkeypatch.setattr(bot_api, "require_admin", lambda _request: "ci-admin")
     client = TestClient(create_app(runner_factory=DummyRunner))
 
     health = client.get("/api/bot-network/health")
