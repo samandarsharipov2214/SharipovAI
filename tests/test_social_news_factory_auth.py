@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 from dashboard.auth_guard_middleware import AuthGuardMiddleware
 
@@ -75,3 +76,25 @@ def test_social_news_mutation_accepts_canonical_saas_principal(monkeypatch) -> N
 
     with TestClient(_canonical_app()) as client:
         assert client.post("/api/social-news/rss/refresh").status_code == 200
+
+
+def test_factory_session_resolver_preserves_legacy_fallback(monkeypatch) -> None:
+    import dashboard.app as app_module
+    import dashboard.auth_guard_middleware as guard
+    import dashboard.auth_saas as auth_saas
+
+    monkeypatch.setattr(auth_saas, "resolve_authenticated_principal", lambda request: None)
+    monkeypatch.setattr(app_module, "_session_username", lambda request: "legacy-user")
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/social-news/rss/refresh",
+            "headers": [],
+            "scheme": "https",
+            "server": ("example.test", 443),
+            "client": ("127.0.0.1", 12345),
+        }
+    )
+
+    assert guard.session_username(request) == "legacy-user"
