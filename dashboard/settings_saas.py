@@ -53,8 +53,10 @@ def get_saas_settings() -> SaaSSettings:
     production = _bool_env("RENDER", False) or environment in {"prod", "production"}
     auth_secret = os.getenv("AUTH_SECRET", "").strip()
     jwt_secret = os.getenv("JWT_SECRET", "").strip() or auth_secret or "local-dev-jwt-secret-change-me"
+    configured_database_url = os.getenv("DATABASE_URL", "").strip()
+    database_url = configured_database_url or _default_database_url()
     return SaaSSettings(
-        database_url=os.getenv("DATABASE_URL", _default_database_url()).strip(),
+        database_url=database_url,
         jwt_secret=jwt_secret,
         jwt_algorithm=os.getenv("JWT_ALGORITHM", "HS256").strip() or "HS256",
         jwt_ttl_seconds=max(900, int(os.getenv("JWT_TTL_SECONDS", str(60 * 60 * 24 * 7)))),
