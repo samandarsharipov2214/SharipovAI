@@ -41,6 +41,14 @@ def test_login_page_points_to_access_request(monkeypatch) -> None:
     assert "AUTH_USERS_FILE" not in response.text
 
 
+def test_web2_shell_exposes_the_existing_logout_route() -> None:
+    web2_shell = Path(__file__).parents[1] / "static" / "web2" / "index.html"
+
+    html = web2_shell.read_text(encoding="utf-8")
+
+    assert '<a class="action" href="/logout">Выйти</a>' in html
+
+
 def test_register_creates_security_access_request(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AUTH_ACCESS_REQUESTS_FILE", str(tmp_path / "access_requests.json"))
     monkeypatch.setenv("AUTH_SECURITY_EVENTS_FILE", str(tmp_path / "security_events.json"))
