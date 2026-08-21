@@ -161,6 +161,78 @@ def test_broadcast_provenance_is_server_derived(monkeypatch: pytest.MonkeyPatch)
     }
 
 
+def test_consensus_provenance_is_server_derived(monkeypatch: pytest.MonkeyPatch) -> None:
+    network = _FakeNetwork()
+    monkeypatch.setattr(bot_api, "require_admin", lambda _request: "owner-admin")
+    client = _client(monkeypatch, network)
+
+    response = client.post(
+        "/api/bot-network/consensus",
+        json={
+            "topic": "trade",
+            "question": "check",
+            "participants": ["risk_engine"],
+            "requested_by": "spoofed-user",
+        },
+    )
+
+    assert response.status_code == 200
+    assert network.broadcasted is not None
+    assert network.broadcasted["message_type"] == "consensus_request"
+    assert network.broadcasted["payload"] == {
+        "question": "check",
+        "required_response": "opinion,risk,confidence,source",
+        "requested_by": "owner-admin",
+    }
+
+
+@pytest.mark.parametrize(
+    ("path", "expected_action"),
+    [
+        ("/api/bot-network/agent/risk_engine/self-check", "self_check"),
+        ("/api/bot-network/agent/risk_engine/pause", "pause"),
+        ("/api/bot-network/agent/risk_engine/learn", "learn"),
+    ],
+)
+def test_direct_privileged_commands_persist_admin_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    expected_action: str,
+) -> None:
+    network = _FakeNetwork()
+    monkeypatch.setattr(bot_api, "require_admin", lambda _request: "owner-admin")
+    client = _client(monkeypatch, network)
+
+    response = client.post(path)
+
+    assert response.status_code == 200
+    assert network.sent is not None
+    assert network.sent["message_type"] == "command"
+    assert network.sent["payload"]["action"] == expected_action
+    assert network.sent["payload"]["requested_by"] == "owner-admin"
+
+
+def test_privileged_chat_persists_admin_provenance(monkeypatch: pytest.MonkeyPatch) -> None:
+    network = _FakeNetwork()
+    monkeypatch.setattr(bot_api, "require_admin", lambda _request: "owner-admin")
+    client = _client(monkeypatch, network)
+
+    response = client.post(
+        "/api/bot-network/chat",
+        json={
+            "bot": "risk_engine",
+            "message": "pause",
+            "state": {"requested_by": "spoofed-user"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert network.sent is not None
+    assert network.sent["message_type"] == "command"
+    assert network.sent["payload"]["action"] == "pause"
+    assert network.sent["payload"]["requested_by"] == "owner-admin"
+
+
 def test_shared_admin_guard_accepts_active_canonical_saas_admin(monkeypatch: pytest.MonkeyPatch) -> None:
     class _DB:
         def close(self) -> None:
@@ -235,6 +307,44 @@ def test_bot_network_mutation_blocks_cross_origin_cookie_request(monkeypatch: py
 
     assert response.status_code == 403
     assert response.json()["detail"]["status"] == "cross_origin_blocked"
+
+
+def test_shared_sensitive_guard_blocks_cross_origin_unsafe_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = FastAPI()
+    monkeypatch.setattr(admin_guard, "require_admin", lambda _request: "owner-admin")
+    admin_guard.install_sensitive_api_guard(app)
+
+    @app.post("/api/exchange/account/sync")
+    def sync_account() -> dict[str, str]:
+        return {"status": "ok"}
+
+    client = TestClient(app, base_url="https://example.test")
+    response = client.post(
+        "/api/exchange/account/sync",
+        headers={"Origin": "https://evil.example"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["status"] == "cross_origin_blocked"
+
+
+def test_shared_sensitive_guard_allows_same_origin_unsafe_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = FastAPI()
+    monkeypatch.setattr(admin_guard, "require_admin", lambda _request: "owner-admin")
+    admin_guard.install_sensitive_api_guard(app)
+
+    @app.post("/api/exchange/account/sync")
+    def sync_account() -> dict[str, str]:
+        return {"status": "ok"}
+
+    client = TestClient(app, base_url="https://example.test")
+    response = client.post(
+        "/api/exchange/account/sync",
+        headers={"Origin": "https://example.test"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
 
 
 def test_standalone_bot_network_mutations_are_retired(monkeypatch: pytest.MonkeyPatch) -> None:
