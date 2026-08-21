@@ -40,14 +40,17 @@ def test_provided_news_evidence_is_preserved() -> None:
 
 
 def test_invalid_credibility_does_not_render_as_a_real_percentage() -> None:
-    rendered = format_news_item(
-        {
-            "title": "Market update",
-            "source_name": "Example Wire",
-            "credibility_percent": "unknown",
-        },
-        index=3,
-    )
+    for credibility in ("unknown", False, True):
+        rendered = format_news_item(
+            {
+                "title": "Market update",
+                "source_name": "Example Wire",
+                "credibility_percent": credibility,
+            },
+            index=3,
+        )
 
-    assert "достоверность не указана" in rendered
-    assert "unknown%" not in rendered
+        assert "достоверность не указана" in rendered
+        assert f"{credibility}%" not in rendered
+        assert "достоверность <b>0%</b>" not in rendered
+        assert "достоверность <b>1%</b>" not in rendered
