@@ -120,8 +120,6 @@ def format_news_time(value: str | None) -> str:
 
 def _news_credibility_text(item: dict[str, Any]) -> str:
     credibility = item.get("credibility_percent")
-    if credibility in (None, ""):
-        credibility = item.get("trust_score")
     if credibility in (None, "") or isinstance(credibility, bool):
         return "достоверность не указана"
     try:
