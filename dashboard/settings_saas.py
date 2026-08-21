@@ -40,9 +40,14 @@ def _bool_env(name: str, default: bool) -> bool:
 
 
 def _default_database_url() -> str:
+    data_dir = Path(os.getenv("SHARIPOVAI_DATA_DIR", "data"))
+    configured_legacy_path = data_dir / "sharipovai_saas.sqlite3"
+    if configured_legacy_path.is_file():
+        if configured_legacy_path == _LEGACY_FALLBACK_DATABASE_PATH:
+            return _LEGACY_FALLBACK_DATABASE_URL
+        return f"sqlite:///{configured_legacy_path}"
     if _LEGACY_FALLBACK_DATABASE_PATH.is_file():
         return _LEGACY_FALLBACK_DATABASE_URL
-    data_dir = Path(os.getenv("SHARIPOVAI_DATA_DIR", "data"))
     data_dir.mkdir(parents=True, exist_ok=True)
     return f"sqlite:///{data_dir / 'sharipovai_shared.db'}"
 
