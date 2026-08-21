@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import Body, FastAPI, Request
 from fastapi.responses import HTMLResponse
 
-from ai_chat_orchestrator import AGENTS, answer_chat, detect_agent
+from ai_chat_orchestrator import AGENTS, _action, answer_chat, detect_agent
 from learning.ai_learning_core import BOT_NAMES
 from learning.bot_communication import BotCommunicationNetwork
 
@@ -103,13 +103,16 @@ def install_bot_communication_api(app: FastAPI) -> None:
         )
 
     @app.post("/api/bot-network/chat")
-    def bot_chat_api(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
+    def bot_chat_api(request: Request, payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
         data = payload or {}
         requested_bot = _chat_bot(str(data.get("bot", data.get("recipient", "general_controller"))))
         text = str(data.get("message", "")).strip()
         state = data.get("state", {}) if isinstance(data.get("state", {}), dict) else {}
         if not text:
             return {"status": "empty_message", "reply": "Напиши вопрос AI-боту."}
+
+        if _action(text.lower()) in {"pause", "self_check", "learn"}:
+            require_admin(request)
 
         bus = network()
         sender = "security_guard" if requested_bot == "general_controller" else "general_controller"
@@ -124,7 +127,6 @@ def install_bot_communication_api(app: FastAPI) -> None:
         if question.get("status") != "ok":
             return {"status": "persistence_error", "message": question, "reply": "Вопрос не сохранён."}
 
-        # Prefixing guarantees the same agent routing in web, Mini App and Telegram.
         routed_text = f"{requested_bot}: {text}"
         generated = answer_chat(routed_text, state)
         reply_text = str(generated.get("reply", "Ответ не сформирован."))
