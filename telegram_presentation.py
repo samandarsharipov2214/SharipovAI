@@ -139,8 +139,9 @@ def format_news_item(item: dict[str, Any], *, index: int) -> str:
     credibility = _news_credibility_text(item)
     published = format_news_time(str(item.get("published_at") or ""))
     url = str(item.get("url") or "").strip()
-    if "needs_confirmation" in item and item.get("needs_confirmation") is not None:
-        status = "нужно подтверждение" if bool(item.get("needs_confirmation")) else "подтверждение не требуется"
+    confirmation = item.get("needs_confirmation")
+    if isinstance(confirmation, bool):
+        status = "нужно подтверждение" if confirmation else "подтверждение не требуется"
     else:
         status = "статус подтверждения не указан"
     action = str(item.get("ai_action") or "").strip() or "не указано"
