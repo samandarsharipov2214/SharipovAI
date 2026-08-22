@@ -47,7 +47,7 @@ def test_owner_deploy_gate_requires_exact_persisted_actor_and_chat(tmp_path, mon
     assert telegram_api._owner_deploy_control_update(owner_wrong_chat) is False
 
 
-def test_owner_deploy_gate_fails_closed_for_missing_or_malformed_owner(tmp_path, monkeypatch):
+def test_owner_deploy_gate_fails_closed_for_missing_malformed_or_undecodable_owner(tmp_path, monkeypatch):
     owner_file = tmp_path / "deployment_control" / "owner.json"
     monkeypatch.setattr(deploy_control, "OWNER_FILE", owner_file)
 
@@ -63,6 +63,9 @@ def test_owner_deploy_gate_fails_closed_for_missing_or_malformed_owner(tmp_path,
 
     owner_file.parent.mkdir(parents=True)
     owner_file.write_text("not-json", encoding="utf-8")
+    assert telegram_api._owner_deploy_control_update(deploy) is False
+
+    owner_file.write_bytes(b"\xff\xfe\xfd")
     assert telegram_api._owner_deploy_control_update(deploy) is False
 
 
@@ -83,6 +86,17 @@ def test_owner_tuple_rejects_coerced_non_integer_fields(tmp_path, monkeypatch):
         owner_file.write_text(json.dumps(payload), encoding="utf-8")
         assert deploy_control.persisted_owner() is None
         assert deploy_control.is_exact_owner(101, 202) is False
+
+
+def test_runtime_owner_identity_requires_native_integers(tmp_path, monkeypatch):
+    _owner_file(tmp_path, monkeypatch)
+
+    assert deploy_control.is_exact_owner(101, 202) is True
+    assert deploy_control.is_exact_owner("101", 202) is False
+    assert deploy_control.is_exact_owner(101, "202") is False
+    assert deploy_control.is_exact_owner(101.0, 202) is False
+    assert deploy_control.is_exact_owner(101, 202.0) is False
+    assert deploy_control.is_exact_owner(True, 202) is False
 
 
 def test_shared_chat_member_cannot_reach_confirmation_or_pending_request(tmp_path, monkeypatch):
