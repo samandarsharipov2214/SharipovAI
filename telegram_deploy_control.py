@@ -72,14 +72,23 @@ def expected_bootstrap_owner() -> tuple[int, int | None] | None:
         chat_id = _single_env_id("TELEGRAM_OWNER_CHAT_ID", positive=False)
         return (user_id, chat_id) if chat_id is not None else None
 
+    legacy_user_raw = os.getenv("TELEGRAM_ADMIN_USER_ID", "").strip()
+    legacy_chat_raw = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "").strip()
     legacy_user = _single_env_id("TELEGRAM_ADMIN_USER_ID", positive=True)
     legacy_chat = _single_env_id("TELEGRAM_ADMIN_CHAT_ID", positive=False)
-    if legacy_user is not None:
+    if legacy_user_raw:
+        if legacy_user is None:
+            return None
+        if legacy_chat_raw and legacy_chat is None:
+            return None
         return legacy_user, legacy_chat
-    if legacy_chat is not None and legacy_chat > 0:
-        # Legacy private-chat deployments commonly configured only the chat id.
-        # In a private Telegram chat the positive chat id is the same principal.
-        return legacy_chat, legacy_chat
+    if legacy_chat_raw:
+        if legacy_chat is None:
+            return None
+        if legacy_chat > 0:
+            # Legacy private-chat deployments commonly configured only the chat id.
+            # In a private Telegram chat the positive chat id is the same principal.
+            return legacy_chat, legacy_chat
     return None
 
 
