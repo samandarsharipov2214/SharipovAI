@@ -148,6 +148,19 @@ def test_legacy_single_admin_id_with_delimiter_can_migrate(tmp_path: Path, monke
     assert control.persisted_owner() == (111, 222)
 
 
+def test_legacy_user_with_malformed_companion_chat_fails_closed(tmp_path: Path, monkeypatch):
+    for malformed_chat in ("bad", "222,333"):
+        _configure_control(tmp_path, monkeypatch, owner_id="")
+        monkeypatch.setenv("TELEGRAM_ADMIN_USER_ID", "111")
+        monkeypatch.setenv("TELEGRAM_ADMIN_CHAT_ID", malformed_chat)
+        _write_claim()
+
+        text, _ = control.claim_owner(111, 222, "654321")
+
+        assert "не настроен" in text
+        assert not control.OWNER_FILE.exists()
+
+
 def test_legacy_private_chat_admin_can_migrate_once_to_persisted_owner(tmp_path: Path, monkeypatch):
     _configure_control(tmp_path, monkeypatch, owner_id="")
     monkeypatch.setenv("TELEGRAM_ADMIN_CHAT_ID", "111")
