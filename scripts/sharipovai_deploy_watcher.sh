@@ -60,10 +60,13 @@ from pathlib import Path
 def positive_int(value):
     return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
 
+def nonzero_int(value):
+    return value if isinstance(value, int) and not isinstance(value, bool) and value != 0 else None
+
 try:
     request = json.loads(os.environ["DEPLOY_REQUEST_JSON"])
     owner = json.loads((Path("/var/lib/sharipovai/deployment_control") / "owner.json").read_text(encoding="utf-8"))
-except (KeyError, OSError, ValueError, json.JSONDecodeError):
+except (KeyError, OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
     raise SystemExit(1)
 
 if not isinstance(request, dict) or not isinstance(owner, dict):
@@ -75,9 +78,9 @@ if not isinstance(request.get("action"), str) or not request["action"]:
 if positive_int(request.get("created_at")) is None:
     raise SystemExit(1)
 owner_user = positive_int(owner.get("user_id"))
-owner_chat = positive_int(owner.get("chat_id"))
+owner_chat = nonzero_int(owner.get("chat_id"))
 actor = positive_int(request.get("actor_id"))
-chat = positive_int(request.get("chat_id"))
+chat = nonzero_int(request.get("chat_id"))
 if None in (owner_user, owner_chat, actor, chat) or actor != owner_user or chat != owner_chat:
     raise SystemExit(1)
 print("authorized")
