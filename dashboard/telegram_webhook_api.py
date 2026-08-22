@@ -14,7 +14,7 @@ from fastapi import BackgroundTasks, Body, FastAPI, Header, HTTPException, Reque
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 
-from telegram_deploy_control import is_admin
+from telegram_deploy_control import is_exact_owner
 from telegram_system_adapter import CANONICAL_WEBAPP_URL, handle_callback, handle_message, main_keyboard, send_message, setup_bot_commands
 from telegram_health import telegram_health
 from dashboard.admin_guard import require_admin
@@ -201,11 +201,11 @@ def _telegram_update_chat_id(update: dict[str, Any]) -> int | None:
 
 
 def _owner_deploy_control_update(update: dict[str, Any]) -> bool:
-    """Allow only the persisted Telegram owner to reach deploy control without a SaaS binding."""
+    """Allow only the exact persisted Telegram owner to reach deploy control without SaaS binding."""
 
     actor_id = _telegram_update_user_id(update)
     chat_id = _telegram_update_chat_id(update)
-    if actor_id is None or chat_id is None or not is_admin(actor_id, chat_id):
+    if actor_id is None or chat_id is None or not is_exact_owner(actor_id, chat_id):
         return False
 
     message = update.get("message")
