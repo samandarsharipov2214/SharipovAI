@@ -70,6 +70,34 @@ def is_admin(actor_id: int | None, chat_id: int | None = None) -> bool:
     return bool(configured and ({int(actor_id or 0), int(chat_id or 0)} & configured))
 
 
+def persisted_owner() -> tuple[int, int] | None:
+    """Return the exact persisted owner tuple or fail closed."""
+    try:
+        owner = json.loads(OWNER_FILE.read_text(encoding="utf-8"))
+        if not isinstance(owner, dict):
+            return None
+        user_id = int(owner.get("user_id", 0))
+        chat_id = int(owner.get("chat_id", 0))
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return None
+    if user_id <= 0 or chat_id == 0:
+        return None
+    return user_id, chat_id
+
+
+def is_exact_owner(actor_id: int | None, chat_id: int | None) -> bool:
+    """Authorize only the persisted Telegram owner actor in the persisted owner chat."""
+    owner = persisted_owner()
+    if owner is None:
+        return False
+    try:
+        actor = int(actor_id or 0)
+        chat = int(chat_id or 0)
+    except (TypeError, ValueError):
+        return False
+    return actor > 0 and chat != 0 and owner == (actor, chat)
+
+
 def claim_owner(actor_id: int, chat_id: int, code: str) -> tuple[str, dict[str, Any]]:
     if admin_ids():
         return "Владелец уже настроен. Повторное присвоение запрещено.", {"inline_keyboard": []}
@@ -111,7 +139,7 @@ def claim_owner(actor_id: int, chat_id: int, code: str) -> tuple[str, dict[str, 
 
 
 def deployment_keyboard(actor_id: int | None, chat_id: int | None) -> list[list[dict[str, Any]]]:
-    if not is_admin(actor_id, chat_id):
+    if not is_exact_owner(actor_id, chat_id):
         return []
     return [[
         {"text": "🔄 Обновить SharipovAI", "callback_data": "deploy:prepare"},
@@ -120,7 +148,7 @@ def deployment_keyboard(actor_id: int | None, chat_id: int | None) -> list[list[
 
 
 def prepare_confirmation(actor_id: int, chat_id: int) -> tuple[str, dict[str, Any]]:
-    if not is_admin(actor_id, chat_id):
+    if not is_exact_owner(actor_id, chat_id):
         return unauthorized_message(actor_id, chat_id), {"inline_keyboard": []}
     token = secrets.token_urlsafe(10)
     _CONFIRMATIONS[int(actor_id)] = (token, time.time() + CONFIRM_TTL_SECONDS)
@@ -153,7 +181,7 @@ def prepare_confirmation(actor_id: int, chat_id: int) -> tuple[str, dict[str, An
 
 
 def confirm_deployment(actor_id: int, chat_id: int, token: str) -> tuple[str, dict[str, Any]]:
-    if not is_admin(actor_id, chat_id):
+    if not is_exact_owner(actor_id, chat_id):
         return unauthorized_message(actor_id, chat_id), {"inline_keyboard": []}
     confirmation = _CONFIRMATIONS.pop(int(actor_id), None)
     if not confirmation or not secrets.compare_digest(confirmation[0], token) or confirmation[1] < time.time():
@@ -198,7 +226,7 @@ def cancel_confirmation(actor_id: int) -> tuple[str, dict[str, Any]]:
 
 
 def status_message(actor_id: int | None, chat_id: int | None) -> tuple[str, dict[str, Any]]:
-    if not is_admin(actor_id, chat_id):
+    if not is_exact_owner(actor_id, chat_id):
         return unauthorized_message(actor_id, chat_id), {"inline_keyboard": []}
     status = read_status()
     if not status:
@@ -254,7 +282,7 @@ def identity_message(actor_id: int | None, chat_id: int | None) -> str:
         "🪪 <b>Telegram идентификаторы</b>\n\n"
         f"User ID: <code>{int(actor_id or 0)}</code>\n"
         f"Chat ID: <code>{int(chat_id or 0)}</code>\n"
-        f"Права владельца: <b>{'ДА' if is_admin(actor_id, chat_id) else 'НЕТ'}</b>"
+        f"Права владельца: <b>{'ДА' if is_exact_owner(actor_id, chat_id) else 'НЕТ'}</b>"
     )
 
 
