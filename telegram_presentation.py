@@ -119,8 +119,8 @@ def format_news_time(value: str | None) -> str:
         else:
             age = f"{seconds // 86400} дн назад"
         return f"{absolute} · {age}"
-    except Exception:
-        return raw
+    except (TypeError, ValueError, OverflowError):
+        return "время публикации некорректно; свежесть не подтверждена"
 
 
 def _news_credibility_text(item: dict[str, Any]) -> str:
