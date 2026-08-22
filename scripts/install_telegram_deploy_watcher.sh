@@ -76,8 +76,7 @@ root = Path('/var/lib/sharipovai/deployment_control')
 root.mkdir(parents=True, exist_ok=True)
 owner = root / 'owner.json'
 claim = root / 'owner_claim.json'
-env_owner = bool(os.getenv('TELEGRAM_ADMIN_USER_ID', '').strip() or os.getenv('TELEGRAM_ADMIN_CHAT_ID', '').strip())
-if owner.exists() or env_owner:
+if owner.exists():
     print('')
 else:
     code = f'{secrets.randbelow(900000) + 100000}'
