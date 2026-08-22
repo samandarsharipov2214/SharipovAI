@@ -34,16 +34,39 @@ def _canonical_owner_id(name: str) -> int | None:
     return identifier if identifier > 0 else None
 
 
-def expected_bootstrap_owner() -> tuple[int, int | None] | None:
-    """Return the configured immutable bootstrap identity, if valid."""
-    user_id = _canonical_owner_id("TELEGRAM_OWNER_ID")
-    if user_id is None:
+def _single_env_id(name: str, *, positive: bool) -> int | None:
+    """Parse exactly one legacy Telegram identifier without accepting lists."""
+    raw = os.getenv(name, "").strip()
+    if not raw or "," in raw or ";" in raw:
         return None
-    configured_chat = os.getenv("TELEGRAM_OWNER_CHAT_ID", "").strip()
-    if not configured_chat:
-        return user_id, None
-    chat_id = _canonical_owner_id("TELEGRAM_OWNER_CHAT_ID")
-    return (user_id, chat_id) if chat_id is not None else None
+    try:
+        identifier = int(raw)
+    except ValueError:
+        return None
+    if positive:
+        return identifier if identifier > 0 else None
+    return identifier if identifier != 0 else None
+
+
+def expected_bootstrap_owner() -> tuple[int, int | None] | None:
+    """Return the configured immutable/bootstrap owner identity, including safe legacy migration."""
+    user_id = _canonical_owner_id("TELEGRAM_OWNER_ID")
+    if user_id is not None:
+        configured_chat = os.getenv("TELEGRAM_OWNER_CHAT_ID", "").strip()
+        if not configured_chat:
+            return user_id, None
+        chat_id = _single_env_id("TELEGRAM_OWNER_CHAT_ID", positive=False)
+        return (user_id, chat_id) if chat_id is not None else None
+
+    legacy_user = _single_env_id("TELEGRAM_ADMIN_USER_ID", positive=True)
+    legacy_chat = _single_env_id("TELEGRAM_ADMIN_CHAT_ID", positive=False)
+    if legacy_user is not None:
+        return legacy_user, legacy_chat
+    if legacy_chat is not None and legacy_chat > 0:
+        # Legacy private-chat deployments commonly configured only the chat id.
+        # In a private Telegram chat the positive chat id is the same principal.
+        return legacy_chat, legacy_chat
+    return None
 
 
 def admin_ids() -> set[int]:
@@ -74,11 +97,13 @@ def persisted_owner() -> tuple[int, int] | None:
     """Return the exact persisted owner tuple or fail closed."""
     try:
         owner = json.loads(OWNER_FILE.read_text(encoding="utf-8"))
-        if not isinstance(owner, dict):
-            return None
-        user_id = int(owner.get("user_id", 0))
-        chat_id = int(owner.get("chat_id", 0))
-    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(owner, dict):
+        return None
+    user_id = owner.get("user_id")
+    chat_id = owner.get("chat_id")
+    if type(user_id) is not int or type(chat_id) is not int:
         return None
     if user_id <= 0 or chat_id == 0:
         return None
@@ -99,7 +124,7 @@ def is_exact_owner(actor_id: int | None, chat_id: int | None) -> bool:
 
 
 def claim_owner(actor_id: int, chat_id: int, code: str) -> tuple[str, dict[str, Any]]:
-    if admin_ids():
+    if OWNER_FILE.exists():
         return "Владелец уже настроен. Повторное присвоение запрещено.", {"inline_keyboard": []}
     expected_owner = expected_bootstrap_owner()
     if expected_owner is None:
