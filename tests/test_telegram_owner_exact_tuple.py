@@ -66,6 +66,25 @@ def test_owner_deploy_gate_fails_closed_for_missing_or_malformed_owner(tmp_path,
     assert telegram_api._owner_deploy_control_update(deploy) is False
 
 
+def test_owner_tuple_rejects_coerced_non_integer_fields(tmp_path, monkeypatch):
+    owner_file = tmp_path / "deployment_control" / "owner.json"
+    owner_file.parent.mkdir(parents=True)
+    monkeypatch.setattr(deploy_control, "OWNER_FILE", owner_file)
+
+    invalid_payloads = [
+        {"user_id": True, "chat_id": 202},
+        {"user_id": 101, "chat_id": False},
+        {"user_id": "101", "chat_id": 202},
+        {"user_id": 101, "chat_id": "202"},
+        {"user_id": 101.9, "chat_id": 202},
+        {"user_id": 101, "chat_id": 202.9},
+    ]
+    for payload in invalid_payloads:
+        owner_file.write_text(json.dumps(payload), encoding="utf-8")
+        assert deploy_control.persisted_owner() is None
+        assert deploy_control.is_exact_owner(101, 202) is False
+
+
 def test_shared_chat_member_cannot_reach_confirmation_or_pending_request(tmp_path, monkeypatch):
     _owner_file(tmp_path, monkeypatch)
     monkeypatch.setattr(deploy_control, "REQUEST_FILE", tmp_path / "deployment_control" / "pending.json")
