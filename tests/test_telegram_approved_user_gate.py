@@ -92,11 +92,28 @@ def test_owner_deploy_bypass_is_narrow_and_requires_exact_persisted_owner(monkey
     assert (999, 202) in checked
 
 
+def test_owner_bootstrap_claim_requires_exact_configured_identity(monkeypatch):
+    monkeypatch.setattr(telegram_api, "expected_bootstrap_owner", lambda: (101, -202))
+
+    claim = {"message": {"from": {"id": 101}, "chat": {"id": -202}, "text": "/claim_owner 654321"}}
+    wrong_actor = {"message": {"from": {"id": 999}, "chat": {"id": -202}, "text": "/claim_owner 654321"}}
+    wrong_chat = {"message": {"from": {"id": 101}, "chat": {"id": -999}, "text": "/claim_owner 654321"}}
+    start = {"message": {"from": {"id": 101}, "chat": {"id": -202}, "text": "/start"}}
+    coerced = {"message": {"from": {"id": "101"}, "chat": {"id": -202}, "text": "/claim_owner 654321"}}
+
+    assert telegram_api._owner_bootstrap_claim_update(claim) is True
+    assert telegram_api._owner_bootstrap_claim_update(wrong_actor) is False
+    assert telegram_api._owner_bootstrap_claim_update(wrong_chat) is False
+    assert telegram_api._owner_bootstrap_claim_update(start) is False
+    assert telegram_api._owner_bootstrap_claim_update(coerced) is False
+
+
 def test_webhook_claims_but_does_not_dispatch_unapproved_actor(monkeypatch):
     app = _app(monkeypatch)
     monkeypatch.setattr(telegram_api, "_webhook_secret", lambda: "secret")
     monkeypatch.setattr(telegram_api, "_approved_telegram_user_id", lambda _update: None)
     monkeypatch.setattr(telegram_api, "_owner_deploy_control_update", lambda _update: False)
+    monkeypatch.setattr(telegram_api, "_owner_bootstrap_claim_update", lambda _update: False)
 
     claims = []
     processed = []
@@ -127,6 +144,7 @@ def test_webhook_queues_only_approved_actor(monkeypatch):
     monkeypatch.setattr(telegram_api, "_webhook_secret", lambda: "secret")
     monkeypatch.setattr(telegram_api, "_approved_telegram_user_id", lambda _update: "user-1")
     monkeypatch.setattr(telegram_api, "_owner_deploy_control_update", lambda _update: False)
+    monkeypatch.setattr(telegram_api, "_owner_bootstrap_claim_update", lambda _update: False)
 
     claims = []
     processed = []
@@ -152,6 +170,7 @@ def test_webhook_queues_owner_deploy_control_without_canonical_binding(monkeypat
     monkeypatch.setattr(telegram_api, "_webhook_secret", lambda: "secret")
     monkeypatch.setattr(telegram_api, "_approved_telegram_user_id", lambda _update: None)
     monkeypatch.setattr(telegram_api, "_owner_deploy_control_update", lambda _update: True)
+    monkeypatch.setattr(telegram_api, "_owner_bootstrap_claim_update", lambda _update: False)
 
     claims = []
     processed = []
@@ -172,4 +191,33 @@ def test_webhook_queues_owner_deploy_control_without_canonical_binding(monkeypat
     assert response.status_code == 200
     assert response.json()["queued"] is True
     assert claims == [7003]
+    assert processed == [payload]
+
+
+def test_webhook_queues_configured_owner_bootstrap_claim_without_canonical_binding(monkeypatch):
+    app = _app(monkeypatch)
+    monkeypatch.setattr(telegram_api, "_webhook_secret", lambda: "secret")
+    monkeypatch.setattr(telegram_api, "_approved_telegram_user_id", lambda _update: None)
+    monkeypatch.setattr(telegram_api, "_owner_deploy_control_update", lambda _update: False)
+    monkeypatch.setattr(telegram_api, "expected_bootstrap_owner", lambda: (101, 202))
+
+    claims = []
+    processed = []
+    monkeypatch.setattr(telegram_api, "claim_telegram_update", lambda update_id: claims.append(update_id) or True)
+    monkeypatch.setattr(telegram_api, "_process_update_safely", lambda update: processed.append(update))
+
+    payload = {
+        "update_id": 7004,
+        "message": {"from": {"id": 101}, "chat": {"id": 202}, "text": "/claim_owner 654321"},
+    }
+    with TestClient(app) as client:
+        response = client.post(
+            "/telegram/webhook",
+            json=payload,
+            headers={"X-Telegram-Bot-Api-Secret-Token": "secret"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["queued"] is True
+    assert claims == [7004]
     assert processed == [payload]
