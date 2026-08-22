@@ -61,10 +61,42 @@ def test_unbound_or_malformed_identity_fails_closed(monkeypatch):
     assert telegram_api._approved_telegram_user_id({"message": {"from": {"id": 101}}}) is None
 
 
+def test_owner_deploy_bypass_is_narrow_and_requires_persisted_admin(monkeypatch):
+    checked = []
+    monkeypatch.setattr(
+        telegram_api,
+        "is_admin",
+        lambda actor_id, chat_id: checked.append((actor_id, chat_id)) or actor_id == 101,
+    )
+
+    deploy = {"message": {"from": {"id": 101}, "chat": {"id": 202}, "text": "/deploy"}}
+    status = {"message": {"from": {"id": 101}, "chat": {"id": 202}, "text": "/deploy_status"}}
+    whoami = {"message": {"from": {"id": 101}, "chat": {"id": 202}, "text": "/whoami"}}
+    normal = {"message": {"from": {"id": 101}, "chat": {"id": 202}, "text": "/start"}}
+    confirm = {
+        "callback_query": {
+            "from": {"id": 101},
+            "data": "deploy:confirm:token",
+            "message": {"chat": {"id": 202}},
+        }
+    }
+    foreign = {"message": {"from": {"id": 999}, "chat": {"id": 202}, "text": "/deploy"}}
+
+    assert telegram_api._owner_deploy_control_update(deploy) is True
+    assert telegram_api._owner_deploy_control_update(status) is True
+    assert telegram_api._owner_deploy_control_update(whoami) is True
+    assert telegram_api._owner_deploy_control_update(confirm) is True
+    assert telegram_api._owner_deploy_control_update(normal) is False
+    assert telegram_api._owner_deploy_control_update(foreign) is False
+    assert (101, 202) in checked
+    assert (999, 202) in checked
+
+
 def test_webhook_claims_but_does_not_dispatch_unapproved_actor(monkeypatch):
     app = _app(monkeypatch)
     monkeypatch.setattr(telegram_api, "_webhook_secret", lambda: "secret")
     monkeypatch.setattr(telegram_api, "_approved_telegram_user_id", lambda _update: None)
+    monkeypatch.setattr(telegram_api, "_owner_deploy_control_update", lambda _update: False)
 
     claims = []
     processed = []
@@ -94,6 +126,7 @@ def test_webhook_queues_only_approved_actor(monkeypatch):
     app = _app(monkeypatch)
     monkeypatch.setattr(telegram_api, "_webhook_secret", lambda: "secret")
     monkeypatch.setattr(telegram_api, "_approved_telegram_user_id", lambda _update: "user-1")
+    monkeypatch.setattr(telegram_api, "_owner_deploy_control_update", lambda _update: False)
 
     claims = []
     processed = []
@@ -111,4 +144,32 @@ def test_webhook_queues_only_approved_actor(monkeypatch):
     assert response.status_code == 200
     assert response.json()["queued"] is True
     assert claims == [7002]
+    assert processed == [payload]
+
+
+def test_webhook_queues_owner_deploy_control_without_canonical_binding(monkeypatch):
+    app = _app(monkeypatch)
+    monkeypatch.setattr(telegram_api, "_webhook_secret", lambda: "secret")
+    monkeypatch.setattr(telegram_api, "_approved_telegram_user_id", lambda _update: None)
+    monkeypatch.setattr(telegram_api, "_owner_deploy_control_update", lambda _update: True)
+
+    claims = []
+    processed = []
+    monkeypatch.setattr(telegram_api, "claim_telegram_update", lambda update_id: claims.append(update_id) or True)
+    monkeypatch.setattr(telegram_api, "_process_update_safely", lambda update: processed.append(update))
+
+    payload = {
+        "update_id": 7003,
+        "message": {"from": {"id": 101}, "chat": {"id": 202}, "text": "/deploy"},
+    }
+    with TestClient(app) as client:
+        response = client.post(
+            "/telegram/webhook",
+            json=payload,
+            headers={"X-Telegram-Bot-Api-Secret-Token": "secret"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["queued"] is True
+    assert claims == [7003]
     assert processed == [payload]
