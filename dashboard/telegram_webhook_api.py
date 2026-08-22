@@ -14,7 +14,7 @@ from fastapi import BackgroundTasks, Body, FastAPI, Header, HTTPException, Reque
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 
-from telegram_deploy_control import is_exact_owner
+from telegram_deploy_control import expected_bootstrap_owner, is_exact_owner
 from telegram_system_adapter import CANONICAL_WEBAPP_URL, handle_callback, handle_message, main_keyboard, send_message, setup_bot_commands
 from telegram_health import telegram_health
 from dashboard.admin_guard import require_admin
@@ -64,7 +64,11 @@ def install_telegram_webhook_api(app: FastAPI) -> None:
         if not claim_telegram_update(update_id):
             return {"ok": True, "duplicate": True, "update_id": update_id, "adapter": "shared_website_system"}
 
-        if _approved_telegram_user_id(update) is None and not _owner_deploy_control_update(update):
+        if (
+            _approved_telegram_user_id(update) is None
+            and not _owner_deploy_control_update(update)
+            and not _owner_bootstrap_claim_update(update)
+        ):
             return {
                 "ok": True,
                 "ignored": True,
@@ -218,6 +222,31 @@ def _owner_deploy_control_update(update: dict[str, Any]) -> bool:
     if isinstance(callback, dict):
         return str(callback.get("data") or "").startswith("deploy:")
     return False
+
+
+def _owner_bootstrap_claim_update(update: dict[str, Any]) -> bool:
+    """Allow only the configured bootstrap owner to submit /claim_owner before owner.json exists."""
+
+    message = update.get("message")
+    if not isinstance(message, dict):
+        return False
+    actor = message.get("from")
+    chat = message.get("chat")
+    if not isinstance(actor, dict) or not isinstance(chat, dict):
+        return False
+    actor_id = actor.get("id")
+    chat_id = chat.get("id")
+    if type(actor_id) is not int or type(chat_id) is not int or actor_id <= 0 or chat_id == 0:
+        return False
+    text = str(message.get("text") or "").strip()
+    command = text.split()[0].lower() if text.startswith("/") else ""
+    if command != "/claim_owner":
+        return False
+    expected = expected_bootstrap_owner()
+    if expected is None:
+        return False
+    expected_user_id, expected_chat_id = expected
+    return actor_id == expected_user_id and (expected_chat_id is None or chat_id == expected_chat_id)
 
 
 def _approved_telegram_user_id(update: dict[str, Any]) -> str | None:
