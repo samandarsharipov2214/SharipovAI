@@ -61,12 +61,12 @@ def test_unbound_or_malformed_identity_fails_closed(monkeypatch):
     assert telegram_api._approved_telegram_user_id({"message": {"from": {"id": 101}}}) is None
 
 
-def test_owner_deploy_bypass_is_narrow_and_requires_persisted_admin(monkeypatch):
+def test_owner_deploy_bypass_is_narrow_and_requires_exact_persisted_owner(monkeypatch):
     checked = []
     monkeypatch.setattr(
         telegram_api,
-        "is_admin",
-        lambda actor_id, chat_id: checked.append((actor_id, chat_id)) or actor_id == 101,
+        "is_exact_owner",
+        lambda actor_id, chat_id: checked.append((actor_id, chat_id)) or (actor_id, chat_id) == (101, 202),
     )
 
     deploy = {"message": {"from": {"id": 101}, "chat": {"id": 202}, "text": "/deploy"}}
