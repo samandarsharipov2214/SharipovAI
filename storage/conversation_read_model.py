@@ -6,6 +6,7 @@ backend. Conversation identity is the existing ``(project_id, chat_id)`` pair in
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -58,17 +59,17 @@ class ConversationReadModel:
     ) -> ConversationIndex:
         """Return recent conversation summaries from canonical messages.
 
-        The underlying ``ProjectDatabase.list_messages`` API is intentionally
-        bounded to 2,000 messages. If that boundary is reached, ``scan_truncated``
-        is true so consumers cannot mistake a bounded projection for complete
-        history. Channel and actor provenance are derived only from canonical
-        message metadata; missing metadata stays missing rather than being
-        guessed from a chat-id prefix.
+        The projection intentionally scans the newest canonical messages first,
+        bounded to 2,000 messages. If that boundary is reached,
+        ``scan_truncated`` is true so consumers cannot mistake a bounded
+        projection for complete history. Channel and actor provenance are
+        derived only from canonical message metadata; missing metadata stays
+        missing rather than being guessed from a chat-id prefix.
         """
 
         conversation_limit = min(max(int(limit), 1), 1000)
         scan_limit = min(max(int(message_scan_limit), 1), 2000)
-        messages = self.database.list_messages(project_id=project_id, limit=scan_limit)
+        messages = self._list_recent_messages(project_id=project_id, limit=scan_limit)
 
         grouped: dict[str, dict[str, Any]] = {}
         for message in messages:
@@ -138,6 +139,38 @@ class ConversationReadModel:
             scan_truncated=len(messages) >= scan_limit,
             scanned_message_count=len(messages),
         )
+
+    def _list_recent_messages(self, *, project_id: str, limit: int) -> list[dict[str, Any]]:
+        """Read the newest canonical project messages without changing history ordering APIs."""
+
+        clean_project_id = str(project_id).strip()
+        if not clean_project_id or len(clean_project_id) > 200:
+            raise ValueError("project_id must contain 1..200 characters")
+        bounded_limit = min(max(int(limit), 1), 2000)
+        with self.database.connect() as connection:
+            rows = self.database._fetchall(
+                connection,
+                """
+                SELECT project_id, chat_id, message_id, role, content, metadata_json, created_at_ms
+                FROM project_messages
+                WHERE project_id = ?
+                ORDER BY created_at_ms DESC, message_id DESC
+                LIMIT ?
+                """,
+                (clean_project_id, bounded_limit),
+            )
+        return [
+            {
+                "project_id": row["project_id"],
+                "chat_id": row["chat_id"],
+                "message_id": row["message_id"],
+                "role": row["role"],
+                "content": row["content"],
+                "metadata": json.loads(row["metadata_json"]),
+                "created_at_ms": int(row["created_at_ms"]),
+            }
+            for row in rows
+        ]
 
     def get_history(
         self,

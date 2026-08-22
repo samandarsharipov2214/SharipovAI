@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -24,10 +25,49 @@ _SENSITIVE_PREFIXES = (
     "/api/production/phase11/",
     "/api/learning/phase12/",
 )
+_UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+_DEFAULT_LOCAL_JWT_SECRET = "local-dev-jwt-secret-change-me"
+
+
+def _explicit_canonical_jwt_secret() -> str | None:
+    """Return only an explicitly configured non-default JWT signing secret."""
+
+    configured = os.getenv("JWT_SECRET", "").strip() or os.getenv("AUTH_SECRET", "").strip()
+    if not configured or configured == _DEFAULT_LOCAL_JWT_SECRET:
+        return None
+    return configured
+
+
+def _canonical_saas_user(request: Request) -> Any | None:
+    """Return an active canonical SaaS user only when JWT auth is explicitly configured."""
+
+    if _explicit_canonical_jwt_secret() is None:
+        return None
+    try:
+        from .auth_saas import get_current_user
+        from .db_saas import SessionLocal
+
+        db = SessionLocal()
+        try:
+            user = get_current_user(request, db)
+            if user and user.is_active:
+                return user
+        finally:
+            db.close()
+    except Exception:
+        return None
+    return None
 
 
 def require_admin(request: Request) -> str:
-    """Require explicit auth configuration and an active administrator."""
+    """Require an active administrator from canonical SaaS or legacy auth."""
+
+    canonical_user = _canonical_saas_user(request)
+    if canonical_user is not None:
+        if str(canonical_user.role or "").lower() != "admin":
+            raise HTTPException(status_code=403, detail={"status": "forbidden"})
+        return str(canonical_user.email)
+
     if not all(os.getenv(name, "").strip() for name in ("AUTH_SECRET", "ADMIN_USERNAME", "ADMIN_PASSWORD")):
         raise HTTPException(status_code=503, detail={"status": "auth_not_configured"})
     from .app import _is_admin_request, _session_username
@@ -54,6 +94,10 @@ def install_sensitive_api_guard(app: FastAPI) -> None:
     async def sensitive_api_guard(request: Request, call_next):
         if _is_sensitive_path(request.url.path):
             try:
+                if request.method.upper() in _UNSAFE_METHODS:
+                    from .auth_saas import ensure_same_origin
+
+                    ensure_same_origin(request)
                 require_admin(request)
             except HTTPException as exc:
                 return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})

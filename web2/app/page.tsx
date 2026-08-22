@@ -47,7 +47,11 @@ function apiUrl(path: string) {
 }
 
 function finiteNumber(value: unknown): number | null {
-  const number = Number(value);
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value !== 'string') return null;
+  const text = value.trim();
+  if (!text) return null;
+  const number = Number(text);
   return Number.isFinite(number) ? number : null;
 }
 
