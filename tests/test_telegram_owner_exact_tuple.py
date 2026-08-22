@@ -64,3 +64,26 @@ def test_owner_deploy_gate_fails_closed_for_missing_or_malformed_owner(tmp_path,
     owner_file.parent.mkdir(parents=True)
     owner_file.write_text("not-json", encoding="utf-8")
     assert telegram_api._owner_deploy_control_update(deploy) is False
+
+
+def test_shared_chat_member_cannot_reach_confirmation_or_pending_request(tmp_path, monkeypatch):
+    _owner_file(tmp_path, monkeypatch)
+    monkeypatch.setattr(deploy_control, "REQUEST_FILE", tmp_path / "deployment_control" / "pending.json")
+    monkeypatch.setattr(deploy_control, "STATUS_FILE", tmp_path / "deployment_control" / "status.json")
+    deploy_control._CONFIRMATIONS.clear()
+
+    text, keyboard = deploy_control.prepare_confirmation(999, 202)
+
+    assert "только владельцу" in text
+    assert keyboard["inline_keyboard"] == []
+    assert 999 not in deploy_control._CONFIRMATIONS
+    assert not deploy_control.REQUEST_FILE.exists()
+
+    owner_text, owner_keyboard = deploy_control.prepare_confirmation(101, 202)
+    assert "Подтверждение" in owner_text
+    token = owner_keyboard["inline_keyboard"][0][0]["callback_data"].split(":", 2)[2]
+
+    text, keyboard = deploy_control.confirm_deployment(999, 202, token)
+    assert "только владельцу" in text
+    assert keyboard["inline_keyboard"] == []
+    assert not deploy_control.REQUEST_FILE.exists()
