@@ -14,6 +14,7 @@ from fastapi import BackgroundTasks, Body, FastAPI, Header, HTTPException, Reque
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 
+from telegram_deploy_control import is_admin
 from telegram_system_adapter import CANONICAL_WEBAPP_URL, handle_callback, handle_message, main_keyboard, send_message, setup_bot_commands
 from telegram_health import telegram_health
 from dashboard.admin_guard import require_admin
@@ -63,7 +64,7 @@ def install_telegram_webhook_api(app: FastAPI) -> None:
         if not claim_telegram_update(update_id):
             return {"ok": True, "duplicate": True, "update_id": update_id, "adapter": "shared_website_system"}
 
-        if _approved_telegram_user_id(update) is None:
+        if _approved_telegram_user_id(update) is None and not _owner_deploy_control_update(update):
             return {
                 "ok": True,
                 "ignored": True,
@@ -178,6 +179,45 @@ def _telegram_update_user_id(update: dict[str, Any]) -> int | None:
             return None
         return telegram_user_id if telegram_user_id > 0 else None
     return None
+
+
+def _telegram_update_chat_id(update: dict[str, Any]) -> int | None:
+    """Return the chat id for supported message/callback updates."""
+
+    message = update.get("message")
+    if not isinstance(message, dict):
+        callback = update.get("callback_query")
+        message = callback.get("message") if isinstance(callback, dict) else None
+    if not isinstance(message, dict):
+        return None
+    chat = message.get("chat")
+    if not isinstance(chat, dict):
+        return None
+    try:
+        chat_id = int(chat.get("id"))
+    except (TypeError, ValueError):
+        return None
+    return chat_id if chat_id != 0 else None
+
+
+def _owner_deploy_control_update(update: dict[str, Any]) -> bool:
+    """Allow only the persisted Telegram owner to reach deploy control without a SaaS binding."""
+
+    actor_id = _telegram_update_user_id(update)
+    chat_id = _telegram_update_chat_id(update)
+    if actor_id is None or chat_id is None or not is_admin(actor_id, chat_id):
+        return False
+
+    message = update.get("message")
+    if isinstance(message, dict):
+        text = str(message.get("text") or "").strip()
+        command = text.split()[0].lower() if text.startswith("/") else ""
+        return command in {"/deploy", "/deploy_status", "/whoami"}
+
+    callback = update.get("callback_query")
+    if isinstance(callback, dict):
+        return str(callback.get("data") or "").startswith("deploy:")
+    return False
 
 
 def _approved_telegram_user_id(update: dict[str, Any]) -> str | None:
