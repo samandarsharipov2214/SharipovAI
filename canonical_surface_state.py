@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from autonomous_trading.trade_identity import default_paper_state_file
 from storage import ProjectDatabase, count_json_items, list_json_items
 
 _STATE_NAMESPACE = "autonomous_paper_state"
@@ -23,7 +24,7 @@ def load_canonical_paper_state(database: ProjectDatabase | None = None) -> dict[
 
     db = database or ProjectDatabase()
     db.initialize()
-    state_file = Path(os.getenv("AUTONOMOUS_PAPER_STATE_FILE", "data/autonomous_paper.json"))
+    state_file = default_paper_state_file()
     scope = _scope_for_path(state_file)
     current = db.get_json(_STATE_NAMESPACE, scope)
     if current is None or not isinstance(current.get("value"), dict):

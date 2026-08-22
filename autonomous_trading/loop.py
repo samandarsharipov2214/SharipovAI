@@ -18,13 +18,20 @@ from typing import Any
 from storage import ProjectDatabase, VersionConflict, list_json_items
 
 from .market_stream import MarketStream
-from .trade_identity import new_event_id, new_trade_id, normalize_event, normalize_trade, scope_for_path
+from .trade_identity import (
+    default_paper_state_file,
+    new_event_id,
+    new_trade_id,
+    normalize_event,
+    normalize_trade,
+    scope_for_path,
+)
 
 
 class AutonomousPaperLoop:
     def __init__(self, stream: MarketStream, *, database: ProjectDatabase | None = None) -> None:
         self.stream = stream
-        self.state_file = Path(os.getenv("AUTONOMOUS_PAPER_STATE_FILE", "data/autonomous_paper.json"))
+        self.state_file = default_paper_state_file()
         self.scope = scope_for_path(self.state_file)
         self.state_namespace = "autonomous_paper_state"
         self.trade_namespace = f"paper_trades:{self.scope}"

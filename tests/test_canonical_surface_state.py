@@ -23,6 +23,20 @@ def test_canonical_surface_state_fails_closed_when_runtime_state_is_missing(tmp_
     assert state["equity"] == 0.0
 
 
+def test_canonical_surface_uses_the_same_durable_default_path_as_runtime(tmp_path, monkeypatch) -> None:
+    database = _database(tmp_path)
+    monkeypatch.delenv("AUTONOMOUS_PAPER_STATE_FILE", raising=False)
+    data_dir = tmp_path / "durable-data"
+    monkeypatch.setenv("SHARIPOVAI_DATA_DIR", str(data_dir))
+    scope = _scope_for_path(data_dir / "autonomous_paper.json")
+    database.put_json("autonomous_paper_state", scope, {"equity": 10_000.0, "positions": {}})
+
+    state = load_canonical_paper_state(database)
+
+    assert state["status"] == "ok"
+    assert state["equity"] == 10_000.0
+
+
 def test_canonical_surface_state_reads_database_backed_account_and_bounded_trade_window(tmp_path, monkeypatch) -> None:
     database = _database(tmp_path)
     state_path = tmp_path / "paper.json"
