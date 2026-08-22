@@ -37,7 +37,9 @@ def test_owner_claim_and_deploy_request_are_restricted(tmp_path: Path, monkeypat
     assert "назначен владельцем" in text
     assert keyboard["inline_keyboard"]
     assert control.is_admin(111, 111)
+    assert control.is_exact_owner(111, 111)
     assert not control.is_admin(222, 222)
+    assert not control.is_exact_owner(222, 222)
 
     text, keyboard = control.prepare_confirmation(222, 222)
     assert "только владельцу" in text
@@ -83,6 +85,17 @@ def test_claim_fails_closed_without_canonical_owner(tmp_path: Path, monkeypatch)
     assert not control.OWNER_FILE.exists()
 
 
+def test_invalid_explicit_canonical_owner_does_not_fallback_to_legacy_admin(tmp_path: Path, monkeypatch):
+    _configure_control(tmp_path, monkeypatch, owner_id="not-an-id")
+    monkeypatch.setenv("TELEGRAM_ADMIN_USER_ID", "111")
+    _write_claim()
+
+    text, _ = control.claim_owner(111, 111, "654321")
+
+    assert "не настроен" in text
+    assert not control.OWNER_FILE.exists()
+
+
 def test_claim_rejects_expired_and_reused_codes(tmp_path: Path, monkeypatch):
     _configure_control(tmp_path, monkeypatch)
     _write_claim(expires_at=int(time.time()) - 1)
@@ -109,6 +122,65 @@ def test_claimed_owner_cannot_be_replaced(tmp_path: Path, monkeypatch):
     assert "уже настроен" in text
     owner = json.loads(control.OWNER_FILE.read_text(encoding="utf-8"))
     assert owner["user_id"] == 111
+
+
+def test_legacy_admin_user_can_migrate_once_to_persisted_owner(tmp_path: Path, monkeypatch):
+    _configure_control(tmp_path, monkeypatch, owner_id="")
+    monkeypatch.setenv("TELEGRAM_ADMIN_USER_ID", "111")
+    _write_claim()
+
+    text, keyboard = control.claim_owner(111, 222, "654321")
+
+    assert "назначен владельцем" in text
+    assert keyboard["inline_keyboard"]
+    assert control.persisted_owner() == (111, 222)
+    assert control.is_exact_owner(111, 222)
+
+
+def test_legacy_single_admin_id_with_delimiter_can_migrate(tmp_path: Path, monkeypatch):
+    _configure_control(tmp_path, monkeypatch, owner_id="")
+    monkeypatch.setenv("TELEGRAM_ADMIN_USER_ID", "111,")
+    _write_claim()
+
+    text, _ = control.claim_owner(111, 222, "654321")
+
+    assert "назначен владельцем" in text
+    assert control.persisted_owner() == (111, 222)
+
+
+def test_legacy_user_with_malformed_companion_chat_fails_closed(tmp_path: Path, monkeypatch):
+    for malformed_chat in ("bad", "222,333"):
+        _configure_control(tmp_path, monkeypatch, owner_id="")
+        monkeypatch.setenv("TELEGRAM_ADMIN_USER_ID", "111")
+        monkeypatch.setenv("TELEGRAM_ADMIN_CHAT_ID", malformed_chat)
+        _write_claim()
+
+        text, _ = control.claim_owner(111, 222, "654321")
+
+        assert "не настроен" in text
+        assert not control.OWNER_FILE.exists()
+
+
+def test_legacy_private_chat_admin_can_migrate_once_to_persisted_owner(tmp_path: Path, monkeypatch):
+    _configure_control(tmp_path, monkeypatch, owner_id="")
+    monkeypatch.setenv("TELEGRAM_ADMIN_CHAT_ID", "111")
+    _write_claim()
+
+    text, _ = control.claim_owner(111, 111, "654321")
+
+    assert "назначен владельцем" in text
+    assert control.persisted_owner() == (111, 111)
+
+
+def test_ambiguous_legacy_admin_list_fails_closed_for_owner_migration(tmp_path: Path, monkeypatch):
+    _configure_control(tmp_path, monkeypatch, owner_id="")
+    monkeypatch.setenv("TELEGRAM_ADMIN_USER_ID", "111,222")
+    _write_claim()
+
+    text, _ = control.claim_owner(111, 111, "654321")
+
+    assert "не настроен" in text
+    assert not control.OWNER_FILE.exists()
 
 
 def test_stale_running_deploy_is_terminalized_and_matching_pending_removed(tmp_path: Path, monkeypatch):
@@ -150,3 +222,12 @@ def test_watcher_is_fixed_command_https_only_and_never_mounts_docker_socket():
     assert 'timeout --signal=TERM --kill-after=' in source
     assert "docker.sock" not in source
     assert "amnezia-awg2" not in source
+
+
+def test_watcher_accepts_signed_nonzero_chat_ids_but_positive_user_ids_only():
+    source = Path("scripts/sharipovai_deploy_watcher.sh").read_text(encoding="utf-8")
+    assert "def nonzero_int(value):" in source
+    assert 'owner_user = positive_int(owner.get("user_id"))' in source
+    assert 'actor = positive_int(request.get("actor_id"))' in source
+    assert 'owner_chat = nonzero_int(owner.get("chat_id"))' in source
+    assert 'chat = nonzero_int(request.get("chat_id"))' in source

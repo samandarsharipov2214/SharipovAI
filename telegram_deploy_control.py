@@ -34,16 +34,62 @@ def _canonical_owner_id(name: str) -> int | None:
     return identifier if identifier > 0 else None
 
 
-def expected_bootstrap_owner() -> tuple[int, int | None] | None:
-    """Return the configured immutable bootstrap identity, if valid."""
-    user_id = _canonical_owner_id("TELEGRAM_OWNER_ID")
-    if user_id is None:
+def _single_env_id(name: str, *, positive: bool) -> int | None:
+    """Parse exactly one distinct legacy Telegram identifier from list-compatible env syntax."""
+    raw = os.getenv(name, "").strip()
+    if not raw:
         return None
-    configured_chat = os.getenv("TELEGRAM_OWNER_CHAT_ID", "").strip()
-    if not configured_chat:
-        return user_id, None
-    chat_id = _canonical_owner_id("TELEGRAM_OWNER_CHAT_ID")
-    return (user_id, chat_id) if chat_id is not None else None
+    values: set[int] = set()
+    for part in raw.replace(";", ",").split(","):
+        token = part.strip()
+        if not token:
+            continue
+        try:
+            identifier = int(token)
+        except ValueError:
+            return None
+        if positive:
+            if identifier <= 0:
+                return None
+        elif identifier == 0:
+            return None
+        values.add(identifier)
+    if len(values) != 1:
+        return None
+    return next(iter(values))
+
+
+def expected_bootstrap_owner() -> tuple[int, int | None] | None:
+    """Return the configured immutable/bootstrap owner identity, including safe legacy migration."""
+    canonical_user_raw = os.getenv("TELEGRAM_OWNER_ID", "").strip()
+    if canonical_user_raw:
+        user_id = _canonical_owner_id("TELEGRAM_OWNER_ID")
+        if user_id is None:
+            return None
+        configured_chat = os.getenv("TELEGRAM_OWNER_CHAT_ID", "").strip()
+        if not configured_chat:
+            return user_id, None
+        chat_id = _single_env_id("TELEGRAM_OWNER_CHAT_ID", positive=False)
+        return (user_id, chat_id) if chat_id is not None else None
+
+    legacy_user_raw = os.getenv("TELEGRAM_ADMIN_USER_ID", "").strip()
+    legacy_chat_raw = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "").strip()
+    legacy_user = _single_env_id("TELEGRAM_ADMIN_USER_ID", positive=True)
+    legacy_chat = _single_env_id("TELEGRAM_ADMIN_CHAT_ID", positive=False)
+    if legacy_user_raw:
+        if legacy_user is None:
+            return None
+        if legacy_chat_raw and legacy_chat is None:
+            return None
+        return legacy_user, legacy_chat
+    if legacy_chat_raw:
+        if legacy_chat is None:
+            return None
+        if legacy_chat > 0:
+            # Legacy private-chat deployments commonly configured only the chat id.
+            # In a private Telegram chat the positive chat id is the same principal.
+            return legacy_chat, legacy_chat
+    return None
 
 
 def admin_ids() -> set[int]:
@@ -54,7 +100,7 @@ def admin_ids() -> set[int]:
         owner = json.loads(OWNER_FILE.read_text(encoding="utf-8"))
         if isinstance(owner, dict):
             values.extend([str(owner.get("user_id", "")), str(owner.get("chat_id", ""))])
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         pass
     result: set[int] = set()
     for value in values:
@@ -70,8 +116,35 @@ def is_admin(actor_id: int | None, chat_id: int | None = None) -> bool:
     return bool(configured and ({int(actor_id or 0), int(chat_id or 0)} & configured))
 
 
+def persisted_owner() -> tuple[int, int] | None:
+    """Return the exact persisted owner tuple or fail closed."""
+    try:
+        owner = json.loads(OWNER_FILE.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(owner, dict):
+        return None
+    user_id = owner.get("user_id")
+    chat_id = owner.get("chat_id")
+    if type(user_id) is not int or type(chat_id) is not int:
+        return None
+    if user_id <= 0 or chat_id == 0:
+        return None
+    return user_id, chat_id
+
+
+def is_exact_owner(actor_id: int | None, chat_id: int | None) -> bool:
+    """Authorize only the persisted Telegram owner actor in the persisted owner chat."""
+    owner = persisted_owner()
+    if owner is None:
+        return False
+    if type(actor_id) is not int or type(chat_id) is not int:
+        return False
+    return actor_id > 0 and chat_id != 0 and owner == (actor_id, chat_id)
+
+
 def claim_owner(actor_id: int, chat_id: int, code: str) -> tuple[str, dict[str, Any]]:
-    if admin_ids():
+    if OWNER_FILE.exists():
         return "Владелец уже настроен. Повторное присвоение запрещено.", {"inline_keyboard": []}
     expected_owner = expected_bootstrap_owner()
     if expected_owner is None:
@@ -79,14 +152,16 @@ def claim_owner(actor_id: int, chat_id: int, code: str) -> tuple[str, dict[str, 
             "Канонический владелец Telegram не настроен. Присвоение владельца запрещено.",
             {"inline_keyboard": []},
         )
+    if type(actor_id) is not int or type(chat_id) is not int or actor_id <= 0 or chat_id == 0:
+        return "Этот Telegram-аккаунт не является назначенным владельцем.", {"inline_keyboard": []}
     expected_user_id, expected_chat_id = expected_owner
-    if int(actor_id) != expected_user_id or (
-        expected_chat_id is not None and int(chat_id) != expected_chat_id
+    if actor_id != expected_user_id or (
+        expected_chat_id is not None and chat_id != expected_chat_id
     ):
         return "Этот Telegram-аккаунт не является назначенным владельцем.", {"inline_keyboard": []}
     try:
         claim = json.loads(CLAIM_FILE.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         claim = {}
     expected = str(claim.get("code", ""))
     expires_at = int(claim.get("expires_at", 0) or 0)
@@ -96,7 +171,7 @@ def claim_owner(actor_id: int, chat_id: int, code: str) -> tuple[str, dict[str, 
         return "Неверный код активации владельца.", {"inline_keyboard": []}
     _atomic_write(OWNER_FILE, {
         "user_id": expected_user_id,
-        "chat_id": int(chat_id),
+        "chat_id": chat_id,
         "claimed_at": int(time.time()),
     })
     try:
@@ -111,7 +186,7 @@ def claim_owner(actor_id: int, chat_id: int, code: str) -> tuple[str, dict[str, 
 
 
 def deployment_keyboard(actor_id: int | None, chat_id: int | None) -> list[list[dict[str, Any]]]:
-    if not is_admin(actor_id, chat_id):
+    if not is_exact_owner(actor_id, chat_id):
         return []
     return [[
         {"text": "🔄 Обновить SharipovAI", "callback_data": "deploy:prepare"},
@@ -120,10 +195,10 @@ def deployment_keyboard(actor_id: int | None, chat_id: int | None) -> list[list[
 
 
 def prepare_confirmation(actor_id: int, chat_id: int) -> tuple[str, dict[str, Any]]:
-    if not is_admin(actor_id, chat_id):
+    if not is_exact_owner(actor_id, chat_id):
         return unauthorized_message(actor_id, chat_id), {"inline_keyboard": []}
     token = secrets.token_urlsafe(10)
-    _CONFIRMATIONS[int(actor_id)] = (token, time.time() + CONFIRM_TTL_SECONDS)
+    _CONFIRMATIONS[actor_id] = (token, time.time() + CONFIRM_TTL_SECONDS)
     status = read_status()
     running = status.get("state") in {"queued", "running"}
     if running:
@@ -153,9 +228,9 @@ def prepare_confirmation(actor_id: int, chat_id: int) -> tuple[str, dict[str, An
 
 
 def confirm_deployment(actor_id: int, chat_id: int, token: str) -> tuple[str, dict[str, Any]]:
-    if not is_admin(actor_id, chat_id):
+    if not is_exact_owner(actor_id, chat_id):
         return unauthorized_message(actor_id, chat_id), {"inline_keyboard": []}
-    confirmation = _CONFIRMATIONS.pop(int(actor_id), None)
+    confirmation = _CONFIRMATIONS.pop(actor_id, None)
     if not confirmation or not secrets.compare_digest(confirmation[0], token) or confirmation[1] < time.time():
         return (
             "Подтверждение истекло или уже использовано. Нажми «Обновить SharipovAI» ещё раз.",
@@ -172,8 +247,8 @@ def confirm_deployment(actor_id: int, chat_id: int, token: str) -> tuple[str, di
         "version": 1,
         "request_id": request_id,
         "action": "deploy_main",
-        "actor_id": int(actor_id),
-        "chat_id": int(chat_id),
+        "actor_id": actor_id,
+        "chat_id": chat_id,
         "created_at": int(time.time()),
     }
     _atomic_write(REQUEST_FILE, payload)
@@ -181,7 +256,7 @@ def confirm_deployment(actor_id: int, chat_id: int, token: str) -> tuple[str, di
         "state": "queued",
         "stage": "ожидание host watcher",
         "request_id": request_id,
-        "chat_id": int(chat_id),
+        "chat_id": chat_id,
         "updated_at": int(time.time()),
     })
     return (
@@ -198,7 +273,7 @@ def cancel_confirmation(actor_id: int) -> tuple[str, dict[str, Any]]:
 
 
 def status_message(actor_id: int | None, chat_id: int | None) -> tuple[str, dict[str, Any]]:
-    if not is_admin(actor_id, chat_id):
+    if not is_exact_owner(actor_id, chat_id):
         return unauthorized_message(actor_id, chat_id), {"inline_keyboard": []}
     status = read_status()
     if not status:
@@ -233,7 +308,7 @@ def read_status() -> dict[str, Any]:
     try:
         value = json.loads(STATUS_FILE.read_text(encoding="utf-8"))
         return _terminalize_stale_status(value) if isinstance(value, dict) else {}
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return {}
 
 
@@ -254,7 +329,7 @@ def identity_message(actor_id: int | None, chat_id: int | None) -> str:
         "🪪 <b>Telegram идентификаторы</b>\n\n"
         f"User ID: <code>{int(actor_id or 0)}</code>\n"
         f"Chat ID: <code>{int(chat_id or 0)}</code>\n"
-        f"Права владельца: <b>{'ДА' if is_admin(actor_id, chat_id) else 'НЕТ'}</b>"
+        f"Права владельца: <b>{'ДА' if is_exact_owner(actor_id, chat_id) else 'НЕТ'}</b>"
     )
 
 
@@ -293,7 +368,7 @@ def _terminalize_stale_status(status: dict[str, Any]) -> dict[str, Any]:
     _atomic_write(STATUS_FILE, terminal)
     try:
         pending = json.loads(REQUEST_FILE.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         pending = {}
     if isinstance(pending, dict) and str(pending.get("request_id") or "") == request_id:
         try:
@@ -305,4 +380,5 @@ def _terminalize_stale_status(status: dict[str, Any]) -> dict[str, Any]:
 
 def _safe(value: Any) -> str:
     import html
+
     return html.escape(str(value), quote=False)
