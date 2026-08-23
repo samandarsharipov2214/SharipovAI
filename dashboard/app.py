@@ -30,7 +30,12 @@ MIN_PASSWORD_LENGTH = int(os.getenv("MIN_PASSWORD_LENGTH", "12"))
 
 
 def create_app(runner_factory: Callable[[], SharipovAIRunner] | None = None) -> FastAPI:
-    app_instance = FastAPI(title="SharipovAI OS", docs_url=None if _is_production() else "/docs", redoc_url=None)
+    app_instance = FastAPI(
+        title="SharipovAI OS",
+        docs_url=None if _is_production() else "/docs",
+        redoc_url=None,
+        openapi_url=None if _is_production() else "/openapi.json",
+    )
     app_instance.state.runner_factory = runner_factory or SharipovAIRunner
     app_instance.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
     app_instance.include_router(router)
