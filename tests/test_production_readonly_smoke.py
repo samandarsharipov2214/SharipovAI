@@ -18,6 +18,7 @@ def test_fresh_production_app_readonly_smoke_is_fail_closed(monkeypatch) -> None
         health = client.get("/api/system/health")
         recovery = client.get("/api/system/recovery-plan")
         docs = client.get("/docs")
+        openapi = client.get("/openapi.json")
 
     assert startup.status_code == 200
     assert startup.json() == {"status": "ok", "app": "SharipovAI OS"}
@@ -30,3 +31,4 @@ def test_fresh_production_app_readonly_smoke_is_fail_closed(monkeypatch) -> None
         }
 
     assert docs.status_code == 404
+    assert openapi.status_code == 404
