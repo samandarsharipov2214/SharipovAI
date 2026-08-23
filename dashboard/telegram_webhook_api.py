@@ -14,7 +14,7 @@ from fastapi import BackgroundTasks, Body, FastAPI, Header, HTTPException, Reque
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 
-from telegram_deploy_control import expected_bootstrap_owner, is_exact_owner
+from telegram_deploy_control import expected_bootstrap_owner, is_exact_owner, persisted_owner
 from telegram_system_adapter import CANONICAL_WEBAPP_URL, handle_callback, handle_message, main_keyboard, send_message, setup_bot_commands
 from telegram_health import telegram_health
 from dashboard.admin_guard import require_admin
@@ -26,6 +26,8 @@ from dashboard.telegram_update_idempotency import claim_telegram_update
 
 TELEGRAM_API_TIMEOUT = 20.0
 MINIAPP_MAX_AGE_SECONDS = int(os.getenv("TELEGRAM_INIT_DATA_MAX_AGE", "3600"))
+_BOT_USERNAME_CACHE: str | None = None
+_BOT_USERNAME_RESOLVED = False
 
 
 def install_telegram_webhook_api(app: FastAPI) -> None:
@@ -168,7 +170,7 @@ def install_telegram_webhook_api(app: FastAPI) -> None:
 
 
 def _telegram_update_user_id(update: dict[str, Any]) -> int | None:
-    """Return the Telegram actor id for supported user-originated updates."""
+    """Return a native positive Telegram actor id for supported user-originated updates."""
 
     for key in ("message", "callback_query"):
         envelope = update.get(key)
@@ -177,16 +179,15 @@ def _telegram_update_user_id(update: dict[str, Any]) -> int | None:
         actor = envelope.get("from")
         if not isinstance(actor, dict):
             continue
-        try:
-            telegram_user_id = int(actor.get("id"))
-        except (TypeError, ValueError):
+        telegram_user_id = actor.get("id")
+        if type(telegram_user_id) is not int or telegram_user_id <= 0:
             return None
-        return telegram_user_id if telegram_user_id > 0 else None
+        return telegram_user_id
     return None
 
 
 def _telegram_update_chat_id(update: dict[str, Any]) -> int | None:
-    """Return the chat id for supported message/callback updates."""
+    """Return a native non-zero chat id for supported message/callback updates."""
 
     message = update.get("message")
     if not isinstance(message, dict):
@@ -197,11 +198,10 @@ def _telegram_update_chat_id(update: dict[str, Any]) -> int | None:
     chat = message.get("chat")
     if not isinstance(chat, dict):
         return None
-    try:
-        chat_id = int(chat.get("id"))
-    except (TypeError, ValueError):
+    chat_id = chat.get("id")
+    if type(chat_id) is not int or chat_id == 0:
         return None
-    return chat_id if chat_id != 0 else None
+    return chat_id
 
 
 def _owner_deploy_control_update(update: dict[str, Any]) -> bool:
@@ -224,9 +224,51 @@ def _owner_deploy_control_update(update: dict[str, Any]) -> bool:
     return False
 
 
+def _current_bot_username() -> str | None:
+    """Resolve the authenticated bot username once, failing closed when unavailable."""
+
+    global _BOT_USERNAME_CACHE, _BOT_USERNAME_RESOLVED
+    if _BOT_USERNAME_RESOLVED:
+        return _BOT_USERNAME_CACHE
+
+    configured = os.getenv("TELEGRAM_BOT_USERNAME", "").strip().lstrip("@").lower()
+    if configured:
+        _BOT_USERNAME_CACHE = configured
+        _BOT_USERNAME_RESOLVED = True
+        return configured
+
+    result = _telegram("getMe")
+    payload = result.get("result") if isinstance(result, dict) else None
+    username = str(payload.get("username") or "").strip().lstrip("@").lower() if isinstance(payload, dict) else ""
+    _BOT_USERNAME_CACHE = username or None
+    _BOT_USERNAME_RESOLVED = True
+    return _BOT_USERNAME_CACHE
+
+
+def _normalize_owner_claim_text(text: str) -> str | None:
+    """Normalize /claim_owner and the current bot-qualified form; reject foreign suffixes."""
+
+    stripped = str(text or "").strip()
+    if not stripped.startswith("/"):
+        return None
+    parts = stripped.split(maxsplit=1)
+    token = parts[0]
+    code = parts[1].strip() if len(parts) == 2 else ""
+    command, separator, suffix = token.partition("@")
+    if command.lower() != "/claim_owner" or not code:
+        return None
+    if separator:
+        bot_username = _current_bot_username()
+        if bot_username is None or suffix.strip().lower() != bot_username:
+            return None
+    return f"/claim_owner {code}"
+
+
 def _owner_bootstrap_claim_update(update: dict[str, Any]) -> bool:
     """Allow only the configured bootstrap owner to submit /claim_owner before owner.json exists."""
 
+    if persisted_owner() is not None:
+        return False
     message = update.get("message")
     if not isinstance(message, dict):
         return False
@@ -238,9 +280,7 @@ def _owner_bootstrap_claim_update(update: dict[str, Any]) -> bool:
     chat_id = chat.get("id")
     if type(actor_id) is not int or type(chat_id) is not int or actor_id <= 0 or chat_id == 0:
         return False
-    text = str(message.get("text") or "").strip()
-    command = text.split()[0].lower() if text.startswith("/") else ""
-    if command != "/claim_owner":
+    if _normalize_owner_claim_text(str(message.get("text") or "")) is None:
         return False
     expected = expected_bootstrap_owner()
     if expected is None:
@@ -310,8 +350,12 @@ def validate_miniapp_init_data(init_data: str) -> dict[str, Any]:
 
 def _process_update_safely(update: dict[str, Any]) -> None:
     try:
-        if isinstance(update.get("message"), dict):
-            handle_message(update["message"])
+        message = update.get("message")
+        if isinstance(message, dict):
+            normalized_claim = _normalize_owner_claim_text(str(message.get("text") or ""))
+            if normalized_claim is not None:
+                message = {**message, "text": normalized_claim}
+            handle_message(message)
         if isinstance(update.get("callback_query"), dict):
             handle_callback(update["callback_query"])
     except Exception as exc:
