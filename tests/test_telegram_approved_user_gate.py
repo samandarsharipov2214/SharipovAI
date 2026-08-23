@@ -29,7 +29,8 @@ def _app(monkeypatch) -> FastAPI:
 
 def test_extracts_supported_telegram_actor_ids():
     assert telegram_api._telegram_update_user_id({"message": {"from": {"id": 101}}}) == 101
-    assert telegram_api._telegram_update_user_id({"callback_query": {"from": {"id": "202"}}}) == 202
+    assert telegram_api._telegram_update_user_id({"callback_query": {"from": {"id": 202}}}) == 202
+    assert telegram_api._telegram_update_user_id({"callback_query": {"from": {"id": "202"}}}) is None
     assert telegram_api._telegram_update_user_id({"message": {"from": {"id": 0}}}) is None
     assert telegram_api._telegram_update_user_id({"message": {"from": {"id": "bad"}}}) is None
     assert telegram_api._telegram_update_user_id({"message": {"chat": {"id": 303}}}) is None
@@ -93,6 +94,7 @@ def test_owner_deploy_bypass_is_narrow_and_requires_exact_persisted_owner(monkey
 
 
 def test_owner_bootstrap_claim_requires_exact_configured_identity(monkeypatch):
+    monkeypatch.setattr(telegram_api, "persisted_owner", lambda: None)
     monkeypatch.setattr(telegram_api, "expected_bootstrap_owner", lambda: (101, -202))
 
     claim = {"message": {"from": {"id": 101}, "chat": {"id": -202}, "text": "/claim_owner 654321"}}
@@ -199,6 +201,7 @@ def test_webhook_queues_configured_owner_bootstrap_claim_without_canonical_bindi
     monkeypatch.setattr(telegram_api, "_webhook_secret", lambda: "secret")
     monkeypatch.setattr(telegram_api, "_approved_telegram_user_id", lambda _update: None)
     monkeypatch.setattr(telegram_api, "_owner_deploy_control_update", lambda _update: False)
+    monkeypatch.setattr(telegram_api, "persisted_owner", lambda: None)
     monkeypatch.setattr(telegram_api, "expected_bootstrap_owner", lambda: (101, 202))
 
     claims = []
