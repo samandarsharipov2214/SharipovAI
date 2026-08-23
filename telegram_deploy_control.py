@@ -62,12 +62,17 @@ def _single_env_id(name: str, *, positive: bool) -> int | None:
 def expected_bootstrap_owner() -> tuple[int, int | None] | None:
     """Return the configured immutable/bootstrap owner identity, including safe legacy migration."""
     canonical_user_raw = os.getenv("TELEGRAM_OWNER_ID", "").strip()
-    if canonical_user_raw:
+    canonical_chat_raw = os.getenv("TELEGRAM_OWNER_CHAT_ID", "").strip()
+    if canonical_user_raw or canonical_chat_raw:
+        # Any explicit canonical configuration takes precedence over legacy migration.
+        # A chat without a canonical user is a partial/malformed configuration and must
+        # fail closed rather than silently falling back to stale legacy admin identity.
+        if not canonical_user_raw:
+            return None
         user_id = _canonical_owner_id("TELEGRAM_OWNER_ID")
         if user_id is None:
             return None
-        configured_chat = os.getenv("TELEGRAM_OWNER_CHAT_ID", "").strip()
-        if not configured_chat:
+        if not canonical_chat_raw:
             return user_id, None
         chat_id = _single_env_id("TELEGRAM_OWNER_CHAT_ID", positive=False)
         return (user_id, chat_id) if chat_id is not None else None
