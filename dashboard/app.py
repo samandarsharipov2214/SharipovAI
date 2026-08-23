@@ -141,7 +141,7 @@ def _install_auth_entrypoints(app_instance: FastAPI) -> None:
             _record_security_event("password_change_failed", username, request, {"reason": "bad_current_password"})
             return HTMLResponse(_change_password_html(username=username, error="Текущий пароль неверный"), status_code=401)
         if len(new_password) < MIN_PASSWORD_LENGTH:
-            return HTMLResponse(_change_password_html(username=username, error=f"Новый пароль должен быть не короче {MIN_PASSWORD_LENGTH} символов."), status_code=400)
+            return HTMLResponse(_change_password_html(username=username, error=f"Новый пароль должен быть не короче {MIN_PASSWORD_LENGTH} символов"), status_code=400)
         user["password_hash"] = hash_password(new_password)
         user["must_change_password"] = False
         user["password_changed_at"] = int(time.time())
