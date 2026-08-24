@@ -51,6 +51,23 @@ def test_canonical_backup_runs_after_candidate_checks_and_before_production_muta
     assert "docker system df" in before_backup
 
 
+def test_backup_is_bound_to_proven_live_compose_project_and_volume():
+    script = _text(RUNTIME_DEPLOY)
+
+    inspect_volume = "docker inspect -f '{{range .Mounts}}{{if eq .Destination \"/var/lib/sharipovai\"}}{{.Name}}{{end}}{{end}}' \"$SERVICE\""
+    inspect_project = "docker inspect -f '{{index .Config.Labels \"com.docker.compose.project\"}}' \"$SERVICE\""
+    backup = script.index("deploy/vps/export_backup.sh")
+
+    assert inspect_volume in script
+    assert inspect_project in script
+    assert '[[ "$data_volume" =~ ^[A-Za-z0-9_.-]+$ ]]' in script
+    assert '[[ "$production_compose_project" =~ ^[A-Za-z0-9_.-]+$ ]]' in script
+    assert 'name: ${data_volume}' in script
+    assert 'COMPOSE_PROJECT_NAME="$production_compose_project"' in script[:backup]
+    assert 'COMPOSE_FILE="$DEPLOY/docker-compose.yml:$runtime_override"' in script[:backup]
+    assert script.index('name: ${data_volume}') < backup
+
+
 def test_backup_is_not_allowed_to_fail_open():
     script = _text(RUNTIME_DEPLOY)
 
