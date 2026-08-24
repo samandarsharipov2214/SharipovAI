@@ -27,7 +27,10 @@ def fake_runtime(tmp_path: Path) -> tuple[dict[str, str], Path, Path]:
         """#!/usr/bin/env bash
 set -Eeuo pipefail
 state=$(cat "$FAKE_DF_STATE_FILE")
-if [[ "$state" == high ]]; then avail=26214400; else avail=8388608; fi
+if [[ "$state" == fail_h && "${1:-}" != -Pk ]]; then
+  exit 92
+fi
+if [[ "$state" == high || "$state" == fail_h ]]; then avail=26214400; else avail=8388608; fi
 if [[ "${1:-}" == -Pk ]]; then
   printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\\n'
   printf '/dev/fake 62914560 1 %s 50%% /\\n' "$avail"
@@ -41,9 +44,14 @@ fi
         """#!/usr/bin/env bash
 set -Eeuo pipefail
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
-if [[ "$*" != 'builder prune -af' ]]; then exit 91; fi
-if [[ "${FAKE_RECOVER_ON_PRUNE:-0}" == 1 ]]; then printf 'high' > "$FAKE_DF_STATE_FILE"; fi
-exit "${FAKE_DOCKER_RC:-0}"
+if [[ "$*" == 'system df' ]]; then
+  if [[ "${FAKE_DOCKER_DF_FAIL:-0}" == 1 ]]; then
+    exit 93
+  fi
+  printf 'TYPE TOTAL ACTIVE SIZE RECLAIMABLE\\n'
+  exit 0
+fi
+exit 91
 """,
         encoding="utf-8",
     )
@@ -56,7 +64,6 @@ exit "${FAKE_DOCKER_RC:-0}"
             "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
             "SHARIPOVAI_DEPLOY_ROOT": str(deploy_root),
             "SHARIPOVAI_DEPLOY_MIN_FREE_DISK_GB": "20",
-            "SHARIPOVAI_BUILD_CACHE_PRUNE_TIMEOUT_SECONDS": "15",
             "FAKE_DF_STATE_FILE": str(state),
             "FAKE_DOCKER_LOG": str(docker_log),
         }
@@ -75,52 +82,85 @@ def _run(mode: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_preflight_does_nothing_when_headroom_is_already_safe(fake_runtime) -> None:
+def test_preflight_is_read_only_when_headroom_is_already_safe(fake_runtime) -> None:
     env, state, docker_log = fake_runtime
     state.write_text("high", encoding="utf-8")
     result = _run("preflight", env)
     assert result.returncode == 0
+    assert "STORAGE_GUARD_EVIDENCE_UTC" in result.stdout
     assert "STORAGE_GUARD_PREFLIGHT_OK" in result.stdout
-    assert not docker_log.exists()
+    assert docker_log.read_text(encoding="utf-8").splitlines() == ["system df"]
 
 
-def test_preflight_recovers_low_disk_using_only_build_cache(fake_runtime) -> None:
-    env, _state, docker_log = fake_runtime
-    env["FAKE_RECOVER_ON_PRUNE"] = "1"
-    result = _run("preflight", env)
-    assert result.returncode == 0
-    assert "STORAGE_GUARD_RECOVERED" in result.stdout
-    assert docker_log.read_text(encoding="utf-8").splitlines() == ["builder prune -af"]
-
-
-def test_preflight_fails_closed_if_safe_cleanup_cannot_restore_headroom(fake_runtime) -> None:
+def test_preflight_fails_closed_on_low_disk_without_pruning(fake_runtime) -> None:
     env, _state, docker_log = fake_runtime
     result = _run("preflight", env)
     assert result.returncode == 70
-    assert "STORAGE_GUARD_PREFLIGHT_FAILED" in result.stderr
-    assert docker_log.read_text(encoding="utf-8").splitlines() == ["builder prune -af"]
+    assert "STORAGE_GUARD_PRESSURE" in result.stderr
+    assert "automatic cleanup is disabled" in result.stderr
+    assert docker_log.read_text(encoding="utf-8").splitlines() == ["system df"]
 
 
-def test_post_deploy_cleanup_is_best_effort_and_prunes_build_cache(fake_runtime) -> None:
+def test_cleanup_mode_is_read_only_and_skips_automatic_cleanup(fake_runtime) -> None:
     env, state, docker_log = fake_runtime
     state.write_text("high", encoding="utf-8")
-    env["FAKE_DOCKER_RC"] = "9"
     result = _run("cleanup", env)
     assert result.returncode == 0
-    assert "STORAGE_GUARD_POST_DEPLOY_CLEANUP_WARNING" in result.stderr
-    assert docker_log.read_text(encoding="utf-8").splitlines() == ["builder prune -af"]
+    assert "STORAGE_GUARD_EVIDENCE_UTC" in result.stdout
+    assert "STORAGE_GUARD_CLEANUP_SKIPPED" in result.stdout
+    assert docker_log.read_text(encoding="utf-8").splitlines() == ["system df"]
 
 
-def test_storage_guard_never_invokes_broad_docker_prune_classes() -> None:
+def test_preflight_fails_closed_when_docker_df_fails(fake_runtime) -> None:
+    env, state, docker_log = fake_runtime
+    state.write_text("high", encoding="utf-8")
+    env["FAKE_DOCKER_DF_FAIL"] = "1"
+    result = _run("preflight", env)
+    assert result.returncode == 70
+    assert "STORAGE_GUARD_DOCKER_DF_UNAVAILABLE" in result.stderr
+    assert "STORAGE_GUARD_PREFLIGHT_OK" not in result.stdout
+    assert docker_log.read_text(encoding="utf-8").splitlines() == ["system df"]
+
+
+def test_cleanup_fails_closed_when_docker_df_fails(fake_runtime) -> None:
+    env, state, _docker_log = fake_runtime
+    state.write_text("high", encoding="utf-8")
+    env["FAKE_DOCKER_DF_FAIL"] = "1"
+    result = _run("cleanup", env)
+    assert result.returncode == 70
+    assert "STORAGE_GUARD_DOCKER_DF_UNAVAILABLE" in result.stderr
+    assert "STORAGE_GUARD_CLEANUP_SKIPPED" not in result.stdout
+
+
+def test_preflight_fails_closed_when_human_df_evidence_fails(fake_runtime) -> None:
+    env, state, _docker_log = fake_runtime
+    state.write_text("fail_h", encoding="utf-8")
+    result = _run("preflight", env)
+    assert result.returncode == 70
+    assert "STORAGE_GUARD_HOST_DF_UNAVAILABLE" in result.stderr
+    assert "STORAGE_GUARD_PREFLIGHT_OK" not in result.stdout
+
+
+def test_cleanup_fails_closed_when_human_df_evidence_fails(fake_runtime) -> None:
+    env, state, _docker_log = fake_runtime
+    state.write_text("fail_h", encoding="utf-8")
+    result = _run("cleanup", env)
+    assert result.returncode == 70
+    assert "STORAGE_GUARD_HOST_DF_UNAVAILABLE" in result.stderr
+    assert "STORAGE_GUARD_CLEANUP_SKIPPED" not in result.stdout
+
+
+def test_storage_guard_never_invokes_docker_prune_or_delete_classes() -> None:
     text = GUARD.read_text(encoding="utf-8")
-    assert "docker builder prune -af" in text
     for forbidden in (
+        "docker builder prune",
         "docker system prune",
         "docker volume prune",
         "docker image prune",
         "docker container prune",
         "docker buildx prune",
         "docker rmi",
+        "docker rm",
     ):
         assert forbidden not in text
 
@@ -134,5 +174,5 @@ def test_transactional_web2_deploy_runs_preflight_and_exit_cleanup() -> None:
 
 
 def test_guard_has_required_host_tools() -> None:
-    if shutil.which("bash") is None or shutil.which("timeout") is None:
+    if shutil.which("bash") is None:
         pytest.skip("Linux shell tools are required for deploy guard tests")

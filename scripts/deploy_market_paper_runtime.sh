@@ -10,11 +10,13 @@ PUBLIC_HEALTH="https://85-137-88-17.sslip.io/health"
 DEPLOY_PROFILE="${SHARIPOVAI_DEPLOY_PROFILE:-}"
 
 production_replaced=0
+production_present=0
 candidate_committed=0
 backup_container=""
 old_network=""
 proxy_network=""
 data_volume=""
+production_compose_project=""
 runtime_override=""
 docker_config_tmp=""
 runtime_project="sharipovai-runtime-$(date +%s)-$$"
@@ -41,8 +43,6 @@ fi
 run_bounded() {
   local limit="$1"
   shift
-  # timeout creates an isolated process group, so a timed-out compose/test child
-  # cannot leave its own helper processes behind while the host watcher survives.
   timeout --signal=TERM --kill-after=30s "${limit}s" "$@"
 }
 
@@ -77,12 +77,23 @@ if docker container inspect "$CADDY_SERVICE" >/dev/null 2>&1; then
   proxy_network="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "$CADDY_SERVICE" | head -n 1 | tr -d '[:space:]')"
 fi
 if docker container inspect "$SERVICE" >/dev/null 2>&1; then
+  production_present=1
   old_network="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "$SERVICE" | head -n 1 | tr -d '[:space:]')"
   data_volume="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/var/lib/sharipovai"}}{{.Name}}{{end}}{{end}}' "$SERVICE" | tr -d '[:space:]')"
+  production_compose_project="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$SERVICE" | tr -d '[:space:]')"
+  [[ "$data_volume" =~ ^[A-Za-z0-9_.-]+$ ]] || {
+    echo "Cannot prove the live production data volume for $SERVICE." >&2
+    exit 65
+  }
+  [[ "$production_compose_project" =~ ^[A-Za-z0-9_.-]+$ ]] || {
+    echo "Cannot prove the live production Compose project for $SERVICE." >&2
+    exit 65
+  }
 fi
 old_network="${proxy_network:-${old_network:-vps_default}}"
 proxy_network="${proxy_network:-$old_network}"
 data_volume="${data_volume:-vps_sharipovai_data}"
+production_compose_project="${production_compose_project:-vps}"
 
 cleanup() {
   if [[ -n "$runtime_override" ]]; then
@@ -91,8 +102,6 @@ cleanup() {
   if [[ -n "$docker_config_tmp" ]]; then
     rm -rf "$docker_config_tmp"
   fi
-  # A failed candidate must not accumulate multi-gigabyte deploy tags and refill
-  # the VPS. A committed production candidate is deliberately retained.
   if [[ "$candidate_committed" != "1" && -n "$candidate_image_ref" ]]; then
     docker image rm "$candidate_image_ref" >/dev/null 2>&1 || true
   fi
@@ -168,11 +177,15 @@ docker_config_tmp="$(mktemp -d /tmp/sharipovai-docker-config-XXXXXX)"
 chmod 0700 "$docker_config_tmp"
 export DOCKER_CONFIG="$docker_config_tmp"
 
-# Trust only the selected deployment checkout for read-only Git identity checks.
-# Production uses /opt/sharipovai-repo by default; tests may explicitly point at
-# their isolated checkout without mutating global/system Git configuration.
 git_repo() {
   git -c safe.directory="$ROOT" -C "$ROOT" "$@"
+}
+
+fresh_disk_evidence() {
+  local phase="$1"
+  echo "DEPLOY_DISK_EVIDENCE phase=$phase utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  df -h "$ROOT" >&2
+  docker system df >&2
 }
 
 head_sha="$(git_repo rev-parse HEAD)"
@@ -181,18 +194,15 @@ head_sha="$(git_repo rev-parse HEAD)"
   exit 66
 }
 
+fresh_disk_evidence "before-candidate-build"
 available_kb="$(df -Pk "$ROOT" | awk 'NR==2 {print $4}')"
 minimum_kb="$((MIN_FREE_DISK_GB * 1024 * 1024))"
 if [[ ! "$available_kb" =~ ^[0-9]+$ ]] || (( available_kb < minimum_kb )); then
   echo "DEPLOY_DISK_PREFLIGHT_FAILED: require at least ${MIN_FREE_DISK_GB} GiB free before candidate build." >&2
-  df -h "$ROOT" >&2 || true
   exit 70
 fi
 echo "DEPLOY_DISK_PREFLIGHT_OK available_kb=$available_kb minimum_kb=$minimum_kb"
 
-# Give this build a unique tag and use the same exact image identity for candidate
-# tests and production replacement. This prevents a stale legacy image tag from
-# being substituted after the candidate has already passed its checks.
 export SHARIPOVAI_RELEASE_TAG="deploy-${head_sha:0:12}-$(date +%s)-$$"
 export SHARIPOVAI_RELEASE_SHA="$head_sha"
 export SHARIPOVAI_BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -224,9 +234,6 @@ fi
 
 echo "CANDIDATE_IMAGE_IDENTITY_OK $head_sha $candidate_image_id $expected_web2_sha"
 
-# Candidate validation must never inherit the production sharipovai_data volume.
-# Run the exact image ID with an isolated tmpfs data directory and no external
-# network. Explicit safety overrides take precedence over values in .env.vps.
 candidate_run_base=(
   docker run --rm
   --network none
@@ -373,6 +380,14 @@ run_bounded "$RUNTIME_UP_TIMEOUT_SECONDS" docker compose -p "$runtime_project" \
   -f "$DEPLOY/docker-compose.yml" \
   -f "$runtime_override" \
   config --quiet
+
+fresh_disk_evidence "before-canonical-backup"
+echo "DEPLOY_CANONICAL_BACKUP_START"
+COMPOSE_PROJECT_NAME="$production_compose_project" \
+COMPOSE_FILE="$DEPLOY/docker-compose.yml:$runtime_override" \
+APP_DIR="$ROOT" COMPOSE_DIR="$DEPLOY" CONTAINER="$SERVICE" \
+  bash "$ROOT/deploy/vps/export_backup.sh"
+echo "DEPLOY_CANONICAL_BACKUP_OK"
 
 echo "[4/6] Replacing production while retaining the previous container for rollback..."
 if docker container inspect "$SERVICE" >/dev/null 2>&1; then

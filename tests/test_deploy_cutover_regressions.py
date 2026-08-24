@@ -25,25 +25,19 @@ def test_web2_verifier_waits_out_one_transient_telegram_cutover_error() -> None:
     assert 'raise AssertionError(f"Telegram webhook/menu verification failed: {last_evidence}")' in script
 
 
-def test_storage_guard_uses_ephemeral_writable_docker_config(tmp_path: Path) -> None:
+def test_storage_guard_cleanup_is_read_only_and_emits_docker_evidence(tmp_path: Path) -> None:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
-    record = tmp_path / "docker-config-path.txt"
+    record = tmp_path / "docker-calls.txt"
     fake_docker = fake_bin / "docker"
     fake_docker.write_text(
         """#!/bin/sh
 set -eu
-[ "$#" -eq 3 ]
-[ "$1" = "builder" ]
-[ "$2" = "prune" ]
-[ "$3" = "-af" ]
-case "${DOCKER_CONFIG:-}" in
-  /tmp/sharipovai-storage-guard-docker-config-*) ;;
-  *) echo "unexpected DOCKER_CONFIG=${DOCKER_CONFIG:-missing}" >&2; exit 91 ;;
-esac
-[ -d "$DOCKER_CONFIG" ]
-[ -w "$DOCKER_CONFIG" ]
-printf '%s' "$DOCKER_CONFIG" > "$RECORD_FILE"
+printf '%s\\n' "$*" >> "$RECORD_FILE"
+[ "$#" -eq 2 ]
+[ "$1" = "system" ]
+[ "$2" = "df" ]
+printf 'TYPE TOTAL ACTIVE SIZE RECLAIMABLE\\n'
 """,
         encoding="utf-8",
     )
@@ -55,7 +49,6 @@ printf '%s' "$DOCKER_CONFIG" > "$RECORD_FILE"
             "PATH": f"{fake_bin}:{env.get('PATH', '/usr/bin:/bin')}",
             "RECORD_FILE": str(record),
             "SHARIPOVAI_DEPLOY_ROOT": str(tmp_path),
-            "SHARIPOVAI_BUILD_CACHE_PRUNE_TIMEOUT_SECONDS": "5",
         }
     )
     result = subprocess.run(
@@ -69,14 +62,21 @@ printf '%s' "$DOCKER_CONFIG" > "$RECORD_FILE"
     )
 
     assert result.returncode == 0, result.stderr
-    assert "STORAGE_GUARD_POST_DEPLOY_CLEANUP_OK" in result.stdout
-    docker_config = Path(record.read_text(encoding="utf-8"))
-    assert not docker_config.exists(), "temporary Docker client config leaked after prune"
+    assert "STORAGE_GUARD_EVIDENCE_UTC" in result.stdout
+    assert "STORAGE_GUARD_CLEANUP_SKIPPED" in result.stdout
+    assert record.read_text(encoding="utf-8").splitlines() == ["system df"]
 
 
-def test_storage_guard_never_broad_prunes_images_or_volumes() -> None:
+def test_storage_guard_never_prunes_or_deletes_docker_objects() -> None:
     script = (ROOT / "scripts" / "deploy_storage_guard.sh").read_text(encoding="utf-8")
-    assert "docker builder prune -af" in script
-    assert "docker system prune" not in script
-    assert "docker image prune" not in script
-    assert "docker volume prune" not in script
+    for forbidden in (
+        "docker builder prune",
+        "docker system prune",
+        "docker image prune",
+        "docker volume prune",
+        "docker container prune",
+        "docker buildx prune",
+        "docker rmi",
+        "docker rm",
+    ):
+        assert forbidden not in script
