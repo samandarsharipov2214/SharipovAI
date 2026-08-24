@@ -90,8 +90,16 @@ def test_runtime_aborts_before_build_when_docker_disk_evidence_fails(tmp_path: P
 def test_runtime_uses_same_fail_closed_evidence_function_before_build_and_backup() -> None:
     source = RUNTIME_DEPLOY.read_text(encoding="utf-8")
 
-    assert source.count('fresh_disk_evidence "before-candidate-build"') == 1
-    assert source.count('fresh_disk_evidence "before-canonical-backup"') == 1
+    before_build = 'fresh_disk_evidence "before-candidate-build"'
+    before_backup = 'fresh_disk_evidence "before-canonical-backup"'
+    assert source.count(before_build) == 1
+    assert source.count(before_backup) == 1
+
+    invocation_lines = {line.strip() for line in source.splitlines() if "fresh_disk_evidence \"before-" in line}
+    assert before_build in invocation_lines
+    assert before_backup in invocation_lines
+    assert all("||" not in line and "; true" not in line for line in invocation_lines)
+
     function = source[source.index("fresh_disk_evidence() {") : source.index("head_sha=", source.index("fresh_disk_evidence() {"))]
     assert 'df -h "$ROOT" >&2' in function
     assert "docker system df >&2" in function
