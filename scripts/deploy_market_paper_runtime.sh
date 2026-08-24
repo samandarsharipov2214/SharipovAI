@@ -10,11 +10,13 @@ PUBLIC_HEALTH="https://85-137-88-17.sslip.io/health"
 DEPLOY_PROFILE="${SHARIPOVAI_DEPLOY_PROFILE:-}"
 
 production_replaced=0
+production_present=0
 candidate_committed=0
 backup_container=""
 old_network=""
 proxy_network=""
 data_volume=""
+production_compose_project=""
 runtime_override=""
 docker_config_tmp=""
 runtime_project="sharipovai-runtime-$(date +%s)-$$"
@@ -75,12 +77,23 @@ if docker container inspect "$CADDY_SERVICE" >/dev/null 2>&1; then
   proxy_network="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "$CADDY_SERVICE" | head -n 1 | tr -d '[:space:]')"
 fi
 if docker container inspect "$SERVICE" >/dev/null 2>&1; then
+  production_present=1
   old_network="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "$SERVICE" | head -n 1 | tr -d '[:space:]')"
   data_volume="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/var/lib/sharipovai"}}{{.Name}}{{end}}{{end}}' "$SERVICE" | tr -d '[:space:]')"
+  production_compose_project="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$SERVICE" | tr -d '[:space:]')"
+  [[ "$data_volume" =~ ^[A-Za-z0-9_.-]+$ ]] || {
+    echo "Cannot prove the live production data volume for $SERVICE." >&2
+    exit 65
+  }
+  [[ "$production_compose_project" =~ ^[A-Za-z0-9_.-]+$ ]] || {
+    echo "Cannot prove the live production Compose project for $SERVICE." >&2
+    exit 65
+  }
 fi
 old_network="${proxy_network:-${old_network:-vps_default}}"
 proxy_network="${proxy_network:-$old_network}"
 data_volume="${data_volume:-vps_sharipovai_data}"
+production_compose_project="${production_compose_project:-vps}"
 
 cleanup() {
   if [[ -n "$runtime_override" ]]; then
@@ -370,7 +383,10 @@ run_bounded "$RUNTIME_UP_TIMEOUT_SECONDS" docker compose -p "$runtime_project" \
 
 fresh_disk_evidence "before-canonical-backup"
 echo "DEPLOY_CANONICAL_BACKUP_START"
-APP_DIR="$ROOT" COMPOSE_DIR="$DEPLOY" CONTAINER="$SERVICE" bash "$ROOT/deploy/vps/export_backup.sh"
+COMPOSE_PROJECT_NAME="$production_compose_project" \
+COMPOSE_FILE="$DEPLOY/docker-compose.yml:$runtime_override" \
+APP_DIR="$ROOT" COMPOSE_DIR="$DEPLOY" CONTAINER="$SERVICE" \
+  bash "$ROOT/deploy/vps/export_backup.sh"
 echo "DEPLOY_CANONICAL_BACKUP_OK"
 
 echo "[4/6] Replacing production while retaining the previous container for rollback..."
