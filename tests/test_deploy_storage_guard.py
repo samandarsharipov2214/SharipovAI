@@ -27,7 +27,10 @@ def fake_runtime(tmp_path: Path) -> tuple[dict[str, str], Path, Path]:
         """#!/usr/bin/env bash
 set -Eeuo pipefail
 state=$(cat "$FAKE_DF_STATE_FILE")
-if [[ "$state" == high ]]; then avail=26214400; else avail=8388608; fi
+if [[ "$state" == fail_h && "${1:-}" != -Pk ]]; then
+  exit 92
+fi
+if [[ "$state" == high || "$state" == fail_h ]]; then avail=26214400; else avail=8388608; fi
 if [[ "${1:-}" == -Pk ]]; then
   printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\\n'
   printf '/dev/fake 62914560 1 %s 50%% /\\n' "$avail"
@@ -42,6 +45,9 @@ fi
 set -Eeuo pipefail
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [[ "$*" == 'system df' ]]; then
+  if [[ "${FAKE_DOCKER_DF_FAIL:-0}" == 1 ]]; then
+    exit 93
+  fi
   printf 'TYPE TOTAL ACTIVE SIZE RECLAIMABLE\\n'
   exit 0
 fi
@@ -103,6 +109,45 @@ def test_cleanup_mode_is_read_only_and_skips_automatic_cleanup(fake_runtime) -> 
     assert "STORAGE_GUARD_EVIDENCE_UTC" in result.stdout
     assert "STORAGE_GUARD_CLEANUP_SKIPPED" in result.stdout
     assert docker_log.read_text(encoding="utf-8").splitlines() == ["system df"]
+
+
+def test_preflight_fails_closed_when_docker_df_fails(fake_runtime) -> None:
+    env, state, docker_log = fake_runtime
+    state.write_text("high", encoding="utf-8")
+    env["FAKE_DOCKER_DF_FAIL"] = "1"
+    result = _run("preflight", env)
+    assert result.returncode == 70
+    assert "STORAGE_GUARD_DOCKER_DF_UNAVAILABLE" in result.stderr
+    assert "STORAGE_GUARD_PREFLIGHT_OK" not in result.stdout
+    assert docker_log.read_text(encoding="utf-8").splitlines() == ["system df"]
+
+
+def test_cleanup_fails_closed_when_docker_df_fails(fake_runtime) -> None:
+    env, state, _docker_log = fake_runtime
+    state.write_text("high", encoding="utf-8")
+    env["FAKE_DOCKER_DF_FAIL"] = "1"
+    result = _run("cleanup", env)
+    assert result.returncode == 70
+    assert "STORAGE_GUARD_DOCKER_DF_UNAVAILABLE" in result.stderr
+    assert "STORAGE_GUARD_CLEANUP_SKIPPED" not in result.stdout
+
+
+def test_preflight_fails_closed_when_human_df_evidence_fails(fake_runtime) -> None:
+    env, state, _docker_log = fake_runtime
+    state.write_text("fail_h", encoding="utf-8")
+    result = _run("preflight", env)
+    assert result.returncode == 70
+    assert "STORAGE_GUARD_HOST_DF_UNAVAILABLE" in result.stderr
+    assert "STORAGE_GUARD_PREFLIGHT_OK" not in result.stdout
+
+
+def test_cleanup_fails_closed_when_human_df_evidence_fails(fake_runtime) -> None:
+    env, state, _docker_log = fake_runtime
+    state.write_text("fail_h", encoding="utf-8")
+    result = _run("cleanup", env)
+    assert result.returncode == 70
+    assert "STORAGE_GUARD_HOST_DF_UNAVAILABLE" in result.stderr
+    assert "STORAGE_GUARD_CLEANUP_SKIPPED" not in result.stdout
 
 
 def test_storage_guard_never_invokes_docker_prune_or_delete_classes() -> None:
