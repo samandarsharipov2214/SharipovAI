@@ -20,19 +20,30 @@ available_kb() {
 
 print_fresh_disk_evidence() {
   echo "STORAGE_GUARD_EVIDENCE_UTC $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  df -h "$ROOT" >&2 || true
-  if command -v docker >/dev/null 2>&1; then
-    docker system df >&2 || true
-  else
+  if ! df -h "$ROOT" >&2; then
+    echo "STORAGE_GUARD_HOST_DF_UNAVAILABLE required df -h evidence failed." >&2
+    return 70
+  fi
+  if ! command -v docker >/dev/null 2>&1; then
     echo "STORAGE_GUARD_DOCKER_DF_UNAVAILABLE docker command is missing." >&2
+    return 70
+  fi
+  if ! docker system df >&2; then
+    echo "STORAGE_GUARD_DOCKER_DF_UNAVAILABLE docker system df failed." >&2
+    return 70
   fi
 }
 
 case "$MODE" in
   preflight)
     minimum_kb="$((MIN_FREE_DISK_GB * 1024 * 1024))"
-    current_kb="$(available_kb)"
-    print_fresh_disk_evidence
+    if ! current_kb="$(available_kb)"; then
+      echo "STORAGE_GUARD_DISK_UNKNOWN: cannot determine free disk space." >&2
+      exit 70
+    fi
+    if ! print_fresh_disk_evidence; then
+      exit 70
+    fi
     if [[ ! "$current_kb" =~ ^[0-9]+$ ]]; then
       echo "STORAGE_GUARD_DISK_UNKNOWN: cannot determine free disk space." >&2
       exit 70
@@ -48,9 +59,14 @@ case "$MODE" in
     # Cleanup is intentionally read-only. Deploy automation must never delete
     # Docker objects implicitly; any targeted cleanup requires separate proof
     # that the exact object is unused and explicit operator approval.
-    current_kb="$(available_kb 2>/dev/null || true)"
-    print_fresh_disk_evidence
-    echo "STORAGE_GUARD_CLEANUP_SKIPPED automatic cleanup disabled available_kb=${current_kb:-unknown}"
+    if ! current_kb="$(available_kb)"; then
+      echo "STORAGE_GUARD_DISK_UNKNOWN: cannot determine free disk space." >&2
+      exit 70
+    fi
+    if ! print_fresh_disk_evidence; then
+      exit 70
+    fi
+    echo "STORAGE_GUARD_CLEANUP_SKIPPED automatic cleanup disabled available_kb=$current_kb"
     ;;
 
   *)
