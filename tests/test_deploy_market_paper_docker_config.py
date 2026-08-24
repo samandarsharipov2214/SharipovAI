@@ -41,6 +41,10 @@ EOF
     docker_mock = mock_bin / "docker"
     docker_mock.write_text(
         """#!/usr/bin/env bash
+if [[ "${1:-}" == "system" && "${2:-}" == "df" ]]; then
+  printf 'TYPE TOTAL ACTIVE SIZE RECLAIMABLE\\n'
+  exit 0
+fi
 if [[ "${1:-}" == "container" && "${2:-}" == "inspect" ]]; then
   exit 1
 fi
