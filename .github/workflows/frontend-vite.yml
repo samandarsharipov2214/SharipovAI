@@ -21,13 +21,7 @@ concurrency:
 
 jobs:
   build-and-security:
-    if: >-
-      ${{
-        vars.SHARIPOVAI_SELF_HOSTED_CI == '1' &&
-        (github.event_name != 'pull_request' ||
-         github.event.pull_request.head.repo.full_name == github.repository)
-      }}
-    runs-on: [self-hosted, linux, x64, sharipovai-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
       - name: Checkout
@@ -36,7 +30,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Node 22
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        uses: actions/setup-node@48b55a011dba9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: '22'
 
