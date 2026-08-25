@@ -172,3 +172,4 @@ def test_vps_bootstrap_uses_device_login_and_verifies_real_ci() -> None:
     assert "gh workflow run" not in bootstrap
     assert "gh run watch" not in bootstrap
     assert "usermod -aG docker" not in bootstrap
+    assert "docker.sock" not in bootstrap
