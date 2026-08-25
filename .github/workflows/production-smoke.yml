@@ -14,8 +14,7 @@ concurrency:
 
 jobs:
   smoke:
-    if: ${{ vars.SHARIPOVAI_SELF_HOSTED_CI == '1' }}
-    runs-on: [self-hosted, linux, x64, sharipovai-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 8
     env:
       SHARIPOVAI_PRODUCTION_BASE_URL: ${{ vars.SHARIPOVAI_PRODUCTION_BASE_URL }}

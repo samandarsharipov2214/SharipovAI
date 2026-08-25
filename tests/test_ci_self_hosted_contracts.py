@@ -13,6 +13,7 @@ HEAVY_GITHUB_HOSTED_WORKFLOWS = (
     "tests.yml",
     "project-guardrails.yml",
     "phase13-trading.yml",
+    "production-smoke.yml",
     "secret-history-scan.yml",
 )
 
@@ -24,7 +25,6 @@ HYBRID_PR_HOSTED_WORKFLOWS = (
 
 SELF_HOSTED_LINUX_WORKFLOWS = (
     "full-stabilization.yml",
-    "production-smoke.yml",
     "sync-bybit-skill.yml",
 )
 
