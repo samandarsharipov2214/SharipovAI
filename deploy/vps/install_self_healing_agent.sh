@@ -61,13 +61,32 @@ install -m 0644 \
 
 cd "$COMPOSE_DIR"
 
-# Recreate the application container so the read-only /workspace bind mount
-# required by the in-container agent becomes active.
-docker compose \
-    --env-file .env.vps \
-    -f docker-compose.yml \
-    --project-directory "$COMPOSE_DIR" \
-    up -d --force-recreate sharipovai caddy
+existing_runtime_is_compatible() {
+    [ "$(docker inspect -f '{{.State.Running}}' sharipovai 2>/dev/null || true)" = "true" ] || return 1
+    [ "$(docker inspect -f '{{.State.Running}}' sharipovai-caddy 2>/dev/null || true)" = "true" ] || return 1
+    [ "$(docker inspect -f '{{.State.Health.Status}}' sharipovai 2>/dev/null || true)" = "healthy" ] || return 1
+    docker inspect -f '{{range .Mounts}}{{if and (eq .Destination "/workspace") (not .RW)}}compatible{{end}}{{end}}' \
+        sharipovai 2>/dev/null | grep -qx compatible || return 1
+    curl -fsS --max-time 5 http://127.0.0.1:8000/health >/dev/null
+}
+
+if docker inspect sharipovai >/dev/null 2>&1; then
+    # Transactional deploys use a unique Compose project.  A second project
+    # cannot adopt their fixed container name, so preserve a compatible,
+    # healthy runtime instead of rebuilding or replacing it.
+    existing_runtime_is_compatible || {
+        echo "Existing SharipovAI runtime is not compatible with self-healing; refusing replacement." >&2
+        exit 1
+    }
+else
+    # Initial installation creates the application container with the
+    # read-only /workspace bind mount required by the in-container agent.
+    docker compose \
+        --env-file .env.vps \
+        -f docker-compose.yml \
+        --project-directory "$COMPOSE_DIR" \
+        up -d sharipovai caddy
+fi
 
 for _ in $(seq 1 60); do
     state="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' sharipovai 2>/dev/null || echo missing)"
