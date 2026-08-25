@@ -36,6 +36,8 @@ logs/
 runtime/
 data/
 backups/
+**/backups/
+**/emergency-recovery/
 *.sqlite
 *.sqlite3
 *.db
