@@ -105,47 +105,33 @@ public_root_location="$(
   awk 'BEGIN { IGNORECASE=1 } /^location:/ { sub(/\r$/, ""); sub(/^[^:]+:[[:space:]]*/, ""); print; exit }' \
     "$root_headers_tmp"
 )"
-if [[ "$public_root_status" != "303" || "$public_root_location" != "/login?next=/" ]]; then
-  echo "PUBLIC_ROOT_AUTH_GATE_FAILED expected_status=303 actual_status=$public_root_status expected_location=/login?next=/ actual_location=${public_root_location:-missing}" >&2
+if [[ "$public_root_status" != "200" ]]; then
+  echo "PUBLIC_SITE_V1_ENTRY_FAILED expected_status=200 actual_status=$public_root_status" >&2
   cat "$root_headers_tmp" >&2 || true
   exit 1
 fi
-echo "PUBLIC_ROOT_AUTH_GATE_OK $public_root_status $public_root_location"
+echo "PUBLIC_SITE_V1_ENTRY_OK $public_root_status"
 
-# /static/ is the intentionally public asset surface. Verify the exact Web2
-# shell there while preserving authentication on the browser entry route.
+# /static/ is the intentionally public asset surface. Verify the canonical
+# Site V1 shell; the historical Web2 shell remains compatibility-only.
 public_static_status="$(
   curl --connect-timeout 5 --max-time 15 --fail --silent --show-error \
     --dump-header "$static_headers_tmp" \
     --output "$public_index_tmp" \
     --write-out '%{http_code}' \
-    "$PUBLIC_URL/static/web2/index.html"
+    "$PUBLIC_URL/static/site-v1/index.html"
 )"
 if [[ "$public_static_status" != "200" ]]; then
-  echo "PUBLIC_WEB2_STATIC_HTTP_STATUS_FAILED expected=200 actual=$public_static_status" >&2
+  echo "PUBLIC_SITE_V1_STATIC_HTTP_STATUS_FAILED expected=200 actual=$public_static_status" >&2
   cat "$static_headers_tmp" >&2 || true
   exit 1
 fi
-echo "PUBLIC_WEB2_STATIC_HTTP_STATUS_OK $public_static_status"
-
-for family in \
-  navigation_coordinator_v \
-  runtime_render_guard_v \
-  tradingview_market_v \
-  market_intelligence_v \
-  campaign_operations_v \
-  campaign_decision_v \
-  campaign_monitor_v; do
-  if ! grep -F "$family" "$public_index_tmp" >/dev/null; then
-    echo "PUBLIC_WEB2_ASSET_FAMILY_FAILED missing=$family" >&2
-    exit 1
-  fi
-done
-if grep -F "market_terminal_v13.js" "$public_index_tmp" >/dev/null; then
-  echo "PUBLIC_WEB2_RETIRED_ASSET_FAILED market_terminal_v13.js" >&2
+echo "PUBLIC_SITE_V1_STATIC_HTTP_STATUS_OK $public_static_status"
+if ! grep -F '/static/site-v1/site.js' "$public_index_tmp" >/dev/null || ! grep -F 'SharipovAI' "$public_index_tmp" >/dev/null; then
+  echo "PUBLIC_SITE_V1_ASSET_CONTRACT_FAILED" >&2
   exit 1
 fi
-echo "PUBLIC_WEB2_ASSET_FAMILIES_OK"
+echo "PUBLIC_SITE_V1_ASSET_CONTRACT_OK"
 
 curl --connect-timeout 5 --max-time 15 --fail --silent --show-error "$PUBLIC_URL/health"
 echo

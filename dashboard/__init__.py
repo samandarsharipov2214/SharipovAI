@@ -86,6 +86,8 @@ from .source_status_compat_api import install_source_status_compat_api
 from .system_health_api import install_system_health_api
 from .system_watchdog import install_system_watchdog
 from .web2_host import install_web2_host
+from .site_v1_api import install_site_v1_api
+from .site_v1_host import install_site_v1_host
 
 
 def _remove_route_owner(app: Any, *, method: str, path: str, module: str) -> None:
@@ -135,7 +137,9 @@ def _install_production_runtime_apis(app: Any) -> None:
     install_source_status_compat_api(app)
     install_operational_routers(app)
     install_web2_host(app)
+    install_site_v1_host(app)
     install_saas_auth_api(app)
+    install_site_v1_api(app)
     install_saas_billing_api(app)
     install_market_context_api(app)
     install_release_status_api(app)
