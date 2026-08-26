@@ -142,7 +142,19 @@ mkdir -p "$work/data"
 
 cd "$COMPOSE_DIR"
 source_mode='stopped-volume-readonly'
-container_id=$(docker compose ps -a -q "$CONTAINER" 2>/dev/null || true)
+container_id=$(docker container inspect --format '{{.Id}}' "$CONTAINER" 2>/dev/null || true)
+if [[ -n "$container_id" ]]; then
+  runtime_service=$(docker inspect --format '{{index .Config.Labels "ai.sharipov.service"}}' "$container_id" 2>/dev/null || true)
+  runtime_mode=$(docker inspect --format '{{index .Config.Labels "ai.sharipov.runtime-mode"}}' "$container_id" 2>/dev/null || true)
+  compose_service=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' "$container_id" 2>/dev/null || true)
+  [[ "$runtime_service" == 'dashboard' && "$runtime_mode" == 'production-safe' && "$compose_service" == "$CONTAINER" ]] \
+    || fail 'fixed-name application container has an unexpected production identity'
+else
+  # Initial and compatibility deployments may still belong to the default
+  # Compose project. Transactional deploys use a unique project and are found
+  # above by their canonical fixed container name.
+  container_id=$(docker compose ps -a -q "$CONTAINER" 2>/dev/null || true)
+fi
 running='false'
 if [[ -n "$container_id" ]]; then
   running=$(docker inspect --format '{{.State.Running}}' "$container_id" 2>/dev/null || printf 'false')
