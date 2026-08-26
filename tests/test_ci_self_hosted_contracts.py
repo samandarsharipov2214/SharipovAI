@@ -14,6 +14,7 @@ HEAVY_GITHUB_HOSTED_WORKFLOWS = (
     "project-guardrails.yml",
     "phase13-trading.yml",
     "production-smoke.yml",
+    "frontend-vite.yml",
     "secret-history-scan.yml",
 )
 
