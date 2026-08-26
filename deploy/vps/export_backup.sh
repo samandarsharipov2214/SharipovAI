@@ -142,22 +142,41 @@ mkdir -p "$work/data"
 
 cd "$COMPOSE_DIR"
 source_mode='stopped-volume-readonly'
-container_id=$(docker container inspect --format '{{.Id}}' "$CONTAINER" 2>/dev/null || true)
-if [[ -n "$container_id" ]]; then
-  runtime_service=$(docker inspect --format '{{index .Config.Labels "ai.sharipov.service"}}' "$container_id" 2>/dev/null || true)
-  runtime_mode=$(docker inspect --format '{{index .Config.Labels "ai.sharipov.runtime-mode"}}' "$container_id" 2>/dev/null || true)
-  compose_service=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' "$container_id" 2>/dev/null || true)
-  [[ "$runtime_service" == 'dashboard' && "$runtime_mode" == 'production-safe' && "$compose_service" == "$CONTAINER" ]] \
-    || fail 'fixed-name application container has an unexpected production identity'
+fixed_container_ids=''
+if ! fixed_container_ids=$(docker container ls -a --no-trunc \
+  --filter "name=^/${CONTAINER}$" --format '{{.ID}}' 2>/dev/null); then
+  fail 'could not inspect fixed-name application container inventory'
+fi
+readarray -t fixed_containers <<<"$fixed_container_ids"
+if [[ -n "${fixed_containers[0]:-}" ]]; then
+  (( ${#fixed_containers[@]} == 1 )) || fail 'multiple fixed-name application containers were detected'
+  container_id=${fixed_containers[0]}
 else
   # Initial and compatibility deployments may still belong to the default
-  # Compose project. Transactional deploys use a unique project and are found
-  # above by their canonical fixed container name.
-  container_id=$(docker compose ps -a -q "$CONTAINER" 2>/dev/null || true)
+  # Compose project without a fixed container name. Transactional deploys use
+  # the canonical fixed name and are found above regardless of project name.
+  if ! container_id=$(docker compose ps -a -q "$CONTAINER" 2>/dev/null); then
+    fail 'could not inspect default Compose application runtime'
+  fi
 fi
 running='false'
 if [[ -n "$container_id" ]]; then
-  running=$(docker inspect --format '{{.State.Running}}' "$container_id" 2>/dev/null || printf 'false')
+  if ! canonical_container_id=$(docker inspect --format '{{.Id}}' "$container_id" 2>/dev/null); then
+    fail 'could not inspect application container identity'
+  fi
+  [[ -n "$canonical_container_id" ]] || fail 'application container identity is empty'
+  container_id=$canonical_container_id
+  runtime_service=$(docker inspect --format '{{index .Config.Labels "ai.sharipov.service"}}' "$container_id" 2>/dev/null) \
+    || fail 'could not inspect application service identity'
+  runtime_mode=$(docker inspect --format '{{index .Config.Labels "ai.sharipov.runtime-mode"}}' "$container_id" 2>/dev/null) \
+    || fail 'could not inspect application runtime mode'
+  compose_service=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' "$container_id" 2>/dev/null) \
+    || fail 'could not inspect application Compose service identity'
+  [[ "$runtime_service" == 'dashboard' && "$runtime_mode" == 'production-safe' && "$compose_service" == "$CONTAINER" ]] \
+    || fail 'application container has an unexpected production identity'
+  running=$(docker inspect --format '{{.State.Running}}' "$container_id" 2>/dev/null) \
+    || fail 'could not inspect application container state'
+  [[ "$running" == 'true' || "$running" == 'false' ]] || fail 'application container state is invalid'
 fi
 
 if [[ "$running" == 'true' ]]; then
@@ -167,9 +186,21 @@ else
   log 'application container is stopped; creating read-only backup directly from persistent volume'
 fi
 
-rendered=$(mktemp "$work/compose-config.XXXXXX")
-docker compose config --format json >"$rendered"
-readarray -t backup_runtime < <(python3 - "$rendered" "$CONTAINER" <<'PY'
+volume_name=''
+image_name=''
+if [[ -n "$container_id" ]]; then
+  detected_volume=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/var/lib/sharipovai"}}{{.Name}}{{end}}{{end}}' "$container_id" 2>/dev/null) \
+    || fail 'could not inspect live persistent data volume'
+  detected_image=$(docker inspect --format '{{.Config.Image}}' "$container_id" 2>/dev/null) \
+    || fail 'could not inspect live application image'
+  [[ -n "$detected_volume" ]] || fail 'live persistent data volume is missing'
+  [[ -n "$detected_image" ]] || fail 'live application image is missing'
+  volume_name=$detected_volume
+  image_name=$detected_image
+else
+  rendered=$(mktemp "$work/compose-config.XXXXXX")
+  docker compose config --format json >"$rendered"
+  readarray -t backup_runtime < <(python3 - "$rendered" "$CONTAINER" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -181,16 +212,10 @@ volume = payload.get("volumes", {}).get("sharipovai_data", {})
 print(str(volume.get("name", "")))
 print(str(service.get("image", "")))
 PY
-)
-rm -f "$rendered"
-volume_name=${backup_runtime[0]:-}
-image_name=${backup_runtime[1]:-}
-
-if [[ -n "$container_id" ]]; then
-  detected_volume=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/var/lib/sharipovai"}}{{.Name}}{{end}}{{end}}' "$container_id" 2>/dev/null || true)
-  detected_image=$(docker inspect --format '{{.Config.Image}}' "$container_id" 2>/dev/null || true)
-  [[ -n "$detected_volume" ]] && volume_name=$detected_volume
-  [[ -n "$detected_image" ]] && image_name=$detected_image
+  )
+  rm -f "$rendered"
+  volume_name=${backup_runtime[0]:-}
+  image_name=${backup_runtime[1]:-}
 fi
 
 [[ "$volume_name" =~ ^[A-Za-z0-9_.-]+$ ]] || fail 'persistent data volume could not be resolved safely'
@@ -334,6 +359,10 @@ require_free_space "$staged_bytes" 'before archive creation'
 archive_tmp=$(mktemp "$BACKUP_DIR/.sharipovai-$stamp.tar.gz.partial-XXXXXX")
 archive_checksum_tmp="${archive_tmp}.sha256"
 run_low_priority tar -C "$work" -czf "$archive_tmp" manifest.json data
+if ! run_low_priority timeout --foreground --kill-after=5s "${SIZE_PROBE_TIMEOUT_SECONDS}s" \
+  tar -tzf "$archive_tmp" >/dev/null; then
+  fail 'backup archive integrity verification failed or timed out'
+fi
 archive_digest=$(run_low_priority sha256sum "$archive_tmp" | awk 'NR == 1 {print $1}')
 [[ "$archive_digest" =~ ^[0-9a-fA-F]{64}$ ]] || fail 'archive SHA-256 generation failed'
 printf '%s  %s\n' "$archive_digest" "$(basename "$archive")" >"$archive_checksum_tmp"
