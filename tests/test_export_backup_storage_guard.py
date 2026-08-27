@@ -78,6 +78,10 @@ def test_archive_is_published_only_after_complete_partial_file() -> None:
     text = _script()
     assert 'archive_tmp=$(mktemp "$BACKUP_DIR/.sharipovai-$stamp.tar.gz.partial-XXXXXX")' in text
     assert 'run_low_priority tar -C "$work" -czf "$archive_tmp"' in text
+    verify = 'tar -tzf "$archive_tmp" >/dev/null'
+    assert verify in text
+    assert "fail 'backup archive integrity verification failed or timed out'" in text
+    assert text.index(verify) < text.index('archive_digest=$(run_low_priority sha256sum')
     assert 'mv "$archive_checksum_tmp" "$archive.sha256"' in text
     assert 'mv "$archive_tmp" "$archive"' in text
     assert '[[ "$candidate" == "$BACKUP_DIR"/.sharipovai-*.partial-* ]]' in text

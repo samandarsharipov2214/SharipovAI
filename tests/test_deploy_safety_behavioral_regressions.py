@@ -133,6 +133,9 @@ EOF
     docker_mock.write_text(
         """#!/usr/bin/env bash
 printf '%s project=%s\\n' "$*" "${COMPOSE_PROJECT_NAME:-}" >>"${TRACE}"
+if [[ "${1:-}" == "container" && "${2:-}" == "ls" ]]; then
+  exit 0
+fi
 if [[ "${1:-}" == "compose" && "${2:-}" == "ps" ]]; then
   [[ "${COMPOSE_PROJECT_NAME:-}" == "live-project" ]] || exit 0
   printf 'live-container\\n'
@@ -146,11 +149,14 @@ EOF
 fi
 if [[ "${1:-}" == "inspect" && "${2:-}" == "--format" ]]; then
   case "${3:-}" in
+    *ai.sharipov.service*) printf 'dashboard\\n' ;;
+    *ai.sharipov.runtime-mode*) printf 'production-safe\\n' ;;
+    *com.docker.compose.service*) printf 'sharipovai\\n' ;;
     *State.Running*) printf 'true\\n' ;;
     *Mounts*) printf 'live-volume\\n' ;;
     *Config.Image*) printf 'live-image\\n' ;;
     *Config.Labels*) exit 0 ;;
-    *'.Id'*) exit 0 ;;
+    *'.Id'*) printf 'live-container\\n' ;;
     *) exit 0 ;;
   esac
   exit 0
