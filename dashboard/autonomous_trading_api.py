@@ -39,12 +39,15 @@ def install_autonomous_trading_api(app: FastAPI) -> None:
     worker = getattr(app.state, "bybit_websocket_worker", None)
     market_data = getattr(app.state, "market_data_service", None)
     consensus = getattr(app.state, "multi_exchange_consensus", None)
+    instrument_rules = getattr(app.state, "bybit_instrument_rules", None)
     if worker is None:
         raise RuntimeError("canonical Bybit WebSocket worker must be installed before autonomous trading")
     if not isinstance(market_data, MarketDataService):
         raise RuntimeError("MarketDataService must be installed before autonomous trading")
     if not isinstance(consensus, MultiExchangeConsensus):
         raise RuntimeError("MultiExchangeConsensus must be installed before autonomous trading")
+    if instrument_rules is None:
+        raise RuntimeError("BybitInstrumentRulesService must be installed before autonomous trading")
     existing_worker_database = getattr(worker, "database", None)
     if existing_worker_database is not None and existing_worker_database.dsn != database.dsn:
         raise RuntimeError("market worker and autonomous runtime must use the same database")
@@ -71,6 +74,7 @@ def install_autonomous_trading_api(app: FastAPI) -> None:
         proposal_provider=proposal_provider,
         database=database,
         shadow_gate_provider=shadow_gate_provider,
+        instrument_rules=instrument_rules,
     )
     testnet_bridge = AutonomousTestnetBridge(database=database)
     app.state.market_stream = stream
