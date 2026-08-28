@@ -103,9 +103,14 @@ class _RestQuote:
 
 
 class _Rest:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.timestamp_ms = 1_000
+
     def quote(self, symbol: str) -> _RestQuote:
         assert symbol == "BTCUSDT"
-        return _RestQuote()
+        self.calls += 1
+        return _RestQuote(received_at_unix_ms=self.timestamp_ms)
 
 
 @dataclass
@@ -133,9 +138,10 @@ def test_shared_stream_samples_raw_market_events_but_keeps_latest_decision_evide
     monkeypatch.setenv("MARKET_QUOTE_EVENT_PERSIST_INTERVAL_SECONDS", "60")
     database = _database(tmp_path)
     worker = _Worker()
+    rest = _Rest()
     stream = SharedVerifiedMarketStream(
         worker,
-        _Rest(),  # type: ignore[arg-type]
+        rest,  # type: ignore[arg-type]
         _Consensus(worker),  # type: ignore[arg-type]
         database=database,
         symbols=("BTCUSDT",),
@@ -145,6 +151,7 @@ def test_shared_stream_samples_raw_market_events_but_keeps_latest_decision_evide
     assert len(database.list_events("market")) == 1
 
     worker.timestamp_ms = 2_000
+    rest.timestamp_ms = 2_000
     worker.price = 101.0
     assert stream.quote("BTCUSDT").price == 101.0
     evidence = stream.evidence("BTCUSDT")
@@ -152,6 +159,7 @@ def test_shared_stream_samples_raw_market_events_but_keeps_latest_decision_evide
     assert len(database.list_events("market")) == 1
 
     worker.timestamp_ms = 61_000
+    rest.timestamp_ms = 61_000
     worker.price = 102.0
     assert stream.quote("BTCUSDT").price == 102.0
     events = database.list_events("market")
@@ -159,3 +167,63 @@ def test_shared_stream_samples_raw_market_events_but_keeps_latest_decision_evide
     assert events[0]["payload"]["last_price"] == 102.0
     assert events[0]["payload"]["persistence_class"] == "operational_sample"
     assert events[0]["payload"]["persistence_interval_ms"] == 60_000
+
+
+def test_shared_stream_reuses_one_verified_bbo_for_same_websocket_tick(tmp_path: Path) -> None:
+    database = _database(tmp_path)
+    worker = _Worker()
+    rest = _Rest()
+    stream = SharedVerifiedMarketStream(
+        worker,
+        rest,  # type: ignore[arg-type]
+        _Consensus(worker),  # type: ignore[arg-type]
+        database=database,
+        symbols=("BTCUSDT",),
+    )
+
+    for _ in range(500):
+        quote = stream.quote("BTCUSDT")
+        assert quote.bid_price == 99.5
+        assert quote.ask_price == 100.5
+
+    assert rest.calls == 1
+
+
+def test_shared_stream_never_falls_back_when_executable_bbo_is_unverified(tmp_path: Path) -> None:
+    database = _database(tmp_path)
+    worker = _Worker()
+
+    class FaultRest(_Rest):
+        def __init__(self, quote: _RestQuote | Exception) -> None:
+            super().__init__()
+            self.result = quote
+
+        def quote(self, symbol: str) -> _RestQuote:
+            self.calls += 1
+            if isinstance(self.result, Exception):
+                raise self.result
+            return self.result
+
+    cases = (
+        _RestQuote(source="binance"),
+        _RestQuote(bid_price=0.0),
+        _RestQuote(ask_price=0.0),
+        _RestQuote(bid_price=101.0, ask_price=100.0),
+        _RestQuote(received_at_unix_ms=100_000),
+        TimeoutError("simulated REST timeout"),
+    )
+    for index, rest_result in enumerate(cases):
+        stream = SharedVerifiedMarketStream(
+            worker,
+            FaultRest(rest_result),  # type: ignore[arg-type]
+            _Consensus(worker),  # type: ignore[arg-type]
+            database=database,
+            symbols=("BTCUSDT",),
+        )
+        try:
+            stream.quote("BTCUSDT")
+        except Exception:
+            pass
+        else:
+            raise AssertionError(f"unverified BBO case {index} did not fail closed")
+        assert stream._cache == {}

@@ -99,6 +99,8 @@ class MarketDataService:
         if not rows:
             raise ValueError("Bybit returned no ticker")
         row = rows[0]
+        if normalize_symbol(row.get("symbol")) != symbol:
+            raise ValueError("Bybit returned a ticker for a different symbol")
         return _make_quote(
             symbol=symbol,
             price=row.get("lastPrice"),
@@ -113,6 +115,8 @@ class MarketDataService:
     def _fetch_binance(self, symbol: str) -> MarketQuote:
         url = "https://api.binance.com/api/v3/ticker/24hr"
         row = self.get_json(url, params={"symbol": symbol})
+        if normalize_symbol(row.get("symbol")) != symbol:
+            raise ValueError("Binance returned a ticker for a different symbol")
         return _make_quote(
             symbol=symbol,
             price=row.get("lastPrice"),

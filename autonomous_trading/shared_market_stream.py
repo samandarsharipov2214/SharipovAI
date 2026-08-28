@@ -46,6 +46,12 @@ class SharedVerifiedMarketStream:
             max(float(os.getenv("PAPER_MAX_WS_CONSENSUS_DEVIATION_PERCENT", "0.75")), 0.05),
             3.0,
         )
+        self.max_rest_bbo_alignment_ms = _bounded_seconds_env_ms(
+            "PAPER_MAX_REST_BBO_ALIGNMENT_SECONDS",
+            default=5.0,
+            minimum=0.5,
+            maximum=30.0,
+        )
         # Council persists the exact market evidence used by each decision in
         # council_market_evidence. The raw market namespace is therefore
         # operational sampling, not the immutable decision provenance ledger.
@@ -90,6 +96,12 @@ class SharedVerifiedMarketStream:
         rest_ask = _positive_float(rest.ask_price, "Bybit REST best ask")
         if rest_ask < rest_bid:
             raise RuntimeError("Bybit REST best ask is below best bid")
+        rest_received_at_ms = _positive_int(
+            rest.received_at_unix_ms,
+            "Bybit REST received_at_unix_ms",
+        )
+        if abs(rest_received_at_ms - received_at_ms) > self.max_rest_bbo_alignment_ms:
+            raise RuntimeError("Bybit REST BBO is not time-aligned with the verified WebSocket quote")
         cross = self.consensus.quote(clean)
         if cross.verified is not True or cross.source_count < 3:
             raise RuntimeError("multi-exchange consensus is not verified")
@@ -125,7 +137,8 @@ class SharedVerifiedMarketStream:
             "websocket_exchange_timestamp_ms": exchange_timestamp_ms,
             "websocket_received_at_ms": received_at_ms,
             "rest_source": rest.source,
-            "rest_received_at_ms": rest.received_at_unix_ms,
+            "rest_received_at_ms": rest_received_at_ms,
+            "rest_bbo_maximum_alignment_ms": self.max_rest_bbo_alignment_ms,
             "change_24h_percent": rest.change_24h_percent,
             "volume_24h": rest.volume_24h,
             "consensus_price": cross.price,

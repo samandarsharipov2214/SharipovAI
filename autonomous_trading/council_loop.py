@@ -6,6 +6,8 @@ capital preservation must not wait for a new council round.
 """
 from __future__ import annotations
 
+import copy
+import hashlib
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_DOWN, ROUND_UP
 from threading import Thread
@@ -80,7 +82,7 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         self.shadow_timeout_seconds = float(shadow_timeout_seconds)
         self.instrument_rules = instrument_rules
         self.cost_model = cost_model or ExecutionCostModel(fee_rate=self.fee_rate)
-        self._pending_authorization: PaperDecisionAuthorization | None = None
+        self._pending_authorization_evidence: dict[str, Any] | None = None
         self._pending_exit_context: dict[str, Any] | None = None
         self._pending_execution: dict[str, Any] | None = None
         self._state["peak_equity"] = max(
@@ -91,10 +93,16 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
             self._state["v2_shadow_records"] = {}
         if not isinstance(self._state.get("v2_shadow_errors"), list):
             self._state["v2_shadow_errors"] = []
+        if not isinstance(self._state.get("pending_authorized_executions"), dict):
+            self._state["pending_authorized_executions"] = {}
+        if not isinstance(self._state.get("pending_protective_executions"), dict):
+            self._state["pending_protective_executions"] = {}
         # A close is already an immutable PAPER fact when the process comes
         # back.  Recover only explicitly marked, previously failed settlement
         # writes; do not infer settlements from arbitrary historical trades.
         self._recover_pending_settlements()
+        self._recover_pending_authorized_executions()
+        self._recover_pending_protective_executions()
 
     def _trace(self, symbol: str, status: str, reason: str, **extra: Any) -> dict[str, Any]:
         return persist_decision_trace(
@@ -109,6 +117,9 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         )
 
     def tick(self) -> None:
+        with self._lock:
+            self._recover_pending_authorized_executions()
+            self._recover_pending_protective_executions()
         market = self.stream.snapshot()
         if not market.get("verified"):
             reason = "Market stream is unavailable or stale; no paper order created"
@@ -236,6 +247,14 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                         self._trace(symbol, "BLOCK", reason, phase="virtual_execution")
                         self._event("BLOCK", reason, symbol)
                         continue
+                    exit_reason = f"canonical_council_sell:{authorization.decision_id}"
+                    self._stage_authorized_execution(
+                        symbol=symbol,
+                        side="SELL",
+                        reason=exit_reason,
+                        authorization=authorization,
+                        execution=prepared_exit,
+                    )
                     try:
                         self.decision_runtime.consume_authorization(
                             authorization,
@@ -247,13 +266,7 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                         self._event("BLOCK", reason, symbol)
                         continue
 
-                    self._close(
-                        symbol,
-                        quote,
-                        f"canonical_council_sell:{authorization.decision_id}",
-                        exit_authorization=authorization,
-                        prepared=prepared_exit,
-                    )
+                    self._apply_authorized_execution(authorization.decision_id)
                     self._trace(
                         symbol,
                         "SELL",
@@ -284,6 +297,14 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                     self._event("BLOCK", reason, symbol)
                     continue
 
+                entry_reason = f"canonical_council_allow:{authorization.decision_id}"
+                self._stage_authorized_execution(
+                    symbol=symbol,
+                    side="BUY",
+                    reason=entry_reason,
+                    authorization=authorization,
+                    execution=prepared_entry,
+                )
                 try:
                     self.decision_runtime.consume_authorization(
                         authorization,
@@ -295,39 +316,21 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                     self._event("BLOCK", reason, symbol)
                     continue
 
-                self._pending_authorization = authorization
-                try:
-                    self._open(
-                        symbol,
-                        quote,
-                        f"canonical_council_allow:{authorization.decision_id}",
-                        prepared=prepared_entry,
-                    )
-                    position = self._state["positions"].get(symbol)
-                    if position is None:
-                        reason = "authorized entry could not allocate a safe paper budget"
-                        self._trace(symbol, "BLOCK", reason, phase="virtual_execution")
-                        self._event("BLOCK", reason, symbol)
-                        continue
-                    position["decision_id"] = authorization.decision_id
-                    position["candidate_id"] = authorization.candidate_result.candidate.candidate_id
-                    position["evidence_class"] = "verified_market"
-                    position["verified_market_data"] = True
-                    position["regime"] = authorization.assessment.regime
-                    shadow = self._state.get("v2_shadow_records", {}).get(authorization.decision_id)
-                    if isinstance(shadow, Mapping):
-                        position["v2_shadow_snapshot_id"] = shadow.get("snapshot_id")
-                        position["v2_shadow_evidence_hash"] = shadow.get("evidence_hash")
-                    self._trace(
-                        symbol,
-                        "BUY",
-                        f"canonical council authorization consumed and paper BUY opened: {authorization.decision_id}",
-                        phase="virtual_execution",
-                        decision_id=authorization.decision_id,
-                        authorized=True,
-                    )
-                finally:
-                    self._pending_authorization = None
+                self._apply_authorized_execution(authorization.decision_id)
+                position = self._state["positions"].get(symbol)
+                if position is None:
+                    reason = "authorized entry could not allocate a safe paper budget"
+                    self._trace(symbol, "BLOCK", reason, phase="virtual_execution")
+                    self._event("BLOCK", reason, symbol)
+                    continue
+                self._trace(
+                    symbol,
+                    "BUY",
+                    f"canonical council authorization consumed and paper BUY opened: {authorization.decision_id}",
+                    phase="virtual_execution",
+                    decision_id=authorization.decision_id,
+                    authorized=True,
+                )
 
             self._mark_to_market(market)
             self._state["peak_equity"] = max(
@@ -465,12 +468,295 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
             reason = "protective_momentum_exit"
         if reason is None:
             return
+        state_before = copy.deepcopy(self._state)
+        version_before = self._db_version
         try:
-            self._close(symbol, quote, reason)
+            execution = self._prepare_close(symbol, quote)
+            intent_id = self._stage_protective_execution(symbol, reason, execution)
+            self._apply_protective_execution(intent_id)
         except Exception as exc:
+            # _close mutates cash/position before its event commits the whole
+            # PAPER state.  A storage failure must therefore restore the last
+            # durable state, not persist the partially mutated object as BLOCK.
+            try:
+                self._reload_canonical_state()
+            except Exception:
+                self._state = state_before
+                self._db_version = version_before
             blocked = f"paper_execution_preflight_error:{type(exc).__name__}: {exc}"
             self._trace(symbol, "BLOCK", blocked, phase="protective_exit")
             self._event("BLOCK", blocked, symbol)
+
+    def _stage_protective_execution(
+        self,
+        symbol: str,
+        reason: str,
+        execution: Mapping[str, Any],
+    ) -> str:
+        """Durably stage an exact protective close before settlement/state mutation."""
+
+        position = self._state.get("positions", {}).get(symbol)
+        if not isinstance(position, Mapping):
+            raise PaperExecutionRejected("paper position is unavailable")
+        identity = ":".join(
+            (
+                self.scope,
+                str(symbol).upper(),
+                str(position.get("decision_id") or position.get("opened_at") or "legacy"),
+                str(reason),
+            )
+        )
+        intent_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:40]
+        prepared = dict(execution)
+        prepared["trade_id"] = f"paper_protect_{intent_id}"
+        prepared["execution_intent_id"] = f"paper_protective:{intent_id}"
+        pending = self._state.setdefault("pending_protective_executions", {})
+        if pending and intent_id not in pending:
+            raise PaperExecutionRejected("an unresolved protective PAPER execution already exists")
+        pending[intent_id] = {
+            "symbol": str(symbol).upper(),
+            "reason": str(reason),
+            "execution": prepared,
+            "staged_at_ms": self._now_ms(),
+        }
+        self._persist()
+        return intent_id
+
+    def _apply_protective_execution(self, intent_id: str) -> None:
+        pending = self._state.get("pending_protective_executions", {})
+        intent = pending.get(intent_id) if isinstance(pending, Mapping) else None
+        if not isinstance(intent, Mapping) or not isinstance(intent.get("execution"), Mapping):
+            raise PaperExecutionRejected("durable protective PAPER execution intent is unavailable")
+        execution = dict(intent["execution"])
+        execution_intent_id = str(execution.get("execution_intent_id") or "")
+        if any(
+            str(trade.get("execution_intent_id") or "") == execution_intent_id
+            for trade in self._state.get("trades", [])
+        ):
+            self._complete_protective_execution(intent_id)
+            return
+        state_before = copy.deepcopy(self._state)
+        version_before = self._db_version
+        try:
+            self._close(
+                str(intent.get("symbol") or "").upper(),
+                None,
+                str(intent.get("reason") or "protective_exit"),
+                prepared=execution,
+            )
+        except Exception:
+            try:
+                self._reload_canonical_state()
+            except Exception:
+                self._state = state_before
+                self._db_version = version_before
+            raise
+        self._complete_protective_execution(intent_id)
+
+    def _complete_protective_execution(self, intent_id: str) -> None:
+        pending = self._state.get("pending_protective_executions", {})
+        if isinstance(pending, dict):
+            pending.pop(intent_id, None)
+        self._state.pop("pending_protective_recovery_error", None)
+        self._persist()
+
+    def _recover_pending_protective_executions(self) -> None:
+        pending = self._state.get("pending_protective_executions", {})
+        if not isinstance(pending, dict):
+            return
+        for intent_id in tuple(pending):
+            try:
+                self._apply_protective_execution(intent_id)
+            except Exception as exc:
+                self._state["pending_protective_recovery_error"] = (
+                    f"{type(exc).__name__}: {exc}"
+                )
+
+    def _stage_authorized_execution(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        reason: str,
+        authorization: PaperDecisionAuthorization,
+        execution: Mapping[str, Any],
+    ) -> None:
+        """Durably stage an exact fill before consuming its single-use authority."""
+
+        clean_side = str(side).upper()
+        if clean_side not in {"BUY", "SELL"}:
+            raise PaperExecutionRejected("authorized PAPER side is invalid")
+        decision_id = authorization.decision_id
+        intent_id = hashlib.sha256(
+            f"{self.scope}:{clean_side}:{decision_id}".encode("utf-8")
+        ).hexdigest()[:40]
+        prepared = dict(execution)
+        prepared["trade_id"] = f"paper_auth_{intent_id}"
+        prepared["execution_intent_id"] = f"paper_authorized:{clean_side.lower()}:{decision_id}"
+        evidence = self._authorization_evidence(authorization)
+        pending = self._state.setdefault("pending_authorized_executions", {})
+        if any(
+            str(item.get("symbol") or "").upper() == str(symbol).upper()
+            and str(item.get("decision_id") or "") != decision_id
+            for item in pending.values()
+            if isinstance(item, Mapping)
+        ):
+            raise PaperExecutionRejected(
+                "an unresolved authorized PAPER execution already exists for symbol"
+            )
+        pending[decision_id] = {
+            "decision_id": decision_id,
+            "symbol": str(symbol).upper(),
+            "side": clean_side,
+            "reason": str(reason),
+            "execution": prepared,
+            "authorization_evidence": evidence,
+            "staged_at_ms": self._now_ms(),
+        }
+        self._persist()
+
+    @staticmethod
+    def _authorization_evidence(
+        authorization: PaperDecisionAuthorization,
+    ) -> dict[str, Any]:
+        return {
+            "decision_id": authorization.decision_id,
+            "candidate_id": authorization.candidate_result.candidate.candidate_id,
+            "decision_quality_action": authorization.assessment.action,
+            "decision_quality_confidence": authorization.assessment.confidence,
+            "decision_quality_agreement": authorization.assessment.agreement,
+            "general_controller_decision": (
+                authorization.candidate_result.general_controller_decision.value
+            ),
+            "regime": authorization.assessment.regime,
+            "canonical_entry_authorized": True,
+            "authorization_single_use": True,
+        }
+
+    def _apply_authorized_execution(self, decision_id: str) -> None:
+        pending = self._state.get("pending_authorized_executions", {})
+        intent = pending.get(decision_id) if isinstance(pending, Mapping) else None
+        if not isinstance(intent, Mapping):
+            raise PaperExecutionRejected("durable authorized PAPER execution intent is unavailable")
+        consumption = self.database.get_json(
+            self.decision_runtime.consumption_namespace,
+            decision_id,
+        )
+        if consumption is None:
+            raise PaperExecutionRejected("PAPER authorization consumption is not durable")
+        execution = intent.get("execution")
+        evidence = intent.get("authorization_evidence")
+        if not isinstance(execution, Mapping) or not isinstance(evidence, Mapping):
+            raise PaperExecutionRejected("durable authorized PAPER execution intent is malformed")
+        intent_id = str(execution.get("execution_intent_id") or "")
+        existing = next(
+            (
+                trade
+                for trade in self._state.get("trades", [])
+                if str(trade.get("execution_intent_id") or "") == intent_id
+            ),
+            None,
+        )
+        if existing is not None:
+            self._complete_authorized_execution(decision_id)
+            return
+
+        state_before = copy.deepcopy(self._state)
+        version_before = self._db_version
+        self._pending_authorization_evidence = dict(evidence)
+        try:
+            side = str(intent.get("side") or "").upper()
+            symbol = str(intent.get("symbol") or "").upper()
+            reason = str(intent.get("reason") or "")
+            if side == "BUY":
+                if symbol in self._state.get("positions", {}):
+                    raise PaperExecutionRejected("authorized BUY recovery found an existing position")
+                self._open(
+                    symbol,
+                    None,
+                    reason,
+                    prepared=dict(execution),
+                    entry_context=dict(evidence),
+                )
+            elif side == "SELL":
+                if symbol not in self._state.get("positions", {}):
+                    raise PaperExecutionRejected("authorized SELL recovery found no position")
+                self._close(
+                    symbol,
+                    None,
+                    reason,
+                    prepared=dict(execution),
+                    exit_authorization_evidence=dict(evidence),
+                )
+            else:
+                raise PaperExecutionRejected("durable authorized PAPER side is invalid")
+        except Exception:
+            try:
+                self._reload_canonical_state()
+            except Exception:
+                self._state = state_before
+                self._db_version = version_before
+            raise
+        finally:
+            self._pending_authorization_evidence = None
+        self._complete_authorized_execution(decision_id)
+
+    def _complete_authorized_execution(self, decision_id: str) -> None:
+        pending = self._state.get("pending_authorized_executions", {})
+        if isinstance(pending, dict):
+            pending.pop(decision_id, None)
+        self._state.pop("pending_execution_recovery_error", None)
+        self._persist()
+
+    def _reload_canonical_state(self) -> None:
+        current = self.database.get_json(self.state_namespace, self.scope)
+        if current is None:
+            raise RuntimeError("canonical PAPER state disappeared during execution recovery")
+        self._db_version = int(current["version"])
+        self._state = self._normalize_state(current["value"])
+        if not isinstance(self._state.get("pending_authorized_executions"), dict):
+            self._state["pending_authorized_executions"] = {}
+        if not isinstance(self._state.get("pending_protective_executions"), dict):
+            self._state["pending_protective_executions"] = {}
+
+    def _recover_pending_authorized_executions(self) -> None:
+        pending = self._state.get("pending_authorized_executions", {})
+        if not isinstance(pending, dict) or not pending:
+            return
+        for decision_id in tuple(pending):
+            consumption = self.database.get_json(
+                self.decision_runtime.consumption_namespace,
+                decision_id,
+            )
+            if consumption is None:
+                intent = pending.get(decision_id)
+                evidence = (
+                    intent.get("authorization_evidence")
+                    if isinstance(intent, Mapping)
+                    else None
+                )
+                candidate_id = (
+                    str(evidence.get("candidate_id") or "")
+                    if isinstance(evidence, Mapping)
+                    else ""
+                )
+                try:
+                    self.decision_runtime.recover_staged_authorization(
+                        decision_id,
+                        candidate_id,
+                        consumed_at_ms=self._now_ms(),
+                    )
+                except Exception as exc:
+                    self._state["pending_execution_recovery_error"] = (
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                    continue
+            try:
+                self._apply_authorized_execution(decision_id)
+            except Exception as exc:
+                self._state["pending_execution_recovery_error"] = (
+                    f"{type(exc).__name__}: {exc}"
+                )
 
     def _prepare_open(self, symbol: str, quote: Any) -> dict[str, Any]:
         cash = Decimal(str(self._state["cash"]))
@@ -486,12 +772,17 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         position = self._state["positions"].get(symbol)
         if not isinstance(position, Mapping):
             raise PaperExecutionRejected("paper position is unavailable")
-        return self._prepare_execution(
+        legacy_quantity = not position.get("paper_execution_semantics")
+        execution = self._prepare_execution(
             symbol,
             quote,
             Side.SELL,
             _positive_decimal(position.get("quantity"), "position quantity"),
+            preserve_legacy_quantity=legacy_quantity,
         )
+        if legacy_quantity:
+            execution["legacy_quantity_rules_exception"] = True
+        return execution
 
     def _prepare_execution(
         self,
@@ -499,21 +790,39 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         quote: Any,
         side: Side,
         requested_quantity: Decimal,
+        *,
+        preserve_legacy_quantity: bool = False,
     ) -> dict[str, Any]:
         rules = self.instrument_rules.get(symbol, "spot")
         if rules.symbol != str(symbol).upper() or rules.category != "spot":
             raise PaperExecutionRejected("verified instrument rules do not match PAPER symbol/category")
+        if str(rules.source) != "bybit_v5_instruments_info":
+            raise PaperExecutionRejected("verified instrument rules source is invalid")
+        if int(rules.fetched_at_ms) <= 0:
+            raise PaperExecutionRejected("verified instrument rules timestamp is invalid")
+        min_qty = _positive_decimal(rules.min_qty, "minimum quantity")
+        min_notional = _positive_decimal(rules.min_notional, "minimum notional")
+        if rules.max_market_qty is not None and _positive_decimal(
+            rules.max_market_qty, "maximum market quantity"
+        ) < min_qty:
+            raise PaperExecutionRejected("maximum market quantity is below minimum quantity")
         bid = _positive_decimal(getattr(quote, "bid_price", None), "best bid")
         ask = _positive_decimal(getattr(quote, "ask_price", None), "best ask")
         if ask < bid:
             raise PaperExecutionRejected("best ask is below best bid")
         midpoint = (bid + ask) / Decimal("2")
-        quantity = _step(requested_quantity, rules.qty_step, ROUND_DOWN)
-        if quantity < rules.min_qty:
+        quantity = (
+            requested_quantity
+            if preserve_legacy_quantity
+            else _step(requested_quantity, rules.qty_step, ROUND_DOWN)
+        )
+        if quantity < min_qty:
             raise PaperExecutionRejected("quantity is below verified minimum")
         if rules.max_market_qty is not None and quantity > rules.max_market_qty:
+            if preserve_legacy_quantity:
+                raise PaperExecutionRejected("legacy position exceeds verified maximum market quantity")
             quantity = _step(rules.max_market_qty, rules.qty_step, ROUND_DOWN)
-        if quantity < rules.min_qty:
+        if quantity < min_qty:
             raise PaperExecutionRejected("quantity is below verified minimum")
 
         quote_turnover = _optional_positive_decimal(
@@ -534,8 +843,32 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
             quantity=float(quantity),
             liquidity_role="taker",
         )
+        fee_rate = _bounded_decimal(
+            estimated.fee_rate,
+            "fee rate",
+            minimum=Decimal("0"),
+            maximum=Decimal("0.05"),
+        )
+        participation = _bounded_decimal(
+            estimated.participation_rate,
+            "participation rate",
+            minimum=Decimal("0"),
+            maximum=Decimal(str(self.cost_model.max_participation_rate)),
+        )
+        effective_slippage_bps = _bounded_decimal(
+            estimated.effective_slippage_bps,
+            "effective slippage bps",
+            minimum=Decimal("0"),
+            maximum=Decimal("10000"),
+        )
+        raw_execution_price = _positive_decimal(estimated.execution_price, "execution price")
+        bbo = ask if side is Side.BUY else bid
+        if side is Side.BUY and raw_execution_price < bbo:
+            raise PaperExecutionRejected("BUY execution cannot improve executable ask")
+        if side is Side.SELL and raw_execution_price > bbo:
+            raise PaperExecutionRejected("SELL execution cannot improve executable bid")
         execution_price = _step(
-            _positive_decimal(estimated.execution_price, "execution price"),
+            raw_execution_price,
             rules.tick_size,
             ROUND_UP if side is Side.BUY else ROUND_DOWN,
         )
@@ -544,10 +877,9 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         if rules.max_price is not None and execution_price > rules.max_price:
             raise PaperExecutionRejected("execution price exceeds verified maximum")
         notional = execution_price * quantity
-        if notional < rules.min_notional:
+        if notional < min_notional:
             raise PaperExecutionRejected("order notional is below verified minimum")
 
-        bbo = ask if side is Side.BUY else bid
         spread_cost = abs(bbo - midpoint) * quantity
         slippage_cost = abs(execution_price - bbo) * quantity
         base_rate = Decimal(str(self.cost_model.slippage_bps)) / Decimal("10000")
@@ -561,7 +893,7 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
             - base_execution
         ) * quantity
         impact_cost = min(slippage_cost, estimated_impact)
-        fee = notional * Decimal(str(estimated.fee_rate))
+        fee = notional * fee_rate
         return {
             "side": side.value,
             "quantity": float(quantity),
@@ -573,15 +905,16 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
             "spread_cost": float(spread_cost),
             "slippage_cost": float(slippage_cost),
             "impact_cost": float(impact_cost),
-            "participation_rate": float(estimated.participation_rate),
-            "effective_slippage_bps": float(estimated.effective_slippage_bps),
-            "fee_rate": float(estimated.fee_rate),
+            "impact_cost_included_in_slippage": True,
+            "participation_rate": float(participation),
+            "effective_slippage_bps": float(effective_slippage_bps),
+            "fee_rate": float(fee_rate),
             "instrument_rules_fetched_at_ms": int(rules.fetched_at_ms),
             "instrument_rules_source": str(rules.source),
             "qty_step": str(rules.qty_step),
             "tick_size": str(rules.tick_size),
-            "min_qty": str(rules.min_qty),
-            "min_notional": str(rules.min_notional),
+            "min_qty": str(min_qty),
+            "min_notional": str(min_notional),
             "paper_execution_semantics": "bybit_spot_taker_v2",
             "execution_source": "bybit_rest_bbo+execution_cost_model",
         }
@@ -593,6 +926,7 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         reason: str,
         *,
         prepared: dict[str, Any] | None = None,
+        entry_context: Mapping[str, Any] | None = None,
     ) -> None:
         execution = prepared or self._prepare_open(symbol, quote)
         cash = Decimal(str(self._state["cash"]))
@@ -601,7 +935,7 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
             raise PaperExecutionRejected("paper cash is insufficient for notional and fee")
         opened_at = self._now()
         self._state["cash"] = float(cash - required)
-        self._state["positions"][symbol] = {
+        position = {
             "quantity": execution["quantity"],
             "entry_price": execution["execution_price"],
             "entry_reference_price": execution["reference_price"],
@@ -613,6 +947,21 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
             "paper_execution_semantics": execution["paper_execution_semantics"],
             "reason": reason,
         }
+        if entry_context:
+            position.update(
+                {
+                    "decision_id": str(entry_context.get("decision_id") or ""),
+                    "candidate_id": str(entry_context.get("candidate_id") or ""),
+                    "evidence_class": "verified_market",
+                    "verified_market_data": True,
+                    "regime": str(entry_context.get("regime") or "unknown"),
+                }
+            )
+            shadow = self._state.get("v2_shadow_records", {}).get(position["decision_id"])
+            if isinstance(shadow, Mapping):
+                position["v2_shadow_snapshot_id"] = shadow.get("snapshot_id")
+                position["v2_shadow_evidence_hash"] = shadow.get("evidence_hash")
+        self._state["positions"][symbol] = position
         self._state["total_fees"] += execution["fee"]
         self._pending_execution = execution
         try:
@@ -635,12 +984,20 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         reason: str,
         *,
         exit_authorization: PaperDecisionAuthorization | None = None,
+        exit_authorization_evidence: Mapping[str, Any] | None = None,
         prepared: dict[str, Any] | None = None,
     ) -> None:
         position = dict(self._state["positions"].get(symbol) or {})
         execution = prepared or self._prepare_close(symbol, quote)
-        if Decimal(str(execution["quantity"])) != Decimal(str(position.get("quantity"))):
+        if (
+            Decimal(str(execution["quantity"])) != Decimal(str(position.get("quantity")))
+            and not execution.get("legacy_quantity_rules_exception")
+        ):
             raise PaperExecutionRejected("existing position quantity is not aligned to verified qtyStep")
+        exit_evidence = dict(exit_authorization_evidence or {})
+        if exit_authorization is not None:
+            exit_evidence = self._authorization_evidence(exit_authorization)
+        entry_has_realistic_costs = bool(position.get("paper_execution_semantics"))
         self._pending_exit_context = {
             "decision_id": str(position.get("decision_id") or "").strip(),
             "candidate_id": str(position.get("candidate_id") or "").strip(),
@@ -652,14 +1009,13 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
             "entry_spread_cost": float(position.get("entry_spread_cost", 0.0) or 0.0),
             "entry_slippage_cost": float(position.get("entry_slippage_cost", 0.0) or 0.0),
             "entry_impact_cost": float(position.get("entry_impact_cost", 0.0) or 0.0),
-            "exit_decision_id": (
-                exit_authorization.decision_id if exit_authorization is not None else ""
+            "entry_spread_cost_unknown": not entry_has_realistic_costs,
+            "entry_slippage_cost_unknown": not entry_has_realistic_costs,
+            "legacy_quantity_rules_exception": bool(
+                execution.get("legacy_quantity_rules_exception")
             ),
-            "exit_candidate_id": (
-                exit_authorization.candidate_result.candidate.candidate_id
-                if exit_authorization is not None
-                else ""
-            ),
+            "exit_decision_id": str(exit_evidence.get("decision_id") or ""),
+            "exit_candidate_id": str(exit_evidence.get("candidate_id") or ""),
         }
         try:
             quantity = Decimal(str(execution["quantity"]))
@@ -737,23 +1093,13 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
             item["gross_pnl"] = self._pending_execution.get("gross_pnl")
             item["source"] = "bybit_websocket_v5+bybit_rest_bbo"
 
-        if side == "BUY" and self._pending_authorization is not None:
-            authorization = self._pending_authorization
-            item.update(
-                {
-                    "decision_id": authorization.decision_id,
-                    "candidate_id": authorization.candidate_result.candidate.candidate_id,
-                    "evidence_class": "verified_market",
-                    "verified_market_data": True,
-                    "decision_quality_action": authorization.assessment.action,
-                    "decision_quality_confidence": authorization.assessment.confidence,
-                    "decision_quality_agreement": authorization.assessment.agreement,
-                    "general_controller_decision": authorization.candidate_result.general_controller_decision.value,
-                    "canonical_entry_authorized": True,
-                    "authorization_single_use": True,
-                }
+        authorization_evidence = self._pending_authorization_evidence
+        if side == "BUY" and authorization_evidence is not None:
+            item.update(dict(authorization_evidence))
+            item.update(evidence_class="verified_market", verified_market_data=True)
+            shadow = self._state.get("v2_shadow_records", {}).get(
+                str(authorization_evidence.get("decision_id") or "")
             )
-            shadow = self._state.get("v2_shadow_records", {}).get(authorization.decision_id)
             if isinstance(shadow, Mapping):
                 item["v2_shadow_snapshot_id"] = shadow.get("snapshot_id")
                 item["v2_shadow_evidence_hash"] = shadow.get("evidence_hash")
@@ -785,6 +1131,15 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                         }
                     )
                 net = float(net_pnl or 0.0)
+                item["entry_spread_cost_unknown"] = bool(
+                    self._pending_exit_context.get("entry_spread_cost_unknown")
+                )
+                item["entry_slippage_cost_unknown"] = bool(
+                    self._pending_exit_context.get("entry_slippage_cost_unknown")
+                )
+                item["legacy_quantity_rules_exception"] = bool(
+                    self._pending_exit_context.get("legacy_quantity_rules_exception")
+                )
                 self._settle_or_mark_pending(item, decision_id=decision_id, net_pnl=net)
 
                 shadow = self._state.get("v2_shadow_records", {}).get(decision_id)
@@ -977,6 +1332,22 @@ def _optional_positive_decimal(value: Any, name: str) -> Decimal | None:
     if value in (None, ""):
         return None
     return _positive_decimal(value, name)
+
+
+def _bounded_decimal(
+    value: Any,
+    name: str,
+    *,
+    minimum: Decimal,
+    maximum: Decimal,
+) -> Decimal:
+    try:
+        parsed = Decimal(str(value))
+    except Exception as exc:
+        raise PaperExecutionRejected(f"{name} is invalid") from exc
+    if not parsed.is_finite() or parsed < minimum or parsed > maximum:
+        raise PaperExecutionRejected(f"{name} must be within {minimum}..{maximum}")
+    return parsed
 
 
 def _step(value: Decimal, step: Decimal, rounding: str) -> Decimal:

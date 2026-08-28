@@ -191,19 +191,86 @@ class CanonicalPaperDecisionRuntime:
         candidate = authorization.candidate_result.candidate
         if candidate.candidate_id != authorization.decision_id:
             raise CanonicalPaperRuntimeError("authorization candidate identity mismatch")
+        return self._consume_once(
+            decision_id=authorization.decision_id,
+            candidate_id=candidate.candidate_id,
+            environment=candidate.environment.value,
+            decision=candidate.decision.value,
+            consumed_at_ms=consumed_at_ms,
+        )
+
+    def recover_staged_authorization(
+        self,
+        decision_id: str,
+        candidate_id: str,
+        *,
+        consumed_at_ms: int,
+    ) -> dict[str, Any]:
+        """Consume a durably staged authorization after a crash or transient DB failure."""
+
+        clean_id = _decision_id(decision_id)
+        clean_candidate = _decision_id(candidate_id)
+        if clean_candidate != clean_id:
+            raise CanonicalPaperRuntimeError("staged authorization candidate identity mismatch")
+        decision_record = self.database.get_json(self.v2_decision_namespace, clean_id)
+        decision_value = decision_record.get("value") if decision_record else None
+        if not isinstance(decision_value, Mapping):
+            raise CanonicalPaperRuntimeError("durable V2 decision is unavailable")
+        controller = decision_value.get("controller")
+        final_intent = (
+            str(controller.get("final_intent") or "").upper()
+            if isinstance(controller, Mapping)
+            else ""
+        )
+        if (
+            decision_value.get("authorized") is not True
+            or decision_value.get("candidate_validation_valid") is not True
+            or str(decision_value.get("candidate_decision") or "").upper() != "ALLOW"
+            or final_intent not in {"BUY", "SELL"}
+        ):
+            raise CanonicalPaperRuntimeError("durable V2 decision does not authorize PAPER execution")
+        candidate_record = self.database.get_json("trading_candidates", clean_candidate)
+        candidate = candidate_record.get("value") if candidate_record else None
+        if not isinstance(candidate, Mapping):
+            raise CanonicalPaperRuntimeError("durable TradingCandidate is unavailable")
+        if (
+            str(candidate.get("candidate_id") or "") != clean_candidate
+            or str(candidate.get("environment") or "").lower() != "paper"
+            or str(candidate.get("decision") or "").upper() != "ALLOW"
+        ):
+            raise CanonicalPaperRuntimeError("durable TradingCandidate is not executable PAPER evidence")
+        return self._consume_once(
+            decision_id=clean_id,
+            candidate_id=clean_candidate,
+            environment="paper",
+            decision="ALLOW",
+            consumed_at_ms=consumed_at_ms,
+        )
+
+    def _consume_once(
+        self,
+        *,
+        decision_id: str,
+        candidate_id: str,
+        environment: str,
+        decision: str,
+        consumed_at_ms: int,
+    ) -> dict[str, Any]:
+        if consumed_at_ms <= 0:
+            raise CanonicalPaperRuntimeError("consumed_at_ms must be positive")
         payload = {
-            "decision_id": authorization.decision_id,
-            "candidate_id": candidate.candidate_id,
+            "decision_id": decision_id,
+            "candidate_id": candidate_id,
             "consumed_at_ms": int(consumed_at_ms),
-            "environment": candidate.environment.value,
-            "decision": candidate.decision.value,
+            "environment": environment,
+            "decision": decision,
             "paper_decision_owner": "general_controller_v2",
             "execution_authority": False,
         }
         try:
             self.database.put_json(
                 self.consumption_namespace,
-                authorization.decision_id,
+                decision_id,
                 payload,
                 expected_version=0,
             )

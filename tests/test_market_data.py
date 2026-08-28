@@ -19,6 +19,7 @@ def test_bybit_quote_is_verified_and_normalized() -> None:
                 "retCode": 0,
                 "result": {
                     "list": [{
+                        "symbol": "BTCUSDT",
                         "lastPrice": "60000.5", "price24hPcnt": "0.025", "turnover24h": "1000000",
                         "bid1Price": "60000.0", "ask1Price": "60001.0",
                     }]
@@ -47,6 +48,7 @@ def test_binance_is_used_when_bybit_fails() -> None:
         return httpx.Response(
             200,
             json={
+                "symbol": "ETHUSDT",
                 "lastPrice": "3000", "priceChangePercent": "1.2", "quoteVolume": "500000",
                 "bidPrice": "2999.5", "askPrice": "3000.5",
             },
@@ -67,6 +69,7 @@ def test_crossed_bybit_bbo_is_rejected() -> None:
             json={
                 "retCode": 0,
                 "result": {"list": [{
+                    "symbol": "BTCUSDT",
                     "lastPrice": "100", "price24hPcnt": "0", "turnover24h": "1000",
                     "bid1Price": "101", "ask1Price": "100",
                 }]},
@@ -74,6 +77,24 @@ def test_crossed_bybit_bbo_is_rejected() -> None:
         )
 
     with pytest.raises(ValueError, match="best ask"):
+        MarketDataService(client=_client(handler)).provider_quote("bybit", "BTCUSDT")
+
+
+def test_provider_symbol_mismatch_is_rejected() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "retCode": 0,
+                "result": {"list": [{
+                    "symbol": "ETHUSDT",
+                    "lastPrice": "100", "price24hPcnt": "0", "turnover24h": "1000",
+                    "bid1Price": "99", "ask1Price": "101",
+                }]},
+            },
+        )
+
+    with pytest.raises(ValueError, match="different symbol"):
         MarketDataService(client=_client(handler)).provider_quote("bybit", "BTCUSDT")
 
 
