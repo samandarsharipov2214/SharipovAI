@@ -11,8 +11,14 @@ export interface AuthResponse {
   user: AuthUser | null;
 }
 
-export interface AuthRequest {
+export interface LoginRequest {
   email: string;
   password: string;
-  display_name?: string;
+}
+
+export interface RegistrationRequest extends LoginRequest {
+  name: string;
+  contact: string;
+  password_confirmation: string;
+  reason: string;
 }

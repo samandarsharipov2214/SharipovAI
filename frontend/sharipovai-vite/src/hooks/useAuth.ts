@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { fetchMe, login, logout, register } from "../api/authApi";
 import { ApiClientError } from "../api/http";
-import type { AuthRequest, AuthUser } from "../types/auth";
+import type { AuthUser, LoginRequest, RegistrationRequest } from "../types/auth";
 
 type Status = "loading" | "anonymous" | "authenticated";
 
@@ -29,11 +29,11 @@ export function useAuth() {
     void refresh();
   }, [refresh]);
 
-  const submit = useCallback(
-    async (mode: "login" | "register", payload: AuthRequest) => {
+  const submitLogin = useCallback(
+    async (payload: LoginRequest) => {
       setBusy(true);
       try {
-        const response = mode === "login" ? await login(payload) : await register(payload);
+        const response = await login(payload);
         setUser(response.user);
         setStatus("authenticated");
         setError(null);
@@ -45,6 +45,20 @@ export function useAuth() {
     },
     [],
   );
+
+  const submitRegistration = useCallback(async (payload: RegistrationRequest) => {
+    setBusy(true);
+    try {
+      await register(payload);
+      setUser(null);
+      setStatus("anonymous");
+      setError(null);
+    } catch (error) {
+      setError(error instanceof ApiClientError ? error.message : "Ошибка регистрации.");
+    } finally {
+      setBusy(false);
+    }
+  }, []);
 
   const signOut = useCallback(async () => {
     setBusy(true);
@@ -63,8 +77,8 @@ export function useAuth() {
     error,
     busy,
     refresh,
-    login: (payload: AuthRequest) => submit("login", payload),
-    register: (payload: AuthRequest) => submit("register", payload),
+    login: submitLogin,
+    register: submitRegistration,
     signOut,
   } as const;
 }

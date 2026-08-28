@@ -39,6 +39,9 @@ def test_production_factory_contains_critical_production_contracts() -> None:
 
     expected = {
         ("GET", "/api/auth/me"),
+        ("POST", "/api/auth/register"),
+        ("GET", "/api/auth/access-requests"),
+        ("POST", "/api/auth/access-requests/{request_id}/approve"),
         ("GET", "/api/system/release-truth"),
         ("POST", "/api/control-plane/commands/{action}"),
     }

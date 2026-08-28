@@ -5,7 +5,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import dashboard.auth_saas as auth_saas
-from dashboard.models_saas import Base, User
+from dashboard.models_saas import AccessRequest, Base, User
 
 
 def _session_factory():
@@ -42,7 +42,10 @@ def test_registration_is_pending_and_does_not_issue_session(monkeypatch):
         json={
             "email": "pending@example.com",
             "password": "correct-horse-battery-staple",
-            "display_name": "Pending User",
+            "password_confirmation": "correct-horse-battery-staple",
+            "name": "Pending User",
+            "contact": "@pending",
+            "reason": "Research",
         },
     )
 
@@ -57,6 +60,10 @@ def test_registration_is_pending_and_does_not_issue_session(monkeypatch):
         assert user is not None
         assert user.is_active is False
         assert user.subscription is None
+        access_request = db.scalar(select(AccessRequest).where(AccessRequest.user_id == user.id))
+        assert access_request is not None
+        assert access_request.status == "pending"
+        assert access_request.contact == "@pending"
 
     login = client.post(
         "/api/auth/login",
@@ -64,10 +71,10 @@ def test_registration_is_pending_and_does_not_issue_session(monkeypatch):
         json={
             "email": "pending@example.com",
             "password": "correct-horse-battery-staple",
-            "display_name": "",
         },
     )
-    assert login.status_code == 401
+    assert login.status_code == 403
+    assert login.json()["detail"]["status"] == "pending_approval"
 
 
 def test_jwt_principal_is_revalidated_against_active_user(monkeypatch):
