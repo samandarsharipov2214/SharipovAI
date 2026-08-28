@@ -2,14 +2,20 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, replace
+from decimal import Decimal
+
+import pytest
 
 from autonomous_trading import (
     CanonicalPaperDecisionRuntime,
     CouncilAuthorizedPaperLoop,
     CouncilEntryProposal,
 )
+from autonomous_trading.council_loop import PaperExecutionRejected
 from decision_quality import CandidateEvidencePacket
+from exchange_connector.bybit_instrument_rules import BybitInstrumentRules
 from storage import ProjectDatabase
+from trading_core import ExecutionCostModel
 from trading_candidate import (
     MarketRegime,
     TradingCategory,
@@ -23,6 +29,62 @@ from trading_candidate import (
 class _Quote:
     price: float
     change_24h_percent: float | None = 1.0
+    bid_price: float | None = None
+    ask_price: float | None = None
+    volume_24h: float = 100_000_000.0
+    received_at_unix_ms: int = 1_000
+    source: str = "bybit_websocket_v5"
+
+    def __post_init__(self) -> None:
+        if self.bid_price is None:
+            self.bid_price = self.price - 0.5
+        if self.ask_price is None:
+            self.ask_price = self.price + 0.5
+
+
+class _RulesService:
+    def __init__(
+        self,
+        *,
+        qty_step: str = "0.000001",
+        min_qty: str = "0.000001",
+        min_notional: str = "5",
+    ) -> None:
+        self.qty_step = Decimal(qty_step)
+        self.min_qty = Decimal(min_qty)
+        self.min_notional = Decimal(min_notional)
+
+    def get(self, symbol: str, category: str = "spot") -> BybitInstrumentRules:
+        return BybitInstrumentRules(
+            symbol=symbol,
+            category=category,
+            status="Trading",
+            base_coin=symbol.removesuffix("USDT"),
+            quote_coin="USDT",
+            tick_size=Decimal("0.1"),
+            qty_step=self.qty_step,
+            min_qty=self.min_qty,
+            min_notional=self.min_notional,
+            max_limit_qty=Decimal("1000"),
+            max_market_qty=Decimal("1000"),
+            min_price=Decimal("0.1"),
+            max_price=Decimal("1000000"),
+            min_leverage=None,
+            max_leverage=None,
+            leverage_step=None,
+            fetched_at_ms=1,
+        )
+
+
+def _execution_kwargs() -> dict:
+    return {
+        "instrument_rules": _RulesService(),
+        "cost_model": ExecutionCostModel(
+            fee_rate=0.001,
+            slippage_bps=2.0,
+            market_impact_bps=15.0,
+        ),
+    }
 
 
 class _Stream:
@@ -172,6 +234,7 @@ def test_loop_does_not_open_without_council_proposal(tmp_path, monkeypatch) -> N
         decision_runtime=CanonicalPaperDecisionRuntime(database),
         proposal_provider=lambda symbol, quote, state: None,
         database=database,
+        **_execution_kwargs(),
     )
 
     loop.tick()
@@ -193,6 +256,7 @@ def test_authorized_council_decision_opens_traceable_position(tmp_path, monkeypa
         decision_runtime=CanonicalPaperDecisionRuntime(database),
         proposal_provider=lambda symbol, quote, state: proposal,
         database=database,
+        **_execution_kwargs(),
     )
 
     loop.tick()
@@ -219,6 +283,7 @@ def test_spot_sell_signal_does_not_open_short_when_flat(tmp_path, monkeypatch) -
         decision_runtime=CanonicalPaperDecisionRuntime(database),
         proposal_provider=lambda symbol, quote, state: proposal,
         database=database,
+        **_execution_kwargs(),
     )
 
     loop.tick()
@@ -250,6 +315,7 @@ def test_spot_sell_signal_closes_existing_long_with_single_use_authorization(tmp
         decision_runtime=CanonicalPaperDecisionRuntime(database),
         proposal_provider=lambda _symbol, _quote, _state: next(proposals),
         database=database,
+        **_execution_kwargs(),
     )
 
     loop.tick()
@@ -289,6 +355,7 @@ def test_restart_recovers_a_pending_settlement_once_after_transient_failure(tmp_
         decision_runtime=runtime,
         proposal_provider=lambda _symbol, _quote, _state: proposal,
         database=database,
+        **_execution_kwargs(),
     )
 
     loop.tick()
@@ -310,6 +377,7 @@ def test_restart_recovers_a_pending_settlement_once_after_transient_failure(tmp_
         decision_runtime=CanonicalPaperDecisionRuntime(database),
         proposal_provider=lambda _symbol, _quote, _state: None,
         database=database,
+        **_execution_kwargs(),
     )
     recovered_snapshot = recovered.snapshot()
     recovered_trade = recovered_snapshot["trades"][-1]
@@ -328,6 +396,7 @@ def test_restart_recovers_a_pending_settlement_once_after_transient_failure(tmp_
         decision_runtime=CanonicalPaperDecisionRuntime(database),
         proposal_provider=lambda _symbol, _quote, _state: None,
         database=database,
+        **_execution_kwargs(),
     )
     assert len(restarted_again.snapshot()["trades"]) == 2
 
@@ -348,6 +417,7 @@ def test_protective_stop_loss_does_not_wait_for_new_council(tmp_path, monkeypatc
         decision_runtime=CanonicalPaperDecisionRuntime(database),
         proposal_provider=provider,
         database=database,
+        **_execution_kwargs(),
     )
     loop.tick()
     stream.current = _Quote(58_000.0, change_24h_percent=-2.0)
@@ -358,3 +428,137 @@ def test_protective_stop_loss_does_not_wait_for_new_council(tmp_path, monkeypatc
     assert len(snapshot["trades"]) == 2
     assert snapshot["trades"][-1]["side"] == "SELL"
     assert snapshot["trades"][-1]["reason"] == "protective_stop_loss"
+
+
+def test_canonical_fills_use_bbo_cost_model_and_verified_decimal_rules(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("AUTONOMOUS_PAPER_STATE_FILE", str(tmp_path / "paper.json"))
+    database = _database(tmp_path)
+    stream = _Stream(100.0)
+    stream.current = _Quote(
+        100.0,
+        bid_price=99.9,
+        ask_price=100.1,
+        volume_24h=100_000.0,
+    )
+    buy = _proposal(database, "paper-realistic-buy", 100.0)
+    sell = replace(
+        _proposal(database, "paper-realistic-sell", 101.0),
+        agent_payloads=_sell_payloads(),
+    )
+    proposals = iter((buy, sell))
+    loop = CouncilAuthorizedPaperLoop(
+        stream,
+        decision_runtime=CanonicalPaperDecisionRuntime(database),
+        proposal_provider=lambda *_args: next(proposals),
+        database=database,
+        instrument_rules=_RulesService(qty_step="0.1", min_qty="0.1"),
+        cost_model=ExecutionCostModel(
+            fee_rate=0.001,
+            slippage_bps=10.0,
+            market_impact_bps=15.0,
+        ),
+    )
+
+    loop.tick()
+    entry = loop.snapshot()["trades"][0]
+    assert Decimal(str(entry["quantity"])) % Decimal("0.1") == 0
+    assert entry["reference_price"] == pytest.approx(100.0)
+    assert entry["execution_price"] >= 100.1
+    assert entry["price"] == entry["execution_price"]
+    assert entry["spread_cost"] > 0
+    assert entry["slippage_cost"] > 0
+    assert entry["impact_cost"] > 0
+    assert entry["fee"] == pytest.approx(
+        entry["execution_price"] * entry["quantity"] * entry["fee_rate"]
+    )
+    assert entry["paper_execution_semantics"] == "bybit_spot_taker_v2"
+
+    stream.current = _Quote(
+        101.0,
+        bid_price=100.9,
+        ask_price=101.1,
+        volume_24h=100_000.0,
+    )
+    loop.tick()
+    snapshot = loop.snapshot()
+    exit_fill = snapshot["trades"][-1]
+    assert exit_fill["execution_price"] <= 100.9
+    assert exit_fill["spread_cost"] > 0
+    assert exit_fill["slippage_cost"] > 0
+    assert exit_fill["fee"] == pytest.approx(
+        exit_fill["execution_price"] * exit_fill["quantity"] * exit_fill["fee_rate"]
+    )
+    expected_net = (
+        exit_fill["gross_pnl"]
+        - entry["spread_cost"]
+        - exit_fill["spread_cost"]
+        - entry["slippage_cost"]
+        - exit_fill["slippage_cost"]
+        - entry["fee"]
+        - exit_fill["fee"]
+    )
+    assert exit_fill["net_pnl"] == pytest.approx(expected_net)
+    assert snapshot["equity"] == pytest.approx(10_000.0 + expected_net)
+    assert snapshot["realized_pnl"] == pytest.approx(expected_net)
+    stored = loop.trade_history()
+    assert stored[-2]["execution_price"] == entry["execution_price"]
+    assert stored[-1]["net_pnl"] == exit_fill["net_pnl"]
+
+
+@pytest.mark.parametrize(
+    ("rules", "reason"),
+    (
+        (_RulesService(qty_step="1", min_qty="100"), "quantity is below verified minimum"),
+        (_RulesService(min_notional="2000"), "order notional is below verified minimum"),
+    ),
+)
+def test_verified_instrument_minimums_fail_closed_before_authorization_consumption(
+    tmp_path,
+    monkeypatch,
+    rules,
+    reason,
+) -> None:
+    monkeypatch.setenv("AUTONOMOUS_PAPER_STATE_FILE", str(tmp_path / "paper.json"))
+    database = _database(tmp_path)
+    stream = _Stream(100.0)
+    proposal = _proposal(database, f"paper-minimum-{rules.min_qty}-{rules.min_notional}", 100.0)
+    loop = CouncilAuthorizedPaperLoop(
+        stream,
+        decision_runtime=CanonicalPaperDecisionRuntime(database),
+        proposal_provider=lambda *_args: proposal,
+        database=database,
+        instrument_rules=rules,
+        cost_model=ExecutionCostModel(),
+    )
+
+    loop.tick()
+
+    snapshot = loop.snapshot()
+    assert snapshot["positions"] == {}
+    assert snapshot["trades"] == []
+    assert reason in snapshot["last_reason"]
+    assert database.get_json(
+        CanonicalPaperDecisionRuntime.consumption_namespace,
+        proposal.decision_id,
+    ) is None
+
+
+def test_cash_is_rechecked_before_prepared_fill_mutates_state(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("AUTONOMOUS_PAPER_STATE_FILE", str(tmp_path / "paper.json"))
+    database = _database(tmp_path)
+    stream = _Stream(100.0)
+    loop = CouncilAuthorizedPaperLoop(
+        stream,
+        decision_runtime=CanonicalPaperDecisionRuntime(database),
+        proposal_provider=lambda *_args: None,
+        database=database,
+        **_execution_kwargs(),
+    )
+    prepared = loop._prepare_open("BTCUSDT", stream.current)
+    loop._state["cash"] = 0.0
+
+    with pytest.raises(PaperExecutionRejected, match="cash is insufficient"):
+        loop._open("BTCUSDT", stream.current, "test", prepared=prepared)
+
+    assert loop.snapshot()["positions"] == {}
+    assert loop.snapshot()["trades"] == []

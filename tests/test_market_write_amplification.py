@@ -96,8 +96,10 @@ class _RestQuote:
     verified: bool = True
     change_24h_percent: float = 1.0
     volume_24h: float = 1_000.0
-    source: str = "bybit_rest"
+    source: str = "bybit"
     received_at_unix_ms: int = 1_000
+    bid_price: float = 99.5
+    ask_price: float = 100.5
 
 
 class _Rest:

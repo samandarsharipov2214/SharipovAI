@@ -31,6 +31,8 @@ class MarketQuote:
     received_at_unix_ms: int
     status: str = "live"
     verified: bool = True
+    bid_price: float | None = None
+    ask_price: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -104,6 +106,8 @@ class MarketDataService:
             volume_24h=row.get("turnover24h"),
             source="bybit",
             source_url=url,
+            bid_price=row.get("bid1Price"),
+            ask_price=row.get("ask1Price"),
         )
 
     def _fetch_binance(self, symbol: str) -> MarketQuote:
@@ -116,6 +120,8 @@ class MarketDataService:
             volume_24h=row.get("quoteVolume"),
             source="binance",
             source_url=url,
+            bid_price=row.get("bidPrice"),
+            ask_price=row.get("askPrice"),
         )
 
     def _get(self, url: str, *, params: dict[str, str]) -> httpx.Response:
@@ -181,8 +187,14 @@ def _make_quote(
     volume_24h: Any,
     source: str,
     source_url: str,
+    bid_price: Any = None,
+    ask_price: Any = None,
 ) -> MarketQuote:
     now = datetime.now(UTC)
+    parsed_bid = None if bid_price in (None, "") else positive_finite_float(bid_price, "bid_price")
+    parsed_ask = None if ask_price in (None, "") else positive_finite_float(ask_price, "ask_price")
+    if parsed_bid is not None and parsed_ask is not None and parsed_ask < parsed_bid:
+        raise ValueError("best ask must not be below best bid")
     return MarketQuote(
         symbol=normalize_symbol(symbol),
         price=positive_finite_float(price, "price"),
@@ -192,4 +204,6 @@ def _make_quote(
         source_url=source_url,
         received_at=now.isoformat(),
         received_at_unix_ms=int(now.timestamp() * 1000),
+        bid_price=parsed_bid,
+        ask_price=parsed_ask,
     )

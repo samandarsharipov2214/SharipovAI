@@ -14,6 +14,7 @@ from autonomous_trading import (
 )
 from dashboard.autonomous_trading_api import install_autonomous_trading_api
 from dashboard.database_api import install_database_api
+from exchange_connector.bybit_instrument_rules import BybitInstrumentRulesService
 from exchange_connector.market_data import MarketDataService, MarketQuote
 from exchange_connector.multi_exchange_consensus import ConsensusQuote, MultiExchangeConsensus
 from storage import ProjectDatabase
@@ -68,6 +69,8 @@ class FakeMarketData(MarketDataService):
             source_url="https://api.bybit.com/v5/market/tickers",
             received_at="2026-07-12T00:00:00+00:00",
             received_at_unix_ms=now,
+            bid_price=59_999.5,
+            ask_price=60_000.5,
         )
 
 
@@ -217,6 +220,7 @@ def test_dashboard_installer_uses_one_database_and_canonical_loop(tmp_path, monk
     app.state.bybit_websocket_worker = worker
     app.state.market_data_service = FakeMarketData()
     app.state.multi_exchange_consensus = FakeConsensus()
+    app.state.bybit_instrument_rules = BybitInstrumentRulesService()
 
     install_autonomous_trading_api(app)
 

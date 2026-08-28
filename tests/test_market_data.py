@@ -18,7 +18,10 @@ def test_bybit_quote_is_verified_and_normalized() -> None:
             json={
                 "retCode": 0,
                 "result": {
-                    "list": [{"lastPrice": "60000.5", "price24hPcnt": "0.025", "turnover24h": "1000000"}]
+                    "list": [{
+                        "lastPrice": "60000.5", "price24hPcnt": "0.025", "turnover24h": "1000000",
+                        "bid1Price": "60000.0", "ask1Price": "60001.0",
+                    }]
                 },
             },
         )
@@ -29,6 +32,8 @@ def test_bybit_quote_is_verified_and_normalized() -> None:
     assert quote.change_24h_percent == 2.5
     assert quote.source == "bybit"
     assert quote.verified is True
+    assert quote.bid_price == 60000.0
+    assert quote.ask_price == 60001.0
 
 
 def test_binance_is_used_when_bybit_fails() -> None:
@@ -41,13 +46,35 @@ def test_binance_is_used_when_bybit_fails() -> None:
             return httpx.Response(503, json={"error": "down"})
         return httpx.Response(
             200,
-            json={"lastPrice": "3000", "priceChangePercent": "1.2", "quoteVolume": "500000"},
+            json={
+                "lastPrice": "3000", "priceChangePercent": "1.2", "quoteVolume": "500000",
+                "bidPrice": "2999.5", "askPrice": "3000.5",
+            },
         )
 
     quote = MarketDataService(client=_client(handler)).quote("ETH-USDT")
     assert calls == 2
     assert quote.source == "binance"
     assert quote.price == 3000.0
+    assert quote.bid_price == 2999.5
+    assert quote.ask_price == 3000.5
+
+
+def test_crossed_bybit_bbo_is_rejected() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "retCode": 0,
+                "result": {"list": [{
+                    "lastPrice": "100", "price24hPcnt": "0", "turnover24h": "1000",
+                    "bid1Price": "101", "ask1Price": "100",
+                }]},
+            },
+        )
+
+    with pytest.raises(ValueError, match="best ask"):
+        MarketDataService(client=_client(handler)).provider_quote("bybit", "BTCUSDT")
 
 
 def test_no_provider_means_no_fake_price() -> None:

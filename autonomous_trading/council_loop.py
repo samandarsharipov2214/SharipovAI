@@ -7,10 +7,14 @@ capital preservation must not wait for a new council round.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal, ROUND_DOWN, ROUND_UP
 from threading import Thread
 from typing import Any, Callable, Mapping, Sequence
 
 from decision_quality import CandidateEvidencePacket
+from exchange_connector.bybit_instrument_rules import BybitInstrumentRulesService
+from trading_core.costs import ExecutionCostModel
+from trading_core.models import MarketEvent, Side
 from trading_candidate import TradingDecision
 
 from .canonical_runtime import CanonicalPaperDecisionRuntime, PaperDecisionAuthorization
@@ -42,6 +46,10 @@ ShadowGateProvider = Callable[
 ]
 
 
+class PaperExecutionRejected(RuntimeError):
+    """A fail-closed rejection before a canonical PAPER state transition."""
+
+
 class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
     """Autonomous paper loop whose new entries require council authorization."""
 
@@ -55,6 +63,8 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         shadow_runtime: RuntimeShadowV2 | None = None,
         shadow_gate_provider: ShadowGateProvider | None = None,
         shadow_timeout_seconds: float = 0.05,
+        instrument_rules: BybitInstrumentRulesService,
+        cost_model: ExecutionCostModel | None = None,
     ) -> None:
         super().__init__(stream, database=database or decision_runtime.database)
         if decision_runtime.database.dsn != self.database.dsn:
@@ -68,8 +78,11 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         # Portfolio and Security evidence, GeneralControllerV2 fails closed to WAIT.
         self.shadow_gate_provider = shadow_gate_provider or (lambda _auth, _packet, _state: ())
         self.shadow_timeout_seconds = float(shadow_timeout_seconds)
+        self.instrument_rules = instrument_rules
+        self.cost_model = cost_model or ExecutionCostModel(fee_rate=self.fee_rate)
         self._pending_authorization: PaperDecisionAuthorization | None = None
         self._pending_exit_context: dict[str, Any] | None = None
+        self._pending_execution: dict[str, Any] | None = None
         self._state["peak_equity"] = max(
             float(self._state.get("peak_equity", 0.0) or 0.0),
             float(self._state.get("equity", 0.0) or 0.0),
@@ -217,6 +230,13 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
 
                 if position is not None and candidate_side == "SELL":
                     try:
+                        prepared_exit = self._prepare_close(symbol, quote)
+                    except Exception as exc:
+                        reason = f"paper_execution_preflight_error:{type(exc).__name__}: {exc}"
+                        self._trace(symbol, "BLOCK", reason, phase="virtual_execution")
+                        self._event("BLOCK", reason, symbol)
+                        continue
+                    try:
                         self.decision_runtime.consume_authorization(
                             authorization,
                             consumed_at_ms=self._now_ms(),
@@ -229,9 +249,10 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
 
                     self._close(
                         symbol,
-                        quote.price,
+                        quote,
                         f"canonical_council_sell:{authorization.decision_id}",
                         exit_authorization=authorization,
+                        prepared=prepared_exit,
                     )
                     self._trace(
                         symbol,
@@ -256,6 +277,14 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                     continue
 
                 try:
+                    prepared_entry = self._prepare_open(symbol, quote)
+                except Exception as exc:
+                    reason = f"paper_execution_preflight_error:{type(exc).__name__}: {exc}"
+                    self._trace(symbol, "BLOCK", reason, phase="virtual_execution")
+                    self._event("BLOCK", reason, symbol)
+                    continue
+
+                try:
                     self.decision_runtime.consume_authorization(
                         authorization,
                         consumed_at_ms=self._now_ms(),
@@ -270,8 +299,9 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                 try:
                     self._open(
                         symbol,
-                        quote.price,
+                        quote,
                         f"canonical_council_allow:{authorization.decision_id}",
+                        prepared=prepared_entry,
                     )
                     position = self._state["positions"].get(symbol)
                     if position is None:
@@ -426,27 +456,202 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         entry = float(position["entry_price"])
         move = (float(quote.price) - entry) / entry * 100
         change = quote.change_24h_percent
+        reason = None
         if move <= -self.stop_loss_percent:
-            self._close(symbol, quote.price, "protective_stop_loss")
+            reason = "protective_stop_loss"
         elif move >= self.take_profit_percent:
-            self._close(symbol, quote.price, "protective_take_profit")
+            reason = "protective_take_profit"
         elif change is not None and change <= self.exit_change_percent:
-            self._close(symbol, quote.price, "protective_momentum_exit")
+            reason = "protective_momentum_exit"
+        if reason is None:
+            return
+        try:
+            self._close(symbol, quote, reason)
+        except Exception as exc:
+            blocked = f"paper_execution_preflight_error:{type(exc).__name__}: {exc}"
+            self._trace(symbol, "BLOCK", blocked, phase="protective_exit")
+            self._event("BLOCK", blocked, symbol)
+
+    def _prepare_open(self, symbol: str, quote: Any) -> dict[str, Any]:
+        cash = Decimal(str(self._state["cash"]))
+        budget = min(
+            cash * Decimal(str(self.max_position_percent)) / Decimal("100"),
+            cash / Decimal(max(len(self.stream.symbols), 1)),
+        )
+        ask = _positive_decimal(getattr(quote, "ask_price", None), "best ask")
+        requested_quantity = budget / ask
+        return self._prepare_execution(symbol, quote, Side.BUY, requested_quantity)
+
+    def _prepare_close(self, symbol: str, quote: Any) -> dict[str, Any]:
+        position = self._state["positions"].get(symbol)
+        if not isinstance(position, Mapping):
+            raise PaperExecutionRejected("paper position is unavailable")
+        return self._prepare_execution(
+            symbol,
+            quote,
+            Side.SELL,
+            _positive_decimal(position.get("quantity"), "position quantity"),
+        )
+
+    def _prepare_execution(
+        self,
+        symbol: str,
+        quote: Any,
+        side: Side,
+        requested_quantity: Decimal,
+    ) -> dict[str, Any]:
+        rules = self.instrument_rules.get(symbol, "spot")
+        if rules.symbol != str(symbol).upper() or rules.category != "spot":
+            raise PaperExecutionRejected("verified instrument rules do not match PAPER symbol/category")
+        bid = _positive_decimal(getattr(quote, "bid_price", None), "best bid")
+        ask = _positive_decimal(getattr(quote, "ask_price", None), "best ask")
+        if ask < bid:
+            raise PaperExecutionRejected("best ask is below best bid")
+        midpoint = (bid + ask) / Decimal("2")
+        quantity = _step(requested_quantity, rules.qty_step, ROUND_DOWN)
+        if quantity < rules.min_qty:
+            raise PaperExecutionRejected("quantity is below verified minimum")
+        if rules.max_market_qty is not None and quantity > rules.max_market_qty:
+            quantity = _step(rules.max_market_qty, rules.qty_step, ROUND_DOWN)
+        if quantity < rules.min_qty:
+            raise PaperExecutionRejected("quantity is below verified minimum")
+
+        quote_turnover = _optional_positive_decimal(
+            getattr(quote, "volume_24h", None), "24h quote turnover"
+        )
+        base_volume = None if quote_turnover is None else float(quote_turnover / midpoint)
+        event = MarketEvent(
+            timestamp_ms=int(getattr(quote, "received_at_unix_ms", 0) or 0),
+            symbol=str(symbol).upper(),
+            bid=float(bid),
+            ask=float(ask),
+            source=str(getattr(quote, "source", "bybit_websocket_v5")),
+            volume=base_volume,
+        )
+        estimated = self.cost_model.estimate(
+            event,
+            side=side,
+            quantity=float(quantity),
+            liquidity_role="taker",
+        )
+        execution_price = _step(
+            _positive_decimal(estimated.execution_price, "execution price"),
+            rules.tick_size,
+            ROUND_UP if side is Side.BUY else ROUND_DOWN,
+        )
+        if rules.min_price is not None and execution_price < rules.min_price:
+            raise PaperExecutionRejected("execution price is below verified minimum")
+        if rules.max_price is not None and execution_price > rules.max_price:
+            raise PaperExecutionRejected("execution price exceeds verified maximum")
+        notional = execution_price * quantity
+        if notional < rules.min_notional:
+            raise PaperExecutionRejected("order notional is below verified minimum")
+
+        bbo = ask if side is Side.BUY else bid
+        spread_cost = abs(bbo - midpoint) * quantity
+        slippage_cost = abs(execution_price - bbo) * quantity
+        base_rate = Decimal(str(self.cost_model.slippage_bps)) / Decimal("10000")
+        base_execution = (
+            bbo * (Decimal("1") + base_rate)
+            if side is Side.BUY
+            else bbo / (Decimal("1") + base_rate)
+        )
+        estimated_impact = abs(
+            _positive_decimal(estimated.execution_price, "estimated execution price")
+            - base_execution
+        ) * quantity
+        impact_cost = min(slippage_cost, estimated_impact)
+        fee = notional * Decimal(str(estimated.fee_rate))
+        return {
+            "side": side.value,
+            "quantity": float(quantity),
+            "reference_price": float(midpoint),
+            "bbo_price": float(bbo),
+            "execution_price": float(execution_price),
+            "notional": float(notional),
+            "fee": float(fee),
+            "spread_cost": float(spread_cost),
+            "slippage_cost": float(slippage_cost),
+            "impact_cost": float(impact_cost),
+            "participation_rate": float(estimated.participation_rate),
+            "effective_slippage_bps": float(estimated.effective_slippage_bps),
+            "fee_rate": float(estimated.fee_rate),
+            "instrument_rules_fetched_at_ms": int(rules.fetched_at_ms),
+            "instrument_rules_source": str(rules.source),
+            "qty_step": str(rules.qty_step),
+            "tick_size": str(rules.tick_size),
+            "min_qty": str(rules.min_qty),
+            "min_notional": str(rules.min_notional),
+            "paper_execution_semantics": "bybit_spot_taker_v2",
+            "execution_source": "bybit_rest_bbo+execution_cost_model",
+        }
+
+    def _open(
+        self,
+        symbol: str,
+        quote: Any,
+        reason: str,
+        *,
+        prepared: dict[str, Any] | None = None,
+    ) -> None:
+        execution = prepared or self._prepare_open(symbol, quote)
+        cash = Decimal(str(self._state["cash"]))
+        required = Decimal(str(execution["notional"])) + Decimal(str(execution["fee"]))
+        if required > cash:
+            raise PaperExecutionRejected("paper cash is insufficient for notional and fee")
+        opened_at = self._now()
+        self._state["cash"] = float(cash - required)
+        self._state["positions"][symbol] = {
+            "quantity": execution["quantity"],
+            "entry_price": execution["execution_price"],
+            "entry_reference_price": execution["reference_price"],
+            "opened_at": opened_at,
+            "entry_fee": execution["fee"],
+            "entry_spread_cost": execution["spread_cost"],
+            "entry_slippage_cost": execution["slippage_cost"],
+            "entry_impact_cost": execution["impact_cost"],
+            "paper_execution_semantics": execution["paper_execution_semantics"],
+            "reason": reason,
+        }
+        self._state["total_fees"] += execution["fee"]
+        self._pending_execution = execution
+        try:
+            self._trade(
+                symbol,
+                "BUY",
+                execution["quantity"],
+                execution["execution_price"],
+                execution["fee"],
+                reason,
+                None,
+            )
+        finally:
+            self._pending_execution = None
 
     def _close(
         self,
         symbol: str,
-        price: float,
+        quote: Any,
         reason: str,
         *,
         exit_authorization: PaperDecisionAuthorization | None = None,
+        prepared: dict[str, Any] | None = None,
     ) -> None:
         position = dict(self._state["positions"].get(symbol) or {})
+        execution = prepared or self._prepare_close(symbol, quote)
+        if Decimal(str(execution["quantity"])) != Decimal(str(position.get("quantity"))):
+            raise PaperExecutionRejected("existing position quantity is not aligned to verified qtyStep")
         self._pending_exit_context = {
             "decision_id": str(position.get("decision_id") or "").strip(),
             "candidate_id": str(position.get("candidate_id") or "").strip(),
             "entry_price": float(position.get("entry_price", 0.0) or 0.0),
             "entry_fee": float(position.get("entry_fee", 0.0) or 0.0),
+            "entry_reference_price": float(
+                position.get("entry_reference_price", position.get("entry_price", 0.0)) or 0.0
+            ),
+            "entry_spread_cost": float(position.get("entry_spread_cost", 0.0) or 0.0),
+            "entry_slippage_cost": float(position.get("entry_slippage_cost", 0.0) or 0.0),
+            "entry_impact_cost": float(position.get("entry_impact_cost", 0.0) or 0.0),
             "exit_decision_id": (
                 exit_authorization.decision_id if exit_authorization is not None else ""
             ),
@@ -457,7 +662,37 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
             ),
         }
         try:
-            super()._close(symbol, price, reason)
+            quantity = Decimal(str(execution["quantity"]))
+            proceeds = Decimal(str(execution["execution_price"])) * quantity
+            gross = (
+                Decimal(str(execution["reference_price"]))
+                - Decimal(str(self._pending_exit_context["entry_reference_price"]))
+            ) * quantity
+            total_spread = Decimal(str(self._pending_exit_context["entry_spread_cost"])) + Decimal(
+                str(execution["spread_cost"])
+            )
+            total_slippage = Decimal(str(self._pending_exit_context["entry_slippage_cost"])) + Decimal(
+                str(execution["slippage_cost"])
+            )
+            total_fees = Decimal(str(self._pending_exit_context["entry_fee"])) + Decimal(
+                str(execution["fee"])
+            )
+            net = gross - total_spread - total_slippage - total_fees
+            self._state["positions"].pop(symbol)
+            self._state["cash"] += float(proceeds - Decimal(str(execution["fee"])))
+            self._state["realized_pnl"] += float(net)
+            self._state["total_fees"] += execution["fee"]
+            execution["gross_pnl"] = float(gross)
+            self._pending_execution = execution
+            self._trade(
+                symbol,
+                "SELL",
+                execution["quantity"],
+                execution["execution_price"],
+                execution["fee"],
+                reason,
+                float(net),
+            )
             self._trace(
                 symbol,
                 "SELL",
@@ -466,6 +701,7 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                 decision_id=self._pending_exit_context.get("decision_id") or None,
             )
         finally:
+            self._pending_execution = None
             self._pending_exit_context = None
 
     def _trade(
@@ -495,6 +731,11 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
             "source": "bybit_websocket",
             "verified_market_data": True,
         }
+        if self._pending_execution:
+            item.update(self._pending_execution)
+            item["price"] = float(self._pending_execution["execution_price"])
+            item["gross_pnl"] = self._pending_execution.get("gross_pnl")
+            item["source"] = "bybit_websocket_v5+bybit_rest_bbo"
 
         if side == "BUY" and self._pending_authorization is not None:
             authorization = self._pending_authorization
@@ -559,9 +800,9 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                             entry_fee=float(self._pending_exit_context.get("entry_fee", 0.0) or 0.0),
                             exit_fee=float(fee),
                             net_pnl=net,
-                            # Current paper execution fills at the supplied verified quote;
-                            # there is no separate simulated slippage charge in this loop.
-                            slippage_cost=0.0,
+                            slippage_cost=float(
+                                self._pending_exit_context.get("entry_slippage_cost", 0.0) or 0.0
+                            ) + float(item.get("slippage_cost", 0.0) or 0.0),
                         )
                         self._state["v2_shadow_records"][decision_id] = settled_shadow
                         item["v2_shadow_snapshot_id"] = settled_shadow["snapshot_id"]
@@ -716,6 +957,29 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
 __all__ = [
     "CouncilAuthorizedPaperLoop",
     "CouncilEntryProposal",
+    "PaperExecutionRejected",
     "ProposalProvider",
     "ShadowGateProvider",
 ]
+
+
+def _positive_decimal(value: Any, name: str) -> Decimal:
+    try:
+        parsed = Decimal(str(value))
+    except Exception as exc:
+        raise PaperExecutionRejected(f"{name} is invalid") from exc
+    if not parsed.is_finite() or parsed <= 0:
+        raise PaperExecutionRejected(f"{name} must be positive and finite")
+    return parsed
+
+
+def _optional_positive_decimal(value: Any, name: str) -> Decimal | None:
+    if value in (None, ""):
+        return None
+    return _positive_decimal(value, name)
+
+
+def _step(value: Decimal, step: Decimal, rounding: str) -> Decimal:
+    if not step.is_finite() or step <= 0:
+        raise PaperExecutionRejected("verified instrument step is invalid")
+    return (value / step).to_integral_value(rounding=rounding) * step

@@ -84,6 +84,12 @@ class SharedVerifiedMarketStream:
         rest = self.market_data.quote(clean)
         if rest.verified is not True:
             raise RuntimeError("REST market quote is not verified")
+        if rest.source != "bybit":
+            raise RuntimeError("executable Bybit bid/ask is unavailable")
+        rest_bid = _positive_float(rest.bid_price, "Bybit REST best bid")
+        rest_ask = _positive_float(rest.ask_price, "Bybit REST best ask")
+        if rest_ask < rest_bid:
+            raise RuntimeError("Bybit REST best ask is below best bid")
         cross = self.consensus.quote(clean)
         if cross.verified is not True or cross.source_count < 3:
             raise RuntimeError("multi-exchange consensus is not verified")
@@ -103,6 +109,8 @@ class SharedVerifiedMarketStream:
             received_at=now.isoformat(),
             received_at_unix_ms=received_at_ms,
             verified=True,
+            bid_price=rest_bid,
+            ask_price=rest_ask,
         )
         exchange_timestamp_ms = _positive_int(
             websocket.get("exchange_timestamp_ms"), "exchange_timestamp_ms"
@@ -112,6 +120,8 @@ class SharedVerifiedMarketStream:
             "symbol": clean,
             "websocket_source": str(websocket.get("source") or "bybit_websocket_v5"),
             "websocket_price": ws_price,
+            "bybit_rest_best_bid": rest_bid,
+            "bybit_rest_best_ask": rest_ask,
             "websocket_exchange_timestamp_ms": exchange_timestamp_ms,
             "websocket_received_at_ms": received_at_ms,
             "rest_source": rest.source,
