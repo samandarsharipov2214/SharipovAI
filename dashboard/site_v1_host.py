@@ -1,6 +1,5 @@
 """Serve version-controlled Site V1 from the canonical FastAPI service."""
 from pathlib import Path
-from urllib.parse import quote
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, RedirectResponse
@@ -17,8 +16,7 @@ def install_site_v1_host(app: FastAPI) -> None:
     async def site_v1_host(request: Request, call_next):
         if request.method in {"GET", "HEAD"} and request.url.path in {"/login", "/register"}:
             mode = "register" if request.url.path == "/register" else "login"
-            next_path = request.query_params.get("next", "")
-            suffix = f"&next={quote(next_path, safe='/')}" if next_path.startswith("/") and not next_path.startswith("//") else ""
+            suffix = "&next=/app" if request.query_params.get("next") == "/app" else ""
             return RedirectResponse(url=f"/?mode={mode}{suffix}", status_code=303)
         if (
             request.method in {"GET", "HEAD"}

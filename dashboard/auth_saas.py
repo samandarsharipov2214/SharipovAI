@@ -1,16 +1,17 @@
 """JWT cookie authentication for the SharipovAI SaaS frontend."""
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 import re
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlsplit
 
 import jwt
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import Body, FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from sqlalchemy import select
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .db_saas import SessionLocal
@@ -25,7 +26,7 @@ class LoginRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     email: str = Field(min_length=5, max_length=320)
-    password: str = Field(min_length=12, max_length=200, repr=False)
+    password: str = Field(min_length=1, max_length=200, repr=False)
 
 
 class RegistrationRequest(BaseModel):
@@ -66,6 +67,30 @@ settings = get_saas_settings()
 
 def normalize_email(email: str) -> str:
     return email.strip().lower()
+
+
+def _user_by_email(email: str):
+    return select(User).where(func.lower(User.email) == normalize_email(email))
+
+
+def _registration_payload(raw_payload: Any) -> RegistrationRequest:
+    try:
+        return RegistrationRequest.model_validate(raw_payload)
+    except ValidationError:
+        raise HTTPException(
+            status_code=422,
+            detail={"status": "invalid_registration", "message": "Проверьте поля регистрации."},
+        ) from None
+
+
+def _login_payload(raw_payload: Any) -> LoginRequest:
+    try:
+        return LoginRequest.model_validate(raw_payload)
+    except ValidationError:
+        raise HTTPException(
+            status_code=422,
+            detail={"status": "invalid_login", "message": "Проверьте формат данных входа."},
+        ) from None
 
 
 def ensure_same_origin(request: Request) -> None:
@@ -144,8 +169,7 @@ def resolve_authenticated_principal(request: Request) -> str | None:
             return None
         db = SessionLocal()
         try:
-            stmt = select(User).where(User.email == normalize_email(str(payload["sub"])))
-            user = db.scalar(stmt)
+            user = db.scalar(_user_by_email(str(payload["sub"])))
             if not user or not user.is_active:
                 return None
             return user.email
@@ -161,8 +185,7 @@ def get_current_user(request: Request, db: Session) -> User | None:
     payload = decode_access_token(token)
     if not payload:
         return None
-    stmt = select(User).where(User.email == normalize_email(str(payload["sub"])))
-    user = db.scalar(stmt)
+    user = db.scalar(_user_by_email(str(payload["sub"])))
     if not user or not user.is_active:
         return None
     return user
@@ -210,14 +233,18 @@ def install_saas_auth_api(app: FastAPI) -> None:
     app.state.saas_auth_api_installed = True
 
     @app.post("/api/auth/register", response_model=AuthResponse)
-    async def register(payload: RegistrationRequest, request: Request) -> AuthResponse:
+    async def register(request: Request, raw_payload: Any = Body(...)) -> AuthResponse:
         ensure_same_origin(request)
+        payload = _registration_payload(raw_payload)
         db = SessionLocal()
         try:
             email = normalize_email(payload.email)
-            existing = db.scalar(select(User).where(User.email == email))
+            existing = db.scalar(_user_by_email(email))
             if existing:
-                raise HTTPException(status_code=409, detail={"status": "already_exists", "message": "Пользователь уже существует."})
+                raise HTTPException(
+                    status_code=409,
+                    detail={"status": "already_exists", "message": "Пользователь уже существует."},
+                )
             user = User(
                 email=email,
                 display_name=payload.name.strip(),
@@ -241,6 +268,12 @@ def install_saas_auth_api(app: FastAPI) -> None:
                 authenticated=False,
                 user=serialize_user(user),
             )
+        except IntegrityError:
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail={"status": "already_exists", "message": "Пользователь уже существует."},
+            ) from None
         except Exception:
             db.rollback()
             raise
@@ -248,15 +281,30 @@ def install_saas_auth_api(app: FastAPI) -> None:
             db.close()
 
     @app.post("/api/auth/login", response_model=AuthResponse)
-    async def login(payload: LoginRequest, request: Request) -> AuthResponse:
+    async def login(request: Request, raw_payload: Any = Body(...)) -> AuthResponse:
         ensure_same_origin(request)
+        payload = _login_payload(raw_payload)
         db = SessionLocal()
         try:
             email = normalize_email(payload.email)
-            user = db.scalar(select(User).where(User.email == email))
+            user = db.scalar(_user_by_email(email))
             if not user or not verify_password(payload.password, user.password_hash):
-                raise HTTPException(status_code=401, detail={"status": "invalid_credentials", "message": "Неверный email или пароль."})
+                raise HTTPException(
+                    status_code=401,
+                    detail={"status": "invalid_credentials", "message": "Неверный email или пароль."},
+                )
             if not user.is_active:
+                access_request = db.scalar(
+                    select(AccessRequest).where(AccessRequest.user_id == user.id)
+                )
+                if access_request and access_request.status == "rejected":
+                    raise HTTPException(
+                        status_code=403,
+                        detail={
+                            "status": "access_rejected",
+                            "message": "Заявка на доступ не одобрена.",
+                        },
+                    )
                 raise HTTPException(
                     status_code=403,
                     detail={

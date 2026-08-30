@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import dashboard.admin_guard as admin_guard
@@ -79,18 +81,87 @@ def test_registration_validation_and_duplicate_are_fail_closed(monkeypatch):
         _registration(password="short", password_confirmation="short"),
         _registration(password_confirmation="different-long-password"),
         _registration(contact=""),
+        _registration(name="x" * 121),
     )
     for payload in invalid_payloads:
-        assert client.post("/api/auth/register", json=payload, headers=ORIGIN_HEADERS).status_code == 422
+        response = client.post("/api/auth/register", json=payload, headers=ORIGIN_HEADERS)
+        assert response.status_code == 422
+        assert payload["password"] not in response.text
+        assert payload["password_confirmation"] not in response.text
 
-    accepted = client.post("/api/auth/register", json=_registration(), headers=ORIGIN_HEADERS)
+    accepted = client.post(
+        "/api/auth/register",
+        json=_registration(email="Ada@Example.Test"),
+        headers=ORIGIN_HEADERS,
+    )
     assert accepted.status_code == 200
-    duplicate = client.post("/api/auth/register", json=_registration(), headers=ORIGIN_HEADERS)
+    duplicate = client.post(
+        "/api/auth/register",
+        json=_registration(email="ADA@EXAMPLE.TEST"),
+        headers=ORIGIN_HEADERS,
+    )
     assert duplicate.status_code == 409
     assert duplicate.json()["detail"]["status"] == "already_exists"
     with sessions() as db:
         assert len(db.scalars(select(User)).all()) == 1
         assert len(db.scalars(select(AccessRequest)).all()) == 1
+
+
+def test_active_pending_and_rejected_accounts_cannot_register_again(monkeypatch):
+    client, sessions = _client(monkeypatch)
+    assert client.post("/api/auth/register", json=_registration(), headers=ORIGIN_HEADERS).status_code == 200
+
+    for account_state in ("pending", "active", "rejected"):
+        with sessions() as db:
+            user = db.scalar(select(User))
+            access_request = db.scalar(select(AccessRequest))
+            user.is_active = account_state == "active"
+            access_request.status = "rejected" if account_state == "rejected" else "pending"
+            db.commit()
+        response = client.post(
+            "/api/auth/register",
+            json=_registration(email="ADA@EXAMPLE.TEST"),
+            headers=ORIGIN_HEADERS,
+        )
+        assert response.status_code == 409
+        assert response.json()["detail"]["status"] == "already_exists"
+
+    with sessions() as db:
+        assert len(db.scalars(select(User)).all()) == 1
+        assert len(db.scalars(select(AccessRequest)).all()) == 1
+
+
+def test_concurrent_unique_collision_returns_stable_conflict_and_rolls_back(monkeypatch):
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+        future=True,
+    )
+    Base.metadata.create_all(engine)
+
+    class CollisionSession(Session):
+        def commit(self):
+            raise IntegrityError("synthetic concurrent duplicate", {}, RuntimeError("unique"))
+
+    collision_sessions = sessionmaker(bind=engine, class_=CollisionSession, expire_on_commit=False)
+    inspection_sessions = sessionmaker(bind=engine, expire_on_commit=False)
+    monkeypatch.setattr(auth_saas, "SessionLocal", collision_sessions)
+    app = FastAPI()
+    auth_saas.install_saas_auth_api(app)
+
+    response = TestClient(app).post(
+        "/api/auth/register",
+        json=_registration(),
+        headers=ORIGIN_HEADERS,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["status"] == "already_exists"
+    assert PASSWORD not in response.text
+    with inspection_sessions() as db:
+        assert db.scalar(select(User)) is None
+        assert db.scalar(select(AccessRequest)) is None
 
 
 def test_registration_rejects_cross_origin(monkeypatch):
@@ -103,6 +174,26 @@ def test_registration_rejects_cross_origin(monkeypatch):
     assert response.status_code == 403
     with sessions() as db:
         assert db.scalar(select(User)) is None
+
+
+def test_registration_treats_profile_metadata_as_text_and_never_echoes_password(monkeypatch):
+    client, sessions = _client(monkeypatch)
+    payload = _registration(
+        name='<img src=x onerror="alert(1)">',
+        contact="<script>alert(2)</script>",
+        reason="<b>research</b>",
+    )
+
+    response = client.post("/api/auth/register", json=payload, headers=ORIGIN_HEADERS)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.json()["user"]["display_name"] == payload["name"]
+    assert PASSWORD not in response.text
+    with sessions() as db:
+        access_request = db.scalar(select(AccessRequest))
+        assert access_request.contact == payload["contact"]
+        assert access_request.reason == payload["reason"]
 
 
 def test_registration_rolls_back_user_when_request_insert_fails(monkeypatch):
@@ -132,6 +223,20 @@ def test_login_contract_pending_wrong_approved_logout(monkeypatch):
         headers=ORIGIN_HEADERS,
     )
     assert wrong.status_code == 401
+    unknown = client.post(
+        "/api/auth/login",
+        json={"email": "unknown@example.test", "password": "wrong"},
+        headers=ORIGIN_HEADERS,
+    )
+    assert unknown.status_code == 401
+    assert unknown.json()["detail"]["status"] == "invalid_credentials"
+    malformed = client.post(
+        "/api/auth/login",
+        json={"email": "ada@example.test", "password": PASSWORD, "name": "unexpected"},
+        headers=ORIGIN_HEADERS,
+    )
+    assert malformed.status_code == 422
+    assert PASSWORD not in malformed.text
     pending = client.post(
         "/api/auth/login",
         json={"email": "ada@example.test", "password": PASSWORD},
@@ -154,8 +259,61 @@ def test_login_contract_pending_wrong_approved_logout(monkeypatch):
     assert approved.json()["authenticated"] is True
     cookie = approved.headers["set-cookie"].lower()
     assert "httponly" in cookie and "samesite=" in cookie
+    assert f"max-age={auth_saas.settings.jwt_ttl_seconds}" in cookie
     logout = client.post("/api/auth/logout", json={}, headers=ORIGIN_HEADERS)
     assert logout.status_code == 200
+
+
+def test_production_cookie_is_secure_http_only_and_bounded(monkeypatch):
+    production_settings = replace(
+        auth_saas.settings,
+        auth_cookie_secure=True,
+        jwt_secret="site-v1-test-signing-key-longer-than-32-bytes",
+    )
+    monkeypatch.setattr(auth_saas, "settings", production_settings)
+    client, sessions = _client(monkeypatch)
+    with sessions() as db:
+        db.add(
+            User(
+                email="active@example.test",
+                display_name="Active",
+                password_hash=auth_saas.hash_password(PASSWORD),
+                is_active=True,
+            )
+        )
+        db.commit()
+
+    response = client.post(
+        "/api/auth/login",
+        json={"email": "active@example.test", "password": PASSWORD},
+        headers=ORIGIN_HEADERS,
+    )
+
+    cookie = response.headers["set-cookie"].lower()
+    assert response.status_code == 200
+    assert "secure" in cookie
+    assert "httponly" in cookie
+    assert f"samesite={production_settings.auth_cookie_samesite}" in cookie
+    assert f"max-age={production_settings.jwt_ttl_seconds}" in cookie
+
+
+def test_rejected_account_gets_truthful_denial_without_session(monkeypatch):
+    client, sessions = _client(monkeypatch)
+    client.post("/api/auth/register", json=_registration(), headers=ORIGIN_HEADERS)
+    with sessions() as db:
+        access_request = db.scalar(select(AccessRequest))
+        access_request.status = "rejected"
+        db.commit()
+
+    response = client.post(
+        "/api/auth/login",
+        json={"email": "ada@example.test", "password": PASSWORD},
+        headers=ORIGIN_HEADERS,
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["status"] == "access_rejected"
+    assert "set-cookie" not in response.headers
 
 
 def test_access_approval_rejects_user_and_allows_admin(monkeypatch):
@@ -169,6 +327,8 @@ def test_access_approval_rejects_user_and_allows_admin(monkeypatch):
         raise HTTPException(status_code=403, detail={"status": "forbidden"})
 
     monkeypatch.setattr(admin_guard, "require_admin", reject_user)
+    forbidden_list = client.get("/api/auth/access-requests")
+    assert forbidden_list.status_code == 403
     forbidden = client.post(
         f"/api/auth/access-requests/{request_id}/approve",
         json={},
@@ -195,6 +355,38 @@ def test_access_approval_rejects_user_and_allows_admin(monkeypatch):
         assert db.get(User, access_request.user_id).is_active is True
 
 
+def test_access_reject_is_admin_only_and_persists_review(monkeypatch):
+    client, sessions = _client(monkeypatch)
+    client.post("/api/auth/register", json=_registration(), headers=ORIGIN_HEADERS)
+    with sessions() as db:
+        request_id = db.scalar(select(AccessRequest)).id
+
+    def unauthenticated(_request):
+        raise HTTPException(status_code=401, detail={"status": "unauthorized"})
+
+    monkeypatch.setattr(admin_guard, "require_admin", unauthenticated)
+    denied = client.post(
+        f"/api/auth/access-requests/{request_id}/reject",
+        json={},
+        headers=ORIGIN_HEADERS,
+    )
+    assert denied.status_code == 401
+
+    monkeypatch.setattr(admin_guard, "require_admin", lambda _request: "owner@example.test")
+    rejected = client.post(
+        f"/api/auth/access-requests/{request_id}/reject",
+        json={},
+        headers=ORIGIN_HEADERS,
+    )
+    assert rejected.status_code == 200
+    with sessions() as db:
+        access_request = db.get(AccessRequest, request_id)
+        assert access_request.status == "rejected"
+        assert access_request.reviewed_at is not None
+        assert access_request.reviewed_by == "owner@example.test"
+        assert db.get(User, access_request.user_id).is_active is False
+
+
 def test_site_v1_static_contract_has_no_missing_local_assets():
     static = ROOT / "dashboard" / "static" / "site-v1"
     html = (static / "index.html").read_text(encoding="utf-8")
@@ -207,4 +399,7 @@ def test_site_v1_static_contract_has_no_missing_local_assets():
     assert 'requestJson("/api/auth/register"' in js
     assert "/api/site-v1/access-requests" not in js
     assert "localStorage" not in js
+    assert "innerHTML" not in js
+    assert 'aria-busy") === "true"' in js
+    assert "AbortController" in js
     assert "password_confirmation" in html

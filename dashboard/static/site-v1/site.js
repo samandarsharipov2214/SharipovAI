@@ -10,6 +10,7 @@
     register: select("#registerForm"),
   };
   const tabs = [...document.querySelectorAll("[data-mode]")];
+  const REQUEST_TIMEOUT_MS = 15000;
 
   function setMessage(text = "", type = "error", target = message) {
     target.textContent = text;
@@ -38,7 +39,9 @@
     form.setAttribute("aria-busy", String(busy));
     [...form.elements].forEach((control) => { control.disabled = busy; });
     const label = form.id === "loginForm" ? "Входим…" : "Отправляем…";
+    const button = form.querySelector(".primary-action");
     const buttonText = form.querySelector(".primary-action span");
+    button.classList.toggle("loading", busy);
     if (busy) {
       buttonText.dataset.original = buttonText.textContent;
       buttonText.textContent = label;
@@ -49,20 +52,29 @@
   }
 
   async function requestJson(url, options = {}) {
-    const response = await fetch(url, {
-      credentials: "same-origin",
-      ...options,
-      headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      const error = new Error("request_failed");
-      error.status = response.status;
-      error.payload = payload;
-      throw error;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      const response = await fetch(url, {
+        credentials: "same-origin",
+        ...options,
+        headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+        signal: controller.signal,
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const error = new Error("request_failed");
+        error.status = response.status;
+        error.payload = payload;
+        throw error;
+      }
+      return payload;
+    } finally {
+      window.clearTimeout(timeout);
     }
-    return payload;
   }
+
+  const isNetworkError = (error) => !Number.isInteger(error?.status);
 
   function validate(form) {
     if (!form.checkValidity()) {
@@ -93,6 +105,7 @@
 
   forms.login.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (forms.login.getAttribute("aria-busy") === "true") return;
     if (!validate(forms.login)) return;
     setMessage();
     setBusy(forms.login, true);
@@ -105,15 +118,24 @@
       window.location.assign("/app");
     } catch (error) {
       const status = error.payload?.detail?.status;
-      setMessage(status === "pending_approval"
-        ? "Заявка ещё ожидает одобрения администратора."
-        : "Не удалось войти. Проверьте e-mail и пароль.");
+      if (isNetworkError(error)) {
+        setMessage("Нет соединения с сервером. Проверьте сеть и повторите попытку.");
+      } else if (status === "pending_approval") {
+        setMessage("Заявка ещё ожидает одобрения администратора.");
+      } else if (status === "access_rejected") {
+        setMessage("Заявка на доступ не одобрена.");
+      } else if (error.status >= 500) {
+        setMessage("Сервис временно недоступен. Повторите попытку позже.");
+      } else {
+        setMessage("Не удалось войти. Проверьте e-mail и пароль.");
+      }
       setBusy(forms.login, false);
     }
   });
 
   forms.register.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (forms.register.getAttribute("aria-busy") === "true") return;
     if (!validate(forms.register)) return;
     const values = Object.fromEntries(new FormData(forms.register));
     if (values.password !== values.password_confirmation) {
@@ -129,9 +151,15 @@
       setMessage("Заявка отправлена. После одобрения вы сможете войти.", "success");
     } catch (error) {
       const status = error.payload?.detail?.status;
-      setMessage(status === "already_exists"
-        ? "Аккаунт с таким e-mail уже существует."
-        : "Проверьте заполненные поля и повторите попытку.");
+      if (isNetworkError(error)) {
+        setMessage("Нет соединения с сервером. Проверьте сеть и повторите попытку.");
+      } else if (status === "already_exists") {
+        setMessage("Аккаунт с таким e-mail уже существует или заявка уже отправлена.");
+      } else if (error.status >= 500) {
+        setMessage("Сервис временно недоступен. Повторите попытку позже.");
+      } else {
+        setMessage("Проверьте заполненные поля и повторите попытку.");
+      }
     } finally {
       setBusy(forms.register, false);
     }
