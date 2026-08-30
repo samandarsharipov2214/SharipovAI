@@ -24,6 +24,8 @@ class StreamQuote:
     received_at: str
     received_at_unix_ms: int
     verified: bool = True
+    bid_price: float | None = None
+    ask_price: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

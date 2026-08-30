@@ -14,6 +14,7 @@ from autonomous_trading import (
 )
 from dashboard.autonomous_trading_api import install_autonomous_trading_api
 from dashboard.database_api import install_database_api
+from exchange_connector.bybit_instrument_rules import BybitInstrumentRulesService
 from exchange_connector.market_data import MarketDataService, MarketQuote
 from exchange_connector.multi_exchange_consensus import ConsensusQuote, MultiExchangeConsensus
 from storage import ProjectDatabase
@@ -68,6 +69,8 @@ class FakeMarketData(MarketDataService):
             source_url="https://api.bybit.com/v5/market/tickers",
             received_at="2026-07-12T00:00:00+00:00",
             received_at_unix_ms=now,
+            bid_price=59_999.5,
+            ask_price=60_000.5,
         )
 
 
@@ -184,6 +187,57 @@ def test_verified_council_authorization_is_single_use_and_settles_reputation(tmp
     assert persisted["value"] == _canonical(settlement)
 
 
+def test_staged_authorization_recovery_requires_durable_authorized_v2_evidence(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("COUNCIL_PROPOSAL_INTERVAL_SECONDS", "10")
+    database = _database(tmp_path)
+    worker = FakeWorker()
+    worker.database = database
+    stream = SharedVerifiedMarketStream(
+        worker,
+        FakeMarketData(),
+        FakeConsensus(),
+        database=database,
+    )
+    proposal = AutonomousCouncilProposalProvider(
+        database,
+        stream,
+        news_reader=_positive_news,
+    )("BTCUSDT", stream.quote("BTCUSDT"), _state())
+    assert proposal is not None
+    runtime = CanonicalPaperDecisionRuntime(database)
+    authorization = runtime.assess_entry(
+        proposal.decision_id,
+        proposal.agent_payloads,
+        proposal.evidence_packet,
+        general_controller_decision=proposal.general_controller_decision,
+        now_ms=int(time.time() * 1000),
+        regime=proposal.regime,
+    )
+    assert authorization.authorized is True
+
+    recovered = runtime.recover_staged_authorization(
+        proposal.decision_id,
+        proposal.decision_id,
+        consumed_at_ms=int(time.time() * 1000),
+    )
+    assert recovered["decision_id"] == proposal.decision_id
+    with pytest.raises(Exception, match="already consumed"):
+        runtime.recover_staged_authorization(
+            proposal.decision_id,
+            proposal.decision_id,
+            consumed_at_ms=int(time.time() * 1000),
+        )
+    with pytest.raises(Exception, match="unavailable"):
+        runtime.recover_staged_authorization(
+            "not-authorized",
+            "not-authorized",
+            consumed_at_ms=int(time.time() * 1000),
+        )
+
+
 def test_missing_news_confirmation_cannot_be_upgraded_to_entry(tmp_path) -> None:
     database = _database(tmp_path)
     worker = FakeWorker()
@@ -217,6 +271,7 @@ def test_dashboard_installer_uses_one_database_and_canonical_loop(tmp_path, monk
     app.state.bybit_websocket_worker = worker
     app.state.market_data_service = FakeMarketData()
     app.state.multi_exchange_consensus = FakeConsensus()
+    app.state.bybit_instrument_rules = BybitInstrumentRulesService()
 
     install_autonomous_trading_api(app)
 
