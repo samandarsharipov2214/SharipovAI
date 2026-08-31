@@ -10,6 +10,7 @@ ENV_FILE="$COMPOSE_DIR/.env.vps"
 LOCK_FILE="/run/sharipovai-self-healing.lock"
 HOST_LOG="/var/log/sharipovai-self-healing-host.log"
 AGENT_RUNNER_PATH="/workspace/tools/self_healing_runner.py"
+AGENT_ACTION_PATH="/workspace/tools/self_healing_agent.py"
 GIT_SNAPSHOT_HELPER="$REPO_DIR/tools/self_healing_git_snapshot.sh"
 RUNTIME_DIR="/var/lib/sharipovai/.self_healing"
 GIT_SNAPSHOT_DIR="$RUNTIME_DIR/git-metadata"
@@ -161,6 +162,33 @@ run_agent() {
 read_agent_file() {
     docker exec --user "$CONTAINER_USER" sharipovai sh -ec \
         "test -f '$1' && cat '$1' || true" 2>/dev/null
+}
+
+reject_stale_noncritical_authority() {
+    local rejected
+    if ! rejected="$(docker exec --user "$CONTAINER_USER" sharipovai \
+        python "$AGENT_ACTION_PATH" --action-lifecycle reject-stale)"; then
+        log "Unable to reject an abandoned non-critical action claim; failing closed."
+        return 1
+    fi
+    if [ -n "$rejected" ]; then
+        log "Rejected stale non-critical action generation without replay: $rejected"
+    fi
+}
+
+claim_noncritical_action() {
+    docker exec --user "$CONTAINER_USER" sharipovai \
+        python "$AGENT_ACTION_PATH" --action-lifecycle claim
+}
+
+terminalize_noncritical_action() {
+    local status="$1" generation="$2" detail="$3"
+    docker exec --user "$CONTAINER_USER" sharipovai \
+        python "$AGENT_ACTION_PATH" \
+        --action-lifecycle terminalize \
+        --action-generation "$generation" \
+        --action-result "$status" \
+        --action-detail "$detail"
 }
 
 clear_agent_action() {
@@ -326,6 +354,7 @@ execute_action() {
 
 main() {
     local agent_code=0 action=none expected_sha="" action_ok=0
+    local claim_record="" claimed_action="" generation=""
     exec 9>"$LOCK_FILE"
     if ! flock -n 9; then
         log "Another self-healing run is active; skipping."
@@ -351,18 +380,52 @@ main() {
         log "Unable to provide runtime input to the in-container agent."
         exit 1
     }
+    reject_stale_noncritical_authority || exit 1
 
     run_agent || agent_code=$?
     action="$(read_agent_file "$RUNTIME_DIR/action" | tr -d '\r\n[:space:]')"
     expected_sha="$(read_agent_file "$RUNTIME_DIR/expected_sha" | tr -d '\r\n[:space:]')"
     log "Agent finished: code=$agent_code action=${action:-none}"
 
-    if execute_action "${action:-none}" "$expected_sha"; then
-        action_ok=1
-        clear_agent_action
-    else
-        log "Self-healing action failed and was left pending for inspection."
-    fi
+    case "${action:-none}" in
+        ""|none)
+            action_ok=1
+            ;;
+        restore_database|git_revert|apply_approved_patch)
+            # Critical DCC authorization and claim semantics are unchanged.
+            if execute_action "$action" "$expected_sha"; then
+                action_ok=1
+                clear_agent_action
+            else
+                log "Critical self-healing action failed and remains governed by its DCC decision."
+            fi
+            ;;
+        *)
+            if ! claim_record="$(claim_noncritical_action)" || [ -z "$claim_record" ]; then
+                log "Non-critical action could not be atomically claimed; execution refused."
+            else
+                IFS='|' read -r claimed_action generation expected_sha <<EOF
+$claim_record
+EOF
+                if [ "$claimed_action" != "$action" ] || [ -z "$generation" ]; then
+                    log "Claimed action metadata did not match the published action; execution refused."
+                    terminalize_noncritical_action rejected "$generation" "claim metadata mismatch" || true
+                elif execute_action "$claimed_action" "$expected_sha"; then
+                    if terminalize_noncritical_action success "$generation" "allow-listed host action completed"; then
+                        action_ok=1
+                    else
+                        log "Action succeeded but terminal evidence could not be persisted; claim remains non-replayable."
+                    fi
+                else
+                    if terminalize_noncritical_action failed "$generation" "allow-listed host action returned failure"; then
+                        log "Non-critical self-healing action failed and was terminalized: generation=$generation"
+                    else
+                        log "Action failed and terminal evidence could not be persisted; claim remains non-replayable."
+                    fi
+                fi
+            fi
+            ;;
+    esac
 
     if [ "$action_ok" -eq 1 ] && [ "${action:-none}" != "none" ] && container_running sharipovai; then
         write_runtime_input || true
