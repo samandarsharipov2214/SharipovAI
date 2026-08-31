@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import importlib.util
 import json
 from pathlib import Path
@@ -100,6 +101,19 @@ def test_same_generation_cannot_execute_twice(tmp_path: Path) -> None:
     config.action_file.write_text("restart_sharipovai\n", encoding="utf-8")
     assert agent.claim_noncritical_action(config) is None
     assert not config.action_file.exists()
+
+
+def test_concurrent_readers_allow_exactly_one_claim(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    generation = _request(config)
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        claims = list(executor.map(lambda _: agent.claim_noncritical_action(config), range(8)))
+
+    claimed = [claim for claim in claims if claim is not None]
+    assert len(claimed) == 1
+    assert claimed[0]["generation"] == generation
+    assert agent.terminalize_noncritical_action(config, generation, "success", "verified")
 
 
 def test_legacy_stale_action_cannot_override_new_cycle(tmp_path: Path) -> None:
