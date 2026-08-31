@@ -124,7 +124,7 @@ export function AuthPanel({ busy, error, pendingApproval = false, onLogin, onReg
         </label>
         {pendingApproval && <p className="text-sm text-emerald-300">Заявка отправлена. После одобрения вы сможете войти.</p>}
         {error && <p className="text-sm text-rose-300">{error}</p>}
-        <button className="primary-button" type="submit" disabled={busy || pendingApproval}>
+        <button className="primary-button" type="submit" disabled={busy || (mode === "register" && pendingApproval)}>
           {mode === "login" ? "Войти" : "Создать аккаунт"}
         </button>
       </form>

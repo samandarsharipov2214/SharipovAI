@@ -446,3 +446,11 @@ def test_security_compatibility_urls_use_canonical_admin_queue(monkeypatch):
     )
     assert approved.status_code == 200
     assert approved.json()["status"] == "approved"
+
+
+def test_logout_clears_saas_and_legacy_session_cookies(monkeypatch):
+    client, _sessions = _client(monkeypatch)
+    response = client.post("/api/auth/logout", json={}, headers=ORIGIN_HEADERS)
+    cookie = response.headers["set-cookie"].lower()
+    assert auth_saas.settings.auth_cookie_name in cookie
+    assert "sharipovai_session" in cookie

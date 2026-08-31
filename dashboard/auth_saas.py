@@ -212,6 +212,9 @@ def set_auth_cookie(response: Response, token: str) -> None:
 
 def clear_auth_cookie(response: Response) -> None:
     response.delete_cookie(settings.auth_cookie_name, path="/")
+    # Upgraded browsers can still carry the canonical legacy session cookie.
+    # Logout must end both authentication mechanisms, not reveal it by fallback.
+    response.delete_cookie("sharipovai_session", path="/")
 
 
 def _ensure_free_subscription(db: Session, user: User) -> None:

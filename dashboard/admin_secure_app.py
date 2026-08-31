@@ -39,6 +39,20 @@ def create_admin_secure_app(runner_factory: Any | None = None):
             requests = _access_request_rows(db)
         finally:
             db.close()
+        from . import stabilization_compat as compat
+        legacy_requests = [
+            {
+                "id": str(item.get("id", "")),
+                "name": str(item.get("username", "")),
+                "email": "",
+                "contact": str(item.get("contact", "")),
+                "reason": str(item.get("reason", "")),
+                "status": str(item.get("status", "pending")),
+                "created_at": str(item.get("created_at", "")),
+            }
+            for item in compat._load_requests()
+        ]
+        requests.extend(legacy_requests)
         pending = [entry for entry in requests if entry["status"] == "pending"]
         return HTMLResponse(_security_center_html(username=username, pending_count=len(pending), requests=requests))
 
