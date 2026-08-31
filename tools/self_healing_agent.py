@@ -21,6 +21,7 @@ from logging.handlers import RotatingFileHandler
 import os
 from pathlib import Path
 import re
+import secrets
 import shutil
 import sqlite3
 import subprocess
@@ -104,6 +105,171 @@ def load_json(path: Path, default: dict[str, Any] | None = None) -> dict[str, An
     except (FileNotFoundError, OSError, ValueError, TypeError):
         return fallback
     return payload if isinstance(payload, dict) else fallback
+
+
+_ACTION_GENERATION_RE = re.compile(r"(?:[0-9a-f]{32}|legacy-[0-9a-f]{32})\Z")
+_NONCRITICAL_TERMINAL_STATUSES = frozenset({"success", "failed", "rejected"})
+
+
+def action_claim_path(config: "Config") -> Path:
+    return config.work_dir / "action.claimed.json"
+
+
+def action_result_path(config: "Config", generation: str) -> Path:
+    if not _ACTION_GENERATION_RE.fullmatch(generation):
+        raise ValueError("invalid self-healing action generation")
+    return config.work_dir / "action-results" / f"{generation}.json"
+
+
+def _clear_action_authority(config: "Config") -> None:
+    config.action_file.unlink(missing_ok=True)
+    config.action_meta_file.unlink(missing_ok=True)
+    config.expected_sha_file.unlink(missing_ok=True)
+
+
+def _valid_noncritical_metadata(payload: dict[str, Any]) -> bool:
+    action = payload.get("action")
+    generation = payload.get("generation")
+    return (
+        isinstance(action, str)
+        and action in ACTION_PRIORITY
+        and action not in CRITICAL_ACTIONS
+        and action != "none"
+        and isinstance(generation, str)
+        and _ACTION_GENERATION_RE.fullmatch(generation) is not None
+        and isinstance(payload.get("created_at"), str)
+        and bool(payload["created_at"].strip())
+    )
+
+
+def claim_noncritical_action(config: "Config") -> dict[str, Any] | None:
+    """Atomically claim one generated non-critical action for the host.
+
+    The metadata rename is the ownership transfer. A terminal generation or an
+    existing claim can never be returned for execution a second time.
+    """
+
+    try:
+        action = config.action_file.read_text(encoding="utf-8").strip()
+    except (FileNotFoundError, OSError, UnicodeError):
+        return None
+    if action in CRITICAL_ACTIONS:
+        return None
+
+    payload = load_json(config.action_meta_file)
+    if not _valid_noncritical_metadata(payload) or payload.get("action") != action:
+        return None
+    generation = str(payload["generation"])
+    result_path = action_result_path(config, generation)
+    if result_path.exists():
+        _clear_action_authority(config)
+        return None
+
+    claim_path = action_claim_path(config)
+    if claim_path.exists():
+        return None
+    try:
+        os.replace(config.action_meta_file, claim_path)
+    except (FileNotFoundError, OSError):
+        return None
+    config.action_file.unlink(missing_ok=True)
+    config.expected_sha_file.unlink(missing_ok=True)
+    return payload
+
+
+def terminalize_noncritical_action(
+    config: "Config",
+    generation: str,
+    status: str,
+    detail: str,
+) -> bool:
+    """Persist one terminal host result and revoke the claimed authority."""
+
+    if status not in _NONCRITICAL_TERMINAL_STATUSES:
+        raise ValueError("invalid self-healing terminal status")
+    claim_path = action_claim_path(config)
+    claim = load_json(claim_path)
+    if claim.get("generation") != generation or not _valid_noncritical_metadata(claim):
+        return False
+    result_path = action_result_path(config, generation)
+    if result_path.exists():
+        claim_path.unlink(missing_ok=True)
+        _clear_action_authority(config)
+        return False
+    atomic_write_json(
+        result_path,
+        {
+            "action": claim["action"],
+            "generation": generation,
+            "requested_at": claim["created_at"],
+            "status": status,
+            "detail": detail.strip()[:2000],
+            "terminal_at": utc_now_iso(),
+        },
+    )
+    claim_path.unlink(missing_ok=True)
+    _clear_action_authority(config)
+    return True
+
+
+def reject_stale_noncritical_authority(config: "Config") -> str | None:
+    """Revoke an abandoned claim or a pre-generation non-critical artifact."""
+
+    claim = load_json(action_claim_path(config))
+    generation = claim.get("generation")
+    if isinstance(generation, str) and _valid_noncritical_metadata(claim):
+        terminalize_noncritical_action(
+            config,
+            generation,
+            "rejected",
+            "host cycle ended before a terminal result; replay prohibited",
+        )
+        return generation
+
+    try:
+        action = config.action_file.read_text(encoding="utf-8").strip()
+    except (FileNotFoundError, OSError, UnicodeError):
+        return None
+    if action in CRITICAL_ACTIONS:
+        return None
+    metadata = load_json(config.action_meta_file)
+    if action not in ACTION_PRIORITY or action == "none":
+        return None
+    current_generation = metadata.get("generation")
+    if isinstance(current_generation, str) and _ACTION_GENERATION_RE.fullmatch(current_generation):
+        if action_result_path(config, current_generation).exists():
+            _clear_action_authority(config)
+            return current_generation
+        claimed = claim_noncritical_action(config)
+        if claimed is None:
+            return None
+        terminalize_noncritical_action(
+            config,
+            current_generation,
+            "rejected",
+            "action survived its originating host cycle before claim; replay prohibited",
+        )
+        return current_generation
+
+    legacy_digest = hashlib.sha256(
+        (action + "\0" + json.dumps(metadata, sort_keys=True)).encode("utf-8")
+    ).hexdigest()[:32]
+    legacy_generation = f"legacy-{legacy_digest}"
+    result_path = action_result_path(config, legacy_generation)
+    if not result_path.exists():
+        atomic_write_json(
+            result_path,
+            {
+                "action": action,
+                "generation": legacy_generation,
+                "requested_at": str(metadata.get("created_at", "unknown")),
+                "status": "rejected",
+                "detail": "legacy action had no one-shot generation; replay prohibited",
+                "terminal_at": utc_now_iso(),
+            },
+        )
+    _clear_action_authority(config)
+    return legacy_generation
 
 
 @dataclass(frozen=True)
@@ -288,28 +454,31 @@ class ActionRequest:
 
     def persist(self) -> None:
         if self.action == "none":
-            # A previous unacknowledged host action must never be erased by a
-            # later read-only cycle.  The host wrapper clears action files only
-            # after the allow-listed recovery command succeeds.
+            # The host owns any active claim. A read-only agent cycle must
+            # neither erase that claim nor resurrect a terminal generation.
             return
 
         if self.action in CRITICAL_ACTIONS:
             self._request_critical_owner_approval()
             return
 
-        atomic_write_text(self.config.action_file, self.action + "\n")
-        atomic_write_text(self.config.expected_sha_file, self.expected_sha + "\n")
+        generation = secrets.token_hex(16)
         metadata = {
             "action": self.action,
+            "generation": generation,
             "reason": self.reason,
             "expected_sha": self.expected_sha,
             "details": self.details,
             "created_at": utc_now_iso(),
         }
+        # Publish metadata and ancillary evidence before the action pointer.
+        # The final atomic action write is the ready signal for the host.
         atomic_write_json(
             self.config.action_meta_file,
             metadata,
         )
+        atomic_write_text(self.config.expected_sha_file, self.expected_sha + "\n")
+        atomic_write_text(self.config.action_file, self.action + "\n")
 
     def _request_critical_owner_approval(self) -> None:
         """Create one canonical DCC request; never expose a host action early."""
@@ -1288,12 +1457,51 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Run checks without preparing repairs or requesting restarts.",
     )
+    parser.add_argument(
+        "--action-lifecycle",
+        choices=("claim", "terminalize", "reject-stale"),
+        help="Host-only one-shot lifecycle operation for non-critical actions.",
+    )
+    parser.add_argument("--action-generation", default="")
+    parser.add_argument(
+        "--action-result",
+        choices=tuple(sorted(_NONCRITICAL_TERMINAL_STATUSES)),
+    )
+    parser.add_argument("--action-detail", default="")
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     config = Config.from_env()
+    if args.action_lifecycle == "reject-stale":
+        rejected = reject_stale_noncritical_authority(config)
+        if rejected:
+            print(rejected)
+        return EXIT_OK
+    if args.action_lifecycle == "claim":
+        claimed = claim_noncritical_action(config)
+        if claimed is not None:
+            print(
+                "|".join(
+                    (
+                        str(claimed["action"]),
+                        str(claimed["generation"]),
+                        str(claimed.get("expected_sha", "")),
+                    )
+                )
+            )
+        return EXIT_OK
+    if args.action_lifecycle == "terminalize":
+        if not args.action_generation or not args.action_result:
+            raise SystemExit("terminalize requires --action-generation and --action-result")
+        terminalized = terminalize_noncritical_action(
+            config,
+            args.action_generation,
+            args.action_result,
+            args.action_detail,
+        )
+        return EXIT_OK if terminalized else EXIT_UNRESOLVED
     try:
         return SelfHealingAgent(config).run(verify_only=args.verify_only)
     except RuntimeError as exc:
