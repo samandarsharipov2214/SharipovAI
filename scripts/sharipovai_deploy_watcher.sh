@@ -207,9 +207,75 @@ fetch_main() {
   fi
 }
 
+run_deploy_request_with_private_output() (
+  local request_id="$1" chat_id="$2"
+  local commit deploy_result output_file tail_text tmp_root
+
+  tmp_root="${TMPDIR:-/tmp}"
+  if [[ "$tmp_root" != /* || ! -d "$tmp_root" ]]; then
+    publish_status failed failed "$request_id" "$chat_id" \
+      "Не удалось создать защищённый журнал deploy; production не изменён" "" || true
+    remove_request || true
+    notify "$chat_id" "❌ <b>Обновление не выполнено</b>\n\nЗащищённый временный журнал недоступен. Production не изменён."
+    log "Deployment $request_id stopped because the private temporary directory is unavailable"
+    return 0
+  fi
+  if ! output_file="$(umask 077; mktemp "${tmp_root%/}/sharipovai-deploy.XXXXXXXXXX.log")"; then
+    publish_status failed failed "$request_id" "$chat_id" \
+      "Не удалось создать защищённый журнал deploy; production не изменён" "" || true
+    remove_request || true
+    notify "$chat_id" "❌ <b>Обновление не выполнено</b>\n\nЗащищённый временный журнал недоступен. Production не изменён."
+    log "Deployment $request_id stopped because private temporary-file creation failed"
+    return 0
+  fi
+  trap 'rm -f -- "$output_file"' EXIT
+  if [[ ! -f "$output_file" || -L "$output_file" || "$(stat -c '%a' "$output_file" 2>/dev/null)" != "600" ]]; then
+    publish_status failed failed "$request_id" "$chat_id" \
+      "Защищённый журнал deploy не прошёл проверку; production не изменён" "" || true
+    remove_request || true
+    notify "$chat_id" "❌ <b>Обновление не выполнено</b>\n\nВременный журнал не прошёл security-проверку. Production не изменён."
+    log "Deployment $request_id stopped because the private temporary file failed validation"
+    return 0
+  fi
+
+  if ! fetch_main >"$output_file" 2>&1; then
+    commit="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || true)"
+    publish_status failed failed "$request_id" "$chat_id" "Не удалось получить проверенный main; production не изменён" "$commit" || true
+    remove_request || true
+    log "Deployment $request_id could not fetch main; private temporary output removed"
+    return 0
+  fi
+  commit="$(git -C "$ROOT" rev-parse --short HEAD)"
+  if ! publish_status running "защищённые тесты и deploy" "$request_id" "$chat_id" "Кандидат проверяется" "$commit"; then
+    return 1
+  fi
+
+  if run_deploy_with_watchdog "$request_id" "$chat_id" "$commit" >>"$output_file" 2>&1; then
+    commit="$(git -C "$ROOT" rev-parse --short HEAD)"
+    publish_status success completed "$request_id" "$chat_id" "Production проверен; реальные ордера заблокированы" "$commit" || true
+    remove_request || true
+    notify "$chat_id" "✅ <b>SharipovAI обновлён и проверен</b>\n\nКоммит: <code>${commit}</code>\nProduction healthy. Реальные ордера заблокированы."
+    log "Deployment $request_id succeeded at $commit; private temporary output removed"
+  else
+    deploy_result=$?
+    commit="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || true)"
+    tail_text="$(tail -n 12 "$output_file" 2>/dev/null | sed 's/[<>]/ /g' | tail -c 2500)"
+    if [[ "$deploy_result" == "124" || "$deploy_result" == "137" ]]; then
+      publish_status timeout timed_out "$request_id" "$chat_id" "Deploy превысил лимит времени; production защищён откатом" "$commit" || true
+      notify "$chat_id" "⏱️ <b>Обновление остановлено по таймауту</b>\n\nProduction сохранён или восстановлен.\nКоммит: <code>${commit:-—}</code>"
+      log "Deployment $request_id timed out; private temporary output removed after terminal evidence"
+    else
+      publish_status failed failed "$request_id" "$chat_id" "Deploy завершился ошибкой; production защищён откатом" "$commit" || true
+      notify "$chat_id" "❌ <b>Обновление не выполнено</b>\n\nProduction сохранён или восстановлен.\nКоммит: <code>${commit:-—}</code>\n\n<pre>${tail_text}</pre>"
+      log "Deployment $request_id failed; private temporary output removed after terminal evidence"
+    fi
+    remove_request || true
+  fi
+)
+
 process_request() {
   local request_json="$1"
-  local request_id action actor_id chat_id created_at now commit output_file
+  local request_id action actor_id chat_id created_at now
   if ! validate_owner_request "$request_json"; then
     write_status failed security_blocked "blocked-untrusted-request" 0 "Запрос отклонён независимой host-проверкой владельца" ""
     remove_request
@@ -240,42 +306,7 @@ process_request() {
     return 1
   fi
   notify "$chat_id" "🔄 <b>Обновление SharipovAI началось</b>\n\nID: <code>${request_id}</code>\nСначала будут проверены кандидат и тесты."
-
-  output_file="/tmp/${request_id}.log"
-  if ! fetch_main >"$output_file" 2>&1; then
-    commit="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || true)"
-    publish_status failed failed "$request_id" "$chat_id" "Не удалось получить проверенный main; production не изменён" "$commit" || true
-    remove_request || true
-    log "Deployment $request_id could not fetch main; see $output_file"
-    return 0
-  fi
-  commit="$(git -C "$ROOT" rev-parse --short HEAD)"
-  if ! publish_status running "защищённые тесты и deploy" "$request_id" "$chat_id" "Кандидат проверяется" "$commit"; then
-    return 1
-  fi
-
-  if run_deploy_with_watchdog "$request_id" "$chat_id" "$commit" >>"$output_file" 2>&1; then
-    commit="$(git -C "$ROOT" rev-parse --short HEAD)"
-    publish_status success completed "$request_id" "$chat_id" "Production проверен; реальные ордера заблокированы" "$commit" || true
-    remove_request || true
-    notify "$chat_id" "✅ <b>SharipovAI обновлён и проверен</b>\n\nКоммит: <code>${commit}</code>\nProduction healthy. Реальные ордера заблокированы."
-    log "Deployment $request_id succeeded at $commit"
-  else
-    local deploy_result=$?
-    commit="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || true)"
-    local tail_text
-    tail_text="$(tail -n 12 "$output_file" 2>/dev/null | sed 's/[<>]/ /g' | tail -c 2500)"
-    if [[ "$deploy_result" == "124" || "$deploy_result" == "137" ]]; then
-      publish_status timeout timed_out "$request_id" "$chat_id" "Deploy превысил лимит времени; production защищён откатом" "$commit" || true
-      notify "$chat_id" "⏱️ <b>Обновление остановлено по таймауту</b>\n\nProduction сохранён или восстановлен.\nКоммит: <code>${commit:-—}</code>"
-      log "Deployment $request_id timed out; see $output_file"
-    else
-      publish_status failed failed "$request_id" "$chat_id" "Deploy завершился ошибкой; production защищён откатом" "$commit" || true
-      notify "$chat_id" "❌ <b>Обновление не выполнено</b>\n\nProduction сохранён или восстановлен.\nКоммит: <code>${commit:-—}</code>\n\n<pre>${tail_text}</pre>"
-      log "Deployment $request_id failed; see $output_file"
-    fi
-    remove_request || true
-  fi
+  run_deploy_request_with_private_output "$request_id" "$chat_id"
 }
 
 main() {
