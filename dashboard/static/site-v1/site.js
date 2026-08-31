@@ -166,18 +166,23 @@
   });
 
   async function loadWorkspace() {
-    if (window.location.pathname !== "/app") return;
     try {
       const session = await requestJson("/api/auth/me");
       if (!session.authenticated) {
-        window.location.replace("/?mode=login&next=/app");
+        if (window.location.pathname === "/app") window.location.replace("/?mode=login&next=/app");
+        return;
+      }
+      if (window.location.pathname === "/") {
+        accessView.hidden = true;
+        workspaceView.hidden = false;
+        select("#workspaceUser").textContent = session.user?.display_name || session.user?.email || "";
         return;
       }
       accessView.hidden = true;
       workspaceView.hidden = false;
       select("#workspaceUser").textContent = session.user?.display_name || session.user?.email || "";
     } catch {
-      window.location.replace("/?mode=login&next=/app");
+      if (window.location.pathname === "/app") window.location.replace("/?mode=login&next=/app");
     }
   }
 

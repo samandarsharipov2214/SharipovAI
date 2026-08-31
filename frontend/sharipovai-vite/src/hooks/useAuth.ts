@@ -4,7 +4,7 @@ import { fetchMe, login, logout, register } from "../api/authApi";
 import { ApiClientError } from "../api/http";
 import type { AuthUser, LoginRequest, RegistrationRequest } from "../types/auth";
 
-type Status = "loading" | "anonymous" | "authenticated";
+type Status = "loading" | "anonymous" | "authenticated" | "pending_approval";
 
 export function useAuth() {
   const [status, setStatus] = useState<Status>("loading");
@@ -49,9 +49,9 @@ export function useAuth() {
   const submitRegistration = useCallback(async (payload: RegistrationRequest) => {
     setBusy(true);
     try {
-      await register(payload);
+      const response = await register(payload);
       setUser(null);
-      setStatus("anonymous");
+      setStatus(response.status === "pending_approval" ? "pending_approval" : "anonymous");
       setError(null);
     } catch (error) {
       setError(error instanceof ApiClientError ? error.message : "Ошибка регистрации.");

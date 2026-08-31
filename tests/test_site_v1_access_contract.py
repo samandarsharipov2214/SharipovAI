@@ -107,6 +107,13 @@ def test_registration_validation_and_duplicate_are_fail_closed(monkeypatch):
         assert len(db.scalars(select(AccessRequest)).all()) == 1
 
 
+def test_registration_requires_name(monkeypatch):
+    client, _sessions = _client(monkeypatch)
+    response = client.post("/api/auth/register", json=_registration(name=""), headers=ORIGIN_HEADERS)
+    assert response.status_code == 422
+    assert response.json()["detail"]["status"] == "invalid_registration"
+
+
 def test_active_pending_and_rejected_accounts_cannot_register_again(monkeypatch):
     client, sessions = _client(monkeypatch)
     assert client.post("/api/auth/register", json=_registration(), headers=ORIGIN_HEADERS).status_code == 200
@@ -387,6 +394,23 @@ def test_access_reject_is_admin_only_and_persists_review(monkeypatch):
         assert db.get(User, access_request.user_id).is_active is False
 
 
+def test_competing_terminal_decisions_have_exactly_one_winner(monkeypatch):
+    client, sessions = _client(monkeypatch)
+    client.post("/api/auth/register", json=_registration(), headers=ORIGIN_HEADERS)
+    with sessions() as db:
+        request_id = db.scalar(select(AccessRequest)).id
+    monkeypatch.setattr(admin_guard, "require_admin", lambda _request: "owner@example.test")
+    approved = client.post(f"/api/auth/access-requests/{request_id}/approve", json={}, headers=ORIGIN_HEADERS)
+    rejected = client.post(f"/api/auth/access-requests/{request_id}/reject", json={}, headers=ORIGIN_HEADERS)
+    assert approved.status_code == 200
+    assert rejected.status_code == 409
+    assert rejected.json()["detail"]["status"] == "already_decided"
+    with sessions() as db:
+        access_request = db.get(AccessRequest, request_id)
+        assert access_request.status == "approved"
+        assert db.get(User, access_request.user_id).is_active is True
+
+
 def test_site_v1_static_contract_has_no_missing_local_assets():
     static = ROOT / "dashboard" / "static" / "site-v1"
     html = (static / "index.html").read_text(encoding="utf-8")
@@ -403,3 +427,22 @@ def test_site_v1_static_contract_has_no_missing_local_assets():
     assert 'aria-busy") === "true"' in js
     assert "AbortController" in js
     assert "password_confirmation" in html
+    assert 'async function loadWorkspace()' in js
+    assert 'window.location.pathname === "/"' in js
+    assert 'Заявка отправлена. После одобрения вы сможете войти.' in js
+
+
+def test_security_compatibility_urls_use_canonical_admin_queue(monkeypatch):
+    client, sessions = _client(monkeypatch)
+    client.post("/api/auth/register", json=_registration(), headers=ORIGIN_HEADERS)
+    with sessions() as db:
+        request_id = db.scalar(select(AccessRequest)).id
+    monkeypatch.setattr(admin_guard, "require_admin", lambda _request: "owner@example.test")
+    listing = client.get("/api/security/access-requests")
+    assert listing.status_code == 200
+    assert listing.json()["requests"][0]["id"] == request_id
+    approved = client.post(
+        f"/api/security/access-requests/{request_id}/approve", json={}, headers=ORIGIN_HEADERS
+    )
+    assert approved.status_code == 200
+    assert approved.json()["status"] == "approved"

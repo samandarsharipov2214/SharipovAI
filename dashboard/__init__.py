@@ -114,6 +114,8 @@ def _install_production_runtime_apis(app: Any) -> None:
     # request dispatch has exactly one owner for each method/path contract.
     _remove_route_owner(app, method="GET", path="/login", module="dashboard.demo_api")
     _remove_route_owner(app, method="GET", path="/api/auth/me", module="dashboard.app")
+    _remove_route_owner(app, method="GET", path="/api/security/access-requests", module="dashboard.app")
+    _remove_route_owner(app, method="POST", path="/api/security/access-requests/{request_id}/approve", module="dashboard.app")
 
     install_database_api(app)
     install_news_agent_network_api(app)

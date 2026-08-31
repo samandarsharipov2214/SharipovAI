@@ -10,7 +10,7 @@ import jwt
 from fastapi import Body, FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -227,6 +227,38 @@ def _ensure_free_subscription(db: Session, user: User) -> None:
     )
 
 
+def _access_request_rows(db: Session) -> list[dict[str, Any]]:
+    """Return the canonical approval queue with safe, display-ready fields."""
+    rows = db.scalars(select(AccessRequest).order_by(AccessRequest.created_at.desc())).all()
+    users = {user.id: user for user in db.scalars(select(User).where(User.id.in_([row.user_id for row in rows]))).all()} if rows else {}
+    return [{
+        "id": row.id, "user_id": row.user_id,
+        "email": users[row.user_id].email if row.user_id in users else "",
+        "name": users[row.user_id].display_name if row.user_id in users else "",
+        "contact": row.contact, "reason": row.reason, "status": row.status,
+        "created_at": row.created_at.isoformat(),
+    } for row in rows]
+
+
+def _decide_access_request(db: Session, request_id: str, reviewer: str, decision: str) -> None:
+    """Atomically reserve a pending request for exactly one terminal decision."""
+    now = datetime.now(UTC)
+    changed = db.execute(
+        update(AccessRequest)
+        .where(AccessRequest.id == request_id, AccessRequest.status == "pending")
+        .values(status=decision, reviewed_at=now, reviewed_by=reviewer)
+    )
+    if changed.rowcount != 1:
+        existing = db.get(AccessRequest, request_id)
+        if existing is None:
+            raise HTTPException(status_code=404, detail={"status": "not_found"})
+        raise HTTPException(status_code=409, detail={"status": "already_decided", "decision": existing.status})
+    active = decision == "approved"
+    user_changed = db.execute(update(User).where(User.id == db.get(AccessRequest, request_id).user_id).values(is_active=active))
+    if user_changed.rowcount != 1:
+        raise HTTPException(status_code=409, detail={"status": "user_missing"})
+
+
 def install_saas_auth_api(app: FastAPI) -> None:
     if getattr(app.state, "saas_auth_api_installed", False):
         return
@@ -332,33 +364,14 @@ def install_saas_auth_api(app: FastAPI) -> None:
         require_admin(request)
         db = SessionLocal()
         try:
-            rows = db.scalars(
-                select(AccessRequest).order_by(AccessRequest.created_at.desc())
-            ).all()
-            users = {
-                user.id: user
-                for user in db.scalars(
-                    select(User).where(User.id.in_([row.user_id for row in rows]))
-                ).all()
-            } if rows else {}
-            return {
-                "status": "ok",
-                "requests": [
-                    {
-                        "id": row.id,
-                        "user_id": row.user_id,
-                        "email": users[row.user_id].email if row.user_id in users else "",
-                        "name": users[row.user_id].display_name if row.user_id in users else "",
-                        "contact": row.contact,
-                        "reason": row.reason,
-                        "status": row.status,
-                        "created_at": row.created_at.isoformat(),
-                    }
-                    for row in rows
-                ],
-            }
+            return {"status": "ok", "requests": _access_request_rows(db)}
         finally:
             db.close()
+
+    @app.get("/api/security/access-requests")
+    async def security_access_requests(request: Request) -> dict[str, Any]:
+        """Compatibility URL, backed by the one canonical SaaS approval queue."""
+        return await list_access_requests(request)
 
     @app.post("/api/auth/access-requests/{request_id}/approve")
     async def approve_access_request(request_id: str, request: Request) -> dict[str, str]:
@@ -368,16 +381,7 @@ def install_saas_auth_api(app: FastAPI) -> None:
         reviewer = require_admin(request)
         db = SessionLocal()
         try:
-            access_request = db.get(AccessRequest, request_id)
-            if not access_request or access_request.status != "pending":
-                raise HTTPException(status_code=404, detail={"status": "not_found"})
-            user = db.get(User, access_request.user_id)
-            if not user:
-                raise HTTPException(status_code=409, detail={"status": "user_missing"})
-            user.is_active = True
-            access_request.status = "approved"
-            access_request.reviewed_at = datetime.now(UTC)
-            access_request.reviewed_by = reviewer
+            _decide_access_request(db, request_id, reviewer, "approved")
             db.commit()
             return {"status": "approved", "request_id": request_id}
         except Exception:
@@ -385,6 +389,10 @@ def install_saas_auth_api(app: FastAPI) -> None:
             raise
         finally:
             db.close()
+
+    @app.post("/api/security/access-requests/{request_id}/approve")
+    async def security_approve_access_request(request_id: str, request: Request) -> dict[str, str]:
+        return await approve_access_request(request_id, request)
 
     @app.post("/api/auth/access-requests/{request_id}/reject")
     async def reject_access_request(request_id: str, request: Request) -> dict[str, str]:
@@ -394,16 +402,7 @@ def install_saas_auth_api(app: FastAPI) -> None:
         reviewer = require_admin(request)
         db = SessionLocal()
         try:
-            access_request = db.get(AccessRequest, request_id)
-            if not access_request or access_request.status != "pending":
-                raise HTTPException(status_code=404, detail={"status": "not_found"})
-            user = db.get(User, access_request.user_id)
-            if not user:
-                raise HTTPException(status_code=409, detail={"status": "user_missing"})
-            user.is_active = False
-            access_request.status = "rejected"
-            access_request.reviewed_at = datetime.now(UTC)
-            access_request.reviewed_by = reviewer
+            _decide_access_request(db, request_id, reviewer, "rejected")
             db.commit()
             return {"status": "rejected", "request_id": request_id}
         except Exception:
@@ -411,6 +410,10 @@ def install_saas_auth_api(app: FastAPI) -> None:
             raise
         finally:
             db.close()
+
+    @app.post("/api/security/access-requests/{request_id}/reject")
+    async def security_reject_access_request(request_id: str, request: Request) -> dict[str, str]:
+        return await reject_access_request(request_id, request)
 
     @app.post("/api/auth/logout")
     async def logout(request: Request) -> dict[str, str]:

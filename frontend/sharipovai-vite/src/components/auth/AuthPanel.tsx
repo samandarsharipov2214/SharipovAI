@@ -4,6 +4,7 @@ import { LockKeyhole, LogIn, UserPlus } from "lucide-react";
 interface AuthPanelProps {
   busy: boolean;
   error: string | null;
+  pendingApproval?: boolean;
   onLogin: (payload: { email: string; password: string }) => Promise<void>;
   onRegister: (payload: {
     email: string;
@@ -15,7 +16,7 @@ interface AuthPanelProps {
   }) => Promise<void>;
 }
 
-export function AuthPanel({ busy, error, onLogin, onRegister }: AuthPanelProps) {
+export function AuthPanel({ busy, error, pendingApproval = false, onLogin, onRegister }: AuthPanelProps) {
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -37,6 +38,8 @@ export function AuthPanel({ busy, error, onLogin, onRegister }: AuthPanelProps) 
       password_confirmation: passwordConfirmation,
       reason: "",
     });
+    setPassword("");
+    setPasswordConfirmation("");
   };
 
   return (
@@ -70,6 +73,7 @@ export function AuthPanel({ busy, error, onLogin, onRegister }: AuthPanelProps) 
               value={displayName}
               onChange={(event) => setDisplayName(event.target.value)}
               maxLength={120}
+              required
             />
           </label>
           <label className="block text-sm text-slate-300">
@@ -118,8 +122,9 @@ export function AuthPanel({ busy, error, onLogin, onRegister }: AuthPanelProps) 
             required
           />
         </label>
+        {pendingApproval && <p className="text-sm text-emerald-300">Заявка отправлена. После одобрения вы сможете войти.</p>}
         {error && <p className="text-sm text-rose-300">{error}</p>}
-        <button className="primary-button" type="submit" disabled={busy}>
+        <button className="primary-button" type="submit" disabled={busy || pendingApproval}>
           {mode === "login" ? "Войти" : "Создать аккаунт"}
         </button>
       </form>

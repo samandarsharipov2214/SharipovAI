@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 
 from dashboard.global_auth_guard import install_global_auth_guard
+import dashboard.site_v1_host as site_v1_host
 from dashboard.site_v1_host import install_site_v1_host
 
 STATIC_DIR = Path(__file__).resolve().parents[1] / "dashboard" / "static"
@@ -100,3 +101,21 @@ def test_site_host_does_not_intercept_static_api_other_methods_or_404s() -> None
     assert api.json() == {"owner": "api"}
     assert app_post.json() == {"owner": "post-route"}
     assert missing.status_code == 404
+
+
+def test_missing_site_index_fails_closed_instead_of_rendering_legacy_root(monkeypatch, tmp_path) -> None:
+    app = FastAPI()
+
+    @app.get("/")
+    def legacy_root() -> str:
+        return "legacy operational dashboard"
+
+    monkeypatch.setattr(site_v1_host, "SITE_INDEX", tmp_path / "missing-index.html")
+    install_site_v1_host(app)
+    install_global_auth_guard(app)
+
+    with TestClient(app, follow_redirects=False) as client:
+        response = client.get("/")
+
+    assert response.status_code == 503
+    assert "legacy operational dashboard" not in response.text
