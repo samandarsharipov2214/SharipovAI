@@ -53,13 +53,13 @@ def test_public_health_route_remains_available(monkeypatch) -> None:
     assert response.json()["status"] == "ok"
 
 
-def test_root_and_private_api_reject_anonymous(monkeypatch) -> None:
+def test_public_root_and_private_api_keep_separate_auth_boundaries(monkeypatch) -> None:
     monkeypatch.delenv("SHARIPOVAI_DISABLE_AUTH", raising=False)
     with TestClient(_app(monkeypatch), follow_redirects=False) as client:
         root = client.get("/")
         api = client.get("/api/private")
-    assert root.status_code == 303
-    assert root.headers["location"] == "/login?next=/"
+    assert root.status_code == 200
+    assert root.json()["status"] == "private"
     assert api.status_code == 401
     assert api.json()["status"] == "unauthorized"
 

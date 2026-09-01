@@ -138,6 +138,7 @@ export function Dashboard() {
           <AuthPanel
             busy={auth.busy}
             error={auth.error}
+            pendingApproval={auth.status === "pending_approval"}
             onLogin={auth.login}
             onRegister={auth.register}
           />

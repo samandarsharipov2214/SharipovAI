@@ -75,4 +75,17 @@ class ChatMessageLog(Base):
     user: Mapped[User] = relationship(back_populates="chat_messages")
 
 
-__all__ = ["Base", "ChatMessageLog", "Subscription", "User", "utcnow"]
+class AccessRequest(Base):
+    """Pending Site V1 request; passwords are deliberately not stored here."""
+    __tablename__ = "saas_access_requests"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    user_id: Mapped[str] = mapped_column(ForeignKey("saas_users.id", ondelete="CASCADE"), unique=True, index=True)
+    contact: Mapped[str] = mapped_column(String(320))
+    reason: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewed_by: Mapped[str | None] = mapped_column(String(320), nullable=True)
+
+
+__all__ = ["AccessRequest", "Base", "ChatMessageLog", "Subscription", "User", "utcnow"]

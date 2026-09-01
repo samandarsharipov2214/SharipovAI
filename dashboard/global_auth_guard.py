@@ -14,6 +14,7 @@ from .auth_saas import resolve_authenticated_principal
 from .internal_service_auth import require_internal_service
 
 _PUBLIC_EXACT = {
+    "/",
     "/login",
     "/register",
     "/logout",

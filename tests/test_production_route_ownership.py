@@ -42,8 +42,17 @@ def test_critical_production_routes_have_exactly_one_owner() -> None:
     app = dashboard.create_production_app()
     owners = _route_owners(app)
 
+    for signature in (("GET", "/"), ("GET", "/app")):
+        matching = [module for method, path, module in owners if (method, path) == signature]
+        assert len(matching) <= 1, f"{signature} owners={matching}"
+
     for signature in (
+        ("POST", "/api/auth/register"),
+        ("POST", "/api/auth/login"),
         ("GET", "/api/auth/me"),
+        ("GET", "/api/auth/access-requests"),
+        ("POST", "/api/auth/access-requests/{request_id}/approve"),
+        ("POST", "/api/auth/access-requests/{request_id}/reject"),
         ("GET", "/api/system/release-truth"),
         ("POST", "/api/control-plane/commands/{action}"),
     ):

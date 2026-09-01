@@ -32,9 +32,29 @@ def create_admin_secure_app(runner_factory: Any | None = None):
     @dashboard.get("/security", response_class=HTMLResponse)
     def security_center(request: Request) -> HTMLResponse:
         username = _session_username(request) or "admin"
-        requests = _load_access_requests()
-        pending = [entry for entry in requests.values() if isinstance(entry, dict) and entry.get("status") == "pending"]
-        return HTMLResponse(_security_center_html(username=username, pending_count=len(pending)))
+        from .auth_saas import _access_request_rows
+        from .db_saas import SessionLocal
+        db = SessionLocal()
+        try:
+            requests = _access_request_rows(db)
+        finally:
+            db.close()
+        from . import stabilization_compat as compat
+        legacy_requests = [
+            {
+                "id": str(item.get("id", "")),
+                "name": str(item.get("username", "")),
+                "email": "",
+                "contact": str(item.get("contact", "")),
+                "reason": str(item.get("reason", "")),
+                "status": str(item.get("status", "pending")),
+                "created_at": str(item.get("created_at", "")),
+            }
+            for item in compat._load_requests()
+        ]
+        requests.extend(legacy_requests)
+        pending = [entry for entry in requests if entry["status"] == "pending"]
+        return HTMLResponse(_security_center_html(username=username, pending_count=len(pending), requests=requests))
 
     @dashboard.get("/api/auth/role")
     def auth_role(request: Request) -> dict[str, Any]:
@@ -80,18 +100,41 @@ class AdminAccessContractMiddleware:
             await self.app(scope, receive, send)
             return
 
-        from . import stabilization_compat as compat
-
         if method == "GET" and path == prefix:
-            response = JSONResponse({"status": "ok", "requests": compat._load_requests()})
+            from .auth_saas import _access_request_rows
+            from .db_saas import SessionLocal
+            from . import stabilization_compat as compat
+            db = SessionLocal()
+            try:
+                canonical_rows = _access_request_rows(db)
+            finally:
+                db.close()
+            # Existing legacy requests remain visible during the migration, but
+            # all Site V1 rows come from the canonical SQL queue.
+            response = JSONResponse({"status": "ok", "requests": canonical_rows + compat._load_requests()})
             await response(scope, receive, send)
             return
-        suffix = "/approve"
-        if method == "POST" and path.startswith(prefix + "/") and path.endswith(suffix):
-            request_id = path[len(prefix) + 1:-len(suffix)]
-            response = compat._approve(request_id)
-            await response(scope, receive, send)
-            return
+        for suffix, decision in (("/approve", "approved"), ("/reject", "rejected")):
+            if method == "POST" and path.startswith(prefix + "/") and path.endswith(suffix):
+                from .auth_saas import _decide_access_request
+                from .db_saas import SessionLocal
+                from . import stabilization_compat as compat
+                request_id = path[len(prefix) + 1:-len(suffix)]
+                db = SessionLocal()
+                try:
+                    _decide_access_request(db, request_id, username, decision)
+                    db.commit()
+                    response = JSONResponse({"status": decision, "request_id": request_id})
+                except Exception as exc:
+                    db.rollback()
+                    if getattr(exc, "status_code", None) == 404 and decision == "approved":
+                        response = compat._approve(request_id)
+                    else:
+                        response = JSONResponse({"detail": getattr(exc, "detail", {"status": "decision_failed"})}, status_code=getattr(exc, "status_code", 500))
+                finally:
+                    db.close()
+                await response(scope, receive, send)
+                return
         await self.app(scope, receive, send)
 
 
@@ -191,8 +234,19 @@ def _header_value(headers: list[tuple[bytes, bytes]], name: bytes) -> str:
     return ""
 
 
-def _security_center_html(*, username: str, pending_count: int) -> str:
-    return f"""<!doctype html><html lang='ru'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>SharipovAI · Кибер-безопасность</title><style>body{{min-height:100vh;margin:0;background:#020817;color:#f8fbff;font-family:Inter,system-ui,sans-serif}}main{{width:min(920px,92vw);margin:40px auto}}.card{{border:1px solid #38bdf844;background:#071426;border-radius:28px;padding:24px;box-shadow:0 30px 80px #0008}}.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px}}.stat{{border:1px solid #ffffff18;border-radius:18px;padding:16px;background:#0b1b2c}}small{{color:#94a3b8}}a{{color:#7dd3fc}}</style></head><body><main><h1>Кибер-безопасность</h1><p>Администратор: {escape(username)}</p><section class='card'><div class='grid'><div class='stat'><small>Статус</small><h2>Защищено</h2></div><div class='stat'><small>Заявки</small><h2>{pending_count}</h2></div><div class='stat'><small>Роль</small><h2>admin</h2></div></div><p><a href='/api/security/access-requests'>Открыть заявки доступа</a></p></section></main></body></html>"""
+def _security_center_html(*, username: str, pending_count: int, requests: list[dict[str, Any]]) -> str:
+    rows = "".join(
+        "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
+            escape(str(entry["name"])), escape(str(entry["email"])), escape(str(entry["contact"])),
+            escape(str(entry["reason"])), escape(str(entry["created_at"])), escape(str(entry["status"])),
+            (
+                "<form method='post' action='/api/security/access-requests/{}/approve'><button>Approve</button></form>"
+                "<form method='post' action='/api/security/access-requests/{}/reject'><button>Reject</button></form>"
+            ).format(escape(str(entry["id"])), escape(str(entry["id"]))) if entry["status"] == "pending" else "—",
+        )
+        for entry in requests
+    ) or "<tr><td colspan='7'>Нет данных</td></tr>"
+    return f"""<!doctype html><html lang='ru'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>SharipovAI · Кибер-безопасность</title><style>body{{min-height:100vh;margin:0;background:#020817;color:#f8fbff;font-family:Inter,system-ui,sans-serif}}main{{width:min(1200px,94vw);margin:40px auto}}.card{{border:1px solid #38bdf844;background:#071426;border-radius:28px;padding:24px;box-shadow:0 30px 80px #0008}}.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px}}.stat{{border:1px solid #ffffff18;border-radius:18px;padding:16px;background:#0b1b2c}}small{{color:#94a3b8}}table{{width:100%;border-collapse:collapse;margin-top:20px}}td,th{{padding:10px;border-bottom:1px solid #ffffff18;text-align:left;vertical-align:top}}form{{display:inline}}button{{margin:2px;padding:7px 10px}}.table{{overflow:auto}}</style></head><body><main><h1>Кибер-безопасность</h1><p>Администратор: {escape(username)}</p><section class='card'><div class='grid'><div class='stat'><small>Статус</small><h2>Защищено</h2></div><div class='stat'><small>Заявки</small><h2>{pending_count}</h2></div><div class='stat'><small>Роль</small><h2>admin</h2></div></div><div class='table'><table><thead><tr><th>Имя</th><th>Email</th><th>Контакт</th><th>Причина</th><th>Создано</th><th>Статус</th><th>Решение</th></tr></thead><tbody>{rows}</tbody></table></div></section></main></body></html>"""
 
 
 def _forbidden_page_html() -> str:
