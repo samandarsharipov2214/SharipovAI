@@ -1,11 +1,13 @@
 """Telegram adapter backed by the same services and state as the SharipovAI website.
 
-Telegram, Mini App and website share the same orchestrator and paper state.
+Telegram, Mini App and website share the same orchestrator and canonical
+autonomous-paper runtime. Demo sandbox state is never a Telegram source of truth.
 Every section opens its own contextual controls instead of repeating the main menu.
 """
 from __future__ import annotations
 
 import html
+import math
 import os
 from typing import Any
 from urllib.parse import urlparse
@@ -13,7 +15,7 @@ from urllib.parse import urlparse
 import httpx
 
 from ai_chat_orchestrator import answer_chat
-from dashboard.demo_api import _load as load_shared_state
+from telegram_runtime_state import canonical_state_from_app, unavailable_state
 from telegram_deploy_control import (
     cancel_confirmation,
     claim_owner,
@@ -26,6 +28,27 @@ from telegram_deploy_control import (
 
 API_TIMEOUT = 20.0
 CANONICAL_WEBAPP_URL = "https://85-137-88-17.sslip.io"
+TELEGRAM_STATE_SOURCE = "telegram_runtime_state"
+
+_runtime_app: Any | None = None
+
+
+def bind_runtime_app(app: Any | None) -> None:
+    """Bind the FastAPI app that owns CouncilAuthorizedPaperLoop."""
+
+    global _runtime_app
+    _runtime_app = app
+
+
+def _current_state() -> dict[str, Any]:
+    """Project canonical paper state, or fail closed without fabricated money."""
+
+    if _runtime_app is None:
+        return unavailable_state("telegram_runtime_app_unbound")
+    return canonical_state_from_app(_runtime_app)
+
+
+load_shared_state = _current_state
 
 
 def _token() -> str:
@@ -169,48 +192,134 @@ def _safe(value: Any) -> str:
     return html.escape(str(value), quote=False)
 
 
+def _format_money(value: Any) -> str:
+    if value is None:
+        return "UNAVAILABLE"
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return "UNAVAILABLE"
+    if not math.isfinite(parsed):
+        return "UNAVAILABLE"
+    return f"{parsed:.2f} USDT"
+
+
+def _format_int(value: Any) -> str:
+    if value is None:
+        return "UNAVAILABLE"
+    try:
+        return str(int(value))
+    except (TypeError, ValueError):
+        return "UNAVAILABLE"
+
+
+def _label(value: Any) -> str:
+    return "—" if value is None or value == "" else str(value)
+
+
+def _paper_summary_lines(state: dict[str, Any]) -> list[str]:
+    return [
+        f"Источник: <b>{_safe(state.get('source_of_truth') or 'autonomous_paper')}</b>",
+        f"Режим: <b>{_safe(state.get('mode') or 'UNAVAILABLE')}</b>",
+        f"Equity: <b>{_format_money(state.get('equity'))}</b>",
+        f"Net PnL: <b>{_format_money(state.get('net_pnl'))}</b>",
+        f"Realized PnL: <b>{_format_money(state.get('realized_pnl'))}</b>",
+        f"Комиссии: <b>{_format_money(state.get('total_fees'))}</b>",
+        f"Открытые позиции: <b>{_format_int(state.get('open_positions'))}</b>",
+        f"Last action: <b>{_safe(_label(state.get('last_action')))}</b>",
+        f"Last reason: <b>{_safe(_label(state.get('last_reason')))}</b>",
+    ]
+
+
+def _unavailable_block(title: str, state: dict[str, Any]) -> str:
+    reason = _safe(state.get("error") or "autonomous_paper_unavailable")
+    lines = [
+        f"⚠️ <b>{title}</b>",
+        "",
+        *_paper_summary_lines(state),
+        "",
+        "Demo sandbox не используется. Финансовые нули не выдумываются.",
+        f"Причина: <code>{reason}</code>",
+        "Исполнение: только virtual paper-счёт.",
+        "LIVE execution: <b>заблокирован</b>",
+    ]
+    return "\n".join(lines)
+
+
 def _reply(question: str) -> str:
-    result = answer_chat(question, load_shared_state())
+    result = answer_chat(question, _current_state())
     source = _safe(result.get("source_ai", "SharipovAI"))
     reply = _safe(result.get("reply", "Ответ не сформирован."))
     return f"<b>{source}</b>\n\n{reply}"
 
 
 def _overview() -> str:
-    state = load_shared_state()
-    return (
-        "🏠 <b>SharipovAI Mission Control</b>\n\n"
-        f"Режим: <b>{_safe(state.get('mode', 'PAPER'))}</b>\n"
-        f"Equity: <b>{float(state.get('equity', 0)):.2f} USDT</b>\n"
-        f"Net PnL: <b>{float(state.get('net_pnl', 0)):.2f} USDT</b>\n"
-        f"Комиссии: <b>{float(state.get('total_fees', 0)):.2f} USDT</b>\n"
-        f"Открытые позиции: <b>{int(state.get('open_positions', 0))}</b>\n\n"
-        "Выбери раздел ниже. Mini App открывает основной VPS SharipovAI."
-    )
+    state = _current_state()
+    if not state.get("data_available"):
+        return _unavailable_block("Канонический paper runtime недоступен", state)
+    lines = [
+        "🏠 <b>SharipovAI Mission Control</b>",
+        "",
+        *_paper_summary_lines(state),
+        "",
+        "Исполнение: только virtual paper-счёт. LIVE заблокирован.",
+        "Выбери раздел ниже. Mini App открывает основной VPS SharipovAI.",
+    ]
+    return "\n".join(lines)
 
 
 def _trades() -> str:
-    state = load_shared_state()
-    trades = list(state.get("trades", []))
-    lines = ["💼 <b>Сделки</b>", ""]
+    state = _current_state()
+    if not state.get("data_available"):
+        return _unavailable_block("Сделки недоступны", state)
+    trades = [item for item in (state.get("trades") or []) if isinstance(item, dict)]
+    lines = [
+        "💼 <b>Сделки</b>",
+        "",
+        *_paper_summary_lines(state),
+        "",
+    ]
     if not trades:
         lines.append("Сделок пока нет.")
-    for index, trade in enumerate(trades[-10:], start=max(1, len(trades) - 9)):
-        lines.append(f"{index}. <b>{_safe(trade.get('symbol', trade.get('asset', 'UNKNOWN')))}</b> {_safe(trade.get('side', ''))} · fee {_safe(trade.get('fee', 0))} · net PnL {_safe(trade.get('net_pnl', '—'))}")
-    lines.append("\nПолные карточки сделок и графика доступны в Mini App.")
+    total = state.get("trade_count")
+    start = 1
+    if isinstance(total, int) and total >= len(trades[-10:]):
+        start = max(1, total - len(trades[-10:]) + 1)
+    elif trades:
+        start = max(1, len(trades) - 9)
+    for index, trade in enumerate(trades[-10:], start=start):
+        lines.append(
+            f"{index}. <b>{_safe(trade.get('symbol', trade.get('asset', 'UNKNOWN')))}</b> "
+            f"{_safe(trade.get('side', ''))} · fee {_safe(trade.get('fee', 0))} · "
+            f"net PnL {_safe(trade.get('net_pnl', '—'))}"
+        )
+    lines.append("")
+    lines.append("Полные карточки сделок и графика доступны в Mini App.")
+    lines.append("LIVE execution: <b>заблокирован</b>")
     return "\n".join(lines)
 
 
 def _status() -> str:
-    state = load_shared_state()
-    return (
-        "📡 <b>Статус интеграции</b>\n\n"
-        "Website core: <b>подключён</b>\nAI Chat Orchestrator: <b>подключён</b>\n"
-        "Shared paper state: <b>подключён</b>\nBot Communication Network: <b>подключён</b>\n"
-        f"Mini App: <b>{_safe(_webapp_url())}</b>\n"
-        f"Exchange mode: <b>{_safe((state.get('exchange_status') or {}).get('mode', 'sandbox'))}</b>\n"
-        "LIVE execution: <b>заблокирован</b>"
-    )
+    state = _current_state()
+    if not state.get("data_available"):
+        return _unavailable_block("Статус интеграции", state)
+    exchange_mode = (state.get("exchange_status") or {}).get("mode") or "virtual_execution_only"
+    lines = [
+        "📡 <b>Статус интеграции</b>",
+        "",
+        "Website core: <b>подключён</b>",
+        "AI Chat Orchestrator: <b>подключён</b>",
+        "State source: <b>telegram_runtime_state</b>",
+        "Source of truth: <b>autonomous_paper</b>",
+        "shared_demo_state: <b>false</b>",
+        "Bot Communication Network: <b>подключён</b>",
+        *_paper_summary_lines(state),
+        f"Mini App: <b>{_safe(_webapp_url())}</b>",
+        f"Exchange mode: <b>{_safe(exchange_mode)}</b>",
+        "Исполнение: только virtual paper-счёт.",
+        "LIVE execution: <b>заблокирован</b>",
+    ]
+    return "\n".join(lines)
 
 
 def _section_intro(section: str, actor_id: int | None = None, chat_id: int | None = None) -> tuple[str, dict[str, Any]]:
