@@ -88,6 +88,47 @@ class ExecutionCostModel:
             fee_rate=applied_fee_rate,
         )
 
+    def estimate_round_trip(
+        self,
+        event: MarketEvent,
+        *,
+        quantity: float,
+        liquidity_role: str = "taker",
+    ) -> RoundTripCost:
+        """Pure all-in BUY then SELL cost on the current BBO.
+
+        Impact is already inside each leg's slippage_cost via estimate().
+        """
+        entry = self.estimate(
+            event, side=Side.BUY, quantity=quantity, liquidity_role=liquidity_role
+        )
+        exit_leg = self.estimate(
+            event, side=Side.SELL, quantity=quantity, liquidity_role=liquidity_role
+        )
+        fee = entry.fee + exit_leg.fee
+        spread_cost = entry.spread_cost + exit_leg.spread_cost
+        slippage_cost = entry.slippage_cost + exit_leg.slippage_cost
+        return RoundTripCost(
+            entry=entry,
+            exit=exit_leg,
+            fee=fee,
+            spread_cost=spread_cost,
+            slippage_cost=slippage_cost,
+            all_in=fee + spread_cost + slippage_cost,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RoundTripCost:
+    """All-in taker round-trip cost: fees + spread + slippage (impact included)."""
+
+    entry: ExecutionCost
+    exit: ExecutionCost
+    fee: float
+    spread_cost: float
+    slippage_cost: float
+    all_in: float
+
 
 def validate_market_event(event: MarketEvent) -> None:
     if not isinstance(event.timestamp_ms, int) or event.timestamp_ms <= 0:
@@ -115,4 +156,4 @@ def validate_market_event(event: MarketEvent) -> None:
         raise ValueError("funding_interval_hours must be within 0..744")
 
 
-__all__ = ["ExecutionCost", "ExecutionCostModel", "validate_market_event"]
+__all__ = ["ExecutionCost", "ExecutionCostModel", "RoundTripCost", "validate_market_event"]
