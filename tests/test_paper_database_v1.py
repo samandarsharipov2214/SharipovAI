@@ -219,7 +219,8 @@ def test_full_trade_history_is_immutable_while_ui_cache_is_bounded(tmp_path, mon
     for index in range(505):
         loop._trade("BTCUSDT", "BUY", 0.01, 100 + index, 0.01, f"trade-{index}", None)
     snapshot = loop.snapshot()
-    assert len(snapshot["trades"]) == 500
+    assert len(loop._state["trades"]) == 500
+    assert len(snapshot["trades"]) == 20
     assert snapshot["trade_history_count"] == 505
     assert len(loop.trade_history()) == 505
 

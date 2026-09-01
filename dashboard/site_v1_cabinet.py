@@ -37,32 +37,21 @@ def cabinet_payload(app: Any) -> dict[str, Any]:
         "last_reason": last_reason,
         "worker_running": state.get("worker_running") if available else None,
         "wait": wait,
-        "drawdown_percent": _optional_drawdown(app) if available else None,
+        "drawdown_percent": _drawdown_percent(state.get("equity"), state.get("peak_equity")) if available else None,
         "error": None if available else str(state.get("error") or "autonomous_paper_loop_missing"),
     }
 
 
-def _optional_drawdown(app: Any) -> float | None:
+def _drawdown_percent(equity: Any, peak: Any) -> float | None:
     """Report drawdown only when peak equity is present. Never invent a zero."""
-    loop = getattr(getattr(app, "state", None), "autonomous_paper_loop", None)
-    if loop is None:
-        return None
     try:
-        from telegram_runtime_state import _nonblocking_paper_snapshot
-
-        raw = _nonblocking_paper_snapshot(loop)
-    except Exception:
-        return None
-    if not isinstance(raw, dict) or "peak_equity" not in raw:
-        return None
-    try:
-        equity = float(raw.get("equity"))
-        peak = float(raw.get("peak_equity"))
+        equity_f = float(equity)
+        peak_f = float(peak)
     except (TypeError, ValueError):
         return None
-    if not math.isfinite(equity) or not math.isfinite(peak) or peak <= 0:
+    if not math.isfinite(equity_f) or not math.isfinite(peak_f) or peak_f <= 0:
         return None
-    return max(0.0, (peak - equity) / peak * 100.0)
+    return max(0.0, (peak_f - equity_f) / peak_f * 100.0)
 
 
 def install_site_v1_cabinet(app: FastAPI) -> None:

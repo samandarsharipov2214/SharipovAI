@@ -9,6 +9,8 @@ from __future__ import annotations
 import math
 from typing import Any
 
+_TRADE_WINDOW = 20
+
 
 def unavailable_state(reason: str) -> dict[str, Any]:
     """Return an explicit fail-closed state without fabricated financial data."""
@@ -97,6 +99,7 @@ def canonical_state_from_app(app: Any) -> dict[str, Any]:
         "trade_count": trade_count,
         "last_action": raw.get("last_action"),
         "last_reason": raw.get("last_reason"),
+        "peak_equity": _optional_finite(raw.get("peak_equity")),
         "worker_running": bool(raw.get("worker_running")),
         "database_backed": bool(raw.get("database_backed")),
         "database_scope": raw.get("database_scope"),
@@ -139,6 +142,16 @@ def _finite(value: Any, default: float) -> float:
     return parsed if math.isfinite(parsed) else float(default)
 
 
+def _optional_finite(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
 def _integer(value: Any, default: int) -> int:
     try:
         parsed = int(value)
@@ -148,17 +161,17 @@ def _integer(value: Any, default: int) -> int:
 
 
 def _canonical_trades(loop: Any, raw: dict[str, Any]) -> list[dict[str, Any]]:
-    """Prefer the loop's history reader over a bounded snapshot cache."""
+    """Prefer a bounded recent window over the full trade table."""
 
     reader = getattr(loop, "trade_history", None)
     if callable(reader):
         try:
-            rows = reader(limit=200)
+            rows = reader(limit=_TRADE_WINDOW)
         except Exception:
             rows = None
         if isinstance(rows, list):
-            return [item for item in rows if isinstance(item, dict)]
-    return [item for item in (raw.get("trades") or []) if isinstance(item, dict)]
+            return [item for item in rows if isinstance(item, dict)][-_TRADE_WINDOW:]
+    return [item for item in (raw.get("trades") or []) if isinstance(item, dict)][-_TRADE_WINDOW:]
 
 
 __all__ = ["canonical_state_from_app", "unavailable_state"]

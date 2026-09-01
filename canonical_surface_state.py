@@ -16,7 +16,7 @@ from autonomous_trading.trade_identity import default_paper_state_file
 from storage import ProjectDatabase, count_json_items, list_json_items
 
 _STATE_NAMESPACE = "autonomous_paper_state"
-_TRADE_WINDOW = 100
+_TRADE_WINDOW = 20
 
 
 def load_canonical_paper_state(database: ProjectDatabase | None = None) -> dict[str, Any]:

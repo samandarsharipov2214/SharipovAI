@@ -2,7 +2,8 @@
 
 The canonical ProjectDatabase is the source of truth. The JSON file remains a
 bounded UI/operator backup; immutable trade and event history is never truncated
-from the database. Read-only snapshots never mutate account state.
+from the database. Read-only snapshots never mutate account state and never
+materialize full history just to count it.
 """
 from __future__ import annotations
 
@@ -15,7 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from storage import ProjectDatabase, VersionConflict, list_json_items
+from storage import ProjectDatabase, VersionConflict, count_json_items, list_json_items
 
 from .market_stream import MarketStream
 from .trade_identity import (
@@ -26,6 +27,9 @@ from .trade_identity import (
     normalize_trade,
     scope_for_path,
 )
+
+SNAPSHOT_TRADE_WINDOW = 20
+SNAPSHOT_EVENT_WINDOW = 20
 
 
 class AutonomousPaperLoop:
@@ -72,10 +76,17 @@ class AutonomousPaperLoop:
         self._stop.set()
 
     def snapshot(self) -> dict[str, Any]:
-        """Return a read-only marked-to-market copy of the canonical state."""
+        """Return a read-only marked-to-market copy of the canonical state.
+
+        Cabinet/status polls stay O(1) memory with respect to history length:
+        counts use SQL COUNT, and trades/events are a bounded presentation window.
+        """
         market = self.stream.snapshot()
         with self._lock:
-            state = json.loads(json.dumps(self._state, ensure_ascii=False, allow_nan=False))
+            payload = dict(self._state)
+            payload["trades"] = bound_snapshot_history(self._state.get("trades"), SNAPSHOT_TRADE_WINDOW)
+            payload["events"] = bound_snapshot_history(self._state.get("events"), SNAPSHOT_EVENT_WINDOW)
+            state = json.loads(json.dumps(payload, ensure_ascii=False, allow_nan=False))
             self._mark_state_to_market(state, market, update_timestamp=False)
         state["market_stream"] = {
             key: market.get(key)
@@ -84,8 +95,8 @@ class AutonomousPaperLoop:
         state["real_execution_enabled"] = False
         state["database_backed"] = True
         state["database_scope"] = self.scope
-        state["trade_history_count"] = len(list_json_items(self.database, self.trade_namespace))
-        state["event_history_count"] = len(list_json_items(self.database, self.event_namespace))
+        state["trade_history_count"] = self.trade_history_count()
+        state["event_history_count"] = self.event_history_count()
         state["backup_status"] = "error" if self._last_backup_error else "ok"
         state["backup_error"] = self._last_backup_error
         state["worker_running"] = bool(self._thread and self._thread.is_alive())
@@ -95,11 +106,25 @@ class AutonomousPaperLoop:
         state["wait_event_min_interval_seconds"] = self.wait_event_min_interval_seconds
         return state
 
+    def trade_history_count(self) -> int:
+        return count_json_items(self.database, self.trade_namespace)
+
+    def event_history_count(self) -> int:
+        return count_json_items(self.database, self.event_namespace)
+
     def trade_history(self, *, limit: int | None = None) -> list[dict[str, Any]]:
-        return [item["value"] for item in list_json_items(self.database, self.trade_namespace, limit=limit)]
+        return self._read_history(self.trade_namespace, limit=limit)
 
     def event_history(self, *, limit: int | None = None) -> list[dict[str, Any]]:
-        return [item["value"] for item in list_json_items(self.database, self.event_namespace, limit=limit)]
+        return self._read_history(self.event_namespace, limit=limit)
+
+    def _read_history(self, namespace: str, *, limit: int | None) -> list[dict[str, Any]]:
+        if limit is None:
+            rows = list_json_items(self.database, namespace)
+            return [item["value"] for item in rows]
+        bounded = max(1, int(limit))
+        rows = list_json_items(self.database, namespace, limit=bounded, newest_first=True)
+        return [item["value"] for item in reversed(rows)]
 
     def tick(self) -> None:
         market = self.stream.snapshot()
@@ -456,6 +481,13 @@ class AutonomousPaperLoop:
     @staticmethod
     def _now_ms() -> int:
         return int(time.time() * 1000)
+
+
+def bound_snapshot_history(items: Any, limit: int) -> list[Any]:
+    """Return the newest `limit` items without copying unbounded history."""
+    if not isinstance(items, list) or limit <= 0:
+        return []
+    return list(items[-limit:])
 
 
 def _normalize_last_close_by_symbol(raw: Any) -> dict[str, dict[str, Any]]:
