@@ -205,33 +205,60 @@ class ProductionAudit:
             "id_rsa",
             "id_ed25519",
         }
+        forbidden_suffixes = {".pem", ".key", ".p12", ".pfx"}
         present = sorted(
-            name for name in forbidden if (self.root / name).exists()
+            name for name in forbidden if (self.root / name).is_file()
         )
         tracked: list[str] = []
         verified = False
+        git_toplevel: str | None = None
+        git_env = dict(os.environ)
+        for variable in (
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_COMMON_DIR",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_INDEX_FILE",
+            "GIT_PREFIX",
+            "GIT_CEILING_DIRECTORIES",
+        ):
+            git_env.pop(variable, None)
         try:
-            result = subprocess.run(
-                ["git", "ls-files", "-z"],
-                cwd=self.root,
-                check=True,
-                capture_output=True,
-                timeout=5,
-            )
-            verified = True
-            paths = [
-                item.decode("utf-8", errors="replace")
-                for item in result.stdout.split(b"\0")
-                if item
-            ]
-            tracked = sorted(
-                path
-                for path in paths
-                if Path(path).name in forbidden
-                or Path(path).suffix.lower() in {".pem", ".key", ".p12", ".pfx"}
-            )
+            if (self.root / ".git").exists():
+                root_result = subprocess.run(
+                    ["git", "rev-parse", "--show-toplevel"],
+                    cwd=self.root,
+                    env=git_env,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                git_toplevel = root_result.stdout.strip() or None
+                if git_toplevel and Path(git_toplevel).resolve() == self.root:
+                    result = subprocess.run(
+                        ["git", "ls-files", "-z"],
+                        cwd=self.root,
+                        env=git_env,
+                        check=True,
+                        capture_output=True,
+                        timeout=5,
+                    )
+                    verified = True
+                    paths = [
+                        item.decode("utf-8", errors="replace")
+                        for item in result.stdout.split(b"\0")
+                        if item
+                    ]
+                    tracked = sorted(
+                        path
+                        for path in paths
+                        if Path(path).name in forbidden
+                        or Path(path).suffix.lower() in forbidden_suffixes
+                    )
         except (OSError, subprocess.SubprocessError):
-            pass
+            verified = False
         return AuditCheck(
             "secret_file_hygiene",
             "critical",
@@ -240,8 +267,9 @@ class ProductionAudit:
                 "forbidden_root_files": present,
                 "forbidden_tracked_files": tracked,
                 "git_inventory_verified": verified,
+                "git_toplevel": git_toplevel,
             },
-            "Remove secret material and verify Git inventory.",
+            "Remove secret material and verify Git inventory for the audit root.",
         )
 
     def _required_assets(self) -> AuditCheck:
