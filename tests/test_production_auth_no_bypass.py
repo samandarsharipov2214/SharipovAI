@@ -53,3 +53,26 @@ def test_fresh_production_app_rejects_anonymous_private_api_for_every_production
         "status": "unauthorized",
         "detail": "authentication required",
     }
+
+
+
+def test_site_v1_root_is_public_while_app_route_remains_authenticated(monkeypatch) -> None:
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.delenv("SHARIPOVAI_DISABLE_AUTH", raising=False)
+    app = dashboard.create_production_app()
+
+    with TestClient(app, follow_redirects=False) as client:
+        root = client.get("/")
+        login = client.get("/login")
+        private_app = client.get("/app")
+
+    assert root.status_code == 200
+    assert "text/html" in root.headers.get("content-type", "")
+    assert "/static/site-v1/site.css" in root.text
+    assert "access-card" in root.text
+    assert "SharipovAI Login" not in root.text
+    assert "Обзор" not in root.text
+    assert login.status_code == 303
+    assert login.headers["location"] == "/?mode=login"
+    assert private_app.status_code == 303
+    assert private_app.headers["location"] == "/login?next=/app"

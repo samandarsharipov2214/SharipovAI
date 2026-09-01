@@ -38,7 +38,12 @@ def test_production_factory_contains_critical_production_contracts() -> None:
     signatures = _route_signatures(factory_app)
 
     expected = {
+        ("GET", "/security"),
         ("GET", "/api/auth/me"),
+        ("POST", "/api/auth/register"),
+        ("GET", "/api/auth/access-requests"),
+        ("POST", "/api/auth/access-requests/{request_id}/approve"),
+        ("GET", "/api/site-v1/cabinet"),
         ("GET", "/api/system/release-truth"),
         ("POST", "/api/control-plane/commands/{action}"),
     }

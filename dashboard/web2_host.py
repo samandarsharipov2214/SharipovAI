@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 WEB2_DIR = Path(__file__).resolve().parent / "static" / "web2"
 WEB2_INDEX = WEB2_DIR / "index.html"
 _UI_PATHS = {
-    "/", "/market", "/news", "/ai-decision", "/portfolio", "/paper-trading",
+    "/market", "/news", "/ai-decision", "/portfolio", "/paper-trading",
     "/learning", "/self-analysis", "/stress-lab", "/ai-improvement", "/reports",
     "/settings", "/ai-bots", "/ai-control-center", "/general-control",
     "/learning-os", "/evidence-vault", "/virtual-account", "/control",
