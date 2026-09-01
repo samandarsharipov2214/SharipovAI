@@ -46,6 +46,12 @@ def _failed_checks(report):
     ]
 
 
+def _secret_hygiene_check(report):
+    return next(
+        item for item in report["checks"] if item["name"] == "secret_file_hygiene"
+    )
+
+
 def test_full_audit_is_ready_deterministic_and_mainnet_false(
     tmp_path,
     monkeypatch,
@@ -121,3 +127,30 @@ def test_audit_blocks_missing_assets_and_unverified_git(tmp_path, monkeypatch):
     assert report["status"] == "blocked"
     assert "required_production_assets" in report["blockers"]
     assert "secret_file_hygiene" in report["blockers"]
+
+
+def test_secret_hygiene_ignores_inherited_git_routing(tmp_path, monkeypatch):
+    monkeypatch.setenv("GIT_DIR", str(ROOT / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(ROOT))
+    environment = _safe_environment(monkeypatch, tmp_path)
+
+    report = ProductionAudit(tmp_path, environ=environment).run()
+    check = _secret_hygiene_check(report)
+
+    assert "secret_file_hygiene" in report["blockers"]
+    assert check["passed"] is False
+    assert check["evidence"]["git_inventory_verified"] is False
+    assert check["evidence"]["git_toplevel"] is None
+
+
+def test_secret_hygiene_blocks_runtime_secret_without_git(tmp_path, monkeypatch):
+    (tmp_path / ".env").write_text("SECRET=present\n", encoding="utf-8")
+    environment = _safe_environment(monkeypatch, tmp_path)
+
+    report = ProductionAudit(tmp_path, environ=environment).run()
+    check = _secret_hygiene_check(report)
+
+    assert "secret_file_hygiene" in report["blockers"]
+    assert check["passed"] is False
+    assert check["evidence"]["forbidden_root_files"] == [".env"]
+    assert check["evidence"]["git_inventory_verified"] is False
