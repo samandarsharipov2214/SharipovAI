@@ -83,3 +83,24 @@ def test_cabinet_uses_canonical_paper_not_demo() -> None:
     assert "cabinet-grid" in css
     assert "wait-banner" in css
     assert "primary-action" in css
+
+
+def _submit_handler(source: str, form_name: str) -> str:
+    marker = 'forms.%s.addEventListener("submit"' % form_name
+    start = source.index(marker)
+    rest = source[start:]
+    end = rest.find("\n  });\n")
+    return rest if end < 0 else rest[: end + 6]
+
+
+def test_login_reads_formdata_before_setbusy_like_register() -> None:
+    """Disabled controls are omitted from FormData, so values must be read first."""
+    source = (SITE / "site.js").read_text(encoding="utf-8")
+
+    for form_name in ("login", "register"):
+        handler = _submit_handler(source, form_name)
+        formdata_at = handler.index("new FormData(forms.%s)" % form_name)
+        setbusy_at = handler.index("setBusy(forms.%s, true)" % form_name)
+        assert formdata_at < setbusy_at, (
+            "%s must read FormData before setBusy disables controls" % form_name
+        )

@@ -107,9 +107,9 @@
     event.preventDefault();
     if (forms.login.getAttribute("aria-busy") === "true") return;
     if (!validate(forms.login)) return;
+    const values = Object.fromEntries(new FormData(forms.login));
     setMessage();
     setBusy(forms.login, true);
-    const values = Object.fromEntries(new FormData(forms.login));
     try {
       await requestJson("/api/auth/login", {
         method: "POST",
