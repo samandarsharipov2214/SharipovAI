@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import math
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_DOWN, ROUND_UP
 from threading import Thread
@@ -55,6 +56,16 @@ class PaperExecutionRejected(RuntimeError):
 class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
     """Autonomous paper loop whose new entries require council authorization."""
 
+    # Expected edge / price move must cover this multiple of all-in round-trip cost.
+    # This is a cost-coverage margin, not a time wait.
+    ANTI_CHURN_COST_MARGIN = 1.5
+    ANTI_CHURN_TURNOVER_WINDOW_MS = 15 * 60 * 1000
+    ANTI_CHURN_MAX_ROUND_TRIPS = 3
+    ANTI_CHURN_FEE_EQUITY_FRACTION = 0.005
+    ANTI_CHURN_REENTRY = "anti_churn_reentry"
+    ANTI_CHURN_COST_NOT_COVERED = "anti_churn_cost_not_covered"
+    ANTI_CHURN_TURNOVER_LIMIT = "anti_churn_turnover_limit"
+
     def __init__(
         self,
         stream,
@@ -97,6 +108,8 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
             self._state["pending_authorized_executions"] = {}
         if not isinstance(self._state.get("pending_protective_executions"), dict):
             self._state["pending_protective_executions"] = {}
+        if not isinstance(self._state.get("last_close_by_symbol"), dict):
+            self._state["last_close_by_symbol"] = {}
         # A close is already an immutable PAPER fact when the process comes
         # back.  Recover only explicitly marked, previously failed settlement
         # writes; do not infer settlements from arbitrary historical trades.
@@ -287,6 +300,30 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                     reason = "spot paper loop does not open a short position"
                     self._trace(symbol, "WAIT", reason, phase="execution_gate")
                     self._event("WAIT", reason, symbol)
+                    continue
+
+                anti_churn_reason = self._anti_churn_buy_block_reason(
+                    symbol,
+                    quote,
+                    authorization,
+                    proposal=proposal,
+                )
+                if anti_churn_reason:
+                    action = (
+                        "BLOCK"
+                        if anti_churn_reason.startswith(self.ANTI_CHURN_TURNOVER_LIMIT)
+                        else "WAIT"
+                    )
+                    self._trace(
+                        symbol,
+                        action,
+                        anti_churn_reason,
+                        phase="anti_churn",
+                        decision_id=authorization.decision_id,
+                        authorized=True,
+                        anti_churn_blocked=True,
+                    )
+                    self._event(action, anti_churn_reason, symbol)
                     continue
 
                 try:
@@ -1039,6 +1076,7 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
             self._state["realized_pnl"] += float(net)
             self._state["total_fees"] += execution["fee"]
             execution["gross_pnl"] = float(gross)
+            self._record_last_close(symbol, execution, self._pending_exit_context)
             self._pending_execution = execution
             self._trade(
                 symbol,
@@ -1049,6 +1087,7 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                 reason,
                 float(net),
             )
+            self._bind_last_close_trade_id(symbol)
             self._trace(
                 symbol,
                 "SELL",
@@ -1270,6 +1309,308 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                 key: value for key, value in last_reason.items() if key in newest_scopes
             }
         return False
+
+    def _record_last_close(
+        self,
+        symbol: str,
+        execution: Mapping[str, Any],
+        exit_context: Mapping[str, Any] | None,
+    ) -> None:
+        """Persist restart-safe last-close evidence used only by the BUY anti-churn gate."""
+
+        context = dict(exit_context or {})
+        closes = self._state.setdefault("last_close_by_symbol", {})
+        if not isinstance(closes, dict):
+            closes = {}
+            self._state["last_close_by_symbol"] = closes
+        closes[str(symbol).upper()] = {
+            "closed_at_ms": self._now_ms(),
+            "close_price": float(execution.get("execution_price") or 0.0),
+            "decision_id": str(context.get("decision_id") or ""),
+            "candidate_id": str(context.get("candidate_id") or ""),
+            "fees": float(context.get("entry_fee") or 0.0) + float(execution.get("fee") or 0.0),
+            "spread_cost": float(context.get("entry_spread_cost") or 0.0)
+            + float(execution.get("spread_cost") or 0.0),
+            "slippage_cost": float(context.get("entry_slippage_cost") or 0.0)
+            + float(execution.get("slippage_cost") or 0.0),
+            "side": "SELL",
+            "trade_id": "",
+            "quantity": float(execution.get("quantity") or 0.0),
+        }
+
+    def _bind_last_close_trade_id(self, symbol: str) -> None:
+        trades = self._state.get("trades") or []
+        if not trades:
+            return
+        last = trades[-1]
+        if str(last.get("symbol") or "").upper() != str(symbol).upper():
+            return
+        if str(last.get("side") or "").upper() != "SELL":
+            return
+        closes = self._state.get("last_close_by_symbol")
+        if not isinstance(closes, dict):
+            return
+        row = closes.get(str(symbol).upper())
+        if isinstance(row, dict):
+            row["trade_id"] = str(last.get("trade_id") or "")
+            row["closed_at_ms"] = int(last.get("created_at_ms") or row.get("closed_at_ms") or 0)
+
+    def _anti_churn_buy_block_reason(
+        self,
+        symbol: str,
+        quote: Any,
+        authorization: PaperDecisionAuthorization,
+        *,
+        proposal: CouncilEntryProposal | None = None,
+    ) -> str | None:
+        """Return an auditable BUY block reason, or None if a new entry may proceed.
+
+        Protective SELL and authorized SELL of an existing long never call this.
+        """
+
+        turnover = self._anti_churn_turnover_reason(symbol)
+        if turnover:
+            return turnover
+
+        last = self._last_close_for(symbol)
+        if last is None:
+            return None
+
+        try:
+            round_trip = self._estimate_entry_round_trip(symbol, quote, last)
+        except Exception as exc:
+            return (
+                f"{self.ANTI_CHURN_COST_NOT_COVERED}: round-trip cost estimate unavailable "
+                f"({type(exc).__name__}: {exc})"
+            )
+        packet = proposal.evidence_packet if proposal is not None else None
+        packet_cost = self._packet_reported_cost(authorization, packet)
+        all_in = max(float(round_trip.all_in), packet_cost)
+        required = all_in * self.ANTI_CHURN_COST_MARGIN
+        estimate_qty = self._anti_churn_quantity(quote, last)
+        current_mid = self._quote_mid(quote)
+        last_price = float(last.get("close_price") or 0.0)
+        price_move_value = abs(current_mid - last_price) * estimate_qty
+        edge = self._explicit_expected_edge(authorization, packet)
+        same_identity = self._same_buy_identity(last, authorization)
+
+        if same_identity:
+            return (
+                f"{self.ANTI_CHURN_REENTRY}: same decision_id/candidate_id as last close "
+                f"({last.get('decision_id') or last.get('candidate_id')}); "
+                f"all_in={all_in:.8f} required={required:.8f}"
+            )
+
+        if edge is not None:
+            if edge + 1e-12 < required:
+                return (
+                    f"{self.ANTI_CHURN_COST_NOT_COVERED}: expected_edge={edge:.8f} "
+                    f"does not cover {self.ANTI_CHURN_COST_MARGIN}x all-in round-trip "
+                    f"cost {all_in:.8f} (required {required:.8f})"
+                )
+            return None
+
+        # Fail-closed hysteresis: no reliable expected-edge evidence, so the
+        # market itself must have moved enough to cover all-in cost + margin.
+        if price_move_value + 1e-12 < required:
+            return (
+                f"{self.ANTI_CHURN_COST_NOT_COVERED}: price move {price_move_value:.8f} "
+                f"does not cover {self.ANTI_CHURN_COST_MARGIN}x all-in round-trip "
+                f"cost {all_in:.8f} (required {required:.8f}); fees+spread+slippage participate"
+            )
+        return None
+
+    def _anti_churn_turnover_reason(self, symbol: str) -> str | None:
+        now_ms = self._now_ms()
+        cutoff = now_ms - self.ANTI_CHURN_TURNOVER_WINDOW_MS
+        clean = str(symbol).upper()
+        window: list[dict[str, Any]] = []
+        for trade in self._state.get("trades") or []:
+            if not isinstance(trade, dict):
+                continue
+            if str(trade.get("symbol") or "").upper() != clean:
+                continue
+            created = int(trade.get("created_at_ms") or 0)
+            if created >= cutoff:
+                window.append(trade)
+        round_trips = sum(
+            1 for trade in window if str(trade.get("side") or "").upper() == "SELL"
+        )
+        fees = 0.0
+        for trade in window:
+            try:
+                fee = float(trade.get("fee") or 0.0)
+            except (TypeError, ValueError):
+                fee = 0.0
+            if math.isfinite(fee) and fee > 0:
+                fees += fee
+        equity = float(self._state.get("equity") or self._state.get("cash") or 0.0)
+        if round_trips >= self.ANTI_CHURN_MAX_ROUND_TRIPS:
+            return (
+                f"{self.ANTI_CHURN_TURNOVER_LIMIT}: {round_trips} round trips in "
+                f"{self.ANTI_CHURN_TURNOVER_WINDOW_MS}ms window"
+            )
+        if equity > 0 and fees > equity * self.ANTI_CHURN_FEE_EQUITY_FRACTION:
+            return (
+                f"{self.ANTI_CHURN_TURNOVER_LIMIT}: window fees {fees:.8f} exceed "
+                f"{self.ANTI_CHURN_FEE_EQUITY_FRACTION} of equity {equity:.8f}"
+            )
+        return None
+
+    def _last_close_for(self, symbol: str) -> dict[str, Any] | None:
+        closes = self._state.get("last_close_by_symbol")
+        if not isinstance(closes, dict):
+            return None
+        row = closes.get(str(symbol).upper())
+        if not isinstance(row, dict):
+            return None
+        if float(row.get("close_price") or 0.0) <= 0:
+            return None
+        return row
+
+    def _same_buy_identity(
+        self,
+        last: Mapping[str, Any],
+        authorization: PaperDecisionAuthorization,
+    ) -> bool:
+        decision_id = str(authorization.decision_id or "")
+        candidate = authorization.candidate_result.candidate
+        candidate_id = str(getattr(candidate, "candidate_id", "") or "")
+        last_decision = str(last.get("decision_id") or "")
+        last_candidate = str(last.get("candidate_id") or "")
+        if decision_id and last_decision and decision_id == last_decision:
+            return True
+        if candidate_id and last_candidate and candidate_id == last_candidate:
+            return True
+        return False
+
+    def _explicit_expected_edge(
+        self,
+        authorization: PaperDecisionAuthorization,
+        packet: Any,
+    ) -> float | None:
+        """Use a packet/candidate expected-edge field if present. Never invent one."""
+
+        candidate = authorization.candidate_result.candidate
+        sources = (
+            packet,
+            candidate,
+            authorization,
+            getattr(authorization, "assessment", None),
+        )
+        for source in sources:
+            value = self._read_finite_field(
+                source,
+                "expected_edge",
+                "expected_pnl",
+                "expected_gross_edge",
+                "estimated_edge",
+            )
+            if value is not None:
+                return value
+        return None
+
+    def _packet_reported_cost(
+        self,
+        authorization: PaperDecisionAuthorization,
+        packet: Any,
+    ) -> float:
+        candidate = authorization.candidate_result.candidate
+        total = 0.0
+        found = False
+        for source in (packet, candidate):
+            for field in ("estimated_fees", "estimated_slippage"):
+                value = self._read_finite_field(source, field)
+                if value is not None and value > 0:
+                    total += value
+                    found = True
+            if found:
+                break
+        return total if found else 0.0
+
+    @staticmethod
+    def _read_finite_field(source: Any, *names: str) -> float | None:
+        if source is None:
+            return None
+        for name in names:
+            if isinstance(source, Mapping) and name in source:
+                raw = source.get(name)
+            else:
+                raw = getattr(source, name, None)
+            if raw is None:
+                continue
+            try:
+                parsed = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(parsed):
+                return parsed
+        return None
+
+    def _anti_churn_quantity(self, quote: Any, last: Mapping[str, Any] | None) -> float:
+        ask = float(getattr(quote, "ask_price", None) or getattr(quote, "price", 0.0) or 0.0)
+        cash = float(self._state.get("cash") or 0.0)
+        budget = min(
+            cash * float(self.max_position_percent) / 100.0,
+            cash / max(len(self.stream.symbols), 1),
+        )
+        intended = budget / ask if ask > 0 else 0.0
+        last_qty = float((last or {}).get("quantity") or 0.0)
+        quantity = intended if intended > 0 else last_qty
+        if not math.isfinite(quantity) or quantity <= 0:
+            raise PaperExecutionRejected("anti-churn quantity is unavailable")
+        return quantity
+
+    def _quote_mid(self, quote: Any) -> float:
+        bid = float(getattr(quote, "bid_price", None) or 0.0)
+        ask = float(getattr(quote, "ask_price", None) or 0.0)
+        if bid > 0 and ask > 0 and ask >= bid:
+            return (bid + ask) / 2.0
+        price = float(getattr(quote, "price", 0.0) or 0.0)
+        if price <= 0:
+            raise PaperExecutionRejected("anti-churn quote mid is unavailable")
+        return price
+
+    def _estimate_entry_round_trip(
+        self,
+        symbol: str,
+        quote: Any,
+        last: Mapping[str, Any] | None,
+    ):
+        quantity = self._anti_churn_quantity(quote, last)
+        bid = float(getattr(quote, "bid_price", None) or 0.0)
+        ask = float(getattr(quote, "ask_price", None) or 0.0)
+        if bid <= 0 or ask <= 0 or ask < bid:
+            raise PaperExecutionRejected("anti-churn BBO is unavailable")
+        midpoint = (bid + ask) / 2.0
+        volume = None
+        turnover = getattr(quote, "volume_24h", None)
+        if turnover not in (None, ""):
+            try:
+                quote_turnover = float(turnover)
+            except (TypeError, ValueError):
+                quote_turnover = 0.0
+            if math.isfinite(quote_turnover) and quote_turnover > 0 and midpoint > 0:
+                volume = quote_turnover / midpoint
+        event = MarketEvent(
+            timestamp_ms=int(getattr(quote, "received_at_unix_ms", 0) or self._now_ms()),
+            symbol=str(symbol).upper(),
+            bid=bid,
+            ask=ask,
+            source=str(getattr(quote, "source", "bybit_websocket_v5") or "bybit_websocket_v5"),
+            volume=volume,
+        )
+        try:
+            return self.cost_model.estimate_round_trip(event, quantity=quantity)
+        except ValueError:
+            event_no_volume = MarketEvent(
+                timestamp_ms=event.timestamp_ms,
+                symbol=event.symbol,
+                bid=event.bid,
+                ask=event.ask,
+                source=event.source,
+            )
+            return self.cost_model.estimate_round_trip(event_no_volume, quantity=quantity)
 
     def _proposal_state_snapshot(self) -> dict[str, Any]:
         return {

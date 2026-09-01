@@ -18,7 +18,7 @@ from .cost_scenarios import (
     TransactionCostScenarioResult,
     evaluate_transaction_cost_scenarios,
 )
-from .costs import ExecutionCost, ExecutionCostModel
+from .costs import ExecutionCost, ExecutionCostModel, RoundTripCost
 from .models import (
     BacktestConfig,
     BacktestResult,
@@ -60,6 +60,7 @@ __all__ = [
     "EventDrivenBacktester",
     "ExecutionCost",
     "ExecutionCostModel",
+    "RoundTripCost",
     "Fill",
     "FundingPayment",
     "MarketEvent",

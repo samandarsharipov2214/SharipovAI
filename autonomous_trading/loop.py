@@ -359,6 +359,9 @@ class AutonomousPaperLoop:
             0,
             int(state.get("suppressed_wait_events", 0) or 0),
         )
+        state["last_close_by_symbol"] = _normalize_last_close_by_symbol(
+            state.get("last_close_by_symbol")
+        )
         return state
 
     def _default_state(self) -> dict[str, Any]:
@@ -377,6 +380,7 @@ class AutonomousPaperLoop:
             "last_action": "START",
             "last_reason": "Autonomous paper account initialized",
             "updated_at": self._now(),
+            "last_close_by_symbol": {},
         }
 
     def _persist(self) -> None:
@@ -452,6 +456,42 @@ class AutonomousPaperLoop:
     @staticmethod
     def _now_ms() -> int:
         return int(time.time() * 1000)
+
+
+def _normalize_last_close_by_symbol(raw: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(raw, dict):
+        return {}
+    normalized: dict[str, dict[str, Any]] = {}
+    for symbol, row in raw.items():
+        if not isinstance(row, dict):
+            continue
+        clean_symbol = str(symbol).strip().upper()
+        if not clean_symbol or not clean_symbol.isalnum():
+            continue
+        try:
+            closed_at_ms = max(0, int(row.get("closed_at_ms") or 0))
+            close_price = float(row.get("close_price") or 0.0)
+            fees = float(row.get("fees") or 0.0)
+            spread_cost = float(row.get("spread_cost") or 0.0)
+            slippage_cost = float(row.get("slippage_cost") or 0.0)
+            quantity = float(row.get("quantity") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if not all(math.isfinite(value) for value in (close_price, fees, spread_cost, slippage_cost, quantity)):
+            continue
+        normalized[clean_symbol] = {
+            "closed_at_ms": closed_at_ms,
+            "close_price": close_price,
+            "decision_id": str(row.get("decision_id") or ""),
+            "candidate_id": str(row.get("candidate_id") or ""),
+            "fees": max(0.0, fees),
+            "spread_cost": max(0.0, spread_cost),
+            "slippage_cost": max(0.0, slippage_cost),
+            "side": str(row.get("side") or "SELL").upper() or "SELL",
+            "trade_id": str(row.get("trade_id") or ""),
+            "quantity": max(0.0, quantity),
+        }
+    return normalized
 
 
 def _finite(value: Any, name: str) -> float:

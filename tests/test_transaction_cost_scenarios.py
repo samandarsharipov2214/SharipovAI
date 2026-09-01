@@ -72,3 +72,22 @@ def test_cost_scenario_rejects_missing_provenance_and_duplicate_ids() -> None:
             strategy_factory=BuyAndHoldStrategy,
             scenarios=(scenario, scenario),
         )
+
+
+def test_execution_cost_model_round_trip_includes_fees_spread_and_slippage() -> None:
+    from trading_core.costs import ExecutionCostModel
+
+    event = _events()[0]
+    model = ExecutionCostModel(fee_rate=0.001, slippage_bps=5.0, market_impact_bps=0.0)
+    round_trip = model.estimate_round_trip(event, quantity=2.0)
+
+    assert round_trip.fee > 0
+    assert round_trip.spread_cost > 0
+    assert round_trip.slippage_cost > 0
+    assert round_trip.all_in == round_trip.fee + round_trip.spread_cost + round_trip.slippage_cost
+    tight = ExecutionCostModel(fee_rate=0.0, slippage_bps=0.0, market_impact_bps=0.0)
+    cheap = tight.estimate_round_trip(event, quantity=2.0)
+    assert cheap.fee == 0
+    assert cheap.slippage_cost == 0
+    assert cheap.all_in == cheap.spread_cost
+    assert round_trip.all_in > cheap.all_in
