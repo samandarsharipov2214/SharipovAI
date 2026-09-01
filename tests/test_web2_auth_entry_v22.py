@@ -10,6 +10,7 @@ def test_site_v1_root_is_public_but_login_and_api_contracts_remain_explicit() ->
     source = AUTH_GUARD.read_text(encoding="utf-8")
     public_block = source.split("_PUBLIC_EXACT = {", 1)[1].split("}", 1)[0]
     assert '"/",' in public_block
+    assert '"/app"' in public_block
     assert '"/login"' in public_block
     assert '"/api/health"' in public_block
 

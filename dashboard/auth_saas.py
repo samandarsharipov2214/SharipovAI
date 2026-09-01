@@ -378,8 +378,9 @@ def install_saas_auth_api(app: FastAPI) -> None:
         finally:
             db.close()
 
-    @app.post("/api/auth/login", response_model=AuthResponse)
-    async def login(request: Request, raw_payload: Any = Body(...)) -> AuthResponse:
+    @app.post("/api/auth/login")
+    async def login(request: Request, raw_payload: Any = Body(...)) -> Response:
+        # Return Response so Set-Cookie (sharipovai_session / JWT) is not stripped by response_model.
         ensure_same_origin(request)
         payload = _login_payload(raw_payload)
         identifier = _login_identifier(payload)

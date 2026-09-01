@@ -28,16 +28,18 @@ def _protected_app(monkeypatch) -> FastAPI:
     return app
 
 
-def test_public_root_private_app_and_private_api_are_distinct(monkeypatch) -> None:
+def test_public_root_public_app_document_and_private_api_are_distinct(monkeypatch) -> None:
     with TestClient(_protected_app(monkeypatch), follow_redirects=False) as client:
         root = client.get("/")
-        private_app = client.get("/app")
+        site_app = client.get("/app")
         private_api = client.get("/api/private-probe")
 
     assert root.status_code == 200
     assert root.headers["cache-control"] == "no-store, max-age=0, must-revalidate"
-    assert private_app.status_code == 303
-    assert private_app.headers["location"] == "/login?next=/app"
+    assert site_app.status_code == 200
+    assert "text/html" in site_app.headers.get("content-type", "")
+    assert "/static/site-v1/site.css" in site_app.text
+    assert site_app.headers.get("location") is None
     assert private_api.status_code == 401
     assert private_api.json()["status"] == "unauthorized"
 

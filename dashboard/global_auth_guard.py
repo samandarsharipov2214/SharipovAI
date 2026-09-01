@@ -15,6 +15,7 @@ from .internal_service_auth import require_internal_service
 
 _PUBLIC_EXACT = {
     "/",
+    "/app",
     "/login",
     "/register",
     "/logout",
