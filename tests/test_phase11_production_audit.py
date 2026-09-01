@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import subprocess
 
 from audit.phase11_production_audit import ProductionAudit
 
@@ -121,3 +122,54 @@ def test_audit_blocks_missing_assets_and_unverified_git(tmp_path, monkeypatch):
     assert report["status"] == "blocked"
     assert "required_production_assets" in report["blockers"]
     assert "secret_file_hygiene" in report["blockers"]
+
+
+def test_secret_hygiene_ignores_inherited_git_inventory(tmp_path, monkeypatch):
+    audit_root = tmp_path / "audit-root"
+    other_repo = tmp_path / "other-repo"
+    audit_root.mkdir()
+    other_repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(other_repo)], check=True)
+    monkeypatch.setenv("GIT_DIR", str(other_repo / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(other_repo))
+    environment = _safe_environment(monkeypatch, tmp_path)
+
+    report = ProductionAudit(audit_root, environ=environment).run()
+
+    check = next(
+        item for item in report["checks"] if item["name"] == "secret_file_hygiene"
+    )
+    assert "secret_file_hygiene" in report["blockers"]
+    assert check["evidence"]["git_inventory_verified"] is False
+
+
+def test_secret_hygiene_does_not_walk_to_parent_repository(tmp_path, monkeypatch):
+    parent_repo = tmp_path / "parent-repo"
+    audit_root = parent_repo / "nested-audit-root"
+    parent_repo.mkdir()
+    audit_root.mkdir()
+    subprocess.run(["git", "init", "-q", str(parent_repo)], check=True)
+    environment = _safe_environment(monkeypatch, tmp_path)
+
+    report = ProductionAudit(audit_root, environ=environment).run()
+
+    check = next(
+        item for item in report["checks"] if item["name"] == "secret_file_hygiene"
+    )
+    assert "secret_file_hygiene" in report["blockers"]
+    assert check["evidence"]["git_inventory_verified"] is False
+
+
+def test_secret_hygiene_blocks_real_root_secret_without_git(tmp_path, monkeypatch):
+    audit_root = tmp_path / "audit-root"
+    audit_root.mkdir()
+    (audit_root / ".env").write_text("TEST_ONLY=not-a-secret\n", encoding="utf-8")
+    environment = _safe_environment(monkeypatch, tmp_path)
+
+    report = ProductionAudit(audit_root, environ=environment).run()
+
+    check = next(
+        item for item in report["checks"] if item["name"] == "secret_file_hygiene"
+    )
+    assert "secret_file_hygiene" in report["blockers"]
+    assert check["evidence"]["forbidden_root_files"] == [".env"]

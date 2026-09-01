@@ -210,10 +210,32 @@ class ProductionAudit:
         )
         tracked: list[str] = []
         verified = False
+        git_toplevel: str | None = None
+        git_environment = {
+            name: value
+            for name, value in self.environ.items()
+            if not name.startswith("GIT_")
+        }
         try:
+            if not (self.root / ".git").exists():
+                raise FileNotFoundError("audit root has no Git metadata")
+            top_level = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                cwd=self.root,
+                env=git_environment,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            ).stdout.strip()
+            resolved_top_level = Path(top_level).resolve()
+            if resolved_top_level != self.root:
+                raise ValueError("Git inventory does not belong to audit root")
+            git_toplevel = str(resolved_top_level)
             result = subprocess.run(
                 ["git", "ls-files", "-z"],
                 cwd=self.root,
+                env=git_environment,
                 check=True,
                 capture_output=True,
                 timeout=5,
@@ -230,7 +252,7 @@ class ProductionAudit:
                 if Path(path).name in forbidden
                 or Path(path).suffix.lower() in {".pem", ".key", ".p12", ".pfx"}
             )
-        except (OSError, subprocess.SubprocessError):
+        except (OSError, ValueError, subprocess.SubprocessError):
             pass
         return AuditCheck(
             "secret_file_hygiene",
@@ -240,6 +262,7 @@ class ProductionAudit:
                 "forbidden_root_files": present,
                 "forbidden_tracked_files": tracked,
                 "git_inventory_verified": verified,
+                "git_toplevel": git_toplevel,
             },
             "Remove secret material and verify Git inventory.",
         )
