@@ -82,10 +82,13 @@ from .private_order_ws_api import install_private_order_ws_api
 from .routers import install_operational_routers
 from .security_headers import install_security_headers
 from .self_learning_api import install_self_learning_api
+from .site_v1_admin import install_site_v1_admin
+from .site_v1_cabinet import install_site_v1_cabinet
 from .source_status_compat_api import install_source_status_compat_api
 from .system_health_api import install_system_health_api
 from .system_watchdog import install_system_watchdog
 from .web2_host import install_web2_host
+from .site_v1_host import install_site_v1_host
 
 
 def _remove_route_owner(app: Any, *, method: str, path: str, module: str) -> None:
@@ -113,6 +116,8 @@ def _install_production_runtime_apis(app: Any) -> None:
     # request dispatch has exactly one owner for each method/path contract.
     _remove_route_owner(app, method="GET", path="/login", module="dashboard.demo_api")
     _remove_route_owner(app, method="GET", path="/api/auth/me", module="dashboard.app")
+    _remove_route_owner(app, method="GET", path="/api/security/access-requests", module="dashboard.app")
+    _remove_route_owner(app, method="POST", path="/api/security/access-requests/{request_id}/approve", module="dashboard.app")
 
     install_database_api(app)
     install_news_agent_network_api(app)
@@ -135,7 +140,10 @@ def _install_production_runtime_apis(app: Any) -> None:
     install_source_status_compat_api(app)
     install_operational_routers(app)
     install_web2_host(app)
+    install_site_v1_host(app)
     install_saas_auth_api(app)
+    install_site_v1_admin(app)
+    install_site_v1_cabinet(app)
     install_saas_billing_api(app)
     install_market_context_api(app)
     install_release_status_api(app)

@@ -4,15 +4,25 @@ import { LockKeyhole, LogIn, UserPlus } from "lucide-react";
 interface AuthPanelProps {
   busy: boolean;
   error: string | null;
+  pendingApproval?: boolean;
   onLogin: (payload: { email: string; password: string }) => Promise<void>;
-  onRegister: (payload: { email: string; password: string; display_name: string }) => Promise<void>;
+  onRegister: (payload: {
+    email: string;
+    password: string;
+    name: string;
+    contact: string;
+    password_confirmation: string;
+    reason: string;
+  }) => Promise<void>;
 }
 
-export function AuthPanel({ busy, error, onLogin, onRegister }: AuthPanelProps) {
+export function AuthPanel({ busy, error, pendingApproval = false, onLogin, onRegister }: AuthPanelProps) {
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
+  const [contact, setContact] = useState("");
+  const [passwordConfirmation, setPasswordConfirmation] = useState("");
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -20,7 +30,16 @@ export function AuthPanel({ busy, error, onLogin, onRegister }: AuthPanelProps) 
       await onLogin({ email, password });
       return;
     }
-    await onRegister({ email, password, display_name: displayName });
+    await onRegister({
+      email,
+      password,
+      name: displayName,
+      contact,
+      password_confirmation: passwordConfirmation,
+      reason: "",
+    });
+    setPassword("");
+    setPasswordConfirmation("");
   };
 
   return (
@@ -46,6 +65,7 @@ export function AuthPanel({ busy, error, onLogin, onRegister }: AuthPanelProps) 
       </div>
       <form className="mt-5 space-y-4" onSubmit={submit}>
         {mode === "register" && (
+          <>
           <label className="block text-sm text-slate-300">
             <span className="mb-2 block">Имя</span>
             <input
@@ -53,8 +73,20 @@ export function AuthPanel({ busy, error, onLogin, onRegister }: AuthPanelProps) 
               value={displayName}
               onChange={(event) => setDisplayName(event.target.value)}
               maxLength={120}
+              required
             />
           </label>
+          <label className="block text-sm text-slate-300">
+            <span className="mb-2 block">Контакт</span>
+            <input
+              className="w-full rounded-xl border border-white/10 bg-slate-900 px-3 py-3 text-white outline-none focus:border-cyan-300"
+              value={contact}
+              onChange={(event) => setContact(event.target.value)}
+              maxLength={320}
+              required
+            />
+          </label>
+          </>
         )}
         <label className="block text-sm text-slate-300">
           <span className="mb-2 block">Email</span>
@@ -66,6 +98,19 @@ export function AuthPanel({ busy, error, onLogin, onRegister }: AuthPanelProps) 
             required
           />
         </label>
+        {mode === "register" && (
+          <label className="block text-sm text-slate-300">
+            <span className="mb-2 block">Повторите пароль</span>
+            <input
+              className="w-full rounded-xl border border-white/10 bg-slate-900 px-3 py-3 text-white outline-none focus:border-cyan-300"
+              type="password"
+              value={passwordConfirmation}
+              onChange={(event) => setPasswordConfirmation(event.target.value)}
+              minLength={12}
+              required
+            />
+          </label>
+        )}
         <label className="block text-sm text-slate-300">
           <span className="mb-2 block">Пароль</span>
           <input
@@ -77,8 +122,9 @@ export function AuthPanel({ busy, error, onLogin, onRegister }: AuthPanelProps) 
             required
           />
         </label>
+        {pendingApproval && <p className="text-sm text-emerald-300">Заявка отправлена. После одобрения вы сможете войти.</p>}
         {error && <p className="text-sm text-rose-300">{error}</p>}
-        <button className="primary-button" type="submit" disabled={busy}>
+        <button className="primary-button" type="submit" disabled={busy || (mode === "register" && pendingApproval)}>
           {mode === "login" ? "Войти" : "Создать аккаунт"}
         </button>
       </form>

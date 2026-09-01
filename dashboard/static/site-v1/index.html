@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#07111f" />
+    <meta name="description" content="SharipovAI — защищённое AI-пространство для исследований и решений." />
+    <title>SharipovAI — AI-пространство</title>
+    <link rel="stylesheet" href="/static/site-v1/site.css" />
+  </head>
+  <body>
+    <div class="ambient ambient-one" aria-hidden="true"></div>
+    <div class="ambient ambient-two" aria-hidden="true"></div>
+    <main class="page-shell">
+      <header class="site-header">
+        <a class="brand" href="/" aria-label="SharipovAI — главная">
+          <span class="brand-mark" aria-hidden="true">✦</span>
+          <span>SharipovAI</span>
+        </a>
+        <span class="access-state"><i aria-hidden="true"></i> Защищённый доступ</span>
+      </header>
+
+      <section id="accessView" class="access-layout" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="eyebrow">ПЕРСОНАЛЬНОЕ AI-ПРОСТРАНСТВО</p>
+          <h1 id="hero-title">Идеи быстрее.<span>Решения — точнее.</span></h1>
+          <p class="lead">Одно защищённое пространство для AI-инструментов, исследований и осознанной работы с данными.</p>
+          <ul class="benefits" aria-label="Возможности SharipovAI">
+            <li><b aria-hidden="true">01</b><span>AI-диалоги и история работы в одном месте</span></li>
+            <li><b aria-hidden="true">02</b><span>Прозрачные данные и контролируемый доступ</span></li>
+            <li><b aria-hidden="true">03</b><span>Интерфейс, который одинаково удобен на телефоне и компьютере</span></li>
+          </ul>
+        </div>
+
+        <div class="access-card">
+          <div class="mode-switch" role="tablist" aria-label="Авторизация">
+            <button id="loginTab" class="active" type="button" role="tab" aria-selected="true" aria-controls="loginForm" data-mode="login">Войти</button>
+            <button id="registerTab" type="button" role="tab" aria-selected="false" aria-controls="registerForm" data-mode="register">Получить доступ</button>
+          </div>
+
+          <form id="loginForm" aria-labelledby="login-title" novalidate>
+            <div class="form-heading">
+              <p class="eyebrow">С ВОЗВРАЩЕНИЕМ</p>
+              <h2 id="login-title">Войдите в аккаунт</h2>
+              <p>Используйте данные одобренного аккаунта.</p>
+            </div>
+            <label for="loginEmail">E-mail или логин</label>
+            <input id="loginEmail" name="email" type="text" inputmode="email" autocomplete="username" maxlength="320" required />
+            <label for="loginPassword">Пароль</label>
+            <div class="password-field">
+              <input id="loginPassword" name="password" type="password" autocomplete="current-password" minlength="1" maxlength="200" required />
+              <button type="button" class="password-toggle" data-toggle-password="loginPassword" aria-label="Показать пароль" aria-pressed="false">Показать</button>
+            </div>
+            <button class="primary-action" type="submit"><span>Продолжить</span><b aria-hidden="true">→</b></button>
+          </form>
+
+          <form id="registerForm" aria-labelledby="register-title" novalidate hidden>
+            <div class="form-heading">
+              <p class="eyebrow">НОВЫЙ ПОЛЬЗОВАТЕЛЬ</p>
+              <h2 id="register-title">Запросите доступ</h2>
+              <p>Аккаунт станет доступен после одобрения администратором.</p>
+            </div>
+            <label for="registerName">Имя</label>
+            <input id="registerName" name="name" autocomplete="name" maxlength="120" required />
+            <label for="registerEmail">E-mail</label>
+            <input id="registerEmail" name="email" type="email" inputmode="email" autocomplete="email" maxlength="320" required />
+            <label for="registerContact">Контакт</label>
+            <input id="registerContact" name="contact" autocomplete="off" maxlength="320" placeholder="Telegram или другой способ связи" required />
+            <label for="registerPassword">Пароль</label>
+            <div class="password-field">
+              <input id="registerPassword" name="password" type="password" autocomplete="new-password" minlength="12" maxlength="200" aria-describedby="passwordHint" required />
+              <button type="button" class="password-toggle" data-toggle-password="registerPassword" aria-label="Показать пароль" aria-pressed="false">Показать</button>
+            </div>
+            <p id="passwordHint" class="field-hint">Не менее 12 символов. Пароль хранится только в виде защищённого хеша.</p>
+            <label for="registerPasswordConfirmation">Повторите пароль</label>
+            <div class="password-field">
+              <input id="registerPasswordConfirmation" name="password_confirmation" type="password" autocomplete="new-password" minlength="12" maxlength="200" required />
+              <button type="button" class="password-toggle" data-toggle-password="registerPasswordConfirmation" aria-label="Показать пароль" aria-pressed="false">Показать</button>
+            </div>
+            <label for="registerReason">Для чего нужен доступ <span>(необязательно)</span></label>
+            <textarea id="registerReason" name="reason" maxlength="2000" rows="3"></textarea>
+            <button class="primary-action" type="submit"><span>Отправить заявку</span><b aria-hidden="true">→</b></button>
+          </form>
+
+          <div id="message" class="form-message" role="status" aria-live="polite" aria-atomic="true"></div>
+        </div>
+      </section>
+
+      <section id="workspaceView" class="workspace-card cabinet-card" aria-labelledby="workspace-title" hidden>
+        <div class="cabinet-heading">
+          <div>
+            <p class="eyebrow">КАБИНЕТ · AUTONOMOUS PAPER</p>
+            <h1 id="workspace-title">Рабочий кабинет</h1>
+            <p>Аккаунт <strong id="workspaceUser"></strong>. Только канонический paper runtime — без demo и без вымышленных нулей.</p>
+          </div>
+          <button id="logoutButton" class="secondary-action" type="button">Выйти</button>
+        </div>
+        <div id="cabinetUnavailable" class="truthful-state cabinet-unavailable" hidden>
+          <span aria-hidden="true">!</span>
+          <div>
+            <b id="cabinetMode">UNAVAILABLE</b>
+            <p id="cabinetError">Канонический paper runtime недоступен. Значения не подставляются.</p>
+          </div>
+        </div>
+        <div id="cabinetWait" class="wait-banner" hidden>
+          <p class="eyebrow">WAIT / DRAWDOWN</p>
+          <b id="waitAction"></b>
+          <p id="waitReason"></p>
+          <p id="waitDrawdown"></p>
+        </div>
+        <div id="cabinetMetrics" class="cabinet-grid" hidden>
+          <article><p class="eyebrow">EQUITY</p><b id="metricEquity"></b></article>
+          <article><p class="eyebrow">CASH</p><b id="metricCash"></b></article>
+          <article><p class="eyebrow">NET PNL</p><b id="metricNetPnl"></b></article>
+          <article><p class="eyebrow">FEES</p><b id="metricFees"></b></article>
+          <article><p class="eyebrow">OPEN POSITIONS</p><b id="metricPositions"></b></article>
+          <article><p class="eyebrow">WORKER</p><b id="metricWorker"></b></article>
+        </div>
+        <div id="cabinetActivity" class="cabinet-activity" hidden>
+          <article>
+            <p class="eyebrow">LAST ACTION</p>
+            <b id="metricLastAction"></b>
+          </article>
+          <article>
+            <p class="eyebrow">LAST REASON</p>
+            <p id="metricLastReason"></p>
+          </article>
+          <article>
+            <p class="eyebrow">POSITIONS</p>
+            <p id="metricPositionList"></p>
+          </article>
+        </div>
+        <div id="workspaceMessage" class="form-message" role="status" aria-live="polite"></div>
+      </section>
+
+      <footer class="site-footer"><span>© 2026 SharipovAI</span><span>Безопасность и ясность — по умолчанию.</span></footer>
+    </main>
+    <script src="/static/site-v1/site.js" defer></script>
+  </body>
+</html>
