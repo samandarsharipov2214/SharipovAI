@@ -82,6 +82,7 @@ from .private_order_ws_api import install_private_order_ws_api
 from .routers import install_operational_routers
 from .security_headers import install_security_headers
 from .self_learning_api import install_self_learning_api
+from .site_v1_admin import install_site_v1_admin
 from .source_status_compat_api import install_source_status_compat_api
 from .system_health_api import install_system_health_api
 from .system_watchdog import install_system_watchdog
@@ -140,6 +141,7 @@ def _install_production_runtime_apis(app: Any) -> None:
     install_web2_host(app)
     install_site_v1_host(app)
     install_saas_auth_api(app)
+    install_site_v1_admin(app)
     install_saas_billing_api(app)
     install_market_context_api(app)
     install_release_status_api(app)
