@@ -90,10 +90,16 @@ class _BusyLoop:
         state["marked_from_fallback"] = True
 
     def trade_history(self):
-        return [1, 2]
+        raise AssertionError("status snapshot must not materialize trade history")
 
     def event_history(self):
-        return [1]
+        raise AssertionError("status snapshot must not materialize event history")
+
+    def trade_history_count(self):
+        return 2
+
+    def event_history_count(self):
+        return 1
 
 
 class AutonomousPaperRuntimeRegressionTests(unittest.TestCase):

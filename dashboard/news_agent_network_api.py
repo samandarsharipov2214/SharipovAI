@@ -14,7 +14,7 @@ from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 
 from news_intelligence.network import NewsAgentNetwork
-from storage import ProjectDatabase, list_json_items
+from storage import ProjectDatabase, count_json_items
 
 _NETWORK: NewsAgentNetwork | None = None
 _DATABASE: ProjectDatabase | None = None
@@ -246,8 +246,8 @@ def _consumer_states(app: FastAPI | None) -> dict[str, bool]:
 
 
 def _bridge_status(database: ProjectDatabase, *, app: FastAPI | None = None) -> dict[str, Any]:
-    memory_records = len(list_json_items(database, "news_memory"))
-    event_records = len(list_json_items(database, "news_events"))
+    memory_records = count_json_items(database, "news_memory")
+    event_records = count_json_items(database, "news_events")
     consumers = _consumer_states(app)
     consumer_active = bool(consumers) and all(consumers.values())
     return {

@@ -49,7 +49,14 @@ def _loop(app: FastAPI) -> Any:
 
 
 def _snapshot(app: FastAPI) -> dict[str, Any]:
-    value = _loop(app).snapshot()
+    loop = _loop(app)
+    lock = getattr(loop, "_lock", None)
+    if lock is not None:
+        from autonomous_trading.status_snapshot import nonblocking_loop_snapshot
+
+        value = nonblocking_loop_snapshot(loop)
+    else:
+        value = loop.snapshot()
     if not isinstance(value, dict):
         raise HTTPException(status_code=503, detail="canonical paper snapshot is invalid")
     return dict(value)

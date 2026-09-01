@@ -84,6 +84,9 @@ services:
     cap_drop:
       - ALL
     pids_limit: 512
+    # Bound RSS so a leak cannot swap-thrash a 4GB VPS. 1g is enough to boot
+    # and run paper; do not lower this into OOM-kill range during normal paper.
+    mem_limit: 1g
     logging:
       driver: json-file
       options:

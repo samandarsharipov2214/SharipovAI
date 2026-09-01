@@ -303,7 +303,13 @@ def _canonical_paper_snapshot(app: FastAPI | None) -> dict[str, Any]:
     if loop is None:
         return {"status": "unavailable", "worker_running": False, "positions": {}, "trades": []}
     try:
-        snapshot = loop.snapshot()
+        lock = getattr(loop, "_lock", None)
+        if lock is not None:
+            from autonomous_trading.status_snapshot import nonblocking_loop_snapshot
+
+            snapshot = nonblocking_loop_snapshot(loop)
+        else:
+            snapshot = loop.snapshot()
     except Exception as exc:
         return {
             "status": "unavailable",

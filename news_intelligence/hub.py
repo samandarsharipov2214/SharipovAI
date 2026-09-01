@@ -15,7 +15,7 @@ from collections import Counter, OrderedDict, deque
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from storage import ProjectDatabase, VersionConflict, list_json_items
+from storage import ProjectDatabase, VersionConflict, count_json_items, list_json_items
 
 from .agents import SourceAgent
 from .models import NewsArticle, NewsEnvelope, SourceFetch
@@ -157,9 +157,14 @@ class NewsHub:
     def state(self) -> dict[str, Any]:
         impacts = Counter(item.impact for item in self._memory)
         urgencies = Counter(item.urgency for item in self._memory)
-        article_total = len(list_json_items(self.database, self.memory_namespace)) if self.database is not None else len(self._memory)
-        immutable_article_total = len(list_json_items(self.database, self.article_namespace)) if self.database is not None else 0
-        event_total = len(list_json_items(self.database, self.event_namespace)) if self.database is not None else len(self._events)
+        if self.database is not None:
+            article_total = count_json_items(self.database, self.memory_namespace)
+            immutable_article_total = count_json_items(self.database, self.article_namespace)
+            event_total = count_json_items(self.database, self.event_namespace)
+        else:
+            article_total = len(self._memory)
+            immutable_article_total = 0
+            event_total = len(self._events)
         return {
             "memory_size": len(self._memory),
             "event_size": len(self._events),
