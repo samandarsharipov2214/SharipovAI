@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import select
 
 from telegram_deploy_control import expected_bootstrap_owner, is_exact_owner, persisted_owner
-from telegram_system_adapter import CANONICAL_WEBAPP_URL, handle_callback, handle_message, main_keyboard, send_message, setup_bot_commands
+from telegram_system_adapter import CANONICAL_WEBAPP_URL, bind_runtime_app, handle_callback, handle_message, main_keyboard, send_message, setup_bot_commands
 from telegram_health import telegram_health
 from dashboard.admin_guard import require_admin
 from dashboard.auth_saas import ensure_same_origin, get_current_user, issue_access_token, serialize_user, set_auth_cookie
@@ -31,6 +31,7 @@ _BOT_USERNAME_RESOLVED = False
 
 
 def install_telegram_webhook_api(app: FastAPI) -> None:
+    bind_runtime_app(app)
     if getattr(app.state, "telegram_webhook_api_installed", False):
         return
     app.state.telegram_webhook_api_installed = True
@@ -43,7 +44,16 @@ def install_telegram_webhook_api(app: FastAPI) -> None:
     def telegram_status() -> dict[str, Any]:
         result = _telegram_status()
         result["auto_configure"] = getattr(app.state, "telegram_webhook_autoconfigure", None)
-        result["integration"] = {"website_core": True, "shared_demo_state": True, "shared_ai_chat_orchestrator": True, "shared_bot_network": True, "adapter": "telegram_system_adapter"}
+        result["integration"] = {
+            "website_core": True,
+            "shared_demo_state": False,
+            "canonical_paper_state": True,
+            "state_source": "telegram_runtime_state",
+            "source_of_truth": "autonomous_paper",
+            "shared_ai_chat_orchestrator": True,
+            "shared_bot_network": True,
+            "adapter": "telegram_system_adapter",
+        }
         return result
 
     @app.get("/api/telegram/self-test")
