@@ -4,6 +4,8 @@ set -Eeuo pipefail
 MODE="${1:-}"
 ROOT="${SHARIPOVAI_DEPLOY_ROOT:-/opt/sharipovai-repo}"
 MIN_FREE_DISK_GB="${SHARIPOVAI_DEPLOY_MIN_FREE_DISK_GB:-20}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PRUNE_HELPER="${SHARIPOVAI_PRUNE_HELPER:-$SCRIPT_DIR/../deploy/vps/prune_disposable_disk.sh}"
 
 [[ "$MIN_FREE_DISK_GB" =~ ^[1-9][0-9]*$ ]] || {
   echo "Storage guard values must be positive integers." >&2
@@ -34,6 +36,19 @@ print_fresh_disk_evidence() {
   fi
 }
 
+run_bounded_disposable_prune() {
+  if [[ ! -r "$PRUNE_HELPER" ]]; then
+    echo "STORAGE_GUARD_PRUNE_HELPER_MISSING $PRUNE_HELPER" >&2
+    return 65
+  fi
+  # Helper is fail-closed: it never deletes live images, volumes, paper DBs,
+  # or latest.tar.gz. It may reclaim unused sharipovai:deploy-* images,
+  # builder cache, huge host logs, leftover staging, and backups beyond KEEP.
+  SHARIPOVAI_DEPLOY_ROOT="$ROOT" \
+  SHARIPOVAI_REPO_DIR="$ROOT" \
+  bash "$PRUNE_HELPER"
+}
+
 case "$MODE" in
   preflight)
     minimum_kb="$((MIN_FREE_DISK_GB * 1024 * 1024))"
@@ -49,16 +64,24 @@ case "$MODE" in
       exit 70
     fi
     if (( current_kb < minimum_kb )); then
-      echo "STORAGE_GUARD_PRESSURE available_kb=$current_kb minimum_kb=$minimum_kb; automatic cleanup is disabled. Prove and approve a specific unused object before any targeted cleanup." >&2
-      exit 70
+      echo "STORAGE_GUARD_PRESSURE available_kb=$current_kb minimum_kb=$minimum_kb; attempting bounded disposable prune." >&2
+      run_bounded_disposable_prune || true
+      if ! print_fresh_disk_evidence; then
+        exit 70
+      fi
+      if ! current_kb="$(available_kb)"; then
+        echo "STORAGE_GUARD_DISK_UNKNOWN: cannot determine free disk space." >&2
+        exit 70
+      fi
+      if [[ ! "$current_kb" =~ ^[0-9]+$ ]] || (( current_kb < minimum_kb )); then
+        echo "STORAGE_GUARD_PRESSURE available_kb=$current_kb minimum_kb=$minimum_kb; bounded disposable prune did not restore 20GiB headroom." >&2
+        exit 70
+      fi
     fi
     echo "STORAGE_GUARD_PREFLIGHT_OK available_kb=$current_kb minimum_kb=$minimum_kb"
     ;;
 
   cleanup)
-    # Cleanup is intentionally read-only. Deploy automation must never delete
-    # Docker objects implicitly; any targeted cleanup requires separate proof
-    # that the exact object is unused and explicit operator approval.
     if ! current_kb="$(available_kb)"; then
       echo "STORAGE_GUARD_DISK_UNKNOWN: cannot determine free disk space." >&2
       exit 70
@@ -66,7 +89,13 @@ case "$MODE" in
     if ! print_fresh_disk_evidence; then
       exit 70
     fi
-    echo "STORAGE_GUARD_CLEANUP_SKIPPED automatic cleanup disabled available_kb=$current_kb"
+    if ! prune_output="$(run_bounded_disposable_prune)"; then
+      echo "STORAGE_GUARD_CLEANUP_FAILED bounded disposable prune failed closed available_kb=$current_kb" >&2
+      printf '%s\n' "$prune_output"
+      exit 70
+    fi
+    printf '%s\n' "$prune_output"
+    echo "STORAGE_GUARD_CLEANUP_OK available_kb=$current_kb"
     ;;
 
   *)

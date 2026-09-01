@@ -25,7 +25,7 @@ def test_web2_verifier_waits_out_one_transient_telegram_cutover_error() -> None:
     assert 'raise AssertionError(f"Telegram webhook/menu verification failed: {last_evidence}")' in script
 
 
-def test_storage_guard_cleanup_is_read_only_and_emits_docker_evidence(tmp_path: Path) -> None:
+def test_storage_guard_cleanup_emits_docker_evidence_and_runs_bounded_prune(tmp_path: Path) -> None:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     record = tmp_path / "docker-calls.txt"
@@ -63,14 +63,18 @@ printf 'TYPE TOTAL ACTIVE SIZE RECLAIMABLE\\n'
 
     assert result.returncode == 0, result.stderr
     assert "STORAGE_GUARD_EVIDENCE_UTC" in result.stdout
-    assert "STORAGE_GUARD_CLEANUP_SKIPPED" in result.stdout
-    assert record.read_text(encoding="utf-8").splitlines() == ["system df"]
+    assert "STORAGE_GUARD_CLEANUP_OK" in result.stdout
+    assert "STORAGE_GUARD_CLEANUP_SKIPPED" not in result.stdout
+    calls = record.read_text(encoding="utf-8")
+    assert "system df" in calls
+    assert "system prune" not in calls
+    assert "volume prune" not in calls
 
 
-def test_storage_guard_never_prunes_or_deletes_docker_objects() -> None:
+def test_storage_guard_never_uses_unbounded_prune_or_volume_delete() -> None:
     script = (ROOT / "scripts" / "deploy_storage_guard.sh").read_text(encoding="utf-8")
+    assert "prune_disposable_disk.sh" in script
     for forbidden in (
-        "docker builder prune",
         "docker system prune",
         "docker image prune",
         "docker volume prune",
@@ -78,5 +82,6 @@ def test_storage_guard_never_prunes_or_deletes_docker_objects() -> None:
         "docker buildx prune",
         "docker rmi",
         "docker rm",
+        "docker builder prune",
     ):
         assert forbidden not in script

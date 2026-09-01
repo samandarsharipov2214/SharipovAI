@@ -22,3 +22,12 @@ def test_restart_and_compose_actions_remain_automatic() -> None:
     critical_guard = script[script.index("execute_action() {"):script.index('case "$action" in', script.index("execute_action() {") + 1)]
     assert "compose_up" not in critical_guard
     assert "restart_sharipovai" not in critical_guard
+
+
+def test_prune_disposable_disk_is_noncritical_allowlisted_action() -> None:
+    script = RUNNER.read_text(encoding="utf-8")
+    critical_guard = script[script.index("execute_action() {"):script.index('case "$action" in', script.index("execute_action() {") + 1)]
+    assert "prune_disposable_disk" not in critical_guard
+    assert "prune_disposable_disk)" in script
+    assert "run_prune_disposable_disk" in script
+    assert "prune_disposable_disk.sh" in script
