@@ -161,7 +161,7 @@ def test_public_site_v1_html_and_login_redirect(monkeypatch) -> None:
         root = client.get("/")
         login = client.get("/login")
         register = client.get("/register")
-        private_app = client.get("/app")
+        site_app = client.get("/app")
 
     assert root.status_code == 200
     assert "/static/site-v1/site.css" in root.text
@@ -172,8 +172,12 @@ def test_public_site_v1_html_and_login_redirect(monkeypatch) -> None:
     assert login.headers["location"] == "/?mode=login"
     assert register.status_code == 303
     assert register.headers["location"] == "/?mode=register"
-    assert private_app.status_code == 303
-    assert private_app.headers["location"] == "/login?next=/app"
+    assert site_app.status_code == 200
+    assert "/static/site-v1/site.css" in site_app.text
+    assert "access-card" in site_app.text
+    assert "cabinet-card" in site_app.text
+    assert "SharipovAI Login" not in site_app.text
+    assert site_app.headers.get("location") is None
 
 
 
@@ -210,17 +214,19 @@ def test_login_accepts_legacy_owner_username(monkeypatch) -> None:
     Base.metadata.create_all(engine)
     sessions = sessionmaker(bind=engine, expire_on_commit=False)
     monkeypatch.setattr(auth_saas, "SessionLocal", sessions)
+    monkeypatch.setenv("AUTH_SECRET", "site-v1-test-auth-secret-not-production")
     app_mod = importlib.import_module("dashboard.app")
     monkeypatch.setattr(app_mod, "_valid_credentials", lambda username, password: username == "owner" and password == "owner-secret-pass")
-    monkeypatch.setattr(app_mod, "_make_session", lambda username: "legacy-session-token")
-    monkeypatch.setattr(app_mod, "_user_record", lambda users, username: {"role": "admin", "active": True})
-    monkeypatch.setattr(app_mod, "_load_users", lambda: {"users": {}})
+    monkeypatch.setattr(
+        app_mod,
+        "_load_users",
+        lambda: {"owner": {"role": "admin", "active": True}},
+    )
     monkeypatch.setattr(app_mod, "_is_production", lambda: False)
-    monkeypatch.setattr(app_mod, "_clean_username", lambda value: str(value).strip().lower())
 
     app = FastAPI()
     auth_saas.install_saas_auth_api(app)
-    client = TestClient(app)
+    client = TestClient(app, follow_redirects=False)
     response = client.post(
         "/api/auth/login",
         headers={"host": "testserver", "origin": "http://testserver"},
@@ -231,4 +237,10 @@ def test_login_accepts_legacy_owner_username(monkeypatch) -> None:
     body = response.json()
     assert body["authenticated"] is True
     assert body["user"]["display_name"] == "owner"
-    assert "sharipovai_session" in response.cookies
+    set_cookie = response.headers.get("set-cookie", "")
+    assert "sharipovai_session=" in set_cookie
+    assert "httponly" in set_cookie.lower()
+    me = client.get("/api/auth/me")
+    assert me.status_code == 200
+    assert me.json()["authenticated"] is True
+    assert me.json()["user"]["email"] == "owner"

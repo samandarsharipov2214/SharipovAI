@@ -44,6 +44,7 @@ def test_auth_guard_remains_fail_closed_for_protected_routes() -> None:
     public_block = source.split("_PUBLIC_EXACT = {", 1)[1].split("}", 1)[0]
 
     assert '"/",' in public_block
+    assert '"/app"' in public_block
     assert '"/dashboard",' not in public_block
     assert '"/login"' in public_block
     assert 'if path.startswith("/api/")' in source
