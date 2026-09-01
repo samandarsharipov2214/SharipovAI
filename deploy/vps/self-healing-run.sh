@@ -291,6 +291,7 @@ except Exception:
 PY
 }
 
+PRUNE_DISPOSABLE_DISK_HELPER="$REPO_DIR/deploy/vps/prune_disposable_disk.sh"
 APPROVED_PATCH_HELPER="$REPO_DIR/deploy/vps/self-healing-approved-patch.sh"
 APPROVED_PATCH_CLAIM_HELPER="$REPO_DIR/deploy/vps/self-healing-approved-claim.sh"
 if [ -r "$APPROVED_PATCH_HELPER" ] && [ -r "$APPROVED_PATCH_CLAIM_HELPER" ]; then
@@ -308,6 +309,16 @@ else
         return 1
     }
 fi
+
+run_prune_disposable_disk() {
+    if [ ! -r "$PRUNE_DISPOSABLE_DISK_HELPER" ]; then
+        log "Disposable disk prune helper is missing: $PRUNE_DISPOSABLE_DISK_HELPER"
+        return 1
+    fi
+    SELF_HEALING_HOST_LOG="$HOST_LOG" \
+    SHARIPOVAI_REPO_DIR="$REPO_DIR" \
+    bash "$PRUNE_DISPOSABLE_DISK_HELPER"
+}
 
 execute_action() {
     local action="$1" expected_sha="$2"
@@ -345,6 +356,10 @@ execute_action() {
             log "Executing allow-listed action: apply_approved_patch"
             claim_approved_patch && apply_approved_patch
             ;;
+        prune_disposable_disk)
+            log "Executing allow-listed action: prune_disposable_disk"
+            run_prune_disposable_disk
+            ;;
         *)
             log "Refusing unknown self-healing action: $action"
             return 1
@@ -372,6 +387,12 @@ main() {
         log "Unable to bring SharipovAI stack to a running state."
         exit 1
     }
+    log "Running bounded disposable disk prune before the in-container agent."
+    if run_prune_disposable_disk; then
+        log "Bounded disposable disk prune finished."
+    else
+        log "Bounded disposable disk prune failed closed; continuing the self-healing cycle."
+    fi
     prepare_git_snapshot || {
         log "Git verification remains fail-closed because the trusted snapshot is unavailable."
         exit 1

@@ -92,23 +92,33 @@ def test_preflight_is_read_only_when_headroom_is_already_safe(fake_runtime) -> N
     assert docker_log.read_text(encoding="utf-8").splitlines() == ["system df"]
 
 
-def test_preflight_fails_closed_on_low_disk_without_pruning(fake_runtime) -> None:
+def test_preflight_attempts_bounded_prune_then_fails_closed_if_still_low(fake_runtime) -> None:
     env, _state, docker_log = fake_runtime
     result = _run("preflight", env)
     assert result.returncode == 70
     assert "STORAGE_GUARD_PRESSURE" in result.stderr
-    assert "automatic cleanup is disabled" in result.stderr
-    assert docker_log.read_text(encoding="utf-8").splitlines() == ["system df"]
+    assert "automatic cleanup is disabled" not in result.stderr
+    assert "bounded disposable prune" in result.stderr
+    calls = docker_log.read_text(encoding="utf-8")
+    assert "system df" in calls
+    assert "system prune" not in calls
+    assert "volume prune" not in calls
+    assert "volume rm" not in calls
 
 
-def test_cleanup_mode_is_read_only_and_skips_automatic_cleanup(fake_runtime) -> None:
+def test_cleanup_mode_runs_bounded_disposable_prune(fake_runtime) -> None:
     env, state, docker_log = fake_runtime
     state.write_text("high", encoding="utf-8")
     result = _run("cleanup", env)
-    assert result.returncode == 0
+    assert result.returncode == 0, result.stderr
     assert "STORAGE_GUARD_EVIDENCE_UTC" in result.stdout
-    assert "STORAGE_GUARD_CLEANUP_SKIPPED" in result.stdout
-    assert docker_log.read_text(encoding="utf-8").splitlines() == ["system df"]
+    assert "STORAGE_GUARD_CLEANUP_OK" in result.stdout
+    assert "STORAGE_GUARD_CLEANUP_SKIPPED" not in result.stdout
+    calls = docker_log.read_text(encoding="utf-8")
+    assert "system df" in calls
+    assert "system prune" not in calls
+    assert "volume prune" not in calls
+    assert "volume rm" not in calls
 
 
 def test_preflight_fails_closed_when_docker_df_fails(fake_runtime) -> None:
@@ -150,10 +160,11 @@ def test_cleanup_fails_closed_when_human_df_evidence_fails(fake_runtime) -> None
     assert "STORAGE_GUARD_CLEANUP_SKIPPED" not in result.stdout
 
 
-def test_storage_guard_never_invokes_docker_prune_or_delete_classes() -> None:
+def test_storage_guard_delegates_cleanup_and_never_uses_unbounded_prune() -> None:
     text = GUARD.read_text(encoding="utf-8")
+    assert "prune_disposable_disk.sh" in text
+    assert "run_bounded_disposable_prune" in text
     for forbidden in (
-        "docker builder prune",
         "docker system prune",
         "docker volume prune",
         "docker image prune",
@@ -161,6 +172,7 @@ def test_storage_guard_never_invokes_docker_prune_or_delete_classes() -> None:
         "docker buildx prune",
         "docker rmi",
         "docker rm",
+        "docker builder prune",
     ):
         assert forbidden not in text
 

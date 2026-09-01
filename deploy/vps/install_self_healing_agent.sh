@@ -12,6 +12,7 @@ fi
 for path in \
     "$REPO_DIR/tools/self_healing_agent.py" \
     "$COMPOSE_DIR/self-healing-run.sh" \
+    "$COMPOSE_DIR/prune_disposable_disk.sh" \
     "$COMPOSE_DIR/systemd/sharipovai-self-healing.service" \
     "$COMPOSE_DIR/systemd/sharipovai-self-healing.timer" \
     "$COMPOSE_DIR/docker-compose.yml" \
