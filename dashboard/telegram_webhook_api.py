@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import os
+import threading
 import time
 from typing import Any
 from urllib.parse import parse_qsl, urlparse
@@ -25,9 +26,31 @@ from dashboard.telegram_identity import TelegramIdentityConflict, bind_telegram_
 from dashboard.telegram_update_idempotency import claim_telegram_update
 
 TELEGRAM_API_TIMEOUT = 20.0
+TELEGRAM_CONNECT_TIMEOUT = 5.0
 MINIAPP_MAX_AGE_SECONDS = int(os.getenv("TELEGRAM_INIT_DATA_MAX_AGE", "3600"))
 _BOT_USERNAME_CACHE: str | None = None
 _BOT_USERNAME_RESOLVED = False
+
+
+def schedule_telegram_webhook_autoconfigure(app: FastAPI) -> None:
+    """Bind Telegram webhook in a daemon thread. Never block FastAPI lifespan."""
+
+    app.state.telegram_webhook_autoconfigure = {"status": "pending"}
+
+    def _run() -> None:
+        try:
+            app.state.telegram_webhook_autoconfigure = _auto_configure_webhook()
+        except Exception as exc:
+            app.state.telegram_webhook_autoconfigure = {
+                "status": "error",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
+    threading.Thread(
+        target=_run,
+        name="telegram-webhook-autoconfigure",
+        daemon=True,
+    ).start()
 
 
 def install_telegram_webhook_api(app: FastAPI) -> None:
@@ -38,7 +61,7 @@ def install_telegram_webhook_api(app: FastAPI) -> None:
 
     @app.on_event("startup")
     def telegram_auto_configure_webhook() -> None:
-        app.state.telegram_webhook_autoconfigure = _auto_configure_webhook()
+        schedule_telegram_webhook_autoconfigure(app)
 
     @app.get("/api/telegram/status")
     def telegram_status() -> dict[str, Any]:
@@ -422,7 +445,7 @@ def _telegram(method: str, payload: dict[str, Any] | None = None) -> dict[str, A
     if not token:
         return {"ok": False, "error": "BOT_TOKEN_missing"}
     try:
-        with httpx.Client(timeout=TELEGRAM_API_TIMEOUT) as client:
+        with httpx.Client(timeout=httpx.Timeout(TELEGRAM_API_TIMEOUT, connect=TELEGRAM_CONNECT_TIMEOUT)) as client:
             response = client.post(f"https://api.telegram.org/bot{token}/{method}", json=payload or {})
             data = response.json()
             if response.is_error:
