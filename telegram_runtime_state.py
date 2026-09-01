@@ -59,7 +59,7 @@ def canonical_state_from_app(app: Any) -> dict[str, Any]:
         return unavailable_state("autonomous_paper_loop_missing")
 
     try:
-        raw = loop.snapshot()
+        raw = _nonblocking_paper_snapshot(loop)
     except Exception as exc:  # pragma: no cover - exact runtime failures vary
         return unavailable_state(f"{type(exc).__name__}: {exc}")
 
@@ -114,6 +114,21 @@ def canonical_state_from_app(app: Any) -> dict[str, Any]:
             "source": "autonomous_paper",
         },
     }
+
+
+
+def _nonblocking_paper_snapshot(loop: Any) -> Any:
+    """Read PAPER state without waiting on the worker execution lock."""
+
+    lock = getattr(loop, "_lock", None)
+    if lock is not None:
+        from autonomous_trading.status_snapshot import nonblocking_loop_snapshot
+
+        return nonblocking_loop_snapshot(loop)
+    snapshot = getattr(loop, "snapshot", None)
+    if not callable(snapshot):
+        raise RuntimeError("autonomous_paper_snapshot_missing")
+    return snapshot()
 
 
 def _finite(value: Any, default: float) -> float:
