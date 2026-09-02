@@ -94,6 +94,7 @@ def test_worker_is_disabled_by_default(monkeypatch) -> None:
 
 def test_successful_ack_is_required_before_ticker_is_usable(monkeypatch) -> None:
     monkeypatch.setenv("FEATURE_BYBIT_WEBSOCKET", "1")
+    monkeypatch.setenv("BYBIT_WS_SYMBOLS", "BTCUSDT,ETHUSDT")
     connection = _Connection([_ack(), _ticker(), TimeoutError("receive timeout")])
     worker = BybitWebSocketWorker(connector=_connector(connection))
 
