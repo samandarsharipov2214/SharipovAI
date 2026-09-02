@@ -76,6 +76,23 @@ class FakeMarketData(MarketDataService):
         )
 
 
+class WaitingMarketData(FakeMarketData):
+    def quote(self, symbol: str) -> MarketQuote:
+        quote = super().quote(symbol)
+        return MarketQuote(
+            symbol=quote.symbol,
+            price=quote.price,
+            change_24h_percent=-0.77,
+            volume_24h=quote.volume_24h,
+            source=quote.source,
+            source_url=quote.source_url,
+            received_at=quote.received_at,
+            received_at_unix_ms=quote.received_at_unix_ms,
+            bid_price=quote.bid_price,
+            ask_price=quote.ask_price,
+        )
+
+
 class FakeConsensus(MultiExchangeConsensus):
     def __init__(self) -> None:
         pass
@@ -260,6 +277,31 @@ def test_missing_news_confirmation_cannot_be_upgraded_to_entry(tmp_path) -> None
     )
     assert authorization.authorized is False
     assert authorization.decision is TradingDecision.WAIT
+
+
+def test_market_wait_cannot_be_encoded_as_buy_candidate_by_positive_news(tmp_path) -> None:
+    """Regression for the production BTC round trip opened at -0.77% 24h change."""
+
+    database = _database(tmp_path)
+    worker = FakeWorker()
+    worker.database = database
+    stream = SharedVerifiedMarketStream(
+        worker,
+        WaitingMarketData(),
+        FakeConsensus(),
+        database=database,
+    )
+    quote = stream.quote("BTCUSDT")
+    assert quote.change_24h_percent == -0.77
+
+    proposal = AutonomousCouncilProposalProvider(
+        database,
+        stream,
+        news_reader=_positive_news,
+    )("BTCUSDT", quote, _state())
+
+    assert proposal is None
+    assert database.get_json("autonomous_council_runtime", "BTCUSDT") is None
 
 
 def test_database_news_reader_reuses_one_bounded_snapshot_per_proposal_burst(
