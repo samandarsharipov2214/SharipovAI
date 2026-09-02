@@ -108,6 +108,11 @@ class AutonomousCouncilProposalProvider:
 
         decision_id = f"paper-{clean_symbol}-{market_timestamp_ms}"
         market_action = _direction(change, self.entry_change_percent)
+        # A non-directional market observation is not a BUY candidate.  News
+        # remains supporting evidence, but it cannot manufacture the missing
+        # canonical market direction (the production BTC churn regression).
+        if market_action == "WAIT":
+            return None
         regime = _market_regime(change, turnover, self.min_turnover_usdt)
         drawdown_percent = _drawdown_percent(state)
         risk_assessment = self.risk_service.evaluate(
