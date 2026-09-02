@@ -118,6 +118,7 @@ class AutonomousCouncilProposalProvider:
                 "turnover_usdt": turnover,
                 "liquidity_score": 80.0 if turnover >= self.min_turnover_usdt else 0.0,
                 "portfolio_drawdown_percent": drawdown_percent,
+                "open_position_count": _open_position_count(state),
                 "ws_consensus_deviation_percent": float(market.get("ws_consensus_deviation_percent") or 0.0),
                 "max_abs_change_percent": self.max_abs_change_percent,
                 "min_turnover_usdt": self.min_turnover_usdt,
@@ -178,6 +179,11 @@ class AutonomousCouncilProposalProvider:
                 )
             )
         else:
+            recovery = [
+                item
+                for item in risk_assessment.warnings
+                if str(item).startswith("paper_flat_drawdown_recovery")
+            ]
             opinions.append(
                 _opinion(
                     "risk_engine",
@@ -185,7 +191,9 @@ class AutonomousCouncilProposalProvider:
                     35.0,
                     98.0,
                     risk_score,
-                    "canonical risk checks passed; Risk Engine does not create direction",
+                    recovery[0]
+                    if recovery
+                    else "canonical risk checks passed; Risk Engine does not create direction",
                 )
             )
 
@@ -428,22 +436,23 @@ def _risk_blocks(
     min_turnover: float,
     max_drawdown: float,
     deviation: float,
+    open_position_count: int | None = None,
 ) -> tuple[str, ...]:
     """Backward-compatible wrapper over the canonical Risk Engine service."""
-    assessment = _DEFAULT_RISK_SERVICE.evaluate(
-        {
-            "market_data_verified": True,
-            "exchange_ok": True,
-            "price_change_24h_percent": change,
-            "turnover_usdt": turnover,
-            "portfolio_drawdown_percent": drawdown_percent,
-            "ws_consensus_deviation_percent": deviation,
-            "max_abs_change_percent": max_abs_change,
-            "min_turnover_usdt": min_turnover,
-            "max_drawdown_percent": max_drawdown,
-        },
-        profile="council",
-    )
+    payload: dict[str, Any] = {
+        "market_data_verified": True,
+        "exchange_ok": True,
+        "price_change_24h_percent": change,
+        "turnover_usdt": turnover,
+        "portfolio_drawdown_percent": drawdown_percent,
+        "ws_consensus_deviation_percent": deviation,
+        "max_abs_change_percent": max_abs_change,
+        "min_turnover_usdt": min_turnover,
+        "max_drawdown_percent": max_drawdown,
+    }
+    if open_position_count is not None:
+        payload["open_position_count"] = open_position_count
+    assessment = _DEFAULT_RISK_SERVICE.evaluate(payload, profile="council")
     return tuple(assessment.hard_blocks)
 
 
@@ -489,6 +498,18 @@ def _direction(change: float, threshold: float) -> str:
     if change <= -threshold:
         return "SELL"
     return "WAIT"
+
+
+def _open_position_count(state: Mapping[str, Any]) -> int | None:
+    open_symbols = state.get("open_symbols")
+    if open_symbols is not None:
+        if isinstance(open_symbols, (list, tuple, set)):
+            return len(open_symbols)
+        return None
+    positions = state.get("positions")
+    if isinstance(positions, dict):
+        return len(positions)
+    return None
 
 
 def _drawdown_percent(state: Mapping[str, Any]) -> float:

@@ -29,6 +29,12 @@ from trading_candidate import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _fill_math_uses_large_paper_book(monkeypatch) -> None:
+    """These tests size notionals for a 10k book. Production default is 100."""
+    monkeypatch.setenv("AUTONOMOUS_PAPER_INITIAL_CASH", "10000")
+
+
 @dataclass
 class _Quote:
     price: float

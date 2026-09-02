@@ -797,13 +797,30 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
 
     def _prepare_open(self, symbol: str, quote: Any) -> dict[str, Any]:
         cash = Decimal(str(self._state["cash"]))
+        position_percent, recovery_reason = self._entry_position_percent()
+        if recovery_reason:
+            self._event("WAIT", recovery_reason, symbol)
         budget = min(
-            cash * Decimal(str(self.max_position_percent)) / Decimal("100"),
+            cash * Decimal(str(position_percent)) / Decimal("100"),
             cash / Decimal(max(len(self.stream.symbols), 1)),
         )
+        # Recovery size may land under verified paper min_notional after fees.
+        # Raise to the instrument minimum when cash can pay it; never invent a live min.
+        rules = self.instrument_rules.get(symbol, "spot")
+        min_notional = _positive_decimal(rules.min_notional, "minimum notional")
+        min_qty = _positive_decimal(rules.min_qty, "minimum quantity")
+        qty_step = _positive_decimal(rules.qty_step, "qty step")
         ask = _positive_decimal(getattr(quote, "ask_price", None), "best ask")
         requested_quantity = budget / ask
-        return self._prepare_execution(symbol, quote, Side.BUY, requested_quantity)
+        if recovery_reason:
+            floor_qty = max(min_qty, _step(min_notional / ask, qty_step, ROUND_UP))
+            if floor_qty * ask <= cash:
+                requested_quantity = max(requested_quantity, floor_qty)
+        execution = self._prepare_execution(symbol, quote, Side.BUY, requested_quantity)
+        if recovery_reason:
+            execution["recovery_size"] = True
+            execution["recovery_position_percent"] = float(position_percent)
+        return execution
 
     def _prepare_close(self, symbol: str, quote: Any) -> dict[str, Any]:
         position = self._state["positions"].get(symbol)
@@ -1384,11 +1401,16 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                 f"({type(exc).__name__}: {exc})"
             )
         packet = proposal.evidence_packet if proposal is not None else None
-        packet_cost = self._packet_reported_cost(authorization, packet)
-        all_in = max(float(round_trip.all_in), packet_cost)
-        required = all_in * self.ANTI_CHURN_COST_MARGIN
         estimate_qty = self._anti_churn_quantity(quote, last)
         current_mid = self._quote_mid(quote)
+        # Council packet estimated_fees/slippage are percent-of-price
+        # (fee_percent). Convert to USDT so a 100 USDT book is not judged
+        # against a leftover 10_000-scale absolute floor.
+        notional = current_mid * estimate_qty if current_mid > 0 else 0.0
+        packet_percent = self._packet_reported_cost(authorization, packet)
+        packet_cost = packet_percent / 100.0 * notional if packet_percent > 0 and notional > 0 else 0.0
+        all_in = max(float(round_trip.all_in), packet_cost)
+        required = all_in * self.ANTI_CHURN_COST_MARGIN
         last_price = float(last.get("close_price") or 0.0)
         price_move_value = abs(current_mid - last_price) * estimate_qty
         edge = self._explicit_expected_edge(authorization, packet)
@@ -1550,10 +1572,19 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
     def _anti_churn_quantity(self, quote: Any, last: Mapping[str, Any] | None) -> float:
         ask = float(getattr(quote, "ask_price", None) or getattr(quote, "price", 0.0) or 0.0)
         cash = float(self._state.get("cash") or 0.0)
+        position_percent, recovery_reason = self._entry_position_percent()
         budget = min(
-            cash * float(self.max_position_percent) / 100.0,
+            cash * float(position_percent) / 100.0,
             cash / max(len(self.stream.symbols), 1),
         )
+        symbol = str(getattr(quote, "symbol", "") or "").strip().upper()
+        if recovery_reason and symbol:
+            try:
+                min_notional = float(self.instrument_rules.get(symbol, "spot").min_notional)
+            except Exception:
+                min_notional = 0.0
+            if min_notional > 0 and budget < min_notional <= cash:
+                budget = min_notional
         intended = budget / ask if ask > 0 else 0.0
         last_qty = float((last or {}).get("quantity") or 0.0)
         quantity = intended if intended > 0 else last_qty

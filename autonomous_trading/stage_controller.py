@@ -10,6 +10,7 @@ from typing import Any
 
 from .evidence_integrity import eligible_closed_trades
 from .execution_journal import ExecutionJournal
+from .paper_campaign import DEFAULT_PAPER_INITIAL_CASH
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,7 +57,7 @@ class StageController:
         gross_loss = abs(sum(value for value in pnls if value < 0))
         gross_profit = sum(value for value in pnls if value > 0)
         profit_factor = gross_profit / gross_loss if gross_loss > 0 else (10.0 if gross_profit > 0 else 0.0)
-        initial = _positive_env("AUTONOMOUS_PAPER_INITIAL_CASH", 10_000.0)
+        initial = _positive_env("AUTONOMOUS_PAPER_INITIAL_CASH", DEFAULT_PAPER_INITIAL_CASH)
         reported_equity = _finite_or_default(state.get("equity"), initial)
         evidence_equity, drawdown = _evidence_equity_and_max_drawdown(initial, pnls)
         execution = self.journal.summary()

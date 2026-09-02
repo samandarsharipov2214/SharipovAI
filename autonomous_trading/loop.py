@@ -19,13 +19,19 @@ from typing import Any
 from storage import ProjectDatabase, VersionConflict, count_json_items, list_json_items
 
 from .market_stream import MarketStream
+from .paper_campaign import (
+    DEFAULT_PAPER_INITIAL_CASH,
+    PAPER_FLAT_RECOVERY_POSITION_FACTOR,
+    maybe_rebase_paper_book,
+    paper_campaign_id,
+    paper_state_scope,
+)
 from .trade_identity import (
     default_paper_state_file,
     new_event_id,
     new_trade_id,
     normalize_event,
     normalize_trade,
-    scope_for_path,
 )
 
 SNAPSHOT_TRADE_WINDOW = 20
@@ -36,7 +42,7 @@ class AutonomousPaperLoop:
     def __init__(self, stream: MarketStream, *, database: ProjectDatabase | None = None) -> None:
         self.stream = stream
         self.state_file = default_paper_state_file()
-        self.scope = scope_for_path(self.state_file)
+        self.scope = paper_state_scope(self.state_file)
         self.state_namespace = "autonomous_paper_state"
         self.trade_namespace = f"paper_trades:{self.scope}"
         self.event_namespace = f"paper_events:{self.scope}"
@@ -47,7 +53,7 @@ class AutonomousPaperLoop:
             _finite_env("AUTONOMOUS_PAPER_WAIT_EVENT_MIN_INTERVAL_SECONDS", 300.0),
             30.0,
         )
-        self.initial_cash = _positive_env("AUTONOMOUS_PAPER_INITIAL_CASH", 10_000.0)
+        self.initial_cash = _positive_env("AUTONOMOUS_PAPER_INITIAL_CASH", DEFAULT_PAPER_INITIAL_CASH)
         self.fee_rate = min(max(_finite_env("EXCHANGE_DEFAULT_FEE_RATE", 0.001), 0.0), 0.05)
         self.max_position_percent = min(max(_finite_env("AUTONOMOUS_PAPER_MAX_POSITION_PERCENT", 10.0), 0.1), 25.0)
         self.stop_loss_percent = min(max(_finite_env("AUTONOMOUS_PAPER_STOP_LOSS_PERCENT", 1.5), 0.2), 10.0)
@@ -159,10 +165,13 @@ class AutonomousPaperLoop:
     def _open(self, symbol: str, price: float, reason: str) -> None:
         price = _positive(price, "price")
         cash = _nonnegative(self._state["cash"], "cash")
-        budget = min(cash * self.max_position_percent / 100, cash / max(len(self.stream.symbols), 1))
+        position_percent, recovery_reason = self._entry_position_percent()
+        budget = min(cash * position_percent / 100, cash / max(len(self.stream.symbols), 1))
         fee = budget * self.fee_rate
         if budget <= fee or cash < budget + fee:
             return
+        if recovery_reason:
+            self._event("WAIT", recovery_reason, symbol)
         quantity = budget / price
         opened_at = self._now()
         self._state["cash"] = cash - budget - fee
@@ -188,6 +197,26 @@ class AutonomousPaperLoop:
         self._state["realized_pnl"] += net
         self._state["total_fees"] += fee
         self._trade(symbol, "SELL", quantity, price, fee, reason, net)
+
+    def _book_is_flat(self) -> bool:
+        positions = self._state.get("positions")
+        return isinstance(positions, dict) and not positions
+
+    def _entry_position_percent(self) -> tuple[float, str]:
+        """Return (percent, auditable WAIT reason if recovery size is applied)."""
+        percent = float(self.max_position_percent)
+        if not self._book_is_flat():
+            return percent, ""
+        equity = _nonnegative(self._state.get("equity", self._state.get("cash", 0.0)), "equity")
+        if equity >= float(self.initial_cash):
+            return percent, ""
+        recovery = percent * float(PAPER_FLAT_RECOVERY_POSITION_FACTOR)
+        reason = (
+            "paper_flat_recovery_size: new BUY sized at half max_position_percent "
+            f"(factor {PAPER_FLAT_RECOVERY_POSITION_FACTOR}) because book is FLAT "
+            "and equity < initial_cash"
+        )
+        return recovery, reason
 
     def _trade(
         self,
@@ -316,6 +345,7 @@ class AutonomousPaperLoop:
         if current is not None:
             self._db_version = int(current["version"])
             state = self._normalize_state(current["value"])
+            state, _rebase_reason = maybe_rebase_paper_book(state, initial_cash=self.initial_cash)
             self._state = state
             self._sync_immutable_history()
             if state != current["value"]:
@@ -332,6 +362,8 @@ class AutonomousPaperLoop:
                 state = None
         if state is None:
             state = self._default_state()
+        else:
+            state, _rebase_reason = maybe_rebase_paper_book(state, initial_cash=self.initial_cash)
         self._state = state
         self._save_database_state()
         self._sync_immutable_history()
@@ -344,6 +376,17 @@ class AutonomousPaperLoop:
         state["mode"] = "autonomous_paper"
         state["cash"] = _nonnegative(state.get("cash", self.initial_cash), "cash")
         state["equity"] = _nonnegative(state.get("equity", state["cash"]), "equity")
+        state["peak_equity"] = _nonnegative(
+            state.get("peak_equity", state["equity"]),
+            "peak_equity",
+        )
+        if state.get("configured_initial_cash") not in (None, ""):
+            state["configured_initial_cash"] = _positive(
+                state.get("configured_initial_cash"),
+                "configured_initial_cash",
+            )
+        campaign = str(state.get("campaign_id") or paper_campaign_id() or "")
+        state["campaign_id"] = campaign
         state["realized_pnl"] = _finite(state.get("realized_pnl", 0), "realized_pnl")
         state["unrealized_pnl"] = _finite(state.get("unrealized_pnl", 0), "unrealized_pnl")
         state["total_fees"] = _nonnegative(state.get("total_fees", 0), "total_fees")
@@ -390,10 +433,14 @@ class AutonomousPaperLoop:
         return state
 
     def _default_state(self) -> dict[str, Any]:
+        campaign = paper_campaign_id()
         return {
             "mode": "autonomous_paper",
             "cash": self.initial_cash,
             "equity": self.initial_cash,
+            "peak_equity": self.initial_cash,
+            "configured_initial_cash": self.initial_cash,
+            "campaign_id": campaign,
             "realized_pnl": 0.0,
             "unrealized_pnl": 0.0,
             "total_fees": 0.0,

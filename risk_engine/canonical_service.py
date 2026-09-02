@@ -131,7 +131,18 @@ class CanonicalRiskService:
             elif turnover is not None and turnover < min_turnover:
                 _add(hard_blocks, blockers, "insufficient_verified_liquidity", "Подтверждённая ликвидность ниже канонического минимума.")
             if drawdown > max_drawdown:
-                _add(hard_blocks, blockers, "paper_portfolio_drawdown_limit", "Просадка виртуального портфеля превышает канонический лимит.")
+                if _book_is_flat(values):
+                    warnings.append(
+                        "paper_flat_drawdown_recovery: book is FLAT (0 positions); "
+                        "new BUY is not hard-blocked solely because equity is below peak."
+                    )
+                else:
+                    _add(
+                        hard_blocks,
+                        blockers,
+                        "paper_portfolio_drawdown_limit",
+                        "Просадка виртуального портфеля превышает канонический лимит.",
+                    )
             if deviation > max_deviation:
                 _add(hard_blocks, blockers, "websocket_consensus_price_divergence", "Цена WebSocket расходится с межбиржевым консенсусом.")
 
@@ -180,6 +191,7 @@ class CanonicalRiskService:
             "ai_consensus_score": ai_consensus,
             "risk_per_trade_percent": risk_per_trade,
             "portfolio_drawdown_percent": drawdown,
+            "open_position_count": _open_position_count(values),
             "ws_consensus_deviation_percent": deviation,
             "turnover_usdt": turnover,
             "strategy_approved": strategy_approved,
@@ -267,6 +279,28 @@ def _risk_level(score: float) -> str:
     if score < 80:
         return "HIGH"
     return "CRITICAL"
+
+
+def _open_position_count(values: Mapping[str, Any]) -> int | None:
+    raw = values.get("open_position_count")
+    if raw not in (None, "") and not isinstance(raw, bool):
+        try:
+            parsed = int(raw)
+        except (TypeError, ValueError):
+            parsed = None
+        else:
+            if parsed >= 0:
+                return parsed
+    symbols = values.get("open_symbols")
+    if isinstance(symbols, (list, tuple, set)):
+        return len(symbols)
+    return None
+
+
+def _book_is_flat(values: Mapping[str, Any]) -> bool:
+    # Missing position evidence fails closed: keep the in-position 8% halt.
+    count = _open_position_count(values)
+    return count == 0
 
 
 def _add(codes: list[str], messages: list[str], code: str, message: str) -> None:
