@@ -93,6 +93,7 @@ def test_only_verified_trades_count_toward_stage_three(tmp_path, monkeypatch) ->
     state_file = tmp_path / "paper.json"
     state_file.write_text(json.dumps({"equity": 999_999.0, "trades": trades}), encoding="utf-8")
     monkeypatch.setenv("AUTONOMOUS_TRADING_STAGE", "2")
+    monkeypatch.setenv("AUTONOMOUS_PAPER_INITIAL_CASH", "10000")
 
     assessment = StageController(str(state_file), journal=_Journal()).assess()
 
@@ -111,6 +112,7 @@ def test_recovered_deep_drawdown_still_blocks_stage_three(tmp_path, monkeypatch)
     state_file.write_text(json.dumps({"equity": 10_900.0, "trades": trades}), encoding="utf-8")
     monkeypatch.setenv("AUTONOMOUS_TRADING_STAGE", "2")
     monkeypatch.setenv("STAGE3_MAX_DRAWDOWN_PERCENT", "10")
+    monkeypatch.setenv("AUTONOMOUS_PAPER_INITIAL_CASH", "10000")
 
     assessment = StageController(str(state_file), journal=_Journal()).assess()
 
