@@ -138,3 +138,42 @@ def test_assessment_dict_is_json_canonical_for_idempotent_comparison() -> None:
     assert isinstance(payload["hard_blocks"], list)
     assert isinstance(payload["blockers"], list)
     assert isinstance(payload["warnings"], list)
+
+
+def _council_payload(**overrides):
+    payload = {
+        "market_data_verified": True,
+        "exchange_ok": True,
+        "price_change_24h_percent": 1.0,
+        "turnover_usdt": 10_000_000.0,
+        "portfolio_drawdown_percent": 12.0,
+        "ws_consensus_deviation_percent": 0.1,
+        "max_abs_change_percent": 12.0,
+        "min_turnover_usdt": 5_000_000.0,
+        "max_drawdown_percent": 8.0,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_flat_drawdown_does_not_hard_block_recovery_buy() -> None:
+    result = CanonicalRiskService().evaluate(
+        _council_payload(open_position_count=0),
+        profile="council",
+    )
+
+    assert "paper_portfolio_drawdown_limit" not in result.hard_blocks
+    assert result.allowed_virtual is True
+    assert result.allowed_live is False
+    assert any(item.startswith("paper_flat_drawdown_recovery") for item in result.warnings)
+
+
+def test_open_position_drawdown_still_hard_blocks_add() -> None:
+    result = CanonicalRiskService().evaluate(
+        _council_payload(open_position_count=1),
+        profile="council",
+    )
+
+    assert "paper_portfolio_drawdown_limit" in result.hard_blocks
+    assert result.allowed_virtual is False
+    assert result.allowed_live is False
