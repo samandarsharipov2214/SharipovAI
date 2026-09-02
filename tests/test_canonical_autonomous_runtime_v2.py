@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -13,6 +14,7 @@ from autonomous_trading import (
     SharedVerifiedMarketStream,
 )
 from dashboard.autonomous_trading_api import install_autonomous_trading_api
+from dashboard.autonomous_trading_api import _database_news_reader
 from dashboard.database_api import install_database_api
 from exchange_connector.bybit_instrument_rules import BybitInstrumentRulesService
 from exchange_connector.market_data import MarketDataService, MarketQuote
@@ -258,6 +260,91 @@ def test_missing_news_confirmation_cannot_be_upgraded_to_entry(tmp_path) -> None
     )
     assert authorization.authorized is False
     assert authorization.decision is TradingDecision.WAIT
+
+
+def test_database_news_reader_reuses_one_bounded_snapshot_per_proposal_burst(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    database = _database(tmp_path)
+    calls: list[tuple[str, int | None, bool]] = []
+
+    def fake_list_json_items(database_arg, namespace, *, limit=None, newest_first=False):
+        assert database_arg is database
+        calls.append((namespace, limit, newest_first))
+        return []
+
+    monkeypatch.setattr(
+        "dashboard.autonomous_trading_api.list_json_items",
+        fake_list_json_items,
+    )
+    reader = _database_news_reader(database)
+
+    for agent_id in ("crypto_ai", "finance_ai", "economy_ai", "security_ai", "world_ai"):
+        detail = reader(agent_id)
+        assert detail["agent"]["status"] == "stale"
+
+    assert calls == [("news_memory", 1000, True)]
+
+
+def test_provider_discards_quote_that_ages_out_while_news_evidence_is_built(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from autonomous_trading.council_provider import AutonomousCouncilProposalProvider as BaseProvider
+
+    database = _database(tmp_path)
+    clock = {"seconds": 1_000.0}
+    monkeypatch.setattr(
+        "autonomous_trading.council_provider.time.time",
+        lambda: clock["seconds"],
+    )
+
+    class EvidenceStream:
+        @staticmethod
+        def evidence(symbol: str) -> dict[str, object]:
+            return {
+                "symbol": symbol,
+                "verified": True,
+                "synthetic_fallback_used": False,
+                "consensus_sources": ("bybit", "binance", "okx"),
+                "ws_consensus_deviation_percent": 0.01,
+                "consensus_maximum_deviation_percent": 0.01,
+            }
+
+    def slow_positive_news(agent_id: str, *, run_now: bool = False) -> dict[str, object]:
+        del run_now
+        clock["seconds"] = 1_003.1
+        return {
+            "status": "ok",
+            "agent": {"id": agent_id, "status": "active", "database_backed": True},
+            "memory": [
+                {
+                    "key": f"news-{agent_id}",
+                    "created_at": 1_003,
+                    "impact": "positive",
+                    "impact_score": 30.0,
+                    "credibility_percent": 92.0,
+                    "needs_confirmation": False,
+                }
+            ],
+        }
+
+    quote = SimpleNamespace(
+        symbol="BTCUSDT",
+        price=60_000.0,
+        change_24h_percent=2.4,
+        volume_24h=250_000_000.0,
+        received_at_unix_ms=999_500,
+    )
+    proposal = BaseProvider(
+        database,
+        EvidenceStream(),
+        news_reader=slow_positive_news,
+    )("BTCUSDT", quote, _state())
+
+    assert proposal is None
+    assert database.get_json("autonomous_council_runtime", "BTCUSDT") is None
 
 
 def test_dashboard_installer_uses_one_database_and_canonical_loop(tmp_path, monkeypatch) -> None:
