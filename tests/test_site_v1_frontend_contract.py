@@ -76,6 +76,11 @@ def test_cabinet_uses_canonical_paper_not_demo() -> None:
     assert "Рабочий кабинет" in html
     assert "Полноценный рабочий интерфейс будет добавлен" not in html
     assert "SharipovAI Login" not in html
+    assert "Обзор" in html
+    assert "Портфель" in html
+    assert "Сделки" in html
+    assert "data-os-page" in html
+    assert "/static/web2/" not in html
     assert "/api/site-v1/cabinet" in source
     assert "demo_api" not in source
     assert "/api/demo" not in source

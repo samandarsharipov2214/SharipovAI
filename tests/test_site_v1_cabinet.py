@@ -40,11 +40,21 @@ def test_cabinet_projects_canonical_paper_without_demo_defaults() -> None:
             "unrealized_pnl": 3.25,
             "total_fees": 8.75,
             "positions": {"BTCUSDT": {"quantity": 0.01}},
+            "trades": [
+                {
+                    "symbol": "BTCUSDT",
+                    "side": "BUY",
+                    "fee": 1.0,
+                    "net_pnl": None,
+                }
+            ],
             "trade_history_count": 17,
             "last_action": "WAIT",
             "last_reason": "council authorization required",
             "worker_running": True,
+            "database_backed": True,
             "peak_equity": 10000.0,
+            "market_stream": {"verified": True, "age_seconds": 2},
         }
     )
 
@@ -63,6 +73,14 @@ def test_cabinet_projects_canonical_paper_without_demo_defaults() -> None:
     assert payload["wait"] == "WAIT"
     assert payload["drawdown_percent"] == pytest.approx(1.235)
     assert payload["error"] is None
+    assert payload["realized_pnl"] == -12.5
+    assert payload["unrealized_pnl"] == 3.25
+    assert payload["trade_count"] == 17
+    assert payload["peak_equity"] == 10000.0
+    assert payload["database_backed"] is True
+    assert payload["market_verified"] is True
+    assert payload["market_age_seconds"] == 2
+    assert payload["trades"][0]["symbol"] == "BTCUSDT"
 
 
 def test_cabinet_missing_runtime_is_unavailable_without_fabricated_zeros() -> None:
@@ -79,7 +97,24 @@ def test_cabinet_missing_runtime_is_unavailable_without_fabricated_zeros() -> No
     assert payload["drawdown_percent"] is None
     assert payload["status"] == "unavailable"
     assert payload["error"] == "autonomous_paper_loop_missing"
-    assert 0 not in (payload["equity"], payload["cash"], payload["net_pnl"], payload["total_fees"])
+    assert payload["realized_pnl"] is None
+    assert payload["unrealized_pnl"] is None
+    assert payload["peak_equity"] is None
+    assert payload["trade_count"] is None
+    assert payload["database_backed"] is None
+    assert payload["market_verified"] is None
+    assert payload["market_age_seconds"] is None
+    assert payload.get("trades") in ([], None)
+    assert 0 not in (
+        payload["equity"],
+        payload["cash"],
+        payload["net_pnl"],
+        payload["total_fees"],
+        payload["realized_pnl"],
+        payload["unrealized_pnl"],
+        payload["peak_equity"],
+        payload["trade_count"],
+    )
 
 
 def test_cabinet_omits_drawdown_when_peak_equity_is_absent() -> None:
@@ -195,7 +230,10 @@ def test_authenticated_app_serves_site_v1_cabinet_html(monkeypatch) -> None:
     assert "cabinet-card" in response.text
     assert "Рабочий кабинет" in response.text
     assert "SharipovAI Login" not in response.text
-    assert "Обзор" not in response.text
+    assert "Обзор" in response.text
+    assert "Портфель" in response.text
+    assert "Сделки" in response.text
+    assert "/static/web2/" not in response.text
 
 
 def test_login_accepts_legacy_owner_username(monkeypatch) -> None:
