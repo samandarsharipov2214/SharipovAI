@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import math
 import os
+import threading
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -28,6 +30,7 @@ _NEWS_GROUPS = {
     "security_ai": ("security", "cyber", "hack", "exploit"),
     "world_ai": ("world", "politic", "international", "war", "government"),
 }
+_NEWS_SNAPSHOT_CACHE_SECONDS = 5.0
 
 
 def install_autonomous_trading_api(app: FastAPI) -> None:
@@ -135,10 +138,31 @@ def install_autonomous_trading_api(app: FastAPI) -> None:
 def _database_news_reader(database: ProjectDatabase) -> Callable[..., dict[str, Any]]:
     """Expose DB-backed NewsHub evidence in the narrow council-reader contract."""
 
+    snapshot_lock = threading.Lock()
+    cached_rows: tuple[dict[str, Any], ...] = ()
+    cached_until = 0.0
+
+    def bounded_news_snapshot() -> tuple[dict[str, Any], ...]:
+        """Reuse one bounded DB read across the five agent views in a proposal burst."""
+
+        nonlocal cached_rows, cached_until
+        now = time.monotonic()
+        if now < cached_until:
+            return cached_rows
+        with snapshot_lock:
+            now = time.monotonic()
+            if now < cached_until:
+                return cached_rows
+            cached_rows = tuple(
+                list_json_items(database, "news_memory", limit=1000, newest_first=True)
+            )
+            cached_until = now + _NEWS_SNAPSHOT_CACHE_SECONDS
+            return cached_rows
+
     def read(agent_id: str, *, run_now: bool = False) -> dict[str, Any]:
         del run_now
         keywords = _NEWS_GROUPS.get(str(agent_id), ())
-        rows = list_json_items(database, "news_memory", limit=1000, newest_first=True)
+        rows = bounded_news_snapshot()
         memory: list[dict[str, Any]] = []
         for row in rows:
             value = row.get("value")

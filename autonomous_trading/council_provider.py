@@ -31,6 +31,7 @@ from .council_loop import CouncilEntryProposal
 _NEWS_AGENTS = ("crypto_ai", "finance_ai", "economy_ai", "security_ai", "world_ai")
 _POSITIVE = {"positive", "bullish", "up", "growth", "supportive", "risk_on"}
 _NEGATIVE = {"negative", "bearish", "down", "decline", "adverse", "risk_off"}
+_MAX_MARKET_AGE_MS = 2_000
 _DEFAULT_RISK_SERVICE = CanonicalRiskService()
 
 
@@ -102,7 +103,7 @@ class AutonomousCouncilProposalProvider:
         if change is None or turnover is None or turnover < 0:
             return None
         market_timestamp_ms = int(getattr(quote, "received_at_unix_ms", 0) or 0)
-        if market_timestamp_ms <= 0 or now_ms - market_timestamp_ms > 2_000:
+        if market_timestamp_ms <= 0 or now_ms - market_timestamp_ms > _MAX_MARKET_AGE_MS:
             return None
 
         decision_id = f"paper-{clean_symbol}-{market_timestamp_ms}"
@@ -197,6 +198,12 @@ class AutonomousCouncilProposalProvider:
                 )
             )
 
+        # News/risk evidence construction performs bounded synchronous reads.
+        # Recheck the exact quote before persisting a candidate so slow I/O can
+        # never turn a previously fresh observation into a stale proposal.
+        if int(time.time() * 1000) - market_timestamp_ms > _MAX_MARKET_AGE_MS:
+            return None
+
         eligible = [item for item in opinions if item.get("evidence_eligible") is not False]
         if len(eligible) < 4:
             return None
@@ -255,6 +262,12 @@ class AutonomousCouncilProposalProvider:
                 "assessment": risk_assessment.to_dict(),
             },
         )
+
+        # Evidence writes are separate fail-closed transactions. Guard the
+        # remaining bridge window as well; immutable evidence may remain as an
+        # audit of the abandoned attempt, but it cannot authorize PAPER.
+        if int(time.time() * 1000) - market_timestamp_ms > _MAX_MARKET_AGE_MS:
+            return None
 
         packet = CandidateEvidencePacket(
             candidate_id=decision_id,
