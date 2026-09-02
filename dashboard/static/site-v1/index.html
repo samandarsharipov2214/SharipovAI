@@ -86,51 +86,111 @@
         </div>
       </section>
 
-      <section id="workspaceView" class="workspace-card cabinet-card" aria-labelledby="workspace-title" hidden>
-        <div class="cabinet-heading">
-          <div>
-            <p class="eyebrow">КАБИНЕТ · AUTONOMOUS PAPER</p>
-            <h1 id="workspace-title">Рабочий кабинет</h1>
-            <p>Аккаунт <strong id="workspaceUser"></strong>. Только канонический paper runtime — без demo и без вымышленных нулей.</p>
+      <section id="workspaceView" class="workspace-card cabinet-card os-shell" aria-labelledby="workspace-title" hidden>
+        <nav class="os-nav" aria-label="Навигация кабинета">
+          <p class="eyebrow">SITE V1 OS</p>
+          <button type="button" class="os-nav-item active" data-os-page="overview" aria-current="page"><span class="os-nav-label">Обзор</span></button>
+          <button type="button" class="os-nav-item" data-os-page="portfolio"><span class="os-nav-label">Портфель</span></button>
+          <button type="button" class="os-nav-item" data-os-page="trades"><span class="os-nav-label">Сделки</span></button>
+          <button type="button" class="os-nav-item" data-os-page="market"><span class="os-nav-label">Рынок</span></button>
+          <button type="button" class="os-nav-item" data-os-page="news"><span class="os-nav-label">Новости</span></button>
+          <button type="button" class="os-nav-item" data-os-page="risk"><span class="os-nav-label">Риск</span></button>
+          <button type="button" class="os-nav-item" data-os-page="system"><span class="os-nav-label">Система</span></button>
+          <button type="button" class="os-nav-item os-nav-stub" data-os-page="decision" data-os-stub="1"><span class="os-nav-label">Решение ИИ</span><span class="os-soon">скоро</span></button>
+          <button type="button" class="os-nav-item os-nav-stub" data-os-page="bots" data-os-stub="1"><span class="os-nav-label">Центр ИИ</span><span class="os-soon">скоро</span></button>
+          <button type="button" class="os-nav-item os-nav-stub" data-os-page="chat" data-os-stub="1"><span class="os-nav-label">ИИ-чат</span><span class="os-soon">скоро</span></button>
+          <button type="button" class="os-nav-item os-nav-stub" data-os-page="bybit" data-os-stub="1"><span class="os-nav-label">Bybit</span><span class="os-soon">скоро</span></button>
+          <button type="button" class="os-nav-item os-nav-stub" data-os-page="learning" data-os-stub="1"><span class="os-nav-label">Обучение</span><span class="os-soon">скоро</span></button>
+          <button type="button" class="os-nav-item os-nav-stub" data-os-page="control" data-os-stub="1"><span class="os-nav-label">Управление</span><span class="os-soon">скоро</span></button>
+          <button type="button" class="os-nav-item os-nav-stub" data-os-page="evidence" data-os-stub="1"><span class="os-nav-label">Доказательства</span><span class="os-soon">скоро</span></button>
+          <button type="button" class="os-nav-item os-nav-stub" data-os-page="virtual" data-os-stub="1"><span class="os-nav-label">Виртуальный счёт</span><span class="os-soon">скоро</span></button>
+          <button type="button" class="os-nav-item os-nav-stub" data-os-page="campaigns" data-os-stub="1"><span class="os-nav-label">Кампании</span><span class="os-soon">скоро</span></button>
+          <button type="button" class="os-nav-item os-nav-stub" data-os-page="reports" data-os-stub="1"><span class="os-nav-label">Отчёты</span><span class="os-soon">скоро</span></button>
+          <button type="button" class="os-nav-item os-nav-stub" data-os-page="settings" data-os-stub="1"><span class="os-nav-label">Настройки</span><span class="os-soon">скоро</span></button>
+        </nav>
+        <div class="os-main">
+          <div class="cabinet-heading">
+            <div>
+              <p class="eyebrow">КАБИНЕТ · AUTONOMOUS PAPER</p>
+              <h1 id="workspace-title">Рабочий кабинет</h1>
+              <p>Аккаунт <strong id="workspaceUser"></strong>. Только канонический paper runtime — без demo и без вымышленных нулей.</p>
+            </div>
+            <button id="logoutButton" class="secondary-action" type="button">Выйти</button>
           </div>
-          <button id="logoutButton" class="secondary-action" type="button">Выйти</button>
-        </div>
-        <div id="cabinetUnavailable" class="truthful-state cabinet-unavailable" hidden>
-          <span aria-hidden="true">!</span>
-          <div>
-            <b id="cabinetMode">UNAVAILABLE</b>
-            <p id="cabinetError">Канонический paper runtime недоступен. Значения не подставляются.</p>
+          <div id="cabinetUnavailable" class="truthful-state cabinet-unavailable" hidden>
+            <span aria-hidden="true">!</span>
+            <div>
+              <b id="cabinetMode">UNAVAILABLE</b>
+              <p id="cabinetError">Канонический paper runtime недоступен. Значения не подставляются.</p>
+            </div>
           </div>
+          <div id="cabinetWait" class="wait-banner" hidden>
+            <p class="eyebrow">WAIT / DRAWDOWN</p>
+            <b id="waitAction"></b>
+            <p id="waitReason"></p>
+            <p id="waitDrawdown"></p>
+          </div>
+          <section id="page-overview" class="os-page" data-os-panel="overview">
+            <div id="cabinetMetrics" class="cabinet-grid" hidden>
+              <article><p class="eyebrow">КАПИТАЛ</p><b id="metricEquity"></b></article>
+              <article><p class="eyebrow">КЭШ</p><b id="metricCash"></b></article>
+              <article><p class="eyebrow">ЧИСТЫЙ PNL</p><b id="metricNetPnl"></b></article>
+              <article><p class="eyebrow">РЕАЛИЗОВАННЫЙ PNL</p><b id="metricRealized"></b></article>
+              <article><p class="eyebrow">НЕРЕАЛИЗОВАННЫЙ PNL</p><b id="metricUnrealized"></b></article>
+              <article><p class="eyebrow">ПИКОВЫЙ КАПИТАЛ</p><b id="metricPeak"></b></article>
+              <article><p class="eyebrow">КОМИССИИ</p><b id="metricFees"></b></article>
+              <article><p class="eyebrow">ОТКРЫТЫЕ ПОЗИЦИИ</p><b id="metricPositions"></b></article>
+              <article><p class="eyebrow">СДЕЛОК</p><b id="metricTradeCount"></b></article>
+              <article><p class="eyebrow">ВОРКЕР</p><b id="metricWorker"></b></article>
+            </div>
+            <div id="cabinetActivity" class="cabinet-activity" hidden>
+              <article>
+                <p class="eyebrow">ПОСЛЕДНЕЕ ДЕЙСТВИЕ</p>
+                <b id="metricLastAction"></b>
+              </article>
+              <article>
+                <p class="eyebrow">ПОСЛЕДНЯЯ ПРИЧИНА</p>
+                <p id="metricLastReason"></p>
+              </article>
+              <article>
+                <p class="eyebrow">ПОЗИЦИИ</p>
+                <p id="metricPositionList"></p>
+              </article>
+            </div>
+          </section>
+          <section id="page-portfolio" class="os-page" data-os-panel="portfolio" hidden>
+            <h2>Портфель</h2>
+            <p>Открытые позиции канонического paper. Пустой список — не ноль и не demo.</p>
+            <div id="portfolioBody"></div>
+          </section>
+          <section id="page-trades" class="os-page" data-os-panel="trades" hidden>
+            <h2>Сделки</h2>
+            <p>Последние сделки канонического paper, не больше 20.</p>
+            <div id="tradesBody"></div>
+          </section>
+          <section id="page-market" class="os-page" data-os-panel="market" hidden>
+            <h2>Рынок</h2>
+            <p>Только верификация потока и символы из позиций и сделок. Цены не выдумываются.</p>
+            <div id="marketBody"></div>
+          </section>
+          <section id="page-news" class="os-page" data-os-panel="news" hidden>
+            <h2>Новости</h2>
+            <p>Короткий список из уже сохранённого news API. Новый сбор здесь не запускается.</p>
+            <div id="newsBody"></div>
+          </section>
+          <section id="page-risk" class="os-page" data-os-panel="risk" hidden>
+            <h2>Риск</h2>
+            <p>WAIT, причина, просадка, комиссии и открытые позиции канонического paper.</p>
+            <div id="riskBody"></div>
+          </section>
+          <section id="page-system" class="os-page" data-os-panel="system" hidden>
+            <h2>Система</h2>
+            <p>Только чтение. Управление kill-switch и live здесь отсутствует.</p>
+            <div id="systemBody"></div>
+          </section>
+          <div id="osStubMount"></div>
+          <div id="workspaceMessage" class="form-message" role="status" aria-live="polite"></div>
         </div>
-        <div id="cabinetWait" class="wait-banner" hidden>
-          <p class="eyebrow">WAIT / DRAWDOWN</p>
-          <b id="waitAction"></b>
-          <p id="waitReason"></p>
-          <p id="waitDrawdown"></p>
-        </div>
-        <div id="cabinetMetrics" class="cabinet-grid" hidden>
-          <article><p class="eyebrow">EQUITY</p><b id="metricEquity"></b></article>
-          <article><p class="eyebrow">CASH</p><b id="metricCash"></b></article>
-          <article><p class="eyebrow">NET PNL</p><b id="metricNetPnl"></b></article>
-          <article><p class="eyebrow">FEES</p><b id="metricFees"></b></article>
-          <article><p class="eyebrow">OPEN POSITIONS</p><b id="metricPositions"></b></article>
-          <article><p class="eyebrow">WORKER</p><b id="metricWorker"></b></article>
-        </div>
-        <div id="cabinetActivity" class="cabinet-activity" hidden>
-          <article>
-            <p class="eyebrow">LAST ACTION</p>
-            <b id="metricLastAction"></b>
-          </article>
-          <article>
-            <p class="eyebrow">LAST REASON</p>
-            <p id="metricLastReason"></p>
-          </article>
-          <article>
-            <p class="eyebrow">POSITIONS</p>
-            <p id="metricPositionList"></p>
-          </article>
-        </div>
-        <div id="workspaceMessage" class="form-message" role="status" aria-live="polite"></div>
       </section>
 
       <footer class="site-footer"><span>© 2026 SharipovAI</span><span>Безопасность и ясность — по умолчанию.</span></footer>
