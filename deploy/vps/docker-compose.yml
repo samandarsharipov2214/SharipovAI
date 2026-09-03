@@ -59,6 +59,11 @@ services:
       SELF_LEARNING_ENABLED: "1"
       SELF_LEARNING_INTERVAL_SECONDS: "60"
       SELF_LEARNING_RESEARCH_SCOPE: global.paper
+      # Reuse the existing server-side OpenAI-compatible credentials.  The old
+      # MEMORY_LLM_MODEL free slug was retired; keep agent chat independently
+      # configurable and pinned to an available model.
+      AGENT_LLM_MODEL: "${AGENT_LLM_MODEL:-qwen/qwen-2.5-7b-instruct}"
+      AGENT_WEB_SEARCH_ENABLED: "${AGENT_WEB_SEARCH_ENABLED:-1}"
       EXCHANGE_MODE: sandbox
       EXCHANGE_BASE_URL: https://api-testnet.bybit.com
       EXCHANGE_LIVE_TRADING_ENABLED: "0"

@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from agent_intelligence import answer_with_intelligence
+
 try:
     from learning.bot_communication import BotCommunicationNetwork
     from learning_engine_v2 import learning_state
@@ -36,13 +38,25 @@ AGENTS: dict[str, dict[str, Any]] = {
 }
 
 
-def answer_chat(message: str, state: dict[str, Any] | None = None) -> dict[str, Any]:
+def answer_chat(
+    message: str,
+    state: dict[str, Any] | None = None,
+    *,
+    intelligent: bool = False,
+    persist_bus: bool = True,
+) -> dict[str, Any]:
     text = (message or "").strip()
     lower = text.lower()
     state = state or {}
     agent_id = detect_agent(lower)
     if agent_id:
-        return _answer_agent(agent_id, text, state)
+        return _answer_agent(
+            agent_id,
+            text,
+            state,
+            intelligent=intelligent,
+            persist_bus=persist_bus,
+        )
     intent = detect_intent(lower)
     handlers = {
         "news": lambda: _answer_news(),
@@ -102,12 +116,19 @@ def _action(lower: str) -> str:
     return "chat"
 
 
-def _answer_agent(agent_id: str, question: str, state: dict[str, Any]) -> dict[str, Any]:
+def _answer_agent(
+    agent_id: str,
+    question: str,
+    state: dict[str, Any],
+    *,
+    intelligent: bool = False,
+    persist_bus: bool = True,
+) -> dict[str, Any]:
     meta = AGENTS.get(agent_id, AGENTS["general_controller"])
     action = _action(question.lower())
     saved: dict[str, Any] = {}
     net = _network()
-    if net is not None:
+    if persist_bus and net is not None:
         try:
             sender = "security_guard" if agent_id == "general_controller" else "general_controller"
             saved = net.send_message(
@@ -132,8 +153,35 @@ def _answer_agent(agent_id: str, question: str, state: dict[str, Any]) -> dict[s
     elif action == "report":
         reply = _agent_report(agent_id, meta, state)
     else:
-        reply = _agent_chat(agent_id, meta, question, state)
-    return {"status": "ok", "intent": "agent_chat", "source_ai": meta["name"], "reply": reply, "data": {"agent_id": agent_id, "role": meta["role"], "action": action, "message_bus": saved}}
+        intelligence = None
+        if intelligent:
+            intelligence = answer_with_intelligence(
+                agent_id=agent_id,
+                agent_name=str(meta["name"]),
+                role=str(meta["role"]),
+                question=question,
+                state=state,
+            )
+        reply = (
+            intelligence.text
+            if intelligence is not None and intelligence.status == "ok"
+            else _agent_chat(agent_id, meta, question, state)
+        )
+    provider = (
+        {
+            "status": intelligence.status,
+            "model": intelligence.model,
+            "request_id": intelligence.request_id,
+            "grounded": intelligence.grounded,
+            "citations": [
+                {"title": title, "url": url} for title, url in intelligence.citations
+            ],
+            "error": intelligence.error,
+        }
+        if action == "chat" and intelligent and intelligence is not None
+        else {"status": "not_requested"}
+    )
+    return {"status": "ok", "intent": "agent_chat", "source_ai": meta["name"], "reply": reply, "data": {"agent_id": agent_id, "role": meta["role"], "action": action, "message_bus": saved, "intelligence": provider}}
 
 
 def _agent_report(agent_id: str, meta: dict[str, Any], state: dict[str, Any]) -> str:

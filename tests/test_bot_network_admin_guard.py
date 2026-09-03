@@ -98,12 +98,14 @@ def test_bot_network_mutations_require_admin(monkeypatch: pytest.MonkeyPatch) ->
 
 def test_non_privileged_bot_chat_does_not_require_admin(monkeypatch: pytest.MonkeyPatch) -> None:
     network = _FakeNetwork()
+    routed: dict[str, object] = {}
+
+    def fake_answer(_message, _state, **kwargs):
+        routed.update(kwargs)
+        return {"reply": "ok", "source_ai": "Risk Engine", "intent": "agent_chat", "data": {}}
+
     monkeypatch.setattr(bot_api, "require_admin", _deny)
-    monkeypatch.setattr(
-        bot_api,
-        "answer_chat",
-        lambda _message, _state: {"reply": "ok", "source_ai": "Risk Engine", "intent": "agent_chat", "data": {}},
-    )
+    monkeypatch.setattr(bot_api, "answer_chat", fake_answer)
     monkeypatch.setattr(
         network,
         "reply",
@@ -118,6 +120,7 @@ def test_non_privileged_bot_chat_does_not_require_admin(monkeypatch: pytest.Monk
     )
 
     assert response.status_code == 200
+    assert routed == {"intelligent": True, "persist_bus": False}
 
 
 def test_message_provenance_is_server_derived(monkeypatch: pytest.MonkeyPatch) -> None:

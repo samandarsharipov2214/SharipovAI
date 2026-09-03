@@ -223,7 +223,12 @@ def install_bot_communication_api(app: FastAPI) -> None:
             return {"status": "persistence_error", "message": question, "reply": "Вопрос не сохранён."}
 
         routed_text = f"{requested_bot}: {text}"
-        generated = answer_chat(routed_text, state)
+        generated = answer_chat(
+            routed_text,
+            state,
+            intelligent=True,
+            persist_bus=False,
+        )
         reply_text = str(generated.get("reply", "Ответ не сформирован."))
         answer = bus.reply(
             original_message_id=str(question["message_id"]),
