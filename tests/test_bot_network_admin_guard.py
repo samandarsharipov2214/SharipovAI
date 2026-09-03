@@ -100,7 +100,8 @@ def test_non_privileged_bot_chat_does_not_require_admin(monkeypatch: pytest.Monk
     network = _FakeNetwork()
     routed: dict[str, object] = {}
 
-    def fake_answer(_message, _state, **kwargs):
+    def fake_answer(_message, state, **kwargs):
+        routed["state"] = state
         routed.update(kwargs)
         return {"reply": "ok", "source_ai": "Risk Engine", "intent": "agent_chat", "data": {}}
 
@@ -116,11 +117,18 @@ def test_non_privileged_bot_chat_does_not_require_admin(monkeypatch: pytest.Monk
 
     response = client.post(
         "/api/bot-network/chat",
-        json={"bot": "risk_engine", "message": "покажи текущий риск"},
+        json={
+            "bot": "risk_engine",
+            "message": "покажи текущий риск",
+            "state": {"equity": 999_999, "api_key": "client-injection"},
+        },
     )
 
     assert response.status_code == 200
-    assert routed == {"intelligent": True, "persist_bus": False}
+    assert routed["intelligent"] is True
+    assert routed["persist_bus"] is False
+    assert routed["state"].get("equity") != 999_999
+    assert "api_key" not in routed["state"]
 
 
 def test_agent_chat_rate_limit_blocks_before_persistence(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -13,6 +13,7 @@ from ai_chat_orchestrator import AGENTS, _action, answer_chat, detect_agent
 from agent_intelligence import allow_intelligence_request
 from learning.ai_learning_core import BOT_NAMES
 from learning.bot_communication import BotCommunicationNetwork
+from telegram_runtime_state import canonical_state_from_app
 
 from .admin_guard import require_admin
 from .auth_saas import ensure_same_origin
@@ -180,7 +181,11 @@ def install_bot_communication_api(app: FastAPI) -> None:
         data = payload or {}
         requested_bot = _chat_bot(str(data.get("bot", data.get("recipient", "general_controller"))))
         text = str(data.get("message", "")).strip()
-        state = data.get("state", {}) if isinstance(data.get("state", {}), dict) else {}
+        # Runtime evidence is server-owned.  A client-provided ``state`` object
+        # must never become trusted model context or impersonate PAPER truth.
+        state = canonical_state_from_app(request.app)
+        if not isinstance(state, dict):
+            state = {}
         if not text:
             return {"status": "empty_message", "reply": "Напиши вопрос AI-боту."}
 
