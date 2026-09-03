@@ -6,10 +6,11 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
-from fastapi import Body, FastAPI, Request
+from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from ai_chat_orchestrator import AGENTS, _action, answer_chat, detect_agent
+from agent_intelligence import allow_intelligence_request
 from learning.ai_learning_core import BOT_NAMES
 from learning.bot_communication import BotCommunicationNetwork
 
@@ -209,6 +210,10 @@ def install_bot_communication_api(app: FastAPI) -> None:
                 "answer": {},
                 "thread_id": command.get("thread_id"),
             }
+
+        client_host = request.client.host if request.client else "unknown"
+        if not allow_intelligence_request(client_host):
+            raise HTTPException(status_code=429, detail={"status": "agent_chat_rate_limited"})
 
         sender = "security_guard" if requested_bot == "general_controller" else "general_controller"
         question = bus.send_message(

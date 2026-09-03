@@ -123,6 +123,21 @@ def test_non_privileged_bot_chat_does_not_require_admin(monkeypatch: pytest.Monk
     assert routed == {"intelligent": True, "persist_bus": False}
 
 
+def test_agent_chat_rate_limit_blocks_before_persistence(monkeypatch: pytest.MonkeyPatch) -> None:
+    network = _FakeNetwork()
+    monkeypatch.setattr(bot_api, "allow_intelligence_request", lambda _key: False)
+    client = _client(monkeypatch, network)
+
+    response = client.post(
+        "/api/bot-network/chat",
+        json={"bot": "risk_engine", "message": "покажи текущий риск"},
+    )
+
+    assert response.status_code == 429
+    assert response.json() == {"detail": {"status": "agent_chat_rate_limited"}}
+    assert network.sent is None
+
+
 def test_message_provenance_is_server_derived(monkeypatch: pytest.MonkeyPatch) -> None:
     network = _FakeNetwork()
     monkeypatch.setattr(bot_api, "require_admin", lambda _request: "owner-admin")

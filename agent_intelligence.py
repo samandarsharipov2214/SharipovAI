@@ -10,6 +10,9 @@ import json
 import os
 import re
 import secrets
+import threading
+import time
+from collections import OrderedDict, deque
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Mapping, Sequence
@@ -38,6 +41,35 @@ _SAFE_STATE_KEYS = {
 }
 
 
+class _RequestLimiter:
+    def __init__(self, max_buckets: int = 10_000) -> None:
+        self._lock = threading.Lock()
+        self._events: OrderedDict[str, deque[float]] = OrderedDict()
+        self._max_buckets = max_buckets
+
+    def allow(self, key: str, limit: int) -> bool:
+        now = time.monotonic()
+        cutoff = now - 60.0
+        with self._lock:
+            events = self._events.get(key)
+            if events is None:
+                if len(self._events) >= self._max_buckets:
+                    self._events.popitem(last=False)
+                events = deque()
+                self._events[key] = events
+            else:
+                self._events.move_to_end(key)
+            while events and events[0] <= cutoff:
+                events.popleft()
+            if len(events) >= limit:
+                return False
+            events.append(now)
+            return True
+
+
+_REQUEST_LIMITER = _RequestLimiter()
+
+
 @dataclass(frozen=True, slots=True)
 class IntelligenceResult:
     status: str
@@ -47,6 +79,15 @@ class IntelligenceResult:
     grounded: bool = False
     citations: tuple[tuple[str, str], ...] = ()
     error: str = ""
+
+
+def allow_intelligence_request(key: str) -> bool:
+    """Bound external provider cost per authenticated connection origin."""
+
+    return _REQUEST_LIMITER.allow(
+        str(key or "unknown")[:200],
+        _bounded_int("AGENT_CHAT_REQUESTS_PER_MINUTE", 12, 1, 120),
+    )
 
 
 def answer_with_intelligence(
@@ -287,4 +328,4 @@ def _bounded_float(name: str, default: float, minimum: float, maximum: float) ->
     return value if minimum <= value <= maximum else default
 
 
-__all__ = ["IntelligenceResult", "answer_with_intelligence"]
+__all__ = ["IntelligenceResult", "allow_intelligence_request", "answer_with_intelligence"]
