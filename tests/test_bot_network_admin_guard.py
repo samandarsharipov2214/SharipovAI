@@ -51,6 +51,9 @@ class _FakeNetwork:
         self.marked_read = message_id
         return {"status": "ok", "message_id": message_id}
 
+    def get_message_by_dedupe_key(self, _dedupe_key: str) -> dict[str, Any]:
+        return {"status": "not_found"}
+
 
 def _client(monkeypatch: pytest.MonkeyPatch, network: _FakeNetwork, *, base_url: str = "http://testserver") -> TestClient:
     app = FastAPI()
@@ -190,6 +193,14 @@ def test_broadcast_provenance_is_server_derived(monkeypatch: pytest.MonkeyPatch)
 def test_consensus_provenance_is_server_derived(monkeypatch: pytest.MonkeyPatch) -> None:
     network = _FakeNetwork()
     monkeypatch.setattr(bot_api, "require_admin", lambda _request: "owner-admin")
+    captured: dict[str, Any] = {}
+
+    def fake_execute(**kwargs: Any) -> dict[str, Any]:
+        captured.update(kwargs)
+        return {"status": "ok"}
+
+    monkeypatch.setattr(bot_api, "_execute_consensus", fake_execute)
+    monkeypatch.setattr(bot_api, "allow_intelligence_request", lambda _key: True)
     client = _client(monkeypatch, network)
 
     response = client.post(
@@ -203,18 +214,20 @@ def test_consensus_provenance_is_server_derived(monkeypatch: pytest.MonkeyPatch)
     )
 
     assert response.status_code == 200
-    assert network.broadcasted is not None
-    assert network.broadcasted["message_type"] == "consensus_request"
-    assert network.broadcasted["payload"] == {
-        "question": "check",
-        "required_response": "opinion,risk,confidence,source",
-        "requested_by": "owner-admin",
-    }
+    assert captured["actor"] == "owner-admin"
+    assert captured["question"] == "check"
+    assert captured["targets"] == ["risk_engine"]
 
 
 def test_empty_consensus_participants_use_default_subset(monkeypatch: pytest.MonkeyPatch) -> None:
     network = _FakeNetwork()
     monkeypatch.setattr(bot_api, "require_admin", lambda _request: "owner-admin")
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(
+        bot_api, "_execute_consensus",
+        lambda **kwargs: captured.update(kwargs) or {"status": "ok"},
+    )
+    monkeypatch.setattr(bot_api, "allow_intelligence_request", lambda _key: True)
     client = _client(monkeypatch, network)
 
     response = client.post(
@@ -223,8 +236,7 @@ def test_empty_consensus_participants_use_default_subset(monkeypatch: pytest.Mon
     )
 
     assert response.status_code == 200
-    assert network.broadcasted is not None
-    assert network.broadcasted["recipients"] == bot_api.DEFAULT_CONSENSUS_PARTICIPANTS
+    assert captured["targets"] == bot_api.DEFAULT_CONSENSUS_PARTICIPANTS
 
 
 @pytest.mark.parametrize(

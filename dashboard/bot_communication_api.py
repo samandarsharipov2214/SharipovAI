@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import hashlib
 import os
+import secrets
 import time
+from concurrent.futures import ThreadPoolExecutor
 from html import escape
 from pathlib import Path
 from typing import Any
@@ -163,19 +165,31 @@ def install_bot_communication_api(app: FastAPI) -> None:
         ensure_same_origin(request)
         actor = require_admin(request)
         data = payload or {}
-        participants = data.get("participants")
-        targets = participants if isinstance(participants, list) and participants else DEFAULT_CONSENSUS_PARTICIPANTS
-        return network().broadcast(
-            sender="consensus_engine",
-            recipients=targets,
-            message_type="consensus_request",
-            topic=str(data.get("topic", "general")),
-            payload={
-                "question": str(data.get("question", "Need consensus.")),
-                "required_response": "opinion,risk,confidence,source",
-                "requested_by": actor,
-            },
-            priority="high",
+        question = str(data.get("question", "")).strip()[:4_000]
+        if not question:
+            raise HTTPException(status_code=422, detail={"status": "question_required"})
+        targets = _consensus_participants(data.get("participants"))
+        if not targets:
+            raise HTTPException(status_code=422, detail={"status": "valid_participants_required"})
+        client_host = request.client.host if request.client else "unknown"
+        external_key = str(request.headers.get("Idempotency-Key") or data.get("request_id") or secrets.token_hex(16))
+        operation_id = hashlib.sha256(f"{actor}\0{external_key}".encode("utf-8")).hexdigest()[:32]
+        bus = network()
+        already_complete = bus.get_message_by_dedupe_key(
+            f"consensus:{operation_id}:summary"
+        ).get("status") == "ok"
+        if not already_complete and not _reserve_intelligence_budget(
+            f"consensus:{client_host}", len(targets) + 1
+        ):
+            raise HTTPException(status_code=429, detail={"status": "agent_chat_rate_limited"})
+        return _execute_consensus(
+            bus=bus,
+            request=request,
+            actor=actor,
+            operation_id=operation_id,
+            topic=str(data.get("topic", "general"))[:200] or "general",
+            question=question,
+            targets=targets,
         )
 
     @app.post("/api/bot-network/chat")
@@ -364,6 +378,147 @@ def _chat_bot(value: str) -> str:
     detected = detect_agent(value.lower())
     bot = detected or CHAT_BOT_ALIASES.get(key) or CHAT_BOT_ALIASES.get(alias_key) or key
     return bot if bot in BOT_NAMES or bot in AGENTS else "general_controller"
+
+
+def _consensus_participants(value: Any) -> list[str]:
+    requested = value if isinstance(value, list) and value else DEFAULT_CONSENSUS_PARTICIPANTS
+    targets: list[str] = []
+    for item in requested[:5]:
+        candidate = str(item).strip().lower().replace("-", "_").replace(" ", "_")
+        if candidate in AGENTS and candidate != "consensus_engine" and candidate not in targets:
+            targets.append(candidate)
+    return targets
+
+
+def _reserve_intelligence_budget(key: str, calls: int) -> bool:
+    """Charge the existing limiter for every participant plus synthesis call."""
+
+    return all(allow_intelligence_request(key) for _ in range(max(1, calls)))
+
+
+def _execute_consensus(
+    *,
+    bus: BotCommunicationNetwork,
+    request: Request,
+    actor: str,
+    operation_id: str,
+    topic: str,
+    question: str,
+    targets: list[str],
+) -> dict[str, Any]:
+    """Execute only this owner-requested consensus; never consume legacy backlog."""
+
+    thread_id = f"CNS-{operation_id.upper()}"
+    requests: dict[str, dict[str, Any]] = {}
+    for target in targets:
+        saved = bus.send_message(
+            sender="consensus_engine", recipient=target,
+            message_type="consensus_request", topic=topic, priority="high",
+            thread_id=thread_id, dedupe_key=f"consensus:{operation_id}:request:{target}",
+            payload={
+                "question": question,
+                "required_response": "opinion,risk,confidence,source",
+                "requested_by": actor,
+                "operation_id": operation_id,
+            },
+        )
+        if saved.get("status") != "ok":
+            return {"status": "persistence_error", "operation_id": operation_id, "detail": saved}
+        requests[target] = saved
+
+    state = canonical_state_from_app(request.app)
+    if not isinstance(state, dict):
+        state = {}
+    memory_service = getattr(request.app.state, "memory_service", None)
+    principal = resolve_authenticated_principal(request)
+    if principal is None and auth_disabled():
+        principal = "development"
+    memory_user_id = _memory_user_id(principal)
+
+    pending: list[str] = []
+    opinions: dict[str, str] = {}
+    for target in targets:
+        response_key = f"consensus:{operation_id}:response:{target}"
+        existing = bus.get_message_by_dedupe_key(response_key)
+        if existing.get("status") == "ok":
+            payload = existing["message"].get("payload", {})
+            opinions[target] = str(payload.get("reply", ""))
+            # Recover the crash window after durable response persistence but
+            # before terminalizing the corresponding request.
+            bus.mark_read(str(requests[target]["message_id"]))
+        else:
+            pending.append(target)
+
+    def ask(target: str) -> tuple[str, dict[str, Any]]:
+        context: list[str] = []
+        if memory_user_id and memory_service is not None:
+            try:
+                context = memory_service.get_recent_dialog(agent_id=target, user_id=memory_user_id)
+            except Exception:
+                context = []
+        try:
+            generated = answer_chat(
+                f"{target}: {question}", state, intelligent=True,
+                persist_bus=False, memory_context=context,
+            )
+        except Exception as exc:
+            generated = {
+                "status": "degraded", "reply": f"Ответ недоступен: {type(exc).__name__}",
+                "source_ai": AGENTS[target]["name"], "data": {"intelligence": {"status": "unavailable"}},
+            }
+        return target, generated
+
+    if pending:
+        with ThreadPoolExecutor(max_workers=len(pending), thread_name_prefix="agent-consensus") as executor:
+            generated_items = list(executor.map(ask, pending))
+        for target, generated in generated_items:
+            reply_text = str(generated.get("reply", "Ответ недоступен."))[:12_000]
+            response = bus.send_message(
+                sender=target, recipient="consensus_engine",
+                message_type="consensus_response", topic=topic, priority="high",
+                thread_id=thread_id, dedupe_key=f"consensus:{operation_id}:response:{target}",
+                payload={
+                    "reply": reply_text,
+                    "source_ai": generated.get("source_ai", AGENTS[target]["name"]),
+                    "intelligence": generated.get("data", {}).get("intelligence", {}),
+                    "operation_id": operation_id,
+                    "execution_authority": False,
+                },
+            )
+            if response.get("status") == "ok":
+                bus.mark_read(str(requests[target]["message_id"]))
+                opinions[target] = reply_text
+
+    ordered = [{"agent_id": target, "reply": opinions.get(target, "")} for target in targets]
+    summary_key = f"consensus:{operation_id}:summary"
+    existing_summary = bus.get_message_by_dedupe_key(summary_key)
+    if existing_summary.get("status") == "ok":
+        summary = str(existing_summary["message"].get("payload", {}).get("summary", ""))
+    else:
+        summary_context = [f"{item['agent_id']}: {item['reply']}" for item in ordered]
+        try:
+            synthesis = answer_chat(
+                "consensus_engine: Сформируй итоговый консенсус, явно укажи конфликты, риск и неопределённость.",
+                state, intelligent=True, persist_bus=False, memory_context=summary_context,
+            )
+            summary = str(synthesis.get("reply", ""))[:12_000]
+        except Exception:
+            summary = f"Получено {len(opinions)} из {len(targets)} ответов; автоматический синтез недоступен."
+        bus.send_message(
+            sender="consensus_engine", recipient="general_controller",
+            message_type="answer", topic=topic, priority="high", thread_id=thread_id,
+            dedupe_key=summary_key,
+            payload={"summary": summary, "operation_id": operation_id, "execution_authority": False},
+        )
+    return {
+        "status": "ok" if len(opinions) == len(targets) else "degraded",
+        "operation_id": operation_id,
+        "thread_id": thread_id,
+        "participants": targets,
+        "responses": ordered,
+        "summary": summary,
+        "execution_authority": False,
+    }
 
 
 def _memory_user_id(principal: str | None) -> str:
