@@ -42,7 +42,7 @@ def test_backup_only_removes_stale_staging_after_exclusive_lock() -> None:
 
 def test_backup_helper_is_bounded_identifiable_and_still_isolated() -> None:
     text = _script()
-    assert "SHARIPOVAI_BACKUP_HELPER_TIMEOUT_SECONDS:-300" in text
+    assert "SHARIPOVAI_BACKUP_HELPER_TIMEOUT_SECONDS:-600" in text
     assert 'timeout --foreground --kill-after=10s "${HELPER_TIMEOUT_SECONDS}s"' in text
     assert '--name "$helper_name"' in text
     assert "--label 'com.sharipovai.role=backup-helper'" in text
