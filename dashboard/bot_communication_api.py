@@ -6,12 +6,14 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
-from fastapi import Body, FastAPI, Request
+from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from ai_chat_orchestrator import AGENTS, _action, answer_chat, detect_agent
+from agent_intelligence import allow_intelligence_request
 from learning.ai_learning_core import BOT_NAMES
 from learning.bot_communication import BotCommunicationNetwork
+from telegram_runtime_state import canonical_state_from_app
 
 from .admin_guard import require_admin
 from .auth_saas import ensure_same_origin
@@ -179,7 +181,11 @@ def install_bot_communication_api(app: FastAPI) -> None:
         data = payload or {}
         requested_bot = _chat_bot(str(data.get("bot", data.get("recipient", "general_controller"))))
         text = str(data.get("message", "")).strip()
-        state = data.get("state", {}) if isinstance(data.get("state", {}), dict) else {}
+        # Runtime evidence is server-owned.  A client-provided ``state`` object
+        # must never become trusted model context or impersonate PAPER truth.
+        state = canonical_state_from_app(request.app)
+        if not isinstance(state, dict):
+            state = {}
         if not text:
             return {"status": "empty_message", "reply": "Напиши вопрос AI-боту."}
 
@@ -210,6 +216,10 @@ def install_bot_communication_api(app: FastAPI) -> None:
                 "thread_id": command.get("thread_id"),
             }
 
+        client_host = request.client.host if request.client else "unknown"
+        if not allow_intelligence_request(client_host):
+            raise HTTPException(status_code=429, detail={"status": "agent_chat_rate_limited"})
+
         sender = "security_guard" if requested_bot == "general_controller" else "general_controller"
         question = bus.send_message(
             sender=sender,
@@ -223,7 +233,12 @@ def install_bot_communication_api(app: FastAPI) -> None:
             return {"status": "persistence_error", "message": question, "reply": "Вопрос не сохранён."}
 
         routed_text = f"{requested_bot}: {text}"
-        generated = answer_chat(routed_text, state)
+        generated = answer_chat(
+            routed_text,
+            state,
+            intelligent=True,
+            persist_bus=False,
+        )
         reply_text = str(generated.get("reply", "Ответ не сформирован."))
         answer = bus.reply(
             original_message_id=str(question["message_id"]),

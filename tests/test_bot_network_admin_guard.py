@@ -98,12 +98,15 @@ def test_bot_network_mutations_require_admin(monkeypatch: pytest.MonkeyPatch) ->
 
 def test_non_privileged_bot_chat_does_not_require_admin(monkeypatch: pytest.MonkeyPatch) -> None:
     network = _FakeNetwork()
+    routed: dict[str, object] = {}
+
+    def fake_answer(_message, state, **kwargs):
+        routed["state"] = state
+        routed.update(kwargs)
+        return {"reply": "ok", "source_ai": "Risk Engine", "intent": "agent_chat", "data": {}}
+
     monkeypatch.setattr(bot_api, "require_admin", _deny)
-    monkeypatch.setattr(
-        bot_api,
-        "answer_chat",
-        lambda _message, _state: {"reply": "ok", "source_ai": "Risk Engine", "intent": "agent_chat", "data": {}},
-    )
+    monkeypatch.setattr(bot_api, "answer_chat", fake_answer)
     monkeypatch.setattr(
         network,
         "reply",
@@ -114,10 +117,33 @@ def test_non_privileged_bot_chat_does_not_require_admin(monkeypatch: pytest.Monk
 
     response = client.post(
         "/api/bot-network/chat",
-        json={"bot": "risk_engine", "message": "покажи текущий риск"},
+        json={
+            "bot": "risk_engine",
+            "message": "покажи текущий риск",
+            "state": {"equity": 999_999, "api_key": "client-injection"},
+        },
     )
 
     assert response.status_code == 200
+    assert routed["intelligent"] is True
+    assert routed["persist_bus"] is False
+    assert routed["state"].get("equity") != 999_999
+    assert "api_key" not in routed["state"]
+
+
+def test_agent_chat_rate_limit_blocks_before_persistence(monkeypatch: pytest.MonkeyPatch) -> None:
+    network = _FakeNetwork()
+    monkeypatch.setattr(bot_api, "allow_intelligence_request", lambda _key: False)
+    client = _client(monkeypatch, network)
+
+    response = client.post(
+        "/api/bot-network/chat",
+        json={"bot": "risk_engine", "message": "покажи текущий риск"},
+    )
+
+    assert response.status_code == 429
+    assert response.json() == {"detail": {"status": "agent_chat_rate_limited"}}
+    assert network.sent is None
 
 
 def test_message_provenance_is_server_derived(monkeypatch: pytest.MonkeyPatch) -> None:

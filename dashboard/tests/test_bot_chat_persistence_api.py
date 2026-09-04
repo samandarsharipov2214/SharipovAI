@@ -18,6 +18,8 @@ def test_bot_chat_api_persists_question_and_answer(tmp_path, monkeypatch):
     assert thread.status_code == 200
     messages = thread.json()["messages"]
     assert [item["message_type"] for item in messages] == ["question", "answer"]
+    health = client.get("/api/bot-network/health").json()
+    assert health["message_count"] == 2
 
 
 def test_bot_chat_api_persists_general_controller_without_self_message(tmp_path, monkeypatch):
@@ -42,3 +44,5 @@ def test_bot_chat_api_persists_general_controller_without_self_message(tmp_path,
     assert messages[0]["recipient"] == "general_controller"
     assert messages[1]["sender"] == "general_controller"
     assert messages[1]["recipient"] == "security_guard"
+    health = client.get("/api/bot-network/health").json()
+    assert health["message_count"] == 2
