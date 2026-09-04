@@ -71,6 +71,7 @@ class BotCommunicationNetwork:
         payload: dict[str, Any],
         thread_id: str | None = None,
         priority: str = "normal",
+        dedupe_key: str | None = None,
     ) -> dict[str, Any]:
         """Send one message from one bot to another."""
 
@@ -86,15 +87,29 @@ class BotCommunicationNetwork:
             return {"status": "invalid_message_type", "message_type": message_type}
         if priority not in PRIORITIES:
             return {"status": "invalid_priority", "priority": priority}
+        key = str(dedupe_key or "").strip()[:200] or None
         now = int(time.time())
         message_id = "MSG-" + uuid.uuid4().hex[:16].upper()
         thread = thread_id or "THR-" + uuid.uuid4().hex[:16].upper()
         with self._connect() as conn:
-            conn.execute(
-                "INSERT INTO messages(message_id, thread_id, sender, recipient, message_type, topic, priority, payload_json, status, created_at, read_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (message_id, thread, sender, recipient, message_type, topic, priority, json.dumps(payload, ensure_ascii=False), "unread", now, 0),
+            cursor = conn.execute(
+                "INSERT OR IGNORE INTO messages(message_id, thread_id, sender, recipient, message_type, topic, priority, payload_json, status, created_at, read_at, dedupe_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (message_id, thread, sender, recipient, message_type, topic, priority, json.dumps(payload, ensure_ascii=False), "unread", now, 0, key),
             )
-        return {"status": "ok", "message_id": message_id, "thread_id": thread}
+            if key and cursor.rowcount == 0:
+                existing = conn.execute(
+                    "SELECT message_id, thread_id FROM messages WHERE dedupe_key = ?",
+                    (key,),
+                ).fetchone()
+                if existing is None:
+                    raise RuntimeError("deduplicated message could not be resolved")
+                return {
+                    "status": "ok",
+                    "message_id": existing["message_id"],
+                    "thread_id": existing["thread_id"],
+                    "duplicate": True,
+                }
+        return {"status": "ok", "message_id": message_id, "thread_id": thread, "duplicate": False}
 
     def broadcast(
         self,
@@ -211,6 +226,17 @@ class BotCommunicationNetwork:
             return {"status": "not_found", "message_id": message_id}
         return {"status": "ok", "message": _message_row(row)}
 
+    def get_message_by_dedupe_key(self, dedupe_key: str) -> dict[str, Any]:
+        """Resolve an idempotent operation without creating another message."""
+
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM messages WHERE dedupe_key = ?", (str(dedupe_key)[:200],)
+            ).fetchone()
+        if row is None:
+            return {"status": "not_found"}
+        return {"status": "ok", "message": _message_row(row)}
+
     def communication_matrix(self) -> dict[str, Any]:
         """Return full-mesh communication matrix for all bots."""
 
@@ -246,10 +272,16 @@ class BotCommunicationNetwork:
     def _init_db(self) -> None:
         with self._connect() as conn:
             conn.execute(
-                "CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY AUTOINCREMENT, message_id TEXT UNIQUE NOT NULL, thread_id TEXT NOT NULL, sender TEXT NOT NULL, recipient TEXT NOT NULL, message_type TEXT NOT NULL, topic TEXT NOT NULL, priority TEXT NOT NULL, payload_json TEXT NOT NULL, status TEXT NOT NULL, created_at INTEGER NOT NULL, read_at INTEGER NOT NULL)"
+                "CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY AUTOINCREMENT, message_id TEXT UNIQUE NOT NULL, thread_id TEXT NOT NULL, sender TEXT NOT NULL, recipient TEXT NOT NULL, message_type TEXT NOT NULL, topic TEXT NOT NULL, priority TEXT NOT NULL, payload_json TEXT NOT NULL, status TEXT NOT NULL, created_at INTEGER NOT NULL, read_at INTEGER NOT NULL, dedupe_key TEXT)"
             )
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(messages)").fetchall()}
+            if "dedupe_key" not in columns:
+                conn.execute("ALTER TABLE messages ADD COLUMN dedupe_key TEXT")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_recipient ON messages(recipient, status, created_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id, created_at)")
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_dedupe ON messages(dedupe_key) WHERE dedupe_key IS NOT NULL"
+            )
 
 
 def _bot(value: str) -> str:

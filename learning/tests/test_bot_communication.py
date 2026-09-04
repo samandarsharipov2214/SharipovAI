@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import sqlite3
+from concurrent.futures import ThreadPoolExecutor
+
 from fastapi.testclient import TestClient
 
 from learning.ai_learning_core import BOT_NAMES
@@ -65,6 +68,62 @@ def test_reply_keeps_same_thread(tmp_path) -> None:
     assert reply["thread_id"] == sent["thread_id"]
     assert len(thread["messages"]) == 2
     assert thread["messages"][1]["recipient"] == "general_controller"
+
+
+def test_dedupe_key_persists_exactly_one_message(tmp_path) -> None:
+    network = BotCommunicationNetwork(tmp_path / "bot_network.sqlite3")
+    kwargs = dict(
+        sender="general_controller", recipient="risk_engine", message_type="question",
+        topic="risk", payload={"question": "same"}, dedupe_key="owner-request-1",
+    )
+
+    first = network.send_message(**kwargs)
+    second = network.send_message(**kwargs)
+
+    assert first["duplicate"] is False
+    assert second == {**first, "duplicate": True}
+    assert network.health()["message_count"] == 1
+    assert network.get_message_by_dedupe_key("owner-request-1")["message"]["message_id"] == first["message_id"]
+
+
+def test_concurrent_senders_claim_one_dedupe_key(tmp_path) -> None:
+    path = tmp_path / "bot_network.sqlite3"
+    BotCommunicationNetwork(path)
+
+    def send(_index: int) -> dict:
+        return BotCommunicationNetwork(path).send_message(
+            sender="general_controller", recipient="risk_engine",
+            message_type="question", topic="risk", payload={"question": "same"},
+            dedupe_key="concurrent-owner-request",
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(send, range(16)))
+
+    assert len({item["message_id"] for item in results}) == 1
+    assert sum(not item["duplicate"] for item in results) == 1
+    assert BotCommunicationNetwork(path).health()["message_count"] == 1
+
+
+def test_existing_bus_schema_is_migrated_without_losing_messages(tmp_path) -> None:
+    path = tmp_path / "legacy.sqlite3"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "CREATE TABLE messages(id INTEGER PRIMARY KEY AUTOINCREMENT, message_id TEXT UNIQUE NOT NULL, thread_id TEXT NOT NULL, sender TEXT NOT NULL, recipient TEXT NOT NULL, message_type TEXT NOT NULL, topic TEXT NOT NULL, priority TEXT NOT NULL, payload_json TEXT NOT NULL, status TEXT NOT NULL, created_at INTEGER NOT NULL, read_at INTEGER NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO messages(message_id,thread_id,sender,recipient,message_type,topic,priority,payload_json,status,created_at,read_at) VALUES('OLD-1','OLD-T','general_controller','risk_engine','question','risk','normal','{}','unread',1,0)"
+        )
+
+    network = BotCommunicationNetwork(path)
+    saved = network.send_message(
+        sender="general_controller", recipient="risk_engine", message_type="question",
+        topic="risk", payload={"question": "new"}, dedupe_key="new-operation",
+    )
+
+    assert saved["status"] == "ok"
+    assert network.get_message("OLD-1")["status"] == "ok"
+    assert network.health()["message_count"] == 2
 
 
 def test_broadcast_reaches_all_other_bots(tmp_path) -> None:
