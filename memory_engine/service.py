@@ -148,6 +148,32 @@ class MemoryService:
             self._record_failure(exc)
             return []
 
+    def get_recent_dialog(
+        self,
+        *,
+        agent_id: str,
+        user_id: str,
+        team_id: str | None = None,
+        limit: int | None = None,
+    ) -> list[str]:
+        """Return bounded, redacted dialogue continuity with no fact authority."""
+
+        if not self.context_enabled:
+            return []
+        try:
+            self._ensure_initialized()
+            logs = self.repository.list_recent_raw_logs(
+                team_id=team_id or self.settings.team_id,
+                user_id=user_id,
+                agent_id=agent_id,
+                limit=limit or self.settings.context_limit,
+            )
+            self._record_success()
+            return [f"{item.message_role}: {item.content}" for item in logs]
+        except Exception as exc:
+            self._record_failure(exc)
+            return []
+
     def extract_pending(self, *, limit: int | None = None) -> dict[str, Any]:
         if not self.enabled or not self.settings.extraction_enabled:
             return {"status": "disabled", "processed": 0, "facts": 0}

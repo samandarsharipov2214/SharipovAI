@@ -138,7 +138,11 @@ def answer_with_intelligence(
                         "agent_id": agent_id,
                         "question": bounded_question,
                         "trusted_runtime_state": _safe_state(state or {}),
-                        "verified_memory": [str(item)[:1_000] for item in memory_context[:5]],
+                        # Dialogue is continuity context, not a verified fact and
+                        # never execution authority.
+                        "untrusted_conversation_context": [
+                            str(item)[:1_000] for item in memory_context[:5]
+                        ],
                     },
                     ensure_ascii=False,
                     sort_keys=True,

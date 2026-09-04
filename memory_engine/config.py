@@ -35,6 +35,7 @@ class MemorySettings:
     enabled: bool = False
     context_injection_enabled: bool = False
     extraction_enabled: bool = False
+    learning_bridge_enabled: bool = True
     verification_enabled: bool = True
     team_id: str = "sharipovai"
     user_id: str = "owner"
@@ -58,6 +59,7 @@ class MemorySettings:
             enabled=_truthy("MEMORY_ENABLED", False),
             context_injection_enabled=_truthy("MEMORY_CONTEXT_INJECTION", False),
             extraction_enabled=_truthy("MEMORY_EXTRACTION_ENABLED", False),
+            learning_bridge_enabled=_truthy("MEMORY_LEARNING_BRIDGE_ENABLED", True),
             verification_enabled=_truthy("MEMORY_VERIFICATION_ENABLED", True),
             team_id=(os.getenv("MEMORY_TEAM_ID", "sharipovai").strip() or "sharipovai")[:200],
             user_id=(os.getenv("MEMORY_USER_ID", "owner").strip() or "owner")[:200],
@@ -81,6 +83,7 @@ class MemorySettings:
             "MEMORY_ENABLED": self.enabled,
             "MEMORY_CONTEXT_INJECTION": self.context_injection_enabled,
             "MEMORY_EXTRACTION_ENABLED": self.extraction_enabled,
+            "MEMORY_LEARNING_BRIDGE_ENABLED": self.learning_bridge_enabled,
             "MEMORY_VERIFICATION_ENABLED": self.verification_enabled,
         }
 
