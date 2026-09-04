@@ -9,7 +9,10 @@ CONTAINER=${CONTAINER:-sharipovai}
 KEEP=${KEEP:-7}
 MIN_FREE_DISK_GB=${SHARIPOVAI_BACKUP_MIN_FREE_DISK_GB:-20}
 RESERVE_MIB=${SHARIPOVAI_BACKUP_RESERVE_MIB:-512}
-HELPER_TIMEOUT_SECONDS=${SHARIPOVAI_BACKUP_HELPER_TIMEOUT_SECONDS:-300}
+# A production snapshot of the current ~6 GiB data volume takes slightly more
+# than five minutes at low I/O priority. Keep the helper bounded, but leave
+# enough time for a healthy SQLite backup to finish on the VPS.
+HELPER_TIMEOUT_SECONDS=${SHARIPOVAI_BACKUP_HELPER_TIMEOUT_SECONDS:-600}
 SIZE_PROBE_TIMEOUT_SECONDS=${SHARIPOVAI_BACKUP_SIZE_PROBE_TIMEOUT_SECONDS:-60}
 
 fail() { printf '[backup] ERROR: %s\n' "$*" >&2; exit 1; }
