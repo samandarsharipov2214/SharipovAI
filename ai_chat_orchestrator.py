@@ -44,6 +44,7 @@ def answer_chat(
     *,
     intelligent: bool = False,
     persist_bus: bool = True,
+    memory_context: list[str] | tuple[str, ...] = (),
 ) -> dict[str, Any]:
     text = (message or "").strip()
     lower = text.lower()
@@ -56,6 +57,7 @@ def answer_chat(
             state,
             intelligent=intelligent,
             persist_bus=persist_bus,
+            memory_context=memory_context,
         )
     intent = detect_intent(lower)
     handlers = {
@@ -123,6 +125,7 @@ def _answer_agent(
     *,
     intelligent: bool = False,
     persist_bus: bool = True,
+    memory_context: list[str] | tuple[str, ...] = (),
 ) -> dict[str, Any]:
     meta = AGENTS.get(agent_id, AGENTS["general_controller"])
     action = _action(question.lower())
@@ -161,6 +164,7 @@ def _answer_agent(
                 role=str(meta["role"]),
                 question=question,
                 state=state,
+                memory_context=memory_context,
             )
         reply = (
             intelligence.text

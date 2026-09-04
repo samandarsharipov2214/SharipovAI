@@ -20,6 +20,11 @@ class MemoryRuntime:
         if not self.service.settings.enabled:
             return
         self.service.initialize()
+        if not (
+            self.service.settings.learning_bridge_enabled
+            or self.service.settings.extraction_enabled
+        ):
+            return
         if self._thread and self._thread.is_alive():
             return
         self._stop.clear()
@@ -32,7 +37,11 @@ class MemoryRuntime:
             self._thread.join(timeout=5)
 
     def collect_once(self) -> dict[str, Any]:
-        bridge = self.bridge.collect_once()
+        bridge = (
+            self.bridge.collect_once()
+            if self.service.settings.learning_bridge_enabled
+            else {"status": "disabled", "seen": 0, "recorded": 0}
+        )
         extraction = self.service.extract_pending()
         self._last_cycle = {"bridge": bridge, "extraction": extraction}
         return dict(self._last_cycle)

@@ -64,6 +64,13 @@ services:
       # configurable and pinned to an available model.
       AGENT_LLM_MODEL: "${AGENT_LLM_MODEL:-qwen/qwen-2.5-7b-instruct}"
       AGENT_WEB_SEARCH_ENABLED: "${AGENT_WEB_SEARCH_ENABLED:-1}"
+      # Conversation continuity reuses the passive canonical Memory Layer.
+      # Fact extraction remains disabled: raw dialogue is untrusted context only.
+      MEMORY_ENABLED: "1"
+      MEMORY_CONTEXT_INJECTION: "1"
+      MEMORY_EXTRACTION_ENABLED: "0"
+      # Chat turns are written directly; do not poll/re-copy Learning events.
+      MEMORY_LEARNING_BRIDGE_ENABLED: "0"
       EXCHANGE_MODE: sandbox
       EXCHANGE_BASE_URL: https://api-testnet.bybit.com
       EXCHANGE_LIVE_TRADING_ENABLED: "0"

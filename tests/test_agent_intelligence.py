@@ -111,3 +111,36 @@ def test_untrusted_state_is_bounded_and_secrets_are_not_sent(monkeypatch) -> Non
     assert "must-not-leak" not in serialized
     assert "nope" not in serialized
     assert "equity" in serialized
+
+
+def test_dialogue_memory_is_explicitly_untrusted_and_bounded(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {"choices": [{"message": {"content": "ok"}}]}
+
+    def fake_post(_url: str, **kwargs: Any) -> Response:
+        captured.update(kwargs)
+        return Response()
+
+    monkeypatch.setenv("AGENT_LLM_BASE_URL", "https://openrouter.ai/api/v1")
+    monkeypatch.setenv("AGENT_LLM_API_KEY", "not-a-real-key")
+    monkeypatch.setenv("AGENT_LLM_MODEL", "qwen/qwen-2.5-7b-instruct")
+    monkeypatch.setattr(agent_intelligence.httpx, "post", fake_post)
+
+    result = agent_intelligence.answer_with_intelligence(
+        agent_id="market_agent", agent_name="Market Agent", role="Рынок.",
+        question="Продолжим?", state={},
+        memory_context=[f"user: turn-{index}" for index in range(8)],
+    )
+
+    assert result.status == "ok"
+    content = captured["json"]["messages"][-1]["content"]
+    assert "untrusted_conversation_context" in content
+    assert "verified_memory" not in content
+    assert "turn-4" in content
+    assert "turn-5" not in content

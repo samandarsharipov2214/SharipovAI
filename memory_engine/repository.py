@@ -116,6 +116,34 @@ class MemoryRepository:
             )
         return [_raw_from_row(row) for row in rows]
 
+    def list_recent_raw_logs(
+        self,
+        *,
+        team_id: str,
+        user_id: str,
+        agent_id: str,
+        limit: int = 10,
+    ) -> list[RawLog]:
+        """Return one user's recent dialogue with one agent, oldest first."""
+
+        self._require_initialized()
+        bounded = min(max(int(limit), 1), 20)
+        with self.database.connect() as connection:
+            rows = self.database._fetchall(
+                connection,
+                """
+                SELECT * FROM (
+                    SELECT * FROM memory_raw_logs
+                    WHERE team_id = ? AND user_id = ? AND agent_id = ?
+                      AND message_role IN ('user', 'assistant')
+                    ORDER BY created_at_ms DESC, log_id DESC LIMIT ?
+                ) recent
+                ORDER BY created_at_ms ASC, log_id ASC
+                """,
+                (team_id, user_id, agent_id, bounded),
+            )
+        return [_raw_from_row(row) for row in rows]
+
     def mark_raw_log(self, log_id: str, status: RawLogStatus) -> None:
         self._require_initialized()
         processed_at_ms = None if status is RawLogStatus.PENDING else _now_ms()

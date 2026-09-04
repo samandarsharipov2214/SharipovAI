@@ -1,7 +1,9 @@
 """Dashboard integration for the SharipovAI Bot Communication Network."""
 from __future__ import annotations
 
+import hashlib
 import os
+import time
 from html import escape
 from pathlib import Path
 from typing import Any
@@ -16,7 +18,8 @@ from learning.bot_communication import BotCommunicationNetwork
 from telegram_runtime_state import canonical_state_from_app
 
 from .admin_guard import require_admin
-from .auth_saas import ensure_same_origin
+from .auth_saas import ensure_same_origin, resolve_authenticated_principal
+from .global_auth_guard import auth_disabled
 
 CHAT_BOT_ALIASES = {
     "general_controller": "general_controller", "general controller": "general_controller",
@@ -232,12 +235,28 @@ def install_bot_communication_api(app: FastAPI) -> None:
         if question.get("status") != "ok":
             return {"status": "persistence_error", "message": question, "reply": "Вопрос не сохранён."}
 
+        principal = resolve_authenticated_principal(request)
+        if principal is None and auth_disabled():
+            principal = "development"
+        memory_user_id = _memory_user_id(principal)
+        memory_service = getattr(request.app.state, "memory_service", None)
+        memory_context: list[str] = []
+        if memory_user_id and memory_service is not None:
+            try:
+                memory_context = memory_service.get_recent_dialog(
+                    agent_id=requested_bot,
+                    user_id=memory_user_id,
+                )
+            except Exception:
+                memory_context = []
+
         routed_text = f"{requested_bot}: {text}"
         generated = answer_chat(
             routed_text,
             state,
             intelligent=True,
             persist_bus=False,
+            memory_context=memory_context,
         )
         reply_text = str(generated.get("reply", "Ответ не сформирован."))
         answer = bus.reply(
@@ -251,6 +270,17 @@ def install_bot_communication_api(app: FastAPI) -> None:
                 "data": generated.get("data", {}),
             },
         )
+        if memory_user_id and memory_service is not None:
+            _remember_chat_turn(
+                memory_service,
+                user_id=memory_user_id,
+                agent_id=requested_bot,
+                session_id=str(question.get("thread_id") or "unified_chat"),
+                question=text,
+                question_ref=str(question.get("message_id") or "question"),
+                answer=reply_text,
+                answer_ref=str(answer.get("message_id") or "") if answer.get("status") == "ok" else "",
+            )
         status = "ok" if answer.get("status") == "ok" else "persistence_error"
         return {
             "status": status,
@@ -334,6 +364,49 @@ def _chat_bot(value: str) -> str:
     detected = detect_agent(value.lower())
     bot = detected or CHAT_BOT_ALIASES.get(key) or CHAT_BOT_ALIASES.get(alias_key) or key
     return bot if bot in BOT_NAMES or bot in AGENTS else "general_controller"
+
+
+def _memory_user_id(principal: str | None) -> str:
+    if not principal:
+        return ""
+    digest = hashlib.sha256(principal.encode("utf-8")).hexdigest()
+    return f"principal_{digest[:32]}"
+
+
+def _remember_chat_turn(
+    service: Any,
+    *,
+    user_id: str,
+    agent_id: str,
+    session_id: str,
+    question: str,
+    question_ref: str,
+    answer: str,
+    answer_ref: str,
+) -> None:
+    """Persist a redacted turn passively; chat remains available on memory faults."""
+
+    created_at_ms = int(time.time() * 1_000)
+    for offset, (role, message, source_ref) in enumerate((
+        ("user", question, question_ref),
+        ("assistant", answer, answer_ref),
+    )):
+        if not source_ref:
+            continue
+        try:
+            service.record_dialog(
+                team_id=service.settings.team_id,
+                user_id=user_id,
+                agent_id=agent_id,
+                session_id=session_id,
+                message=message,
+                source_ref=f"bot-network:{source_ref}",
+                role=role,
+                created_at_ms=created_at_ms + offset,
+                metadata={"channel": "dashboard", "execution_authority": False},
+            )
+        except Exception:
+            continue
 
 
 def _render_bot_network(health: dict[str, Any]) -> str:
