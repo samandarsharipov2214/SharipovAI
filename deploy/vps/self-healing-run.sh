@@ -8,6 +8,7 @@ COMPOSE_DIR="$REPO_DIR/deploy/vps"
 COMPOSE_FILE="$COMPOSE_DIR/docker-compose.yml"
 ENV_FILE="$COMPOSE_DIR/.env.vps"
 LOCK_FILE="/run/sharipovai-self-healing.lock"
+DEPLOY_LOCK_FILE="${SELF_HEALING_DEPLOY_LOCK_FILE:-/run/sharipovai-telegram-deploy.lock}"
 HOST_LOG="/var/log/sharipovai-self-healing-host.log"
 AGENT_RUNNER_PATH="/workspace/tools/self_healing_runner.py"
 AGENT_ACTION_PATH="/workspace/tools/self_healing_agent.py"
@@ -25,6 +26,15 @@ log() {
     message="$(date -u '+%Y-%m-%dT%H:%M:%SZ') $*"
     printf '%s\n' "$message" >>"$HOST_LOG"
     logger -t sharipovai-self-healing -- "$*" 2>/dev/null || true
+}
+
+claim_deploy_coordination() {
+    # The Telegram watcher holds this exact lock for the complete deploy
+    # transaction. Keep the descriptor open for this process lifetime so a
+    # deploy and a remediation cycle can never observe each other's transient
+    # container/health state.
+    exec 8>"$DEPLOY_LOCK_FILE" || return 1
+    flock -n 8
 }
 
 compose() {
@@ -375,6 +385,10 @@ main() {
         log "Another self-healing run is active; skipping."
         exit 0
     fi
+    if ! claim_deploy_coordination; then
+        log "A protected deployment is active; skipping this self-healing cycle."
+        exit 0
+    fi
     cd "$COMPOSE_DIR" || {
         log "Compose directory is missing: $COMPOSE_DIR"
         exit 1
@@ -468,4 +482,6 @@ EOF
     exit 0
 }
 
-main "$@"
+if [ "${SELF_HEALING_RUN_LIBRARY:-0}" != "1" ]; then
+    main "$@"
+fi
