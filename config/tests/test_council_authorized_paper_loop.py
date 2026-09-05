@@ -1275,7 +1275,6 @@ def test_authorization_persistence_failure_never_mutates_account_and_can_retry(
     (
         (_Quote(98.0, change_24h_percent=1.0), "protective_stop_loss"),
         (_Quote(105.0, change_24h_percent=1.0), "protective_take_profit"),
-        (_Quote(100.0, change_24h_percent=-1.0), "protective_momentum_exit"),
     ),
 )
 def test_every_protective_exit_uses_realistic_sell_execution(
@@ -1307,6 +1306,38 @@ def test_every_protective_exit_uses_realistic_sell_execution(
     assert trade["execution_price"] <= quote.bid_price
     assert trade["slippage_cost"] > 0
     assert trade["paper_execution_semantics"] == "bybit_spot_taker_v2"
+
+
+def test_rolling_24h_reversal_cannot_bypass_council_sell_authority(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """A rolling 24h baseline is not a position-relative emergency exit."""
+
+    monkeypatch.setenv("AUTONOMOUS_PAPER_STATE_FILE", str(tmp_path / "paper.json"))
+    database = _database(tmp_path)
+    stream = _Stream(100.0)
+    loop = CouncilAuthorizedPaperLoop(
+        stream,
+        decision_runtime=CanonicalPaperDecisionRuntime(database),
+        proposal_provider=lambda *_args: None,
+        database=database,
+        **_execution_kwargs(),
+    )
+    entry = loop._prepare_execution("BTCUSDT", stream.current, Side.BUY, Decimal("0.1"))
+    loop._open("BTCUSDT", stream.current, "entry", prepared=entry)
+    before = loop.snapshot()
+
+    # Price is unchanged, while Bybit's rolling 24h percentage crosses the old
+    # local exit threshold solely because its 24h reference window moved.
+    quote = _Quote(100.0, change_24h_percent=-1.0)
+    loop._manage_protective_exit("BTCUSDT", quote)
+
+    after = loop.snapshot()
+    assert list(after["positions"]) == ["BTCUSDT"]
+    assert after["cash"] == before["cash"]
+    assert after["realized_pnl"] == before["realized_pnl"]
+    assert [trade["side"] for trade in after["trades"]] == ["BUY"]
 
 
 def test_temporary_protective_execution_failure_keeps_position_then_recovers(

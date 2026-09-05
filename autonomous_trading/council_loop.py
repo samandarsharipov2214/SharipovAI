@@ -490,19 +490,23 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         )
 
     def _manage_protective_exit(self, symbol: str, quote: Any) -> None:
+        """Execute only position-relative emergency exits without a new Council vote.
+
+        Bybit's rolling 24h percentage is market context, not a loss/profit
+        measurement for this position.  A non-emergency momentum SELL therefore
+        continues through the canonical proposal and authorization path below.
+        """
+
         position = self._state["positions"].get(symbol)
         if not position:
             return
         entry = float(position["entry_price"])
         move = (float(quote.price) - entry) / entry * 100
-        change = quote.change_24h_percent
         reason = None
         if move <= -self.stop_loss_percent:
             reason = "protective_stop_loss"
         elif move >= self.take_profit_percent:
             reason = "protective_take_profit"
-        elif change is not None and change <= self.exit_change_percent:
-            reason = "protective_momentum_exit"
         if reason is None:
             return
         state_before = copy.deepcopy(self._state)
