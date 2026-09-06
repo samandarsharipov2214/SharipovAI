@@ -209,8 +209,7 @@ class SelfLearningSupervisor:
         if not isinstance(opinions, list) or not opinions:
             raise ValueError("decision assessment opinions are missing")
         assessment = payload.get("assessment") if isinstance(payload.get("assessment"), Mapping) else {}
-        evidence_class = str(settlement.get("evidence_class") or "verified_market").strip().lower()
-        verified_market_data = settlement.get("verified_market_data") is True
+        evidence_class, verified_market_data = _require_verified_settlement_evidence(settlement)
         return {
             "outcome_id": f"paper:{decision_id}",
             "decision_id": decision_id,
@@ -234,6 +233,28 @@ _VERIFIED_EVIDENCE_CLASSES = {
     "verified_market_and_news",
 }
 _FORBIDDEN_EVIDENCE_CLASSES = {"synthetic", "fixture", "mock", "demo", "simulation"}
+
+
+def _require_verified_settlement_evidence(settlement: Mapping[str, Any]) -> tuple[str, bool]:
+    """Fail closed: attestation requires an explicit supported verified settlement class.
+
+    Missing, blank, unsupported, synthetic/demo/mock/fixture/simulation, or
+    non-True verified_market_data must not default to a verified class.
+    """
+
+    raw_class = settlement.get("evidence_class") if "evidence_class" in settlement else None
+    if raw_class is None:
+        raise ValueError("settlement evidence_class is required")
+    evidence_class = str(raw_class).strip().lower()
+    if not evidence_class:
+        raise ValueError("settlement evidence_class is required")
+    if evidence_class in _FORBIDDEN_EVIDENCE_CLASSES:
+        raise ValueError(f"synthetic settlement evidence is forbidden: {evidence_class}")
+    if evidence_class not in _VERIFIED_EVIDENCE_CLASSES:
+        raise ValueError(f"unsupported settlement evidence_class: {evidence_class}")
+    if settlement.get("verified_market_data") is not True:
+        raise ValueError("verified market evidence is required")
+    return evidence_class, True
 
 
 def _agents_with_settlement_attestation(
