@@ -98,6 +98,32 @@ for key in (
 PY
 }
 
+# F07: prefer SHA-tagged pinned images; never rebuild with floating deps.
+pinned_image_ref() {
+  local sha="$1"
+  printf 'sharipovai:%s' "${sha:0:12}"
+}
+
+assert_pinned_image_present() {
+  local sha="$1"
+  local ref
+  ref="$(pinned_image_ref "$sha")"
+  docker image inspect "$ref" >/dev/null 2>&1 \
+    || fail "pinned release image $ref is missing; refusing unreproducible rebuild"
+}
+
+redeploy_pinned_release() {
+  local sha="$1"
+  local context="$2"
+  set_build_provenance "$sha"
+  assert_pinned_image_present "$sha"
+  cd "$compose_dir"
+  docker compose config --format json >"$rendered"
+  validate_financial_locks "$rendered"
+  log "reusing pinned image $(pinned_image_ref "$sha") for $context"
+  docker compose up -d --remove-orphans --no-build
+}
+
 compose_dir="$ROOT/deploy/vps"
 target_preflight="$(mktemp)"
 target_compose="$(mktemp "$compose_dir/.phase11-rollback-compose.XXXXXX.yml")"
@@ -113,10 +139,7 @@ restore_original(){
   restore_started=1
   log "rollback target failed: $reason; restoring original $CURRENT_SHA"
   git reset --hard "$CURRENT_SHA"
-  set_build_provenance "$CURRENT_SHA"
-  cd "$compose_dir"
-  docker compose build
-  docker compose up -d --remove-orphans
+  redeploy_pinned_release "$CURRENT_SHA" "restore-original after rejected rollback"
   health_check || fail "original deployment did not recover"
   verify_container_sha "$CURRENT_SHA" || fail "original container SHA did not recover"
   bash smoke_check.sh production || fail "original deployment smoke check failed"
@@ -136,12 +159,9 @@ APP_DIR="$ROOT" COMPOSE_DIR="$compose_dir" bash "$ROOT/deploy/vps/export_backup.
 trap 'restore_original "unexpected error at line ${LINENO}"' ERR
 log "resetting $CURRENT_SHA -> $TARGET_SHA"
 git reset --hard "$TARGET_SHA"
-set_build_provenance "$TARGET_SHA"
-cd "$compose_dir"
-docker compose config --format json >"$rendered"
-validate_financial_locks "$rendered"
-docker compose build
-docker compose up -d --remove-orphans
+# Keep the current SHA image available in case the target image is rejected.
+assert_pinned_image_present "$CURRENT_SHA"
+redeploy_pinned_release "$TARGET_SHA" "exact-SHA rollback"
 health_check || restore_original "health endpoint did not recover"
 verify_container_sha "$TARGET_SHA" || restore_original "container SHA differs from rollback target"
 bash smoke_check.sh production || restore_original "production smoke check failed"

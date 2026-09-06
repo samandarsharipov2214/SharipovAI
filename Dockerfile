@@ -23,9 +23,10 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl git \
     && rm -rf /var/lib/apt/lists/*
 
+# F08: install only deploy-locked exact pins from requirements.txt (no floating ranges,
+# no unbound pip self-upgrade).
 COPY requirements.txt ./
-RUN python -m pip install --upgrade pip \
-    && python -m pip install -r requirements.txt \
+RUN python -m pip install --no-cache-dir -r requirements.txt \
     && python -m pip check
 
 COPY . .

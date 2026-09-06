@@ -107,3 +107,24 @@ def test_initial_install_keeps_live_locked() -> None:
     assert content.index("docker compose config --format json") < content.index(
         "docker compose build --pull"
     )
+
+
+def test_update_rollback_reuses_pinned_image_without_rebuild() -> None:
+    content = _text(UPDATE)
+    assert "redeploy_pinned_release" in content
+    assert "assert_pinned_image_present" in content
+    assert "docker compose up -d --remove-orphans --no-build" in content
+    assert "refusing unreproducible rebuild" in content
+    # Forward deploy may still build; automatic rollback must not.
+    rollback_start = content.index("rollback() {")
+    # Prefer the fetch block that follows rollback(), not the early URL guard.
+    rollback_end = content.index(
+        'if [[ "${FETCH_REMOTE}" == https://github.com/* ]]; then',
+        rollback_start,
+    )
+    rollback = content[rollback_start:rollback_end]
+    assert "docker compose build" not in rollback
+    assert "redeploy_pinned_release" in rollback
+    assert content.index('assert_pinned_image_present "${previous_sha}"') < content.index(
+        "docker compose build --pull"
+    )

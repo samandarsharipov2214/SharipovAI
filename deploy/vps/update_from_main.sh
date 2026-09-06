@@ -106,6 +106,36 @@ for key in (
 PY
 }
 
+# F07: rollback must reuse the previously built SHA-tagged image, never rebuild
+# from mutable base layers / drifting dependency resolution.
+pinned_image_ref() {
+  local sha="$1"
+  printf 'sharipovai:%s' "${sha:0:12}"
+}
+
+assert_pinned_image_present() {
+  local sha="$1"
+  local ref
+  ref="$(pinned_image_ref "${sha}")"
+  docker image inspect "${ref}" >/dev/null 2>&1 \
+    || fail "pinned release image ${ref} is missing; refusing unreproducible rebuild"
+}
+
+redeploy_pinned_release() {
+  local sha="$1"
+  local context="$2"
+  set_build_provenance "${sha}"
+  assert_pinned_image_present "${sha}"
+  cd "${compose_dir}"
+  local rendered
+  rendered="$(mktemp)"
+  docker compose config --format json >"${rendered}"
+  validate_financial_locks "${rendered}"
+  rm -f "${rendered}"
+  log "reusing pinned image $(pinned_image_ref "${sha}") for ${context}"
+  docker compose up -d --remove-orphans --no-build
+}
+
 rollback() {
   local reason="$1"
   trap - ERR
@@ -115,15 +145,7 @@ rollback() {
   rollback_started=1
   log "deployment failed: ${reason}; rolling back to ${previous_sha}"
   git -C "${APP_DIR}" reset --hard "${previous_sha}"
-  set_build_provenance "${previous_sha}"
-  cd "${compose_dir}"
-  local rollback_config
-  rollback_config="$(mktemp)"
-  docker compose config --format json >"${rollback_config}"
-  validate_financial_locks "${rollback_config}"
-  rm -f "${rollback_config}"
-  docker compose build
-  docker compose up -d --remove-orphans
+  redeploy_pinned_release "${previous_sha}" "failed-deploy rollback"
   health_check || fail 'rollback container did not become healthy'
   verify_container_sha "${previous_sha}" || fail 'rollback container SHA is incorrect'
   fail "new deployment was rolled back safely: ${reason}"
@@ -187,6 +209,9 @@ rendered_config="$(mktemp)"
 docker compose config --format json >"${rendered_config}"
 validate_financial_locks "${rendered_config}"
 
+# Preserve the previously running SHA-tagged image so failed deploys can roll
+# back to a pinned artifact instead of rebuilding (F07).
+assert_pinned_image_present "${previous_sha}"
 log 'building the new image with immutable commit provenance'
 docker compose build --pull
 log 'starting the updated services'

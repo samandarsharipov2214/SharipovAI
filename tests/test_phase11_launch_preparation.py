@@ -144,11 +144,14 @@ def test_exact_sha_rollback_is_locked_backed_up_and_self_restoring():
         "EXECUTION_KILL_SWITCH",
         "TESTNET_EXECUTION_ENABLED",
         "restore_original",
-        "docker compose build",
+        "redeploy_pinned_release",
+        "assert_pinned_image_present",
+        "--no-build",
         "smoke_check.sh production",
         "/api/health",
     )
     assert all(token in script for token in required)
+    assert "docker compose build" not in script
     assert 'git reset --hard "$TARGET_SHA"' in script
     assert 'git show "$TARGET_SHA:deploy/vps/export_backup.sh"' not in script
     assert 'bash "$ROOT/deploy/vps/export_backup.sh"' in script
