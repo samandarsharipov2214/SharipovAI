@@ -21,7 +21,11 @@ def _agent() -> SourceAgent:
     )
 
 
-def _article(*, title: str = "Bitcoin market update") -> NewsArticle:
+def _article(
+    *,
+    title: str = "Bitcoin market update",
+    summary: str = "Verified market update.",
+) -> NewsArticle:
     return NewsArticle(
         article_id="article-1",
         title=title,
@@ -29,7 +33,7 @@ def _article(*, title: str = "Bitcoin market update") -> NewsArticle:
         category="crypto_news",
         published_at="2026-08-04T20:00:00+00:00",
         link="https://example.test/article-1",
-        summary="Verified market update.",
+        summary=summary,
         language="en",
         source_type="rss",
     )
@@ -62,6 +66,23 @@ def test_repeat_fetch_timestamps_are_duplicate_not_conflict(tmp_path) -> None:
     assert repeated.accepted == 0
     assert repeated.duplicates == 1
     assert len(database.get_json("news_memory", "article-1")["value"]["article"]) > 0
+
+
+def test_provider_summary_edit_preserves_original_and_does_not_abort_cycle(tmp_path) -> None:
+    database = ProjectDatabase(f"sqlite:///{tmp_path / 'project.db'}")
+    database.initialize()
+    hub = NewsHub(database=database)
+    original = _article(summary="Original provider summary.")
+    edited = _article(summary="Provider-edited summary for the same article identity.")
+
+    assert hub.ingest(_agent(), [original], _fetch(1_000, 1_100)).accepted == 1
+    repeated = hub.ingest(_agent(), [edited], _fetch(2_000, 2_100))
+
+    assert repeated.accepted == 0
+    assert repeated.duplicates == 1
+    stored = database.get_json("news_article_evidence", "article-1")
+    assert stored is not None
+    assert stored["value"]["summary"] == "Original provider summary."
 
 
 def test_material_article_change_with_same_id_is_conflict(tmp_path) -> None:
