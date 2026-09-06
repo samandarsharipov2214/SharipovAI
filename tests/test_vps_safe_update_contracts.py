@@ -111,8 +111,9 @@ def test_initial_install_keeps_live_locked() -> None:
 
 def test_update_rollback_reuses_pinned_image_without_rebuild() -> None:
     content = _text(UPDATE)
-    assert "redeploy_pinned_release" in content
-    assert "assert_pinned_image_present" in content
+    assert "redeploy_retained_release" in content or "redeploy_pinned_release" in content
+    assert "retain_running_image_for_rollback" in content
+    assert "assert_retained_rollback_image" in content
     assert "docker compose up -d --remove-orphans --no-build" in content
     assert "refusing unreproducible rebuild" in content
     # Forward deploy may still build; automatic rollback must not.
@@ -124,7 +125,7 @@ def test_update_rollback_reuses_pinned_image_without_rebuild() -> None:
     )
     rollback = content[rollback_start:rollback_end]
     assert "docker compose build" not in rollback
-    assert "redeploy_pinned_release" in rollback
-    assert content.index('assert_pinned_image_present "${previous_sha}"') < content.index(
+    assert "redeploy_retained_release" in rollback or "redeploy_pinned_release" in rollback
+    assert content.index('retain_running_image_for_rollback "${previous_sha}"') < content.index(
         "docker compose build --pull"
     )

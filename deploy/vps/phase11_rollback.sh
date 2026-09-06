@@ -98,31 +98,71 @@ for key in (
 PY
 }
 
-# F07: prefer SHA-tagged pinned images; never rebuild with floating deps.
-pinned_image_ref() {
+# F07: source of truth is running container image ID + OCI revision label.
+# Do not assume sharipovai:<sha12> already exists (production uses deploy-* tags).
+# Retain the verified current image under that deterministic rollback reference;
+# rollback / restore must reuse retained artifacts with --no-build (never rebuild).
+rollback_image_ref() {
   local sha="$1"
   printf 'sharipovai:%s' "${sha:0:12}"
 }
 
-assert_pinned_image_present() {
-  local sha="$1"
-  local ref
-  ref="$(pinned_image_ref "$sha")"
-  docker image inspect "$ref" >/dev/null 2>&1 \
-    || fail "pinned release image $ref is missing; refusing unreproducible rebuild"
+running_container_image_id() {
+  local image_id
+  image_id="$(docker inspect -f '{{.Image}}' sharipovai 2>/dev/null || true)"
+  [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
+  printf '%s\n' "$image_id"
 }
 
-redeploy_pinned_release() {
+image_oci_revision() {
+  local ref="$1"
+  docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$ref" 2>/dev/null || true
+}
+
+retain_running_image_for_rollback() {
+  local expected_sha="$1"
+  local image_id revision ref
+  image_id="$(running_container_image_id)" \
+    || fail "cannot resolve running container image ID; refusing unreproducible rebuild"
+  revision="$(image_oci_revision "$image_id")"
+  [[ "$revision" == "$expected_sha" ]] \
+    || fail "running image OCI revision mismatch: expected $expected_sha, got ${revision:-missing}; refusing unreproducible rebuild"
+  ref="$(rollback_image_ref "$expected_sha")"
+  docker tag "$image_id" "$ref" \
+    || fail "failed to retain running image $image_id as $ref"
+  revision="$(image_oci_revision "$ref")"
+  [[ "$revision" == "$expected_sha" ]] \
+    || fail "retained rollback image $ref has wrong OCI revision; refusing unreproducible rebuild"
+  log "retained running image $image_id as $ref (OCI revision verified)"
+}
+
+assert_retained_rollback_image() {
+  local sha="$1"
+  local ref revision
+  ref="$(rollback_image_ref "$sha")"
+  docker image inspect "$ref" >/dev/null 2>&1 \
+    || fail "retained rollback image $ref is missing; refusing unreproducible rebuild"
+  revision="$(image_oci_revision "$ref")"
+  [[ "$revision" == "$sha" ]] \
+    || fail "retained rollback image $ref has wrong OCI revision (${revision:-missing}); refusing unreproducible rebuild"
+}
+
+pinned_image_ref() { rollback_image_ref "$1"; }
+assert_pinned_image_present() { assert_retained_rollback_image "$1"; }
+
+redeploy_retained_release() {
   local sha="$1"
   local context="$2"
   set_build_provenance "$sha"
-  assert_pinned_image_present "$sha"
+  assert_retained_rollback_image "$sha"
   cd "$compose_dir"
   docker compose config --format json >"$rendered"
   validate_financial_locks "$rendered"
-  log "reusing pinned image $(pinned_image_ref "$sha") for $context"
+  log "reusing retained image $(rollback_image_ref "$sha") for $context (--no-build)"
   docker compose up -d --remove-orphans --no-build
 }
+
+redeploy_pinned_release() { redeploy_retained_release "$1" "$2"; }
 
 compose_dir="$ROOT/deploy/vps"
 target_preflight="$(mktemp)"
@@ -156,12 +196,16 @@ APP_DIR="$ROOT" COMPOSE_DIR="$compose_dir" PHASE7_COMPOSE_FILE="$target_compose"
 log "creating verified backup with the current trusted exporter"
 APP_DIR="$ROOT" COMPOSE_DIR="$compose_dir" bash "$ROOT/deploy/vps/export_backup.sh"
 
+# Retain the currently running image under the deterministic rollback ref before
+# mutating git / compose state. Target must already be a retained artifact.
+retain_running_image_for_rollback "$CURRENT_SHA"
+assert_retained_rollback_image "$CURRENT_SHA"
+assert_retained_rollback_image "$TARGET_SHA"
+
 trap 'restore_original "unexpected error at line ${LINENO}"' ERR
 log "resetting $CURRENT_SHA -> $TARGET_SHA"
 git reset --hard "$TARGET_SHA"
-# Keep the current SHA image available in case the target image is rejected.
-assert_pinned_image_present "$CURRENT_SHA"
-redeploy_pinned_release "$TARGET_SHA" "exact-SHA rollback"
+redeploy_retained_release "$TARGET_SHA" "exact-SHA rollback"
 health_check || restore_original "health endpoint did not recover"
 verify_container_sha "$TARGET_SHA" || restore_original "container SHA differs from rollback target"
 bash smoke_check.sh production || restore_original "production smoke check failed"
