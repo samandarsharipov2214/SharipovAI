@@ -269,10 +269,12 @@ def _same_article_evidence(existing: Any, candidate: Any) -> bool:
         "category",
         "published_at",
         "link",
-        "summary",
         "language",
         "source_type",
     )
+    # RSS providers may edit the description after publishing without changing
+    # the article identity. Keep the first persisted summary as immutable
+    # evidence, but do not let a presentation-only edit abort the whole cycle.
     return all(str(existing_article.get(field, "")) == str(candidate_article.get(field, "")) for field in immutable_fields)
 
 
