@@ -14,6 +14,31 @@ from dashboard.system_health_api import SystemHealthCenter
 from observability.metrics import _bounded_path, observe_http
 
 
+def _http_path_label_counts():
+    from observability.metrics import HTTP_REQUESTS
+
+    counts: dict[str, float] = {}
+    for metric in HTTP_REQUESTS.collect():
+        for sample in metric.samples:
+            if not sample.name.endswith("_total"):
+                continue
+            path = sample.labels.get("path")
+            if path is None:
+                continue
+            counts[path] = counts.get(path, 0.0) + float(sample.value)
+    return counts
+
+
+def _http_path_label_deltas(before: dict[str, float], after: dict[str, float]) -> dict[str, float]:
+    keys = set(before) | set(after)
+    return {
+        key: after.get(key, 0.0) - before.get(key, 0.0)
+        for key in keys
+        if after.get(key, 0.0) - before.get(key, 0.0) > 0
+    }
+
+
+
 def test_f16_release_status_reports_effective_auth_when_env_bypass_is_ignored(monkeypatch) -> None:
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.setenv("SHARIPOVAI_DISABLE_AUTH", "1")
@@ -187,8 +212,57 @@ def test_f04_http_path_labels_collapse_crypto_symbols_and_ids() -> None:
         _bounded_path("/api/items/550e8400-e29b-41d4-a716-446655440000")
         == "/api/items/:id"
     )
-    # Static routes remain intact.
+    # Static routes / templates remain intact.
     assert _bounded_path("/api/release/status") == "/api/release/status"
+    assert _bounded_path("/api/foo/{customer_id}") == "/api/foo/{customer_id}"
+    assert _bounded_path("/unmatched") == "/unmatched"
 
     observe_http(method="GET", path="/api/market/quote/SOLUSDT", status_code=200, duration_seconds=0.01)
     observe_http(method="GET", path="/api/market/quote/DOGEUSDT", status_code=200, duration_seconds=0.02)
+
+
+def test_f04_arbitrary_dynamic_segments_do_not_explode_path_labels() -> None:
+    """Regex for uuid/numeric/crypto is not enough — opaque segments must collapse."""
+    paths = [
+        "/api/foo/customer-alice-random-1",
+        "/api/foo/customer-bob-random-2",
+        "/api/foo/customer-charlie-random-3",
+    ]
+    labels = [_bounded_path(path) for path in paths]
+    assert labels == ["/api/foo/:id", "/api/foo/:id", "/api/foo/:id"]
+    assert len(set(labels)) == 1
+
+    before = _http_path_label_counts()
+    for path in paths:
+        observe_http(method="GET", path=path, status_code=200, duration_seconds=0.01)
+    delta = _http_path_label_deltas(before, _http_path_label_counts())
+    assert delta == {"/api/foo/:id": 3.0}
+    assert not any("customer-" in key for key in delta)
+
+
+def test_f04_middleware_uses_route_template_not_raw_url() -> None:
+    from dashboard.observability import install_observability
+
+    app = FastAPI()
+
+    @app.get("/api/foo/{customer_id}")
+    def foo(customer_id: str):
+        return {"customer_id": customer_id}
+
+    install_observability(app)
+
+    before = _http_path_label_counts()
+    with TestClient(app) as client:
+        for name in (
+            "customer-alice-random-1",
+            "customer-bob-random-2",
+            "customer-charlie-random-3",
+        ):
+            assert client.get(f"/api/foo/{name}").status_code == 200
+        assert client.get("/no-such-f04-route").status_code == 404
+
+    delta = _http_path_label_deltas(before, _http_path_label_counts())
+    assert delta.get("/api/foo/{customer_id}") == 3.0
+    assert delta.get("/unmatched") == 1.0
+    assert not any("customer-" in key for key in delta)
+    assert not any(key.endswith("random-1") for key in delta)

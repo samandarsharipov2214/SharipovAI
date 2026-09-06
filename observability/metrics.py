@@ -53,6 +53,12 @@ HISTORICAL_DATA_ROWS = Gauge(
 
 
 def observe_http(*, method: str, path: str, status_code: int, duration_seconds: float) -> None:
+    """Record HTTP metrics.
+
+    ``path`` must be a canonical route template (e.g. ``/api/foo/{id}``) or the
+    fixed fallback ``/unmatched``. Never pass a raw request URL; ``_bounded_path``
+    still collapses residual dynamic segments as defense in depth.
+    """
     clean_path = _bounded_path(path)
     HTTP_REQUESTS.labels(
         method=str(method).upper(),
@@ -122,6 +128,8 @@ def _number(value: Any, default: float = 0.0) -> float:
     return number if math.isfinite(number) else default
 
 
+# Explicit dynamic ids (uuid / numeric / crypto). Defense in depth when a caller
+# still passes a raw URL instead of a FastAPI/Starlette route template.
 _DYNAMIC_SEGMENT = re.compile(
     r"(?i)^(?:"
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"  # uuid
@@ -130,24 +138,48 @@ _DYNAMIC_SEGMENT = re.compile(
     r"|[a-z0-9._-]{2,32}(?:usdt|usd|btc|eth|busd|usdc)"  # crypto pairs / symbols
     r")$"
 )
+# Safe static vocabulary for raw-path fallback only. Anything else (including
+# arbitrary user-controlled segments like customer-alice-random-1) collapses.
+_SAFE_STATIC_SEGMENT = re.compile(r"^[a-z][a-z0-9_]{0,48}$")
+_TEMPLATE_SEGMENT = re.compile(r"^\{[^{}]{1,64}\}$")
+_UNMATCHED_ROUTE_LABEL = "/unmatched"
 
 
 def _bounded_path(path: str) -> str:
-    """Collapse high-cardinality path segments (ids, crypto symbols) into :id."""
-    value = str(path or "/")
+    """Bound HTTP path labels for Prometheus.
+
+    Preferred input is a FastAPI/Starlette route template (e.g. /api/foo/{id})
+    or the fixed fallback /unmatched. Raw request URLs are never safe labels;
+    unknown/dynamic segments collapse to :id so cardinality cannot explode.
+    """
+    value = str(path or "/").strip() or "/"
+    if value in {_UNMATCHED_ROUTE_LABEL, "unknown", "/unknown"}:
+        return _UNMATCHED_ROUTE_LABEL
     parts: list[str] = []
     for segment in value.split("/"):
         if segment == "":
             parts.append(segment)
             continue
-        if _DYNAMIC_SEGMENT.fullmatch(segment):
-            parts.append(":id")
-        else:
+        if _TEMPLATE_SEGMENT.fullmatch(segment):
             parts.append(segment[:64])
+        elif _DYNAMIC_SEGMENT.fullmatch(segment):
+            parts.append(":id")
+        elif _SAFE_STATIC_SEGMENT.fullmatch(segment):
+            parts.append(segment[:64])
+        else:
+            # Arbitrary / user-controlled / mixed-case dynamic segment.
+            parts.append(":id")
     normalized = "/".join(parts) or "/"
     if not normalized.startswith("/"):
         normalized = "/" + normalized
     return normalized[:200]
+
+
+def resolve_http_route_label(route_path: str | None) -> str:
+    """Return a Prometheus-safe route label from a matched route template."""
+    if not route_path:
+        return _UNMATCHED_ROUTE_LABEL
+    return _bounded_path(str(route_path))
 
 
 
@@ -163,5 +195,6 @@ __all__ = [
     "record_backtest_failure",
     "record_backtest_result",
     "record_dataset_validation",
+    "resolve_http_route_label",
     "update_runtime_metrics",
 ]
