@@ -49,3 +49,45 @@ def test_prometheus_endpoint_is_scrapeable_in_local_mode(monkeypatch) -> None:
     assert response.status_code == 200
     assert "text/plain" in response.headers["content-type"]
     assert "sharipovai_http_requests_total" in response.text
+
+def test_http_path_labels_bound_crypto_cardinality() -> None:
+    from observability.metrics import _bounded_label, _bounded_path, observe_http
+
+    assert _bounded_path("/api/market/quote/BTCUSDT") == "/api/market/quote/:id"
+    assert _bounded_path("/api/market/candles/ethusdt") == "/api/market/candles/:id"
+    assert _bounded_path("/api/users/42/profile") == "/api/users/:id/profile"
+    assert (
+        _bounded_path("/api/items/550e8400-e29b-41d4-a716-446655440000")
+        == "/api/items/:id"
+    )
+    assert _bounded_path("/api/release/status") == "/api/release/status"
+    assert _bounded_label("dataset/../raw id!") == "dataset_.._raw_id"
+    assert _bounded_label("   ") == "unknown"
+
+    observe_http(
+        method="GET",
+        path="/api/market/quote/SOLUSDT",
+        status_code=200,
+        duration_seconds=0.01,
+    )
+    observe_http(
+        method="GET",
+        path="/api/market/quote/DOGEUSDT",
+        status_code=200,
+        duration_seconds=0.02,
+    )
+
+
+def test_dataset_validation_metric_labels_are_sanitized() -> None:
+    from types import SimpleNamespace
+
+    from observability.metrics import record_dataset_validation
+
+    record_dataset_validation(
+        SimpleNamespace(
+            dataset_id="hist/../BTCUSDT candles!",
+            valid=True,
+            row_count=12,
+        )
+    )
+
