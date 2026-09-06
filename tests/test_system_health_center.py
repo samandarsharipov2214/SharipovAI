@@ -23,7 +23,19 @@ class FakeDatabase:
 
 class FakeMonitor:
     def snapshot(self) -> dict[str, object]:
-        return {"status": "healthy", "organ_count": 9, "monitor_running": True}
+        return {
+            "status": "healthy",
+            "organ_count": 9,
+            "monitor_running": True,
+            "organs": [
+                {
+                    "organ_id": "learning_engine",
+                    "status": "healthy",
+                    "evidence": ["self_learning_disabled_by_policy"],
+                    "blockers": [],
+                }
+            ],
+        }
 
 
 class FakeMarket:
@@ -79,7 +91,7 @@ def test_health_center_reports_healthy_runtime_without_request_path_writes(
     assert snapshot["automatic_financial_recovery"] is False
     assert snapshot["automatic_failover"] is False
     assert snapshot["request_path_persistence"] is False
-    assert snapshot["counts"] == {"healthy": 8, "degraded": 0, "blocked": 0}
+    assert snapshot["counts"] == {"healthy": 9, "degraded": 0, "blocked": 0}
     assert app.state.project_database.saved == {}
 
 

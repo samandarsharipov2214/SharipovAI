@@ -79,7 +79,9 @@ def readiness_status(database: ProjectDatabase) -> dict[str, Any]:
         "configuration": {
             "status": "ok" if not missing else "error",
             "missing": missing,
-            "auth_enabled": os.getenv("SHARIPOVAI_DISABLE_AUTH", "0").strip().lower() not in {"1", "true", "yes", "on"},
+            "auth_enabled": _effective_auth_enabled(),
+            "auth_enforced": _effective_auth_enabled(),
+            "disable_auth_env": os.getenv("SHARIPOVAI_DISABLE_AUTH", "0").strip().lower() in {"1", "true", "yes", "on"},
             "kill_switch": os.getenv("EXECUTION_KILL_SWITCH", "1").strip().lower() in {"1", "true", "yes", "on"},
             "testnet_execution_enabled": os.getenv("TESTNET_EXECUTION_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"},
             "live_execution_enabled": os.getenv("EXCHANGE_LIVE_TRADING_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"},

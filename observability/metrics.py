@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import re
 from typing import Any, Mapping
 
 from prometheus_client import Counter, Gauge, Histogram
@@ -106,7 +107,7 @@ def record_backtest_failure() -> None:
 
 
 def record_dataset_validation(report: Any) -> None:
-    dataset_id = str(getattr(report, "dataset_id", "unknown") or "unknown")[:128]
+    dataset_id = _bounded_label(str(getattr(report, "dataset_id", "unknown") or "unknown"))
     valid = bool(getattr(report, "valid", False))
     rows = _number(getattr(report, "row_count", 0))
     HISTORICAL_DATA_VALID.labels(dataset_id=dataset_id).set(1 if valid else 0)
@@ -121,9 +122,40 @@ def _number(value: Any, default: float = 0.0) -> float:
     return number if math.isfinite(number) else default
 
 
+_DYNAMIC_SEGMENT = re.compile(
+    r"(?i)^(?:"
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"  # uuid
+    r"|[0-9a-f]{16,}"  # long hex ids
+    r"|[0-9]{2,}"  # numeric ids
+    r"|[a-z0-9._-]{2,32}(?:usdt|usd|btc|eth|busd|usdc)"  # crypto pairs / symbols
+    r")$"
+)
+
+
 def _bounded_path(path: str) -> str:
+    """Collapse high-cardinality path segments (ids, crypto symbols) into :id."""
     value = str(path or "/")
-    return value[:200]
+    parts: list[str] = []
+    for segment in value.split("/"):
+        if segment == "":
+            parts.append(segment)
+            continue
+        if _DYNAMIC_SEGMENT.fullmatch(segment):
+            parts.append(":id")
+        else:
+            parts.append(segment[:64])
+    normalized = "/".join(parts) or "/"
+    if not normalized.startswith("/"):
+        normalized = "/" + normalized
+    return normalized[:200]
+
+
+
+def _bounded_label(value: str, *, limit: int = 64) -> str:
+    clean = re.sub(r"[^a-zA-Z0-9._:-]+", "_", str(value or "unknown")).strip("._:-")
+    if not clean:
+        return "unknown"
+    return clean[:limit]
 
 
 __all__ = [

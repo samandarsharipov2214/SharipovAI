@@ -228,10 +228,22 @@ def _install_auth_entrypoints(app_instance: FastAPI) -> None:
 
     @app_instance.get("/api/security/status")
     def security_status(request: Request) -> dict[str, Any]:
+        from .global_auth_guard import auth_disabled
+
+        bypass_requested = os.getenv("SHARIPOVAI_DISABLE_AUTH", "0").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        auth_enabled = not auth_disabled()
         return {
             "status": "ok",
             "authenticated": bool(_session_username(request)),
             "production": _is_production(),
+            "auth_enabled": auth_enabled,
+            "auth_enforced": auth_enabled,
+            "disable_auth_env": bypass_requested,
             "auth_secret_configured": bool(os.getenv("AUTH_SECRET", "").strip()),
             "persistent_data_dir": str(_data_dir()),
         }
