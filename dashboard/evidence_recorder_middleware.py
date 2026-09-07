@@ -19,6 +19,8 @@ RECORDED_ENDPOINTS = {"/api/run", "/api/trade-gate"}
 ADMIN_ONLY_PREFIXES = ("/api/security/access-requests",)
 LOGIN_WINDOW_SECONDS = 15 * 60
 LOGIN_MAX_FAILURES = int(os.getenv("LOGIN_MAX_FAILURES", "8"))
+# Form POST /login and JSON POST /api/auth/login share one fail-closed IP throttle.
+LOGIN_THROTTLE_PATHS = frozenset({"/login", "/api/auth/login"})
 _LOGIN_FAILURES: dict[str, list[float]] = {}
 
 
@@ -68,10 +70,15 @@ def install_evidence_recorder_middleware(app_instance: Any) -> None:
     app_instance.add_middleware(EvidenceRecorderMiddleware)
 
 
+def _is_login_throttle_path(path: str) -> bool:
+    """True for form and JSON login endpoints that share the same IP throttle."""
+    return path in LOGIN_THROTTLE_PATHS
+
+
 def _preflight_block(request: Request) -> JSONResponse | None:
     path = request.url.path
     ip = request.client.host if request.client else "unknown"
-    if request.method == "POST" and path == "/login" and _too_many_login_failures(ip):
+    if request.method == "POST" and _is_login_throttle_path(path) and _too_many_login_failures(ip):
         return JSONResponse(status_code=429, content={"status": "rate_limited", "retry_after_seconds": LOGIN_WINDOW_SECONDS})
     if any(path.startswith(prefix) for prefix in ADMIN_ONLY_PREFIXES) and not _is_admin(request):
         return JSONResponse(status_code=403, content={"status": "forbidden", "detail": "admin_required"})
@@ -115,7 +122,7 @@ def _too_many_login_failures(ip: str) -> bool:
 
 
 def _update_login_throttle(request: Request, status_code: int) -> None:
-    if request.method != "POST" or request.url.path != "/login":
+    if request.method != "POST" or not _is_login_throttle_path(request.url.path):
         return
     ip = request.client.host if request.client else "unknown"
     if status_code == 401:
