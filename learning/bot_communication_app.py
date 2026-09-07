@@ -38,19 +38,6 @@ def _retired_mutation() -> None:
     )
 
 
-def _redact_provenance(value: Any) -> Any:
-    """Redact authenticated actor identity from unauthenticated standalone reads."""
-
-    if isinstance(value, dict):
-        return {
-            key: "[redacted]" if key == "requested_by" else _redact_provenance(item)
-            for key, item in value.items()
-        }
-    if isinstance(value, list):
-        return [_redact_provenance(item) for item in value]
-    return value
-
-
 @app.get("/api/bot-network/health")
 def health_api() -> dict[str, Any]:
     health = network().health()
@@ -78,20 +65,31 @@ def consensus_api() -> None:
     _retired_mutation()
 
 
+def _mailbox_ownership_unproven() -> None:
+    """Standalone reads cannot prove tenant/owner authorization; fail closed."""
+
+    raise HTTPException(
+        status_code=401,
+        detail={
+            "status": "unauthorized",
+            "message": "Bot mailbox reads require authenticated owner authorization via the canonical dashboard API.",
+        },
+    )
+
+
 @app.get("/api/bot-network/inbox/{bot_name}")
 def inbox_api(bot_name: str, unread_only: bool = False) -> dict[str, Any]:
-    messages = network().inbox(bot_name, unread_only=unread_only)
-    return {"status": "ok", "bot": bot_name, "messages": _redact_provenance(messages)}
+    _mailbox_ownership_unproven()
 
 
 @app.get("/api/bot-network/outbox/{bot_name}")
 def outbox_api(bot_name: str) -> dict[str, Any]:
-    return {"status": "ok", "bot": bot_name, "messages": _redact_provenance(network().outbox(bot_name))}
+    _mailbox_ownership_unproven()
 
 
 @app.get("/api/bot-network/threads/{thread_id}")
 def thread_api(thread_id: str) -> dict[str, Any]:
-    return _redact_provenance(network().thread(thread_id))
+    _mailbox_ownership_unproven()
 
 
 @app.post("/api/bot-network/messages/{message_id}/read")

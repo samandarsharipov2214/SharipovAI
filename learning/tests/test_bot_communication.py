@@ -170,8 +170,8 @@ def test_bot_communication_api(tmp_path, monkeypatch) -> None:
     assert sent.json()["detail"]["status"] == "standalone_mutations_retired"
 
     inbox = client.get("/api/bot-network/inbox/risk_engine?unread_only=true")
-    assert inbox.status_code == 200
-    assert inbox.json()["messages"] == []
+    assert inbox.status_code == 401
+    assert inbox.json()["detail"]["status"] == "unauthorized"
 
     page = client.get("/bot-network")
     assert page.status_code == 200
