@@ -33,6 +33,8 @@ def test_release_status_reports_exact_sha_and_fail_closed_flags(monkeypatch) -> 
         "build_date": "2026-07-24T12:00:00Z",
         "environment": "production",
         "auth_enabled": True,
+        "auth_enforced": True,
+        "disable_auth_env": False,
         "database_required": True,
         "exchange_mode": "sandbox",
         "mainnet_execution_compiled": False,

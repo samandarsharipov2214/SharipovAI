@@ -442,7 +442,7 @@ def test_standalone_bot_network_mutations_are_retired(monkeypatch: pytest.Monkey
     assert network.marked_read is None
 
 
-def test_standalone_reads_redact_authenticated_actor_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_standalone_mailbox_reads_fail_closed_without_owner_auth(monkeypatch: pytest.MonkeyPatch) -> None:
     network = _FakeNetwork()
     message = {
         "message_id": "MSG-1",
@@ -467,9 +467,7 @@ def test_standalone_reads_redact_authenticated_actor_identity(monkeypatch: pytes
         "/api/bot-network/threads/THR-1",
     ):
         response = client.get(path)
-        assert response.status_code == 200
-        body = response.json()
+        assert response.status_code == 401, path
+        assert response.json()["detail"]["status"] == "unauthorized"
         assert "admin@example.test" not in response.text
         assert "legacy-owner" not in response.text
-        assert "[redacted]" in response.text
-        assert body

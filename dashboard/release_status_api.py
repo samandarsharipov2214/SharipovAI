@@ -26,12 +26,20 @@ def _release_sha() -> str:
 def release_status() -> dict[str, Any]:
     """Return only public deployment provenance and fail-closed safety state."""
 
+    from dashboard.global_auth_guard import auth_disabled
+
+    bypass_requested = _flag("SHARIPOVAI_DISABLE_AUTH")
+    # Report effective enforcement, not the raw env bit. Production ignores
+    # SHARIPOVAI_DISABLE_AUTH=1, so claiming "auth disabled" would be a lie.
+    auth_enabled = not auth_disabled()
     return {
         "status": "ok",
         "release_sha": _release_sha(),
         "build_date": os.getenv("SHARIPOVAI_BUILD_DATE", "unknown").strip() or "unknown",
         "environment": os.getenv("ENVIRONMENT", "unknown").strip().lower() or "unknown",
-        "auth_enabled": not _flag("SHARIPOVAI_DISABLE_AUTH"),
+        "auth_enabled": auth_enabled,
+        "auth_enforced": auth_enabled,
+        "disable_auth_env": bypass_requested,
         "database_required": _flag("SHARIPOVAI_DATABASE_REQUIRED", "1"),
         "exchange_mode": os.getenv("EXCHANGE_MODE", "sandbox").strip().lower(),
         "mainnet_execution_compiled": bool(MAINNET_EXECUTION_COMPILED),

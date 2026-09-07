@@ -44,6 +44,7 @@ class SystemHealthCenter:
         components = [
             self._database(),
             self._ai_organs(),
+            self._learning(),
             self._market(),
             self._news(),
             self._telegram(),
@@ -90,7 +91,47 @@ class SystemHealthCenter:
         blockers = [] if status == "healthy" else [f"AI organs status={status}"]
         if "monitor_running" in snapshot and snapshot.get("monitor_running") is False:
             blockers.append("AI organ heartbeat thread is not running")
+        learning = _learning_organ(snapshot)
+        if learning is not None and str(learning.get("status", "blocked")) != "healthy":
+            blockers.append(
+                f"learning_engine status={learning.get('status', 'blocked')}"
+            )
         return _component("ai_organs", [f"organ_count={snapshot.get('organ_count', 0)}", f"status={status}"], blockers, ["inspect /api/system/ai-organs"] if blockers else [])
+
+    def _learning(self) -> ComponentHealth:
+        """Surface Learning degradation in aggregate health counts (F17)."""
+        monitor = getattr(self.app.state, "ai_organ_runtime_monitor", None)
+        if monitor is None:
+            return _component(
+                "learning",
+                [],
+                ["learning organ monitor is absent"],
+                ["install existing AI organ monitor"],
+            )
+        try:
+            snapshot = monitor.snapshot()
+        except Exception as exc:
+            return _component(
+                "learning",
+                [],
+                [f"learning organ probe failed: {type(exc).__name__}: {exc}"],
+                ["refresh AI organ monitor"],
+            )
+        learning = _learning_organ(snapshot)
+        if learning is None:
+            return _component(
+                "learning",
+                [],
+                ["learning_engine organ evidence is missing"],
+                ["inspect /api/system/ai-organs"],
+            )
+        evidence = [str(item) for item in learning.get("evidence", [])][:8]
+        blockers = [str(item) for item in learning.get("blockers", [])]
+        status = str(learning.get("status", "blocked"))
+        if status != "healthy" and not blockers:
+            blockers.append(f"learning_engine status={status}")
+        recovery = ["inspect learning_engine via /api/system/ai-organs"] if blockers else []
+        return _component("learning", evidence, blockers, recovery)
 
     def _market(self) -> ComponentHealth:
         worker = getattr(self.app.state, "bybit_websocket_worker", None)
@@ -236,6 +277,16 @@ def install_system_health_api(app: FastAPI) -> None:
             "automatic_failover": False,
             "actions": actions,
         }
+
+
+def _learning_organ(snapshot: dict[str, Any]) -> dict[str, Any] | None:
+    organs = snapshot.get("organs")
+    if not isinstance(organs, list):
+        return None
+    for item in organs:
+        if isinstance(item, dict) and str(item.get("organ_id", "")) == "learning_engine":
+            return item
+    return None
 
 
 def _component(name: str, evidence: list[str], blockers: list[str], recovery: list[str]) -> ComponentHealth:

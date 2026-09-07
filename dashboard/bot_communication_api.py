@@ -110,6 +110,19 @@ def _privileged_command_result(
     }
 
 
+def _require_bot_mailbox_owner(request: Request) -> str:
+    """Require an authenticated owner/admin before reading shared bot mailboxes.
+
+    The bot communication bus is a shared deployment surface. Ownership cannot be
+    proven for anonymous callers or non-admin tenants, so access fails closed.
+    Explicit ``SHARIPOVAI_DISABLE_AUTH`` keeps local/CI harnesses usable.
+    """
+
+    if auth_disabled():
+        return "development"
+    return require_admin(request)
+
+
 def install_bot_communication_api(app: FastAPI) -> None:
     if getattr(app.state, "bot_communication_api_installed", False):
         return
@@ -309,17 +322,20 @@ def install_bot_communication_api(app: FastAPI) -> None:
         }
 
     @app.get("/api/bot-network/inbox/{bot_name}")
-    def inbox_api(bot_name: str, unread_only: bool = False) -> dict[str, Any]:
+    def inbox_api(bot_name: str, request: Request, unread_only: bool = False) -> dict[str, Any]:
+        _require_bot_mailbox_owner(request)
         bot = _chat_bot(bot_name)
         return {"status": "ok", "bot": bot, "messages": network().inbox(bot, unread_only=unread_only)}
 
     @app.get("/api/bot-network/outbox/{bot_name}")
-    def outbox_api(bot_name: str) -> dict[str, Any]:
+    def outbox_api(bot_name: str, request: Request) -> dict[str, Any]:
+        _require_bot_mailbox_owner(request)
         bot = _chat_bot(bot_name)
         return {"status": "ok", "bot": bot, "messages": network().outbox(bot)}
 
     @app.get("/api/bot-network/threads/{thread_id}")
-    def thread_api(thread_id: str) -> dict[str, Any]:
+    def thread_api(thread_id: str, request: Request) -> dict[str, Any]:
+        _require_bot_mailbox_owner(request)
         return network().thread(thread_id)
 
     @app.get("/api/bot-network/agent/{bot_name}/timeline")
