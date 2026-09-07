@@ -46,9 +46,7 @@ cat > "$TIMER" <<'EOF'
 Description=Run SharipovAI verified backup at least once per hour
 
 [Timer]
-OnBootSec=5min
 OnCalendar=hourly
-OnUnitActiveSec=45min
 AccuracySec=30s
 RandomizedDelaySec=0
 Persistent=true

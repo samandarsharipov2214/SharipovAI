@@ -13,7 +13,8 @@ def test_backup_timer_targets_production_repo_and_runs_at_least_hourly() -> None
 
     assert "APP_DIR=${APP_DIR:-/opt/sharipovai-repo}" in source
     assert "OnCalendar=hourly" in source
-    assert "OnUnitActiveSec=45min" in source
+    assert "OnUnitActiveSec=" not in source
+    assert "OnBootSec=" not in source
     assert "Persistent=true" in source
     assert "AccuracySec=30s" in source
     assert "RandomizedDelaySec=0" in source
