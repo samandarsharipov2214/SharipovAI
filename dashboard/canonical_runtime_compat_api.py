@@ -191,15 +191,34 @@ def _safety_state() -> dict[str, Any]:
     }
 
 
+def _learning_organ_status(organs: dict[str, Any]) -> str | None:
+    """Return Learning status when present; None when snapshot does not evaluate it."""
+    rows = organs.get("organs")
+    if not isinstance(rows, list):
+        return None
+    for item in rows:
+        if isinstance(item, dict) and str(item.get("organ_id", "")) == "learning_engine":
+            return str(item.get("status") or "unavailable").lower()
+    # Full nine-organ snapshots must include Learning; partial test doubles may omit it.
+    if int(organs.get("organ_count") or 0) >= 9 or len(rows) >= 9:
+        return "unavailable"
+    return None
+
+
 def _runtime_truth(app: FastAPI) -> dict[str, Any]:
     paper = _canonical_payload(app, limit=200)
     organs = _organ_snapshot(app)
     safety = _safety_state()
     organ_status = str(organs.get("status") or "unavailable").lower()
+    learning_status = _learning_organ_status(organs)
     paper_summary = paper["summary"]
-    if safety["status"] != "locked" or organ_status == "blocked":
+    if safety["status"] != "locked" or organ_status == "blocked" or learning_status == "blocked":
         status = "blocked"
-    elif organ_status in {"degraded", "unavailable"} or not paper_summary.get("database_backed"):
+    elif (
+        organ_status in {"degraded", "unavailable"}
+        or learning_status in {"degraded", "unavailable"}
+        or not paper_summary.get("database_backed")
+    ):
         status = "degraded"
     else:
         status = "healthy"
@@ -214,6 +233,7 @@ def _runtime_truth(app: FastAPI) -> dict[str, Any]:
         },
         "paper": paper,
         "organs": organs,
+        "learning": {"organ_id": "learning_engine", "status": learning_status or "not_evaluated"},
         "safety": safety,
         "legacy": {
             "api_run_allowed_for_ui": False,

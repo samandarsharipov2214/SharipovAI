@@ -13,6 +13,21 @@ from observability import (
     log_event,
     observe_http,
 )
+from observability.metrics import resolve_http_route_label
+
+
+def _canonical_http_route_label(request: Request) -> str:
+    """Prometheus path label: matched route template, else fixed /unmatched.
+
+    Never use request.url.path — arbitrary user-controlled segments would explode
+    cardinality. FastAPI/Starlette expose the template on scope['route'] after
+    routing (e.g. /api/foo/{id}).
+    """
+    route = request.scope.get("route")
+    route_path = getattr(route, "path", None) if route is not None else None
+    if not route_path:
+        route_path = getattr(route, "path_format", None) if route is not None else None
+    return resolve_http_route_label(route_path if isinstance(route_path, str) else None)
 
 
 def install_observability(app: FastAPI) -> None:
@@ -49,9 +64,12 @@ def install_observability(app: FastAPI) -> None:
             raise
         finally:
             duration = time.perf_counter() - started
+            # Metrics labels use the canonical route template only — never the
+            # raw URL. Structured logs may still record the concrete path.
+            route_label = _canonical_http_route_label(request)
             observe_http(
                 method=request.method,
-                path=request.url.path,
+                path=route_label,
                 status_code=status_code,
                 duration_seconds=duration,
             )
@@ -63,6 +81,7 @@ def install_observability(app: FastAPI) -> None:
                 request_id=request_id,
                 method=request.method,
                 path=request.url.path,
+                route=route_label,
                 status_code=status_code,
                 duration_ms=round(duration * 1_000.0, 3),
             )

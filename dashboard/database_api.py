@@ -67,10 +67,22 @@ def install_database_api(app: FastAPI, *, database: ProjectDatabase | None = Non
         return {"status": "ok", "project_id": project_id, "messages": items}
 
 
+def _effective_auth_enabled() -> bool:
+    """Report effective enforcement, not the raw SHARIPOVAI_DISABLE_AUTH bit.
+
+    Production ignores SHARIPOVAI_DISABLE_AUTH=1, so claiming auth is disabled
+    from the env alone would be untruthful.
+    """
+    from dashboard.global_auth_guard import auth_disabled
+
+    return not auth_disabled()
+
+
 def readiness_status(database: ProjectDatabase) -> dict[str, Any]:
     db = database.health()
     missing = _missing_required_configuration()
     status = "ok" if db.get("status") == "ok" and not missing else "error"
+    auth_enabled = _effective_auth_enabled()
     return {
         "status": status,
         "service": "SharipovAI OS",
@@ -79,7 +91,9 @@ def readiness_status(database: ProjectDatabase) -> dict[str, Any]:
         "configuration": {
             "status": "ok" if not missing else "error",
             "missing": missing,
-            "auth_enabled": os.getenv("SHARIPOVAI_DISABLE_AUTH", "0").strip().lower() not in {"1", "true", "yes", "on"},
+            "auth_enabled": auth_enabled,
+            "auth_enforced": auth_enabled,
+            "disable_auth_env": os.getenv("SHARIPOVAI_DISABLE_AUTH", "0").strip().lower() in {"1", "true", "yes", "on"},
             "kill_switch": os.getenv("EXECUTION_KILL_SWITCH", "1").strip().lower() in {"1", "true", "yes", "on"},
             "testnet_execution_enabled": os.getenv("TESTNET_EXECUTION_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"},
             "live_execution_enabled": os.getenv("EXCHANGE_LIVE_TRADING_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"},
