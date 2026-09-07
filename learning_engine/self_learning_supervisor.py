@@ -209,6 +209,7 @@ class SelfLearningSupervisor:
         if not isinstance(opinions, list) or not opinions:
             raise ValueError("decision assessment opinions are missing")
         assessment = payload.get("assessment") if isinstance(payload.get("assessment"), Mapping) else {}
+        evidence_class, verified_market_data = _require_verified_settlement_evidence(settlement)
         return {
             "outcome_id": f"paper:{decision_id}",
             "decision_id": decision_id,
@@ -218,11 +219,90 @@ class SelfLearningSupervisor:
             "net_pnl": settlement.get("net_pnl"),
             "drawdown_contribution": settlement.get("drawdown_contribution", 0.0),
             "regime": assessment.get("regime") or "unknown",
-            "agents": opinions,
+            "agents": _agents_with_settlement_attestation(opinions, evidence_class, verified_market_data),
             "occurred_at_ms": int(settlement.get("settled_at_ms") or events[0].get("created_at_ms") or fallback_timestamp),
-            "evidence_class": settlement.get("evidence_class") or "verified_market",
-            "verified_market_data": settlement.get("verified_market_data") is True,
+            "evidence_class": evidence_class,
+            "verified_market_data": verified_market_data,
         }
+
+
+_VERIFIED_EVIDENCE_CLASSES = {
+    "verified_market",
+    "verified_exchange",
+    "verified_bybit",
+    "verified_market_and_news",
+}
+_FORBIDDEN_EVIDENCE_CLASSES = {"synthetic", "fixture", "mock", "demo", "simulation"}
+
+
+def _require_verified_settlement_evidence(settlement: Mapping[str, Any]) -> tuple[str, bool]:
+    """Fail closed: attestation requires an explicit supported verified settlement class.
+
+    Missing, blank, unsupported, synthetic/demo/mock/fixture/simulation, or
+    non-True verified_market_data must not default to a verified class.
+    """
+
+    raw_class = settlement.get("evidence_class") if "evidence_class" in settlement else None
+    if raw_class is None:
+        raise ValueError("settlement evidence_class is required")
+    evidence_class = str(raw_class).strip().lower()
+    if not evidence_class:
+        raise ValueError("settlement evidence_class is required")
+    if evidence_class in _FORBIDDEN_EVIDENCE_CLASSES:
+        raise ValueError(f"synthetic settlement evidence is forbidden: {evidence_class}")
+    if evidence_class not in _VERIFIED_EVIDENCE_CLASSES:
+        raise ValueError(f"unsupported settlement evidence_class: {evidence_class}")
+    if settlement.get("verified_market_data") is not True:
+        raise ValueError("verified market evidence is required")
+    return evidence_class, True
+
+
+def _agents_with_settlement_attestation(
+    opinions: list[Any],
+    settlement_evidence_class: str,
+    settlement_verified_market_data: bool,
+) -> list[dict[str, Any]]:
+    """Attach settlement market attestation to stripped council opinions fail-closed.
+
+    Decision-assessment opinions are stored without evidence_class after DQ
+    evaluate. When the paper settlement itself proves verified market evidence,
+    re-attach that attestation so AgentEvidence can accept the organ opinions.
+    Synthetic, unsupported, or unverified settlements/opinions are left untouched
+    so the validator still rejects them.
+    """
+
+    settlement_attests = (
+        settlement_verified_market_data is True
+        and settlement_evidence_class in _VERIFIED_EVIDENCE_CLASSES
+        and settlement_evidence_class not in _FORBIDDEN_EVIDENCE_CLASSES
+    )
+    agents: list[dict[str, Any]] = []
+    for item in opinions:
+        if not isinstance(item, Mapping):
+            continue
+        agent = dict(item)
+        existing_class = str(agent.get("evidence_class") or "").strip().lower()
+        if existing_class in _FORBIDDEN_EVIDENCE_CLASSES:
+            agents.append(agent)
+            continue
+        if agent.get("verified_market_data") is False or agent.get("data_verified") is False:
+            agents.append(agent)
+            continue
+        if existing_class in _VERIFIED_EVIDENCE_CLASSES and agent.get("verified_market_data") is True:
+            agents.append(agent)
+            continue
+        if not settlement_attests:
+            agents.append(agent)
+            continue
+        if not existing_class:
+            agent["evidence_class"] = settlement_evidence_class
+        elif existing_class not in _VERIFIED_EVIDENCE_CLASSES:
+            agents.append(agent)
+            continue
+        agent["verified_market_data"] = True
+        agents.append(agent)
+    return agents
+
 
 
 def _bounded_float(name: str, default: float, minimum: float, maximum: float) -> float:
