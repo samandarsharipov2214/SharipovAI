@@ -18,19 +18,19 @@ SIZE_PROBE_TIMEOUT_SECONDS=${SHARIPOVAI_BACKUP_SIZE_PROBE_TIMEOUT_SECONDS:-60}
 fail() { printf '[backup] ERROR: %s\n' "$*" >&2; exit 1; }
 log() { printf '[backup] %s\n' "$*"; }
 
-if ! [[ "$KEEP" =~ ^[0-9]+$ ]] || (( KEEP < 1 || KEEP > 100 )); then
+if ! [[ "$KEEP" =~ ^[1-9][0-9]{0,2}$ ]] || (( KEEP > 100 )); then
   fail 'KEEP must be an integer between 1 and 100'
 fi
-if ! [[ "$MIN_FREE_DISK_GB" =~ ^[0-9]+$ ]] || (( MIN_FREE_DISK_GB < 1 || MIN_FREE_DISK_GB > 1024 )); then
+if ! [[ "$MIN_FREE_DISK_GB" =~ ^[1-9][0-9]{0,3}$ ]] || (( MIN_FREE_DISK_GB > 1024 )); then
   fail 'SHARIPOVAI_BACKUP_MIN_FREE_DISK_GB must be an integer between 1 and 1024'
 fi
-if ! [[ "$RESERVE_MIB" =~ ^[0-9]+$ ]] || (( RESERVE_MIB > 1048576 )); then
+if ! [[ "$RESERVE_MIB" =~ ^(0|[1-9][0-9]{0,6})$ ]] || (( RESERVE_MIB > 1048576 )); then
   fail 'SHARIPOVAI_BACKUP_RESERVE_MIB must be an integer between 0 and 1048576'
 fi
-if ! [[ "$HELPER_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || (( HELPER_TIMEOUT_SECONDS < 30 || HELPER_TIMEOUT_SECONDS > 3600 )); then
+if ! [[ "$HELPER_TIMEOUT_SECONDS" =~ ^[1-9][0-9]{0,3}$ ]] || (( HELPER_TIMEOUT_SECONDS < 30 || HELPER_TIMEOUT_SECONDS > 3600 )); then
   fail 'SHARIPOVAI_BACKUP_HELPER_TIMEOUT_SECONDS must be an integer between 30 and 3600'
 fi
-if ! [[ "$SIZE_PROBE_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || (( SIZE_PROBE_TIMEOUT_SECONDS < 5 || SIZE_PROBE_TIMEOUT_SECONDS > 600 )); then
+if ! [[ "$SIZE_PROBE_TIMEOUT_SECONDS" =~ ^[1-9][0-9]{0,2}$ ]] || (( SIZE_PROBE_TIMEOUT_SECONDS < 5 || SIZE_PROBE_TIMEOUT_SECONDS > 600 )); then
   fail 'SHARIPOVAI_BACKUP_SIZE_PROBE_TIMEOUT_SECONDS must be an integer between 5 and 600'
 fi
 
@@ -80,8 +80,9 @@ require_free_space() {
   local available required
   [[ "$extra_bytes" =~ ^[0-9]+$ ]] || fail "invalid disk reservation for $phase"
   available=$(available_backup_bytes)
-  required=$((MIN_FREE_BYTES + RESERVE_BYTES + extra_bytes))
-  if (( available < required )); then
+  # Python integers cannot wrap a large source estimate into a passing gate.
+  required=$(python3 -c 'import sys; print(sum(map(int, sys.argv[1:])))' "$MIN_FREE_BYTES" "$RESERVE_BYTES" "$extra_bytes")
+  if ! python3 -c 'import sys; sys.exit(int(sys.argv[1]) < int(sys.argv[2]))' "$available" "$required"; then
     fail "disk preflight failed at $phase: available=${available}B required=${required}B (minimum free=${MIN_FREE_DISK_GB}GiB reserve=${RESERVE_MIB}MiB extra=${extra_bytes}B)"
   fi
   log "disk preflight passed at $phase: available=${available}B required=${required}B"
@@ -241,7 +242,10 @@ else
   fail 'persistent data size probe failed or timed out'
 fi
 [[ "$source_bytes" =~ ^[0-9]+$ ]] || fail 'persistent data size probe returned an invalid value'
-require_free_space "$((source_bytes * 2))" 'before staging persistent data'
+# The live source and retained archives already consume filesystem space.
+# Reserve one complete staging copy here; compression is separately byte-capped
+# and continuously guarded below. No assumed compression ratio authorizes a write.
+require_free_space "$source_bytes" 'before staging persistent data'
 
 if run_low_priority timeout --foreground --kill-after=10s "${HELPER_TIMEOUT_SECONDS}s" \
   docker run --rm -i \
@@ -258,7 +262,7 @@ if run_low_priority timeout --foreground --kill-after=10s "${HELPER_TIMEOUT_SECO
     -v "$volume_name:/source:ro" \
     -v "$work/data:/backup" \
     --entrypoint python \
-    "$image_name" - "$source_mode" <<'PY'
+    "$image_name" - "$source_mode" "$MIN_FREE_BYTES" "$RESERVE_BYTES" <<'PY'
 import shutil
 import sqlite3
 import sys
@@ -267,6 +271,21 @@ from pathlib import Path
 source = Path("/source")
 destination = Path("/backup")
 source_mode = sys.argv[1]
+free_floor = int(sys.argv[2]) + int(sys.argv[3])
+
+
+def check_space(*_):
+    if shutil.disk_usage(destination).free < free_floor + 1024 * 1024:
+        raise RuntimeError("disk floor reached during staging; snapshot aborted")
+
+
+def guarded_copy(src, dst):
+    with open(src, "rb") as reader, open(dst, "wb") as writer:
+        for chunk in iter(lambda: reader.read(1024 * 1024), b""):
+            check_space()
+            writer.write(chunk)
+    shutil.copystat(src, dst)
+    return dst
 if source.is_symlink() or not source.is_dir():
     raise RuntimeError("persistent data source must be a real directory")
 for path in source.rglob("*"):
@@ -284,9 +303,9 @@ for item in source.iterdir():
         continue
     target = destination / item.name
     if item.is_dir():
-        shutil.copytree(item, target, dirs_exist_ok=True)
+        shutil.copytree(item, target, dirs_exist_ok=True, copy_function=guarded_copy)
     elif item.is_file():
-        shutil.copy2(item, target)
+        guarded_copy(item, target)
 
 # The source volume stays read-only. SQLite's backup API produces a consistent
 # snapshot for every canonical top-level SQLite database.
@@ -295,7 +314,13 @@ for db in sorted(source.iterdir()):
         continue
     target_db = destination / db.name
     with sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True) as src, sqlite3.connect(target_db) as dst:
-        src.backup(dst)
+        check_space()
+        # Pin a read snapshot across bounded backup steps. Without this explicit
+        # transaction, a busy writer can restart the incremental copy forever.
+        src.execute("BEGIN")
+        src.execute("SELECT name FROM sqlite_schema LIMIT 1").fetchone()
+        src.backup(dst, pages=128, progress=check_space)
+        src.execute("ROLLBACK")  # Release source/WAL retention before checking dst.
         result = dst.execute("PRAGMA quick_check").fetchone()
         if not result or result[0] != "ok":
             raise RuntimeError(f"database quick_check failed: {db.name}: {result!r}")
@@ -357,11 +382,57 @@ else
   fail 'staged backup size probe failed'
 fi
 [[ "$staged_bytes" =~ ^[0-9]+$ ]] || fail 'staged backup size probe returned an invalid value'
-require_free_space "$staged_bytes" 'before archive creation'
+require_free_space 1048576 'before bounded archive creation'
 
 archive_tmp=$(mktemp "$BACKUP_DIR/.sharipovai-$stamp.tar.gz.partial-XXXXXX")
 archive_checksum_tmp="${archive_tmp}.sha256"
-run_low_priority tar -C "$work" -czf "$archive_tmp" manifest.json data
+run_low_priority python3 - "$work" "$archive_tmp" "$MIN_FREE_BYTES" "$RESERVE_BYTES" <<'PY'
+# BEGIN BOUNDED_ARCHIVE_PYTHON
+import os
+import shutil
+import sys
+import tarfile
+from pathlib import Path
+
+
+class BudgetWriter:
+    """A fixed total byte cap plus fresh free-space checks before each write."""
+
+    def __init__(self, stream, root, floor, usage=shutil.disk_usage):
+        self.stream, self.root, self.floor, self.usage = stream, root, floor, usage
+        # Slack includes delayed allocation / tar buffering. The 512 MiB reserve
+        # is additional protection against concurrent production disk growth.
+        self.slack = 1024 * 1024
+        self.limit = usage(root).free - floor - self.slack
+        self.written = 0
+        if self.limit <= 0:
+            raise RuntimeError("insufficient disk budget for archive")
+
+    def write(self, data):
+        if (self.written + len(data) > self.limit
+                or self.usage(self.root).free < self.floor + self.slack + len(data)):
+            raise RuntimeError("archive disk budget exhausted; unpublished backup aborted")
+        count = self.stream.write(data)
+        if count != len(data):
+            raise OSError("short archive write")
+        self.written += count
+        return count
+
+
+def write_archive(root, target, floor):
+    with target.open("wb") as stream:
+        writer = BudgetWriter(stream, root, floor)
+        with tarfile.open(fileobj=writer, mode="w|gz") as archive:
+            archive.add(root / "manifest.json", arcname="manifest.json")
+            archive.add(root / "data", arcname="data")
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+if __name__ == "__main__":
+    write_archive(Path(sys.argv[1]), Path(sys.argv[2]), int(sys.argv[3]) + int(sys.argv[4]))
+# END BOUNDED_ARCHIVE_PYTHON
+PY
 if ! run_low_priority timeout --foreground --kill-after=5s "${SIZE_PROBE_TIMEOUT_SECONDS}s" \
   tar -tzf "$archive_tmp" >/dev/null; then
   fail 'backup archive integrity verification failed or timed out'
@@ -380,8 +451,39 @@ archive_tmp=''
 ln -sfn "$(basename "$archive")" "$BACKUP_DIR/latest.tar.gz"
 ln -sfn "$(basename "$archive.sha256")" "$BACKUP_DIR/latest.tar.gz.sha256"
 
-find "$BACKUP_DIR" -maxdepth 1 -type f -name 'sharipovai-*.tar.gz' -printf '%T@ %p\n' \
-  | sort -rn | tail -n +$((KEEP + 1)) | cut -d' ' -f2- | while read -r old; do rm -f "$old" "$old.sha256"; done
+# Pin the successfully published archive even if an older file has a future
+# mtime. Retention runs under the exporter lock and never follows symlinks.
+python3 - "$BACKUP_DIR" "$archive" "$KEEP" <<'PY'
+# BEGIN RETENTION_PYTHON
+import re
+import sys
+from pathlib import Path
+
+
+def retain_archives(root, active, keep):
+    candidates = sorted((p for p in root.iterdir()
+                         if re.fullmatch(r"sharipovai-[0-9]{8}T[0-9]{6}Z\.tar\.gz", p.name)
+                         and p.is_file() and not p.is_symlink()),
+                        key=lambda p: (p.stat().st_mtime_ns, p.name), reverse=True)
+    latest = root / "latest.tar.gz"
+    protected = {active.resolve(), latest.resolve()}
+    retained = set(protected)
+    for path in candidates:
+        if path.resolve() in retained:
+            continue
+        if len(retained) < keep:
+            retained.add(path.resolve())
+            continue
+        path.unlink()
+        checksum = path.with_name(path.name + ".sha256")
+        if checksum.is_file() and not checksum.is_symlink():
+            checksum.unlink()
+
+
+if __name__ == "__main__":
+    retain_archives(Path(sys.argv[1]), Path(sys.argv[2]), int(sys.argv[3]))
+# END RETENTION_PYTHON
+PY
 
 log "backup completed using $source_mode"
 echo "$archive"

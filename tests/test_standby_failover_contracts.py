@@ -34,7 +34,8 @@ def test_windows_sync_is_scheduled_without_parallel_runs() -> None:
 def test_vps_backup_timer_is_persistent_and_verified_within_one_hour() -> None:
     script = read("deploy/vps/install_backup_timer.sh")
     assert "OnCalendar=hourly" in script
-    assert "OnUnitActiveSec=45min" in script
+    assert "OnUnitActiveSec=" not in script
+    assert "OnBootSec=" not in script
     assert "RandomizedDelaySec=0" in script
     assert "Persistent=true" in script
     assert "systemctl start sharipovai-backup.service" in script

@@ -206,3 +206,38 @@ def test_archive_rejects_symlink_member(tmp_path: Path) -> None:
 
     with pytest.raises(BackupIntegrityError, match="unsafe archive member type"):
         extract_verified_archive(archive, tmp_path / "extracted")
+
+
+def test_large_canonical_database_fits_existing_total_envelope(tmp_path, monkeypatch):
+    # Sparse file exercises real stat/manifest size handling without allocating
+    # gigabytes in CI. Hash correctness is covered by the tampering/restore tests.
+    import tools.backup_integrity as integrity
+
+    snapshot = _snapshot(tmp_path)
+    target = snapshot / "data/sharipovai_shared.db"
+    size = 6_700_000_000
+    with target.open("r+b") as stream:
+        stream.truncate(size)
+    manifest_path, manifest = _manifest(snapshot)
+    manifest["files"][0]["bytes"] = size
+    manifest_path.write_text(json.dumps(manifest))
+    monkeypatch.setattr(integrity, "sha256", lambda _: manifest["files"][0]["sha256"])
+    assert verify_snapshot(snapshot)["files"][0]["bytes"] == size
+
+
+def test_total_snapshot_limit_still_rejects_multiple_large_files(tmp_path, monkeypatch):
+    import tools.backup_integrity as integrity
+
+    snapshot = _snapshot(tmp_path)
+    manifest_path, manifest = _manifest(snapshot)
+    size = integrity.MAX_TOTAL_BYTES // 2 + 1
+    for name in ("sharipovai_shared.db", "sharipovai_saas.sqlite3"):
+        with (snapshot / "data" / name).open("wb") as stream:
+            stream.truncate(size)
+    manifest["files"][0]["bytes"] = size
+    manifest["files"].append(manifest["files"][0] | {"path": "sharipovai_saas.sqlite3"})
+    manifest["file_count"] = 2
+    manifest_path.write_text(json.dumps(manifest))
+    monkeypatch.setattr(integrity, "sha256", lambda _: manifest["files"][0]["sha256"])
+    with pytest.raises(BackupIntegrityError, match="total size limit"):
+        verify_snapshot(snapshot)
