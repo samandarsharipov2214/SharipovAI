@@ -16,10 +16,10 @@ HEAVY_GITHUB_HOSTED_WORKFLOWS = (
     "production-smoke.yml",
     "frontend-vite.yml",
     "secret-history-scan.yml",
+    "phase11-hardening.yml",
 )
 
 HYBRID_PR_HOSTED_WORKFLOWS = (
-    "phase11-hardening.yml",
     "stabilization-dashboard.yml",
     "web2.yml",
 )

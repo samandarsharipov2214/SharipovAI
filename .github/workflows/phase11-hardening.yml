@@ -68,10 +68,12 @@ jobs:
       ${{
         (github.event_name == 'pull_request' &&
          github.event.pull_request.head.repo.full_name == github.repository) ||
-        (github.event_name != 'pull_request' &&
-         vars.SHARIPOVAI_SELF_HOSTED_CI == '1')
+        github.event_name != 'pull_request'
       }}
-    runs-on: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["self-hosted","linux","x64","sharipovai-ci"]') }}
+    # These deterministic release checks use isolated /tmp state and need no
+    # production host access. Main must remain verifiable when the VPS runner
+    # is offline, just as pull requests already are.
+    runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
       PYTHONUNBUFFERED: '1'
