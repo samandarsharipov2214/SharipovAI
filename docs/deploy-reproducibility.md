@@ -57,3 +57,40 @@ Digest (and readable tag) changes are intentional dependency updates only:
 
 Floating tags without digests (`python:3.12-slim`, `caddy:2-alpine`) are not
 acceptable on the production build path because they can move underfoot.
+# Transactional runtime ownership
+
+Production may belong to a `sharipovai-runtime-*` Compose project while its data
+volume and Caddy network retain their original names. `runtime_compose_context.py`
+captures that actual project, named data volume and shared proxy network before
+checkout changes. It verifies the running image ID, image revision, embedded build
+SHA and every execution lock. Its output contains only resource names and Compose
+structure, never runtime environment values.
+
+The updater and exact-SHA rollback retain this context through failure recovery.
+They operate only on the application service with `--no-deps --no-build` during
+replacement/recovery; Caddy and unrelated project resources are not reconciled.
+Image retention precedes checkout mutation. A dirty checkout or unproven runtime
+identity blocks the operation. Health requires the Docker healthcheck and HTTP
+probe to pass within the existing bounded retry window.
+
+Rollback to a commit predating the context helper is supported because the context
+is captured before resetting the checkout. The retained image remains the rollback
+artifact; it is never rebuilt. This changes no database schema or execution authority.
+
+For the first rollout from an older checkout, fetch and review an immutable target
+commit, then materialize its `deploy/vps/update_from_main.sh` using `git show` into
+a private temporary file and validate it with `bash -n`. Run that target updater
+with `SHARIPOVAI_EXPECTED_TARGET_SHA` set to the exact CI-approved commit. It loads
+and compile-validates the helper from the same target before any checkout reset;
+the old checkout does not need to contain the helper. The current Docker and HTTP
+health, complete safety locks, and image retention are checked before the target
+preflight and exporter. The checkout and runtime identity are rechecked immediately
+before mutation. After startup and recovery, the immutable helper verifies image
+provenance and confirms that project, external data volume and proxy network still
+match the captured context.
+
+Regression coverage executes the updater against a disposable Git remote with an
+old commit lacking the helper, and uses strict Docker/HTTP fakes. It covers target
+bootstrap, candidate health failure, volume drift, retained-image rollback, unsafe
+target flags, HTTP failure, invalid helper syntax and a changed release SHA. Live
+backup/isolated restore acceptance and exact main CI remain separate rollout gates.

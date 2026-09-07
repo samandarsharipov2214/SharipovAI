@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-umask 027
+umask 077
 
 ROOT="${SHARIPOVAI_ROOT:-${APP_DIR:-/opt/sharipovai-repo}}"
 TARGET_SHA="${SHARIPOVAI_ROLLBACK_SHA:-}"
@@ -43,7 +43,8 @@ done
 health_check(){
   local attempt
   for ((attempt=1; attempt<=HEALTH_ATTEMPTS; attempt++)); do
-    if curl --fail --silent --show-error --max-time 5 "$HEALTH_URL" >/dev/null; then
+    if [[ "$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' sharipovai 2>/dev/null || true)" == healthy ]] \
+      && curl --fail --silent --show-error --max-time 5 "$HEALTH_URL" >/dev/null; then
       return 0
     fi
     sleep "$HEALTH_DELAY_SECONDS"
@@ -64,9 +65,11 @@ verify_container_sha(){
   runtime_sha="$(docker exec sharipovai printenv SHARIPOVAI_BUILD_SHA 2>/dev/null || true)"
   label_sha="$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' sharipovai 2>/dev/null || true)"
   [[ "$label_sha" == "$expected" ]] || return 1
-  if [[ -n "$runtime_sha" && "$runtime_sha" != "unknown" ]]; then
-    [[ "$runtime_sha" == "$expected" ]] || return 1
-  fi
+  [[ "$runtime_sha" == "$expected" ]] || return 1
+  local project
+  project="$(python3 "$context_helper" --expected-sha "$expected" --output "$verified_override")" || return 1
+  [[ "$project" == "$COMPOSE_PROJECT_NAME" ]] || return 1
+  cmp -s "$runtime_override" "$verified_override"
 }
 
 validate_financial_locks(){
@@ -81,11 +84,16 @@ service = payload.get("services", {}).get("sharipovai", {})
 environment = service.get("environment", {})
 if isinstance(environment, list):
     environment = dict(item.split("=", 1) for item in environment if "=" in item)
-required = {"EXCHANGE_LIVE_TRADING_ENABLED": "0", "EXECUTION_KILL_SWITCH": "1"}
+required = {
+    "EXCHANGE_LIVE_TRADING_ENABLED": "0", "EXECUTION_KILL_SWITCH": "1",
+    "FEATURE_BYBIT_LIVE_EXECUTION": "0", "TESTNET_EXECUTION_ENABLED": "0",
+    "FEATURE_BYBIT_TESTNET": "0", "AUTONOMOUS_TESTNET_ENABLED": "0",
+    "AUTONOMOUS_TESTNET_BRIDGE_ENABLED": "0", "EXCHANGE_MODE": "sandbox",
+}
 for key, expected in required.items():
     actual = str(environment.get(key, ""))
     if actual != expected:
-        raise SystemExit(f"unsafe compose environment: {key}={actual!r}")
+        raise SystemExit(f"unsafe compose environment: {key} does not match required lock")
 for key in (
     "TESTNET_EXECUTION_ENABLED",
     "AUTONOMOUS_TESTNET_ENABLED",
@@ -159,18 +167,30 @@ redeploy_retained_release() {
   docker compose config --format json >"$rendered"
   validate_financial_locks "$rendered"
   log "reusing retained image $(rollback_image_ref "$sha") for $context (--no-build)"
-  docker compose up -d --remove-orphans --no-build
+  docker compose up -d --no-deps --no-build sharipovai
 }
 
 redeploy_pinned_release() { redeploy_retained_release "$1" "$2"; }
 
 compose_dir="$ROOT/deploy/vps"
 target_preflight="$(mktemp)"
-target_compose="$(mktemp "$compose_dir/.phase11-rollback-compose.XXXXXX.yml")"
+target_compose="$(mktemp --suffix=.yml)"
 rendered="$(mktemp)"
+runtime_override="$(mktemp --suffix=.json)"
+verified_override="$(mktemp --suffix=.json)"
+context_helper="$(mktemp)"
 restore_started=0
-cleanup(){ rm -f "$target_preflight" "$target_compose" "$rendered"; }
+cleanup(){ rm -f "$target_preflight" "$target_compose" "$rendered" "$runtime_override" "$verified_override" "$context_helper"; }
 trap cleanup EXIT
+
+git show "$CURRENT_SHA:deploy/vps/runtime_compose_context.py" >"$context_helper"
+chmod 0600 "$context_helper"
+python3 -c 'import pathlib, sys; compile(pathlib.Path(sys.argv[1]).read_bytes(), sys.argv[1], "exec")' "$context_helper"
+export COMPOSE_PROJECT_NAME
+COMPOSE_PROJECT_NAME="$(python3 "$context_helper" --expected-sha "$CURRENT_SHA" --output "$runtime_override")" \
+  || fail 'production runtime identity could not be captured'
+export COMPOSE_FILE="$compose_dir/docker-compose.yml:$runtime_override"
+health_check || fail 'current deployment requires Docker healthy and HTTP success'
 
 restore_original(){
   local reason="$1"
@@ -210,7 +230,7 @@ health_check || restore_original "health endpoint did not recover"
 verify_container_sha "$TARGET_SHA" || restore_original "container SHA differs from rollback target"
 bash smoke_check.sh production || restore_original "production smoke check failed"
 container_state="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' sharipovai 2>/dev/null || true)"
-[[ "$container_state" == "healthy" || "$container_state" == "running" ]] || restore_original "container state is ${container_state:-missing}"
+[[ "$container_state" == "healthy" ]] || restore_original "container state is ${container_state:-missing}"
 trap - ERR
 
 log "rollback completed safely at $TARGET_SHA"

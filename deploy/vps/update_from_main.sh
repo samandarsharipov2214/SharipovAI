@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+umask 077
 
 APP_DIR="${APP_DIR:-/opt/sharipovai-repo}"
 BRANCH="${BRANCH:-main}"
@@ -8,6 +9,7 @@ LOCK_FILE="${LOCK_FILE:-/run/lock/sharipovai-deploy.lock}"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:8000/health}"
 HEALTH_ATTEMPTS="${HEALTH_ATTEMPTS:-30}"
 HEALTH_DELAY_SECONDS="${HEALTH_DELAY_SECONDS:-2}"
+EXPECTED_TARGET_SHA="${SHARIPOVAI_EXPECTED_TARGET_SHA:-}"
 
 log() { printf '[sharipovai-update] %s\n' "$*"; }
 fail() { printf '[sharipovai-update] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -30,26 +32,34 @@ exec 9>"${LOCK_FILE}"
 flock -n 9 || fail 'another SharipovAI update is already running'
 
 previous_sha="$(git -C "${APP_DIR}" rev-parse HEAD)"
+[[ -z "$(git -C "${APP_DIR}" status --porcelain --untracked-files=normal)" ]] || fail 'production checkout is not clean'
 compose_dir="${APP_DIR}/deploy/vps"
 rollback_started=0
 backup_exporter_tmp=""
 preflight_tmp=""
 target_compose_tmp=""
 rendered_config=""
+context_helper=""
+runtime_override=""
+verified_override=""
 
 cleanup() {
   rm -f \
     "${backup_exporter_tmp:-}" \
     "${preflight_tmp:-}" \
     "${target_compose_tmp:-}" \
-    "${rendered_config:-}"
+    "${rendered_config:-}" \
+    "${context_helper:-}" \
+    "${runtime_override:-}" \
+    "${verified_override:-}"
 }
 trap cleanup EXIT
 
 health_check() {
   local attempt
   for ((attempt = 1; attempt <= HEALTH_ATTEMPTS; attempt++)); do
-    if curl --fail --silent --show-error --max-time 5 "${HEALTH_URL}" >/dev/null; then
+    if [[ "$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' sharipovai 2>/dev/null || true)" == healthy ]] \
+      && curl --fail --silent --show-error --max-time 5 "${HEALTH_URL}" >/dev/null; then
       return 0
     fi
     sleep "${HEALTH_DELAY_SECONDS}"
@@ -71,7 +81,15 @@ verify_container_sha() {
   [[ "${actual}" == "${expected}" ]] || return 1
   # Inspect the *running* container image — do not assume sharipovai:<sha12>.
   label="$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' sharipovai 2>/dev/null || true)"
-  [[ "${label}" == "${expected}" ]]
+  [[ "${label}" == "${expected}" ]] || return 1
+  # The immutable helper survives checkout reset, including a rollback to a
+  # revision which predates the helper. Compare structure with the original.
+  if [[ -n "${context_helper}" ]]; then
+    local project
+    project="$(python3 "${context_helper}" --expected-sha "${expected}" --output "${verified_override}")" || return 1
+    [[ "${project}" == "${COMPOSE_PROJECT_NAME}" ]] || return 1
+    cmp -s "${runtime_override}" "${verified_override}" || return 1
+  fi
 }
 
 validate_financial_locks() {
@@ -89,13 +107,20 @@ if isinstance(environment, list):
 required = {
     "EXCHANGE_LIVE_TRADING_ENABLED": "0",
     "EXECUTION_KILL_SWITCH": "1",
+    "FEATURE_BYBIT_LIVE_EXECUTION": "0",
+    "TESTNET_EXECUTION_ENABLED": "0",
+    "FEATURE_BYBIT_TESTNET": "0",
+    "AUTONOMOUS_TESTNET_ENABLED": "0",
+    "AUTONOMOUS_TESTNET_BRIDGE_ENABLED": "0",
+    "EXCHANGE_MODE": "sandbox",
 }
 for key, expected in required.items():
     actual = str(environment.get(key, ""))
     if actual != expected:
-        raise SystemExit(f"unsafe compose environment: {key}={actual!r}, expected {expected!r}")
+        raise SystemExit(f"unsafe compose environment: {key} does not match required lock")
 for key in (
     "AUTONOMOUS_TESTNET_BRIDGE_ENABLED",
+    "AUTONOMOUS_TESTNET_ENABLED",
     "TESTNET_EXECUTION_ENABLED",
     "FEATURE_BYBIT_TESTNET",
     "FEATURE_BYBIT_LIVE_EXECUTION",
@@ -172,7 +197,7 @@ redeploy_retained_release() {
   validate_financial_locks "${rendered}"
   rm -f "${rendered}"
   log "reusing retained image $(rollback_image_ref "${sha}") for ${context} (--no-build)"
-  docker compose up -d --remove-orphans --no-build
+  docker compose up -d --no-deps --no-build sharipovai
 }
 
 redeploy_pinned_release() { redeploy_retained_release "$1" "$2"; }
@@ -202,6 +227,10 @@ else
   target_sha="$(git -C "${APP_DIR}" rev-parse "${FETCH_REMOTE}/${BRANCH}")"
 fi
 [[ "${target_sha}" =~ ^[0-9a-f]{40}$ ]] || fail 'target commit could not be resolved to a full SHA'
+if [[ -n "${EXPECTED_TARGET_SHA}" ]]; then
+  [[ "${EXPECTED_TARGET_SHA}" =~ ^[0-9a-f]{40}$ && "${target_sha}" == "${EXPECTED_TARGET_SHA}" ]] \
+    || fail 'target SHA differs from the verified release SHA'
+fi
 
 if [[ "${target_sha}" == "${previous_sha}" ]]; then
   log "already at ${target_sha}"
@@ -213,14 +242,31 @@ fi
 for target_path in \
   deploy/vps/phase7_preflight.sh \
   deploy/vps/docker-compose.yml \
+  deploy/vps/runtime_compose_context.py \
   deploy/vps/export_backup.sh; do
   git -C "${APP_DIR}" cat-file -e "${target_sha}:${target_path}" 2>/dev/null \
     || fail "target artifact is missing: ${target_path}"
 done
 
+# Materialize before checkout changes; retain this exact context through rollback.
+# A transactional runtime usually belongs to sharipovai-runtime-*, not vps.
+context_helper="$(mktemp)"
+runtime_override="$(mktemp --suffix=.json)"
+verified_override="$(mktemp --suffix=.json)"
+git -C "${APP_DIR}" show "${target_sha}:deploy/vps/runtime_compose_context.py" >"${context_helper}"
+chmod 0600 "${context_helper}"
+python3 -c 'import pathlib, sys; compile(pathlib.Path(sys.argv[1]).read_bytes(), sys.argv[1], "exec")' "${context_helper}"
+export COMPOSE_PROJECT_NAME
+COMPOSE_PROJECT_NAME="$(python3 "${context_helper}" --expected-sha "${previous_sha}" --output "${runtime_override}")" \
+  || fail 'production runtime identity could not be captured'
+export COMPOSE_FILE="${compose_dir}/docker-compose.yml:${runtime_override}"
+health_check || fail 'current deployment requires Docker healthy and HTTP success'
+retain_running_image_for_rollback "${previous_sha}"
+assert_retained_rollback_image "${previous_sha}"
+
 log 'materializing immutable target deployment artifacts'
 preflight_tmp="$(mktemp)"
-target_compose_tmp="$(mktemp "${compose_dir}/.phase7-target-compose-XXXXXX.yml")"
+target_compose_tmp="$(mktemp --suffix=.yml)"
 backup_exporter_tmp="$(mktemp)"
 git -C "${APP_DIR}" show "${target_sha}:deploy/vps/phase7_preflight.sh" >"${preflight_tmp}"
 git -C "${APP_DIR}" show "${target_sha}:deploy/vps/docker-compose.yml" >"${target_compose_tmp}"
@@ -228,6 +274,11 @@ git -C "${APP_DIR}" show "${target_sha}:deploy/vps/export_backup.sh" >"${backup_
 chmod 0700 "${preflight_tmp}" "${backup_exporter_tmp}"
 bash -n "${preflight_tmp}"
 bash -n "${backup_exporter_tmp}"
+set_build_provenance "${target_sha}"
+rendered_config="$(mktemp)"
+docker compose --project-directory "${compose_dir}" --env-file "${compose_dir}/.env.vps" \
+  -f "${target_compose_tmp}" -f "${runtime_override}" config --format json >"${rendered_config}"
+validate_financial_locks "${rendered_config}"
 
 log 'running immutable target Phase 7 deployment preflight'
 APP_DIR="${APP_DIR}" \
@@ -238,6 +289,13 @@ bash "${preflight_tmp}"
 log 'creating verified backup before code update'
 APP_DIR="${APP_DIR}" COMPOSE_DIR="${compose_dir}" bash "${backup_exporter_tmp}"
 
+assert_retained_rollback_image "${previous_sha}"
+[[ "$(git -C "${APP_DIR}" rev-parse HEAD)" == "${previous_sha}" \
+   && -z "$(git -C "${APP_DIR}" status --porcelain --untracked-files=normal)" ]] \
+  || fail 'production checkout changed during preflight'
+health_check || fail 'current deployment health changed during preflight'
+verify_container_sha "${previous_sha}" || fail 'runtime context changed during preflight'
+
 trap 'rollback "unexpected error at line ${LINENO}"' ERR
 log "updating ${previous_sha} -> ${target_sha}"
 git -C "${APP_DIR}" checkout -q "${BRANCH}"
@@ -246,22 +304,17 @@ chmod 600 "${compose_dir}/.env.vps"
 set_build_provenance "${target_sha}"
 
 cd "${compose_dir}"
-rendered_config="$(mktemp)"
 docker compose config --format json >"${rendered_config}"
 validate_financial_locks "${rendered_config}"
 
-# Retain the *currently running* image (whatever deploy-* / other tag it has)
-# under the deterministic rollback reference before building a candidate (F07).
-retain_running_image_for_rollback "${previous_sha}"
-assert_retained_rollback_image "${previous_sha}"
 log 'building the new image with immutable commit provenance'
-docker compose build --pull
+docker compose build --pull sharipovai
 log 'starting the updated services'
-docker compose up -d --remove-orphans
+docker compose up -d --no-deps --no-build sharipovai
 
 health_check || rollback 'health endpoint did not recover in time'
-container_state="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' sharipovai 2>/dev/null || true)"
-[[ "${container_state}" == "healthy" || "${container_state}" == "running" ]] || rollback "container state is ${container_state:-missing}"
+container_state="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' sharipovai 2>/dev/null || true)"
+[[ "${container_state}" == "healthy" ]] || rollback "container state is ${container_state:-missing}"
 verify_container_sha "${target_sha}" || rollback 'container/image commit provenance mismatch'
 
 trap - ERR

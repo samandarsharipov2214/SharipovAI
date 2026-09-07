@@ -114,7 +114,8 @@ def test_update_rollback_reuses_pinned_image_without_rebuild() -> None:
     assert "redeploy_retained_release" in content or "redeploy_pinned_release" in content
     assert "retain_running_image_for_rollback" in content
     assert "assert_retained_rollback_image" in content
-    assert "docker compose up -d --remove-orphans --no-build" in content
+    assert "docker compose up -d --no-deps --no-build sharipovai" in content
+    assert "--remove-orphans" not in content
     assert "refusing unreproducible rebuild" in content
     # Forward deploy may still build; automatic rollback must not.
     rollback_start = content.index("rollback() {")
