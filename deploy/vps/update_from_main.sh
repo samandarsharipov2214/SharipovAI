@@ -66,11 +66,11 @@ set_build_provenance() {
 
 verify_container_sha() {
   local expected="$1"
-  local actual
+  local actual label
   actual="$(docker exec sharipovai printenv SHARIPOVAI_BUILD_SHA 2>/dev/null || true)"
   [[ "${actual}" == "${expected}" ]] || return 1
-  local label
-  label="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "sharipovai:${expected:0:12}" 2>/dev/null || true)"
+  # Inspect the *running* container image — do not assume sharipovai:<sha12>.
+  label="$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' sharipovai 2>/dev/null || true)"
   [[ "${label}" == "${expected}" ]]
 }
 
@@ -106,6 +106,77 @@ for key in (
 PY
 }
 
+# F07: source of truth is the running container image ID + OCI revision label.
+# Production often uses deploy-prefixed tags (sharipovai:deploy-<sha12>-...), so
+# do not assume sharipovai:<sha12> already exists. Retain the verified running
+# image under that deterministic rollback reference before building a candidate.
+# Rollback must reuse the retained artifact with --no-build (never rebuild).
+rollback_image_ref() {
+  local sha="$1"
+  printf 'sharipovai:%s' "${sha:0:12}"
+}
+
+running_container_image_id() {
+  local image_id
+  image_id="$(docker inspect -f '{{.Image}}' sharipovai 2>/dev/null || true)"
+  [[ "${image_id}" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
+  printf '%s\n' "${image_id}"
+}
+
+image_oci_revision() {
+  local ref="$1"
+  docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${ref}" 2>/dev/null || true
+}
+
+retain_running_image_for_rollback() {
+  local expected_sha="$1"
+  local image_id revision ref
+  image_id="$(running_container_image_id)" \
+    || fail "cannot resolve running container image ID; refusing unreproducible rebuild"
+  revision="$(image_oci_revision "${image_id}")"
+  [[ "${revision}" == "${expected_sha}" ]] \
+    || fail "running image OCI revision mismatch: expected ${expected_sha}, got ${revision:-missing}; refusing unreproducible rebuild"
+  ref="$(rollback_image_ref "${expected_sha}")"
+  docker tag "${image_id}" "${ref}" \
+    || fail "failed to retain running image ${image_id} as ${ref}"
+  revision="$(image_oci_revision "${ref}")"
+  [[ "${revision}" == "${expected_sha}" ]] \
+    || fail "retained rollback image ${ref} has wrong OCI revision; refusing unreproducible rebuild"
+  log "retained running image ${image_id} as ${ref} (OCI revision verified)"
+}
+
+assert_retained_rollback_image() {
+  local sha="$1"
+  local ref revision
+  ref="$(rollback_image_ref "${sha}")"
+  docker image inspect "${ref}" >/dev/null 2>&1 \
+    || fail "retained rollback image ${ref} is missing; refusing unreproducible rebuild"
+  revision="$(image_oci_revision "${ref}")"
+  [[ "${revision}" == "${sha}" ]] \
+    || fail "retained rollback image ${ref} has wrong OCI revision (${revision:-missing}); refusing unreproducible rebuild"
+}
+
+# Compatibility aliases used by contract tests / callers.
+pinned_image_ref() { rollback_image_ref "$1"; }
+assert_pinned_image_present() { assert_retained_rollback_image "$1"; }
+
+redeploy_retained_release() {
+  local sha="$1"
+  local context="$2"
+  set_build_provenance "${sha}"
+  assert_retained_rollback_image "${sha}"
+  cd "${compose_dir}"
+  local rendered
+  rendered="$(mktemp)"
+  docker compose config --format json >"${rendered}"
+  validate_financial_locks "${rendered}"
+  rm -f "${rendered}"
+  log "reusing retained image $(rollback_image_ref "${sha}") for ${context} (--no-build)"
+  docker compose up -d --remove-orphans --no-build
+}
+
+redeploy_pinned_release() { redeploy_retained_release "$1" "$2"; }
+
 rollback() {
   local reason="$1"
   trap - ERR
@@ -115,15 +186,7 @@ rollback() {
   rollback_started=1
   log "deployment failed: ${reason}; rolling back to ${previous_sha}"
   git -C "${APP_DIR}" reset --hard "${previous_sha}"
-  set_build_provenance "${previous_sha}"
-  cd "${compose_dir}"
-  local rollback_config
-  rollback_config="$(mktemp)"
-  docker compose config --format json >"${rollback_config}"
-  validate_financial_locks "${rollback_config}"
-  rm -f "${rollback_config}"
-  docker compose build
-  docker compose up -d --remove-orphans
+  redeploy_pinned_release "${previous_sha}" "failed-deploy rollback"
   health_check || fail 'rollback container did not become healthy'
   verify_container_sha "${previous_sha}" || fail 'rollback container SHA is incorrect'
   fail "new deployment was rolled back safely: ${reason}"
@@ -187,6 +250,10 @@ rendered_config="$(mktemp)"
 docker compose config --format json >"${rendered_config}"
 validate_financial_locks "${rendered_config}"
 
+# Retain the *currently running* image (whatever deploy-* / other tag it has)
+# under the deterministic rollback reference before building a candidate (F07).
+retain_running_image_for_rollback "${previous_sha}"
+assert_retained_rollback_image "${previous_sha}"
 log 'building the new image with immutable commit provenance'
 docker compose build --pull
 log 'starting the updated services'

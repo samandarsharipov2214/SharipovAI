@@ -1,4 +1,6 @@
-FROM python:3.12-slim
+# F08: pin base by immutable digest (readable tag + digest).
+# Update only via intentional base-image bump with CI (see docs/deploy-reproducibility.md).
+FROM python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
 
 ARG VCS_REF=unknown
 ARG BUILD_DATE=unknown
@@ -23,9 +25,10 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl git \
     && rm -rf /var/lib/apt/lists/*
 
+# F08: install only deploy-locked exact pins from requirements.txt (no floating ranges,
+# no unbound pip self-upgrade).
 COPY requirements.txt ./
-RUN python -m pip install --upgrade pip \
-    && python -m pip install -r requirements.txt \
+RUN python -m pip install --no-cache-dir -r requirements.txt \
     && python -m pip check
 
 COPY . .
