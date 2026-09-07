@@ -22,8 +22,9 @@ def test_backup_fails_closed_before_staging_when_disk_headroom_is_low() -> None:
     assert "SHARIPOVAI_BACKUP_RESERVE_MIB:-512" in text
     assert "df -P -B1" in text
     assert "require_free_space 0 'initial preflight'" in text
-    assert "require_free_space \"$((source_bytes * 2))\" 'before staging persistent data'" in text
-    assert "require_free_space \"$staged_bytes\" 'before archive creation'" in text
+    assert "require_free_space \"$source_bytes\" 'before staging persistent data'" in text
+    assert "require_free_space 1048576 'before bounded archive creation'" in text
+    assert "BudgetWriter" in text
     assert text.index("require_free_space 0 'initial preflight'") < text.index("work=$(mktemp -d")
 
 
@@ -70,14 +71,14 @@ def test_hashing_is_streaming_and_host_heavy_work_is_deprioritized() -> None:
     assert ".read_bytes()" not in text
     assert 'handle.read(1024 * 1024)' in text
     assert "ionice -c2 -n7 nice -n 10" in text
-    assert 'run_low_priority tar -C "$work"' in text
+    assert 'run_low_priority python3 - "$work" "$archive_tmp"' in text
     assert 'run_low_priority sha256sum "$archive_tmp"' in text
 
 
 def test_archive_is_published_only_after_complete_partial_file() -> None:
     text = _script()
     assert 'archive_tmp=$(mktemp "$BACKUP_DIR/.sharipovai-$stamp.tar.gz.partial-XXXXXX")' in text
-    assert 'run_low_priority tar -C "$work" -czf "$archive_tmp"' in text
+    assert 'tarfile.open(fileobj=writer, mode="w|gz")' in text
     verify = 'tar -tzf "$archive_tmp" >/dev/null'
     assert verify in text
     assert "fail 'backup archive integrity verification failed or timed out'" in text
