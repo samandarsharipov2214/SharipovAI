@@ -570,6 +570,11 @@ def _normalize_last_close_by_symbol(raw: Any) -> dict[str, dict[str, Any]]:
             "trade_id": str(row.get("trade_id") or ""),
             "quantity": max(0.0, quantity),
         }
+        # Preserve additive failed-thesis evidence without fabricating missing
+        # legacy fields. The Council loop recovers legacy facts by exact trade ID.
+        for field in ("symbol", "reason", "net_pnl", "verified_market_data"):
+            if field in row:
+                normalized[clean_symbol][field] = row[field]
     return normalized
 
 
