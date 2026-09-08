@@ -235,8 +235,86 @@ fi
 volume_mount=$(docker volume inspect --format '{{.Mountpoint}}' "$volume_name" 2>/dev/null || true)
 [[ "$volume_mount" == /* && -d "$volume_mount" ]] || fail 'persistent data volume mountpoint could not be resolved safely'
 source_bytes=''
-if source_bytes=$(run_low_priority timeout --foreground --kill-after=5s "${SIZE_PROBE_TIMEOUT_SECONDS}s" \
-  du --apparent-size -s -B1 --one-file-system -- "$volume_mount" | awk 'NR == 1 {print $1}'); then
+# One deadline covers validation and all three attempts. Keep timeout's process
+# group handling so a stuck probe and its child are both bounded.
+if source_bytes=$(run_low_priority timeout --kill-after=5s "${SIZE_PROBE_TIMEOUT_SECONDS}s" \
+  python3 - "$volume_mount" "$SIZE_PROBE_TIMEOUT_SECONDS" <<'PY'
+import os
+import re
+import stat
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+source = Path(sys.argv[1])
+deadline = time.monotonic() + int(sys.argv[2])
+
+
+def source_identity():
+    # Never retry disappearance/replacement of the volume itself, or accept
+    # traversal, symlink aliases or the filesystem root as a source.
+    if str(source) != sys.argv[1] or source == Path("/") or source.resolve(strict=True) != source:
+        raise RuntimeError("unsafe persistent data source path")
+    info = source.lstat()
+    if not stat.S_ISDIR(info.st_mode):
+        raise RuntimeError("persistent data source is not a real directory")
+    return info.st_dev, info.st_ino
+
+
+def transient_entries(stderr):
+    lines = stderr.splitlines()
+    if not lines:
+        return False
+    for line in lines:
+        match = re.fullmatch(rb"du: cannot access '(.+)': No such file or directory", line)
+        if not match:
+            return False
+        raw = os.fsdecode(match[1])
+        entry = Path(raw)
+        # Every diagnostic must name a strict descendant, with no traversal or
+        # symlink escape. Unknown/ambiguous diagnostics always fail closed.
+        if (not entry.is_absolute() or str(entry) != raw or ".." in entry.parts
+                or source not in entry.parents or entry.resolve(strict=False) != entry):
+            return False
+    return True
+
+
+identity = source_identity()
+for attempt in range(1, 4):
+    if source_identity() != identity:
+        raise RuntimeError("persistent data source changed during size probe")
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise SystemExit("persistent data size probe timed out")
+    try:
+        result = subprocess.run(
+            ["du", "--null", "--apparent-size", "-s", "-B1", "--one-file-system", "--", str(source)],
+            capture_output=True, timeout=remaining,
+            env=os.environ | {"LC_ALL": "C", "QUOTING_STYLE": "shell-always"},
+        )
+    except subprocess.TimeoutExpired as exc:
+        sys.stderr.buffer.write(exc.stderr or b"")
+        raise SystemExit("persistent data size probe timed out")
+    # Preserve all diagnostics, including those from a retry that later passes.
+    sys.stderr.buffer.write(result.stderr)
+    sys.stderr.buffer.flush()
+    if source_identity() != identity:
+        raise RuntimeError("persistent data source changed during size probe")
+    if result.returncode == 0:
+        match = re.fullmatch(rb"([0-9]+)\t" + re.escape(os.fsencode(source)) + rb"\0", result.stdout)
+        if result.stderr or not match:
+            raise SystemExit("persistent data size probe returned an invalid value or diagnostic")
+        print(match[1].decode("ascii"))
+        break
+    if result.returncode != 1 or not transient_entries(result.stderr):
+        raise SystemExit(f"persistent data size probe failed (exit={result.returncode})")
+    if attempt == 3:
+        raise SystemExit("persistent data size probe exhausted 3 transient ENOENT attempts")
+    print(f"[backup] transient in-volume ENOENT; retrying size probe ({attempt}/3)", file=sys.stderr)
+    time.sleep(0.1)
+PY
+); then
   :
 else
   fail 'persistent data size probe failed or timed out'
