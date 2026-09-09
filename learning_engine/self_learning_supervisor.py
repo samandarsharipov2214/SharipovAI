@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import math
 import threading
 import time
 from typing import Any, Mapping
@@ -67,7 +68,12 @@ class SelfLearningSupervisor:
                 skipped += 1
                 continue
             try:
-                evidence = self._evidence_from_settlement(decision_id, settlement, timestamp)
+                # The database commit time is when legacy settlement evidence
+                # became available, never the earlier decision-assessment time.
+                evidence = self._evidence_from_settlement(decision_id, settlement, int(row["updated_at_ms"]))
+                if evidence["evidence_available_at_ms"] > timestamp:
+                    skipped += 1
+                    continue
                 self.attribution.record(evidence)
                 processed += 1
             except (KeyError, RuntimeError, TypeError, ValueError, OSError) as exc:
@@ -210,17 +216,32 @@ class SelfLearningSupervisor:
             raise ValueError("decision assessment opinions are missing")
         assessment = payload.get("assessment") if isinstance(payload.get("assessment"), Mapping) else {}
         evidence_class, verified_market_data = _require_verified_settlement_evidence(settlement)
+        occurred = int(settlement.get("settled_at_ms") or fallback_timestamp)
+        if occurred < int(events[0].get("created_at_ms") or 0) or fallback_timestamp < occurred:
+            raise ValueError("settlement time/availability cannot precede its evidence")
+        # DQ AgentOpinion persistence explicitly uses 0..1; AgentEvidence uses
+        # percent. Convert at this typed boundary, with no magnitude guessing.
+        normalized = []
+        for opinion in opinions:
+            agent = dict(opinion)
+            raw = agent.get("confidence")
+            if isinstance(raw, bool) or not isinstance(raw, (float, int)) or not math.isfinite(raw) or not 0 <= raw <= 1:
+                raise ValueError("canonical assessment confidence must be a probability in [0, 1]")
+            agent["confidence"] = raw * 100.0
+            normalized.append(agent)
         return {
             "outcome_id": f"paper:{decision_id}",
             "decision_id": decision_id,
             "source": "paper",
             "selected_action": settlement.get("selected_action") or assessment.get("action") or "WAIT",
-            "realized_action": settlement.get("realized_action") or "HOLD",
+            "realized_action": settlement.get("realized_action"),
+            "realized_outcome": settlement.get("realized_outcome"),
             "net_pnl": settlement.get("net_pnl"),
             "drawdown_contribution": settlement.get("drawdown_contribution", 0.0),
             "regime": assessment.get("regime") or "unknown",
-            "agents": _agents_with_settlement_attestation(opinions, evidence_class, verified_market_data),
-            "occurred_at_ms": int(settlement.get("settled_at_ms") or events[0].get("created_at_ms") or fallback_timestamp),
+            "agents": _agents_with_settlement_attestation(normalized, evidence_class, verified_market_data),
+            "occurred_at_ms": occurred,
+            "evidence_available_at_ms": fallback_timestamp,
             "evidence_class": evidence_class,
             "verified_market_data": verified_market_data,
         }
