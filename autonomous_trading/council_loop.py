@@ -12,8 +12,9 @@ import math
 import os
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_DOWN, ROUND_UP
-from threading import Thread
+from threading import Thread, local
 from typing import Any, Callable, Mapping, Sequence
+from uuid import uuid4
 
 from decision_quality import CandidateEvidencePacket
 from risk_engine.paper_reentry import (
@@ -36,6 +37,8 @@ from .runtime_e2e_shadow_v2 import (
 )
 from .runtime_shadow_integration_v2 import RuntimeShadowV2
 from .trade_identity import new_trade_id
+from .economic_observer import EconomicOpportunityObserver
+from learning_engine.paper_economic_shadow import finite
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,13 +87,18 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         instrument_rules: BybitInstrumentRulesService,
         cost_model: ExecutionCostModel | None = None,
         post_stop_policy_mode: str = "observe",
+        economic_observer: EconomicOpportunityObserver | None = None,
     ) -> None:
         if post_stop_policy_mode not in {"observe", "enforce"}:
             raise ValueError("post_stop_policy_mode must be observe or enforce")
         self.post_stop_policy_mode = post_stop_policy_mode
+        self.economic_observer = economic_observer
+        self._economic_capture = local()
         super().__init__(stream, database=database or decision_runtime.database)
         if decision_runtime.database.dsn != self.database.dsn:
             raise ValueError("paper loop and decision runtime must use the same database")
+        if economic_observer is not None and economic_observer.database.dsn != self.database.dsn:
+            raise ValueError("economic observer must use the canonical PAPER database")
         if float(shadow_timeout_seconds) <= 0:
             raise ValueError("shadow_timeout_seconds must be positive")
         self.decision_runtime = decision_runtime
@@ -129,6 +137,16 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         self._recover_pending_protective_executions()
 
     def _trace(self, symbol: str, status: str, reason: str, **extra: Any) -> dict[str, Any]:
+        rows = getattr(self._economic_capture, "rows", {})
+        if symbol in rows:
+            if extra.get("phase") == "decision_quality":
+                rows[symbol]["decision_quality"] = {k: v for k, v in extra.items()
+                    if k.startswith("decision_quality_") or k in {"final_decision", "authorized"}}
+            rows[symbol]["result"] = {"status": status, "reason": reason, **{
+                k: v for k, v in extra.items() if k in {
+                    "phase", "decision_id", "decision_quality_action", "decision_quality_confidence",
+                    "decision_quality_agreement", "decision_quality_blocked", "final_decision",
+                    "authorized", "anti_churn_blocked", "candidate_validation_valid"}}}
         return persist_decision_trace(
             self.database,
             symbol,
@@ -152,6 +170,41 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         }
 
     def tick(self) -> None:
+        if self.economic_observer is None:
+            self._tick_council()
+            return
+        # Capture scalars only. Source reads and evidence writes happen on a
+        # separate bounded worker after champion execution completes.
+        rows = {symbol: {"opportunity_id": "paper-economic-" + uuid4().hex,
+            "scope": self.scope, "symbol": symbol, "decision_time_ms": self._now_ms(),
+            **self._strategy_evidence(), "decision_id": None, "proposal_present": False,
+            "regime": "unknown", "market_verified": False, "quote": None,
+            "council": None, "risk": {"status": "NOT_EVALUATED"},
+            "result": {"status": "UNAVAILABLE", "reason": "cycle did not reach a decision"},
+            "cost_model": {"fee_rate": self.cost_model.fee_rate,
+                           "slippage_bps": self.cost_model.slippage_bps}}
+            for symbol in self.stream.symbols}
+        self._economic_capture.rows = rows
+        try:
+            self._tick_council()
+        finally:
+            self._economic_capture.rows = {}
+            try:
+                self.economic_observer.submit(list(rows.values()))
+            except Exception:
+                self.economic_observer.failed += len(rows)
+
+    def start(self) -> None:
+        if self.economic_observer is not None:
+            self.economic_observer.start()
+        super().start()
+
+    def stop(self) -> None:
+        super().stop()
+        if self.economic_observer is not None:
+            self.economic_observer.stop()
+
+    def _tick_council(self) -> None:
         with self._lock:
             self._recover_pending_authorized_executions()
             self._recover_pending_protective_executions()
@@ -180,6 +233,14 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                     continue
 
                 position = self._state["positions"].get(symbol)
+                observation = getattr(self._economic_capture, "rows", {}).get(symbol)
+                if observation is not None:
+                    observation.update(decision_time_ms=self._now_ms(),
+                        market_verified=market.get("verified") is True,
+                        portfolio_before=self._proposal_state_snapshot(),
+                        quote={key: finite(getattr(quote, key, None)) for key in (
+                            "price", "bid_price", "ask_price", "received_at_unix_ms",
+                            "change_24h_percent", "volume_24h")})
                 if position:
                     # Capital-preservation exits are intentionally local and
                     # immediate.  If none fires, keep the position available
@@ -205,10 +266,24 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                     trace = read_decision_trace(self.database, symbol) or {}
                     reason = str(trace.get("reason") or "no fresh canonical council proposal")
                     action = "BLOCK" if str(trace.get("status") or "").upper() == "BLOCK" else "WAIT"
+                    if observation is not None:
+                        observation["result"] = {"status": action, "reason": reason,
+                            "phase": trace.get("phase") or "no_proposal"}
                     self._event(action, reason, symbol)
                     continue
 
                 decision_ts_ms = self._now_ms()
+                if observation is not None:
+                    packet = proposal.evidence_packet
+                    observation.update(decision_time_ms=decision_ts_ms,
+                        decision_id=proposal.decision_id, proposal_present=True,
+                        regime=proposal.regime,
+                        council={"opinions": [dict(item) for item in proposal.agent_payloads],
+                            "general_controller_directive": proposal.general_controller_decision.value,
+                            "side": packet.side.value, "market_regime": packet.market_regime.value,
+                            "sources": list(packet.data_sources), "signal_evidence": list(packet.signal_evidence),
+                            "news_evidence": list(packet.news_evidence), "cost_snapshot_id": packet.cost_snapshot_id},
+                        risk={"status": "ASSESSED", "score": packet.risk_score, "blocks": list(packet.risk_blocks)})
                 try:
                     authorization = self.decision_runtime.assess_entry(
                         proposal.decision_id,
@@ -1749,6 +1824,8 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
 
     def snapshot(self) -> dict[str, Any]:
         state = super().snapshot()
+        state["economic_shadow"] = self.economic_observer.status() if self.economic_observer is not None else {
+            "status": "NOT_INSTALLED", "execution_authority": False}
         traces = read_decision_traces(self.database, self.stream.symbols)
         shadow_records = state.get("v2_shadow_records", {})
         if not isinstance(shadow_records, dict):

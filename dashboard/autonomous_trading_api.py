@@ -22,6 +22,7 @@ from autonomous_trading.status_snapshot import nonblocking_loop_snapshot
 from exchange_connector.market_data import MarketDataService
 from exchange_connector.multi_exchange_consensus import MultiExchangeConsensus
 from storage import ProjectDatabase, list_json_items
+from autonomous_trading.economic_observer import EconomicOpportunityObserver
 
 _NEWS_GROUPS = {
     "crypto_ai": ("crypto", "exchange", "token", "blockchain", "regulation"),
@@ -78,6 +79,7 @@ def install_autonomous_trading_api(app: FastAPI) -> None:
         database=database,
         shadow_gate_provider=shadow_gate_provider,
         instrument_rules=instrument_rules,
+        economic_observer=EconomicOpportunityObserver(database),
     )
     testnet_bridge = AutonomousTestnetBridge(database=database)
     app.state.market_stream = stream
