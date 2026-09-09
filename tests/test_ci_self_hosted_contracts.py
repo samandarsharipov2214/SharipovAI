@@ -17,10 +17,10 @@ HEAVY_GITHUB_HOSTED_WORKFLOWS = (
     "frontend-vite.yml",
     "secret-history-scan.yml",
     "phase11-hardening.yml",
+    "stabilization-dashboard.yml",
 )
 
 HYBRID_PR_HOSTED_WORKFLOWS = (
-    "stabilization-dashboard.yml",
     "web2.yml",
 )
 

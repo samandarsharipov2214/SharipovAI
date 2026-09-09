@@ -44,10 +44,11 @@ jobs:
       ${{
         (github.event_name == 'pull_request' &&
          github.event.pull_request.head.repo.full_name == github.repository) ||
-        (github.event_name != 'pull_request' &&
-         vars.SHARIPOVAI_SELF_HOSTED_CI == '1')
+        github.event_name != 'pull_request'
       }}
-    runs-on: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["self-hosted","linux","x64","sharipovai-ci"]') }}
+    # Imports and pytest use disposable SQLite; merged-release verification must
+    # remain available independently of the production VPS runner.
+    runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
       DATABASE_URL: sqlite:////tmp/sharipovai-dashboard-${{ github.run_id }}.db
