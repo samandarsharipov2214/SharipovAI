@@ -190,7 +190,10 @@ elif a[:2] == ['image', 'inspect']:
     else: print(json.dumps([{'Id': a[-1], 'Config': {'Labels': {'org.opencontainers.image.revision': revision}}}]))
 elif a[0] == 'inspect':
     fmt = a[2]
-    print(image_id if fmt == '{{.Image}}' else sha if 'revision' in fmt else health)
+    if 'RestartCount' in fmt:
+        print('running '+health+' 0 0 false')
+    else:
+        print(image_id if fmt == '{{.Image}}' else sha if 'revision' in fmt else health)
 elif a[0] == 'exec':
     assert a[1:] == ['sharipovai','printenv','SHARIPOVAI_BUILD_SHA']
     print(sha)
@@ -216,7 +219,7 @@ elif a[0] == 'compose':
 else: raise AssertionError(a)
 path.write_text(json.dumps(s))
 ''')
-    (binaries / "curl").write_text('#!/bin/sh\n[ "$FAKE_MODE" != "http_failure" ]\n')
+    (binaries / "curl").write_text('#!/bin/sh\n[ "$FAKE_MODE" != "http_failure" ] || exit 22\nprintf 200\n')
     for p in binaries.iterdir(): p.chmod(0o700)
     script = tmp_path / "updater.sh"
     # GitHub-hosted workers are unprivileged. Only bypass the root guard in this
@@ -226,7 +229,7 @@ path.write_text(json.dumps(s))
     env = {**os.environ, "PATH": str(binaries) + os.pathsep + os.environ['PATH'],
            "APP_DIR": str(checkout), "LOCK_FILE": str(tmp_path / "deploy.lock"), "BRANCH": "main", "FETCH_REMOTE": "origin",
            "FAKE_STATE": str(state), "FAKE_LOG": str(tmp_path / "events.jsonl"), "FAKE_MODE": mode,
-           "HEALTH_ATTEMPTS": "1", "HEALTH_DELAY_SECONDS": "0", "SHARIPOVAI_EXPECTED_TARGET_SHA": target}
+           "HEALTH_TIMEOUT_SECONDS": "2", "HEALTH_DELAY_SECONDS": "0.1", "SHARIPOVAI_EXPECTED_TARGET_SHA": target}
     return checkout, script, env, old, target
 
 

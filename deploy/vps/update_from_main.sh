@@ -7,7 +7,7 @@ BRANCH="${BRANCH:-main}"
 FETCH_REMOTE="${FETCH_REMOTE:-origin}"
 LOCK_FILE="${LOCK_FILE:-/run/lock/sharipovai-deploy.lock}"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:8000/health}"
-HEALTH_ATTEMPTS="${HEALTH_ATTEMPTS:-30}"
+HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-360}"
 HEALTH_DELAY_SECONDS="${HEALTH_DELAY_SECONDS:-2}"
 EXPECTED_TARGET_SHA="${SHARIPOVAI_EXPECTED_TARGET_SHA:-}"
 
@@ -56,15 +56,79 @@ cleanup() {
 trap cleanup EXIT
 
 health_check() {
-  local attempt
-  for ((attempt = 1; attempt <= HEALTH_ATTEMPTS; attempt++)); do
-    if [[ "$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' sharipovai 2>/dev/null || true)" == healthy ]] \
-      && curl --fail --silent --show-error --max-time 5 "${HEALTH_URL}" >/dev/null; then
-      return 0
-    fi
-    sleep "${HEALTH_DELAY_SECONDS}"
-  done
-  return 1
+  # Keep this probe in the parsed function: checkout reset during rollback must
+  # not replace it with an older, shorter readiness contract.
+  python3 - "${HEALTH_URL}" "${HEALTH_TIMEOUT_SECONDS}" "${HEALTH_DELAY_SECONDS}" <<'HEALTH_PY'
+import math
+import subprocess
+import sys
+import time
+
+
+def check_health(url, timeout_seconds, delay_seconds):
+    if not (math.isfinite(timeout_seconds) and 1 <= timeout_seconds <= 3600
+            and math.isfinite(delay_seconds) and 0 < delay_seconds <= 30):
+        raise ValueError("health deadline/delay outside bounded range")
+    started = time.monotonic()
+    deadline = started + timeout_seconds
+    last_state = "unavailable"
+    last_probe = "not_started"
+    attempts = 0
+
+    def probe(command):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("startup deadline reached")
+        return subprocess.run(command, capture_output=False, stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL, text=True, check=False,
+                              timeout=min(5.0, remaining))
+
+    while time.monotonic() < deadline:
+        attempts += 1
+        try:
+            result = probe([
+                "docker", "inspect", "--format",
+                "{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}} "
+                "{{.RestartCount}} {{.State.ExitCode}} {{.State.OOMKilled}}", "sharipovai",
+            ])
+            last_probe = "docker_failed"
+            if result.returncode == 0:
+                state, health, restarts, exit_code, oom = result.stdout.strip().split()
+                if (state not in {"running", "restarting", "exited", "created", "paused", "dead", "removing"}
+                        or health not in {"healthy", "unhealthy", "starting", "missing"}
+                        or oom not in {"true", "false"}):
+                    raise ValueError("invalid Docker state")
+                last_state = f"{state}/{health} restarts={int(restarts)} exit={int(exit_code)} oom={oom}"
+                last_probe = "docker_not_healthy"
+                if state == "running" and health == "healthy":
+                    remaining = deadline - time.monotonic()
+                    result = probe(["curl", "--fail", "--silent", "--max-time",
+                                    str(max(0.001, min(5.0, remaining))),
+                                    "--output", "/dev/null", "--write-out", "%{http_code}", url])
+                    last_probe = "http_failed"
+                    if result.returncode == 0 and result.stdout.strip() == "200" and time.monotonic() < deadline:
+                        print(f"HEALTH_READY elapsed={time.monotonic() - started:.3f}s attempts={attempts} {last_state}")
+                        return True
+        except (OSError, ValueError, subprocess.TimeoutExpired, TimeoutError) as exc:
+            # Never emit exception payloads, URL, environment, or application
+            # logs. The allowlisted last state is bounded timeout diagnostics.
+            last_probe = type(exc).__name__
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(delay_seconds, remaining))
+    print(f"HEALTH_TIMEOUT elapsed={time.monotonic() - started:.3f}s "
+          f"limit={timeout_seconds:g}s attempts={attempts} last={last_state} probe={last_probe}", file=sys.stderr)
+    return False
+
+
+if __name__ == "__main__":
+    try:
+        accepted = check_health(sys.argv[1], float(sys.argv[2]), float(sys.argv[3]))
+    except (ValueError, IndexError):
+        print("HEALTH_CONFIG_INVALID: bounded numeric timeout/delay required", file=sys.stderr)
+        sys.exit(2)
+    sys.exit(0 if accepted else 1)
+HEALTH_PY
 }
 
 set_build_provenance() {
