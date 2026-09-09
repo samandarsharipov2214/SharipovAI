@@ -149,7 +149,7 @@ def test_exact_sha_rollback_is_locked_backed_up_and_self_restoring():
         "retain_running_image_for_rollback",
         "--no-build",
         "smoke_check.sh production",
-        "/api/health",
+        "http://127.0.0.1:8000/health",
     )
     assert all(token in script for token in required)
     assert "docker compose build" not in script
