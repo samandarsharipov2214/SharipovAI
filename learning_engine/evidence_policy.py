@@ -76,7 +76,7 @@ class OutcomeEvidence:
     decision_id: str
     source: str
     selected_action: str
-    realized_action: str
+    realized_action: str | None
     net_pnl: float
     drawdown_contribution: float
     regime: str
@@ -84,6 +84,8 @@ class OutcomeEvidence:
     occurred_at_ms: int
     evidence_class: str = "verified_market"
     verified_market_data: bool = True
+    realized_outcome: str | None = None
+    evidence_available_at_ms: int | None = None
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "OutcomeEvidence":
@@ -96,9 +98,18 @@ class OutcomeEvidence:
         if value.get("verified_market_data") is not True:
             raise ValueError("verified market evidence is required")
         selected = str(value.get("selected_action") or "WAIT").strip().upper()
-        realized = str(value.get("realized_action") or "HOLD").strip().upper()
-        if selected not in _ALLOWED_ACTIONS or realized not in _ALLOWED_ACTIONS:
+        realized = str(value["realized_action"]).strip().upper() if value.get("realized_action") is not None else None
+        economic = str(value["realized_outcome"]).strip().upper() if value.get("realized_outcome") is not None else None
+        if selected not in _ALLOWED_ACTIONS or (realized is not None and realized not in _ALLOWED_ACTIONS):
             raise ValueError("invalid selected or realized action")
+        if economic not in {None, "PROFIT", "LOSS", "FLAT"}:
+            raise ValueError("invalid economic outcome")
+        if realized is None and economic is None:
+            raise ValueError("observed direction or economic outcome is required")
+        net_pnl = _finite(value.get("net_pnl"), "net_pnl")
+        expected = "PROFIT" if net_pnl > 1e-9 else "LOSS" if net_pnl < -1e-9 else "FLAT"
+        if economic is not None and economic != expected:
+            raise ValueError("economic outcome does not reconcile with net PnL")
         raw_agents = value.get("agents") or value.get("opinions") or []
         if not isinstance(raw_agents, Sequence) or isinstance(raw_agents, (str, bytes)):
             raise TypeError("agents must be a sequence")
@@ -111,19 +122,24 @@ class OutcomeEvidence:
         occurred = int(value.get("occurred_at_ms") or value.get("settled_at_ms") or 0)
         if occurred <= 0:
             raise ValueError("occurred_at_ms must be positive")
+        available = int(value.get("evidence_available_at_ms") or occurred)
+        if available < occurred:
+            raise ValueError("evidence availability cannot precede the outcome")
         return cls(
             outcome_id=_identifier(value.get("outcome_id"), "outcome_id"),
             decision_id=_identifier(value.get("decision_id"), "decision_id"),
             source=source,
             selected_action=selected,
             realized_action=realized,
-            net_pnl=_finite(value.get("net_pnl"), "net_pnl"),
+            net_pnl=net_pnl,
             drawdown_contribution=max(0.0, _finite(value.get("drawdown_contribution"), "drawdown_contribution")),
             regime=_identifier(value.get("regime") or "unknown", "regime"),
             agents=agents,
             occurred_at_ms=occurred,
             evidence_class=evidence_class,
             verified_market_data=True,
+            realized_outcome=economic,
+            evidence_available_at_ms=available,
         )
 
     def to_dict(self) -> dict[str, Any]:

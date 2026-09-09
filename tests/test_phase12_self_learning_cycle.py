@@ -9,6 +9,11 @@ from meta_ai_persistence import EVENT_NAMESPACE
 from storage import ProjectDatabase
 
 
+@pytest.fixture(autouse=True)
+def _fixed_settlement_commit_time(monkeypatch):
+    monkeypatch.setattr("storage.project_database._now_ms", lambda: 1_700_000_000_500)
+
+
 def _database(tmp_path) -> ProjectDatabase:
     database = ProjectDatabase(f"sqlite:///{tmp_path / 'phase12.db'}")
     database.initialize()
@@ -54,10 +59,10 @@ def test_outcome_replay_repairs_missing_agent_projection_without_double_count(tm
     database = _database(tmp_path)
     service = OutcomeAttributionService(database)
     service.record(_outcome())
-    metric = database.get_json("self_learning_agent_metrics", "market-agent")
+    metric = database.get_json("self_learning_agent_metrics_v2", "market-agent")
     assert metric is not None
     database.put_json(
-        "self_learning_agent_metrics",
+        "self_learning_agent_metrics_v2",
         "market-agent",
         {
             "agent_id": "market-agent",
@@ -73,12 +78,12 @@ def test_outcome_replay_repairs_missing_agent_projection_without_double_count(tm
         expected_version=int(metric["version"]),
     )
     service.record(_outcome())
-    repaired = database.get_json("self_learning_agent_metrics", "market-agent")
+    repaired = database.get_json("self_learning_agent_metrics_v2", "market-agent")
     assert repaired is not None
     assert repaired["value"]["outcome_count"] == 1
     assert repaired["value"]["applied_outcomes"] == ["outcome-1"]
     service.record(_outcome())
-    stable = database.get_json("self_learning_agent_metrics", "market-agent")
+    stable = database.get_json("self_learning_agent_metrics_v2", "market-agent")
     assert stable is not None
     assert stable["value"]["outcome_count"] == 1
 
@@ -108,7 +113,7 @@ def test_supervisor_ingests_settlement_exactly_once(tmp_path) -> None:
         EVENT_NAMESPACE,
         "decision_assessment",
         "decision-1",
-        {"assessment": {"action": "BUY", "regime": "trend"}, "opinions": _outcome()["agents"]},
+        {"assessment": {"action": "BUY", "regime": "trend"}, "opinions": [{**agent, "confidence": agent["confidence"] / 100} for agent in _outcome()["agents"]]},
         event_id="decision-assessment-decision-1",
         created_at_ms=1_700_000_000_000,
     )
@@ -181,13 +186,13 @@ def test_supervisor_normalizes_stripped_verified_council_opinions(tmp_path) -> N
     assert result["processed_count"] == 1
     assert result["failed_count"] == 0
     assert result["execution_authority"] is False
-    recorded = database.get_json("self_learning_outcomes", "paper:decision-f18")
+    recorded = database.get_json("self_learning_outcomes_v2", "paper:decision-f18")
     assert recorded is not None
     assert recorded["value"]["evidence_class"] == "verified_market"
     assert recorded["value"]["verified_market_data"] is True
     attribution_ids = {item["agent_id"] for item in recorded["value"]["attributions"]}
     assert attribution_ids == {"market_intelligence", "risk_intelligence"}
-    market = database.get_json("self_learning_agent_metrics", "market_intelligence")
+    market = database.get_json("self_learning_agent_metrics_v2", "market_intelligence")
     assert market is not None
     assert market["value"]["outcome_count"] == 1
 
@@ -350,7 +355,7 @@ def test_supervisor_processes_explicit_verified_exchange_class(tmp_path) -> None
     result = SelfLearningSupervisor(database).run_once(now_ms=1_700_000_001_000)
     assert result["processed_count"] == 1
     assert result["failed_count"] == 0
-    recorded = database.get_json("self_learning_outcomes", "paper:decision-verified-exchange")
+    recorded = database.get_json("self_learning_outcomes_v2", "paper:decision-verified-exchange")
     assert recorded is not None
     assert recorded["value"]["evidence_class"] == "verified_exchange"
     assert recorded["value"]["verified_market_data"] is True

@@ -47,7 +47,7 @@ class ResearchChallengerService:
         qualified = [
             row for row in agents
             if isinstance(row, Mapping)
-            and int(row.get("outcome_count") or 0) >= self.policy.minimum_agent_outcomes
+            and int(row.get("direction_labeled_count", row.get("outcome_count")) or 0) >= self.policy.minimum_agent_outcomes
             and _number(row.get("direction_accuracy")) >= self.policy.minimum_direction_accuracy
             and _number(row.get("mean_confidence_error")) <= self.policy.maximum_calibration_error
         ]

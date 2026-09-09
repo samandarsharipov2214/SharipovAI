@@ -10,8 +10,11 @@ from storage import ProjectDatabase, VersionConflict, list_json_items
 
 from .evidence_policy import OutcomeEvidence
 
-_OUTCOME_NAMESPACE = "self_learning_outcomes"
-_AGENT_NAMESPACE = "self_learning_agent_metrics"
+# Prior projections contain incompatible units, inferred HOLD labels and early
+# timestamps. Preserve them for audit; rebuild corrected evidence separately in
+# the same canonical database, without modifying any financial source record.
+_OUTCOME_NAMESPACE = "self_learning_outcomes_v2"
+_AGENT_NAMESPACE = "self_learning_agent_metrics_v2"
 _EVENT_NAMESPACE = "self_learning_events"
 
 
@@ -19,9 +22,9 @@ _EVENT_NAMESPACE = "self_learning_events"
 class AgentAttribution:
     agent_id: str
     action: str
-    direction_correct: bool
+    direction_correct: bool | None
     confidence: float
-    confidence_error: float
+    confidence_error: float | None
     evidence_score: float
     pnl_attribution: float
     drawdown_attribution: float
@@ -50,15 +53,18 @@ class OutcomeAttributionService:
 
         attributions = self._attribute(outcome)
         document = {
+            "evidence_schema_version": 2,
             "outcome_id": outcome.outcome_id,
             "decision_id": outcome.decision_id,
             "source": outcome.source,
             "selected_action": outcome.selected_action,
             "realized_action": outcome.realized_action,
+            "realized_outcome": outcome.realized_outcome,
             "net_pnl": outcome.net_pnl,
             "drawdown_contribution": outcome.drawdown_contribution,
             "regime": outcome.regime,
             "occurred_at_ms": outcome.occurred_at_ms,
+            "evidence_available_at_ms": outcome.evidence_available_at_ms,
             "evidence_class": outcome.evidence_class,
             "verified_market_data": True,
             "attributions": [item.to_dict() for item in attributions],
@@ -84,8 +90,8 @@ class OutcomeAttributionService:
                 "agent_count": len(attributions),
                 "evidence_sha256": evidence_sha,
             },
-            event_id=f"self-learning-outcome-{outcome.outcome_id}",
-            created_at_ms=outcome.occurred_at_ms,
+            event_id=f"self-learning-outcome-v2-{outcome.outcome_id}",
+            created_at_ms=outcome.evidence_available_at_ms or outcome.occurred_at_ms,
         )
         return {**document, "version": version, "event_id": event_id, "idempotent": False}
 
@@ -130,7 +136,10 @@ class OutcomeAttributionService:
         regimes = sorted({str(item.get("regime") or "unknown") for item in outcomes})
         return {
             "status": "ok",
+            "evidence_schema_version": 2,
             "verified_outcome_count": len(outcomes),
+            "direction_labeled_outcome_count": sum(item.get("realized_action") is not None for item in outcomes),
+            "economic_only_outcome_count": sum(item.get("realized_action") is None for item in outcomes),
             "agent_count": len(agents),
             "regime_count": len(regimes),
             "regimes": regimes,
@@ -159,14 +168,14 @@ class OutcomeAttributionService:
         result: list[AgentAttribution] = []
         for agent in outcome.agents:
             weight = contribution_by_agent.get(agent.agent_id, 0.0)
-            correct = agent.action == outcome.realized_action
+            correct = agent.action == outcome.realized_action if outcome.realized_action is not None else None
             result.append(
                 AgentAttribution(
                     agent_id=agent.agent_id,
                     action=agent.action,
                     direction_correct=correct,
                     confidence=agent.confidence,
-                    confidence_error=abs(agent.confidence / 100.0 - (1.0 if correct else 0.0)),
+                    confidence_error=abs(agent.confidence / 100.0 - float(correct)) if correct is not None else None,
                     evidence_score=agent.evidence_score,
                     pnl_attribution=outcome.net_pnl * weight,
                     drawdown_attribution=outcome.drawdown_contribution * weight,
@@ -191,6 +200,7 @@ class OutcomeAttributionService:
             payload = dict(current["value"]) if current else {
                 "agent_id": attribution.agent_id,
                 "outcome_count": 0,
+                "direction_labeled_count": 0,
                 "correct_count": 0,
                 "confidence_error_sum": 0.0,
                 "attributed_pnl": 0.0,
@@ -203,8 +213,10 @@ class OutcomeAttributionService:
             if outcome.outcome_id in applied:
                 return
             payload["outcome_count"] = int(payload.get("outcome_count", 0)) + 1
-            payload["correct_count"] = int(payload.get("correct_count", 0)) + int(attribution.direction_correct)
-            payload["confidence_error_sum"] = float(payload.get("confidence_error_sum", 0.0)) + attribution.confidence_error
+            labeled = attribution.direction_correct is not None
+            payload["direction_labeled_count"] = int(payload.get("direction_labeled_count", 0)) + int(labeled)
+            payload["correct_count"] = int(payload.get("correct_count", 0)) + int(attribution.direction_correct is True)
+            payload["confidence_error_sum"] = float(payload.get("confidence_error_sum", 0.0)) + (attribution.confidence_error or 0.0)
             payload["attributed_pnl"] = float(payload.get("attributed_pnl", 0.0)) + attribution.pnl_attribution
             payload["attributed_drawdown"] = float(payload.get("attributed_drawdown", 0.0)) + attribution.drawdown_attribution
             regimes = dict(payload.get("regimes") or {})
@@ -214,11 +226,12 @@ class OutcomeAttributionService:
             sources[outcome.source] = int(sources.get(outcome.source, 0)) + 1
             payload["sources"] = sources
             payload["applied_outcomes"] = [*applied, outcome.outcome_id]
-            count = int(payload["outcome_count"])
-            payload["direction_accuracy"] = float(payload["correct_count"]) / count
-            payload["mean_confidence_error"] = float(payload["confidence_error_sum"]) / count
+            count = int(payload["direction_labeled_count"])
+            payload["direction_accuracy"] = float(payload["correct_count"]) / count if count else None
+            payload["mean_confidence_error"] = float(payload["confidence_error_sum"]) / count if count else None
             payload["learning_score"] = _learning_score(payload)
-            payload["updated_at_ms"] = outcome.occurred_at_ms
+            payload["evidence_schema_version"] = 2
+            payload["updated_at_ms"] = max(int(payload.get("updated_at_ms") or 0), outcome.evidence_available_at_ms or outcome.occurred_at_ms)
             try:
                 self.database.put_json(
                     _AGENT_NAMESPACE,
@@ -260,19 +273,24 @@ def _outcome_from_document(document: Mapping[str, Any]) -> OutcomeEvidence:
         "source": document.get("source"),
         "selected_action": document.get("selected_action"),
         "realized_action": document.get("realized_action"),
+        "realized_outcome": document.get("realized_outcome"),
         "net_pnl": document.get("net_pnl"),
         "drawdown_contribution": document.get("drawdown_contribution"),
         "regime": document.get("regime"),
         "agents": agents,
         "occurred_at_ms": document.get("occurred_at_ms"),
+        "evidence_available_at_ms": document.get("evidence_available_at_ms"),
         "evidence_class": document.get("evidence_class"),
         "verified_market_data": document.get("verified_market_data") is True,
     })
 
 
-def _learning_score(payload: Mapping[str, Any]) -> float:
+def _learning_score(payload: Mapping[str, Any]) -> float | None:
+    if not int(payload.get("direction_labeled_count") or 0):
+        return None
     accuracy = float(payload.get("direction_accuracy") or 0.0)
-    calibration = 1.0 - min(max(float(payload.get("mean_confidence_error") or 1.0), 0.0), 1.0)
+    error = payload.get("mean_confidence_error")
+    calibration = 1.0 - min(max(float(error if error is not None else 1.0), 0.0), 1.0)
     pnl = float(payload.get("attributed_pnl") or 0.0)
     drawdown = max(float(payload.get("attributed_drawdown") or 0.0), 0.0)
     economics = pnl / max(abs(pnl) + drawdown, 1.0)
