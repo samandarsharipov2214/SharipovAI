@@ -9,12 +9,17 @@ from __future__ import annotations
 import copy
 import hashlib
 import math
+import os
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_DOWN, ROUND_UP
 from threading import Thread
 from typing import Any, Callable, Mapping, Sequence
 
 from decision_quality import CandidateEvidencePacket
+from risk_engine.paper_reentry import (
+    PAPER_REENTRY_POLICY_VERSION,
+    post_stop_reentry_block,
+)
 from exchange_connector.bybit_instrument_rules import BybitInstrumentRulesService
 from trading_core.costs import ExecutionCostModel
 from trading_core.models import MarketEvent, Side
@@ -78,7 +83,11 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         shadow_timeout_seconds: float = 0.05,
         instrument_rules: BybitInstrumentRulesService,
         cost_model: ExecutionCostModel | None = None,
+        post_stop_policy_mode: str = "observe",
     ) -> None:
+        if post_stop_policy_mode not in {"observe", "enforce"}:
+            raise ValueError("post_stop_policy_mode must be observe or enforce")
+        self.post_stop_policy_mode = post_stop_policy_mode
         super().__init__(stream, database=database or decision_runtime.database)
         if decision_runtime.database.dsn != self.database.dsn:
             raise ValueError("paper loop and decision runtime must use the same database")
@@ -110,6 +119,8 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
             self._state["pending_protective_executions"] = {}
         if not isinstance(self._state.get("last_close_by_symbol"), dict):
             self._state["last_close_by_symbol"] = {}
+        if not isinstance(self._state.get("post_stop_reentry_assessments"), dict):
+            self._state["post_stop_reentry_assessments"] = {}
         # A close is already an immutable PAPER fact when the process comes
         # back.  Recover only explicitly marked, previously failed settlement
         # writes; do not infer settlements from arbitrary historical trades.
@@ -122,12 +133,23 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
             self.database,
             symbol,
             {
+                **self._strategy_evidence(),
+                "last_post_stop_assessment": self._state.get("post_stop_reentry_assessments", {}).get(symbol),
                 "status": status,
                 "reason": reason,
                 **extra,
             },
             now_ms=self._now_ms(),
         )
+
+    def _strategy_evidence(self) -> dict[str, str]:
+        build_sha = os.getenv("SHARIPOVAI_BUILD_SHA", "").strip().lower()
+        return {
+            "paper_strategy_version": f"{PAPER_REENTRY_POLICY_VERSION}:{self.post_stop_policy_mode}",
+            "paper_build_sha": build_sha
+            if len(build_sha) == 40 and all(c in "0123456789abcdef" for c in build_sha)
+            else "unknown",
+        }
 
     def tick(self) -> None:
         with self._lock:
@@ -635,6 +657,11 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         prepared["trade_id"] = f"paper_auth_{intent_id}"
         prepared["execution_intent_id"] = f"paper_authorized:{clean_side.lower()}:{decision_id}"
         evidence = self._authorization_evidence(authorization)
+        evidence.update(self._strategy_evidence())
+        if clean_side == "BUY":
+            evidence["post_stop_reentry_assessment"] = copy.deepcopy(
+                self._state.get("post_stop_reentry_assessments", {}).get(symbol)
+            )
         pending = self._state.setdefault("pending_authorized_executions", {})
         if any(
             str(item.get("symbol") or "").upper() == str(symbol).upper()
@@ -1013,6 +1040,8 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                     "evidence_class": "verified_market",
                     "verified_market_data": True,
                     "regime": str(entry_context.get("regime") or "unknown"),
+                    "paper_strategy_version": str(entry_context.get("paper_strategy_version") or "legacy_unversioned"),
+                    "paper_build_sha": str(entry_context.get("paper_build_sha") or "unknown"),
                 }
             )
             shadow = self._state.get("v2_shadow_records", {}).get(position["decision_id"])
@@ -1061,6 +1090,8 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
             "candidate_id": str(position.get("candidate_id") or "").strip(),
             "entry_price": float(position.get("entry_price", 0.0) or 0.0),
             "entry_fee": float(position.get("entry_fee", 0.0) or 0.0),
+            "entry_strategy_version": str(position.get("paper_strategy_version") or "legacy_unversioned"),
+            "entry_build_sha": str(position.get("paper_build_sha") or "unknown"),
             "entry_reference_price": float(
                 position.get("entry_reference_price", position.get("entry_price", 0.0)) or 0.0
             ),
@@ -1097,7 +1128,9 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
             self._state["realized_pnl"] += float(net)
             self._state["total_fees"] += execution["fee"]
             execution["gross_pnl"] = float(gross)
-            self._record_last_close(symbol, execution, self._pending_exit_context)
+            self._record_last_close(
+                symbol, execution, self._pending_exit_context, reason=reason, net_pnl=float(net)
+            )
             self._pending_execution = execution
             self._trade(
                 symbol,
@@ -1134,6 +1167,7 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
 
         now = self._now()
         item: dict[str, Any] = {
+            **self._strategy_evidence(),
             "trade_id": new_trade_id(),
             "created_at_ms": self._now_ms(),
             "time": now,
@@ -1176,6 +1210,8 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                         "evidence_class": "verified_market",
                         "verified_market_data": True,
                         "canonical_exit_protective": True,
+                        "entry_strategy_version": self._pending_exit_context.get("entry_strategy_version", "legacy_unversioned"),
+                        "entry_build_sha": self._pending_exit_context.get("entry_build_sha", "unknown"),
                     }
                 )
                 exit_decision_id = self._pending_exit_context.get("exit_decision_id", "")
@@ -1336,6 +1372,9 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         symbol: str,
         execution: Mapping[str, Any],
         exit_context: Mapping[str, Any] | None,
+        *,
+        reason: str,
+        net_pnl: float,
     ) -> None:
         """Persist restart-safe last-close evidence used only by the BUY anti-churn gate."""
 
@@ -1345,6 +1384,10 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
             closes = {}
             self._state["last_close_by_symbol"] = closes
         closes[str(symbol).upper()] = {
+            "symbol": str(symbol).upper(),
+            "reason": str(reason),
+            "net_pnl": float(net_pnl),
+            "verified_market_data": True,
             "closed_at_ms": self._now_ms(),
             "close_price": float(execution.get("execution_price") or 0.0),
             "decision_id": str(context.get("decision_id") or ""),
@@ -1355,7 +1398,7 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
             "slippage_cost": float(context.get("entry_slippage_cost") or 0.0)
             + float(execution.get("slippage_cost") or 0.0),
             "side": "SELL",
-            "trade_id": "",
+            "trade_id": str(execution.get("trade_id") or ""),
             "quantity": float(execution.get("quantity") or 0.0),
         }
 
@@ -1394,6 +1437,20 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
             return turnover
 
         last = self._last_close_for(symbol)
+        observed_at_ms = self._now_ms()
+        post_stop_reason = post_stop_reentry_block(last, symbol=symbol, now_ms=observed_at_ms)
+        self._state.setdefault("post_stop_reentry_assessments", {})[symbol] = {
+            "policy_version": PAPER_REENTRY_POLICY_VERSION,
+            "mode": self.post_stop_policy_mode,
+            "would_block": post_stop_reason is not None,
+            "reason": post_stop_reason or "no post-stop veto",
+            "observed_at_ms": observed_at_ms,
+            "last_close_trade_id": str((last or {}).get("trade_id") or ""),
+            "candidate_decision_id": authorization.decision_id,
+            "execution_authority": False,
+        }
+        if post_stop_reason and self.post_stop_policy_mode == "enforce":
+            return post_stop_reason
         if last is None:
             return None
 
@@ -1489,10 +1546,40 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
             return None
         row = closes.get(str(symbol).upper())
         if not isinstance(row, dict):
-            return None
-        if float(row.get("close_price") or 0.0) <= 0:
-            return None
-        return row
+            return {} if str(symbol).upper() in closes else None
+        # Pre-policy snapshots lack stop reason and net outcome. Recover only
+        # their exact immutable same-scope trade, never a different/latest trade
+        # or an unscoped account record. Failure remains visible to the BUY gate.
+        if all(key in row for key in ("reason", "net_pnl", "symbol", "verified_market_data")):
+            return row
+        trade_id = str(row.get("trade_id") or "")
+        if not trade_id:
+            return row
+        try:
+            record = self.database.get_json(self.trade_namespace, trade_id)
+        except Exception as exc:
+            # Isolate evidence-store failure to this symbol's entry. The risk
+            # gate will veto incomplete facts; no exchange call is attempted.
+            return {**row, "close_evidence_error": f"{type(exc).__name__}: {exc}"}
+        trade = record.get("value") if isinstance(record, Mapping) else None
+        if not isinstance(trade, Mapping):
+            return row
+        if (
+            trade.get("trade_id") != trade_id
+            or trade.get("symbol") != str(symbol).upper()
+            or trade.get("side") != "SELL"
+            or trade.get("decision_id") != row.get("decision_id")
+            or trade.get("created_at_ms") != row.get("closed_at_ms")
+            or trade.get("price") != row.get("close_price")
+        ):
+            return row
+        return {
+            **row,
+            "symbol": trade["symbol"],
+            "reason": trade.get("reason"),
+            "net_pnl": trade.get("net_pnl"),
+            "verified_market_data": trade.get("verified_market_data") is True,
+        }
 
     def _same_buy_identity(
         self,
@@ -1667,6 +1754,7 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         if not isinstance(shadow_records, dict):
             shadow_records = {}
         state["decision_mode"] = "CANONICAL_COUNCIL_REQUIRED"
+        state.update(self._strategy_evidence())
         state["entry_without_authorization_allowed"] = False
         state["protective_exit_without_new_council_allowed"] = True
         state["authorization_single_use"] = True

@@ -248,7 +248,7 @@ class Clock:
         return self.ms
 
 
-def _build_loop(tmp_path, monkeypatch, *, clock: Clock | None = None):
+def _build_loop(tmp_path, monkeypatch, *, clock: Clock | None = None, post_stop_policy_mode: str = "observe"):
     monkeypatch.setenv("AUTONOMOUS_PAPER_STATE_FILE", str(tmp_path / "paper.json"))
     monkeypatch.setenv("AUTONOMOUS_PAPER_MAX_POSITION_PERCENT", "10")
     monkeypatch.setenv("EXCHANGE_DEFAULT_FEE_RATE", "0.001")
@@ -271,6 +271,7 @@ def _build_loop(tmp_path, monkeypatch, *, clock: Clock | None = None):
         shadow_runtime=QuietShadow(),  # type: ignore[arg-type]
         instrument_rules=StubInstrumentRules(),  # type: ignore[arg-type]
         cost_model=ExecutionCostModel(fee_rate=0.001, slippage_bps=2.0, market_impact_bps=15.0),
+        post_stop_policy_mode=post_stop_policy_mode,
     )
     loop._now_ms = clock.now_ms  # type: ignore[method-assign]
     return loop, stream, plan, runtime, clock
@@ -598,4 +599,3 @@ def test_turnover_limit_blocks_new_buy(tmp_path, monkeypatch) -> None:
     assert "eth-buy-turn" not in runtime.consumed
     assert loop._state["last_action"] == "BLOCK"
     assert "anti_churn_turnover_limit" in loop._state["last_reason"]
-
