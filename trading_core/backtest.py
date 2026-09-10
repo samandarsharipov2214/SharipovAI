@@ -93,8 +93,6 @@ class EventDrivenBacktester:
         last_events: dict[str, MarketEvent] = {}
         previous_timestamp = 0
         previous_event_key: tuple[int, str] = (0, "")
-        peak_equity = cash
-        max_drawdown = 0.0
         winning_closed = 0
         losing_closed = 0
         event_count = 0
@@ -252,13 +250,6 @@ class EventDrivenBacktester:
                 prices=last_events,
             )
             exposed_events += int(bool(positions))
-            peak_equity = max(peak_equity, snapshot.equity)
-            drawdown = (
-                (peak_equity - snapshot.equity) / peak_equity * 100.0
-                if peak_equity > 0
-                else 0.0
-            )
-            max_drawdown = max(max_drawdown, drawdown)
             equity_curve.append((event.timestamp_ms, snapshot.equity))
 
         if self.config.force_close_at_end and positions:
@@ -323,7 +314,9 @@ class EventDrivenBacktester:
                 net_pnl / self.config.initial_cash * 100.0,
                 8,
             ),
-            max_drawdown_percent=round(max_drawdown, 8),
+            max_drawdown_percent=round(_maximum_drawdown_percent(
+                self.config.initial_cash, (equity for _, equity in equity_curve)
+            ), 8),
             total_fees=round(total_fees, 8),
             total_slippage_cost=round(total_slippage, 8),
             trade_count=len(fills),
@@ -333,6 +326,7 @@ class EventDrivenBacktester:
             equity_curve=tuple(equity_curve),
             metadata={
                 "event_driven": True,
+                "drawdown_basis": "sampled_equity_including_finalization",
                 "lookahead_allowed": False,
                 "bid_ask_mode": True,
                 "fees_included": True,
@@ -632,8 +626,9 @@ class WalkForwardBacktester:
                 profitable / len(windows) * 100.0,
                 8,
             ),
-            max_drawdown_percent=max(
-                window.result.max_drawdown_percent for window in windows
+            max_drawdown_percent=_walk_forward_drawdown_percent(
+                windows, initial_cash=self.backtest_config.initial_cash,
+                chain_capital=self.config.chain_capital,
             ),
             total_fees=round(
                 sum(window.result.total_fees for window in windows),
@@ -652,6 +647,10 @@ class WalkForwardBacktester:
                 "out_of_sample_only": True,
                 "anchored": self.config.anchored,
                 "chain_capital": self.config.chain_capital,
+                "drawdown_basis": (
+                    "chained_oos_equity" if self.config.chain_capital
+                    else "stitched_reset_window_pnl"
+                ),
                 "window_count": len(windows),
                 "train_events": self.config.train_events,
                 "test_events": self.config.test_events,
@@ -666,6 +665,39 @@ class WalkForwardBacktester:
                 raise ValueError(f"walk-forward {name} must be a positive integer")
         if self.config.step_events > self.config.test_events:
             raise ValueError("walk-forward step_events cannot exceed test_events")
+
+
+def _maximum_drawdown_percent(initial_equity: float, equities: Iterable[float]) -> float:
+    """Measure observed peak-to-trough loss, including the capital at inception."""
+    peak = initial_equity
+    maximum = 0.0
+    for equity in equities:
+        peak = max(peak, equity)
+        maximum = max(maximum, (peak - equity) / peak * 100.0)
+    return maximum
+
+
+def _walk_forward_drawdown_percent(
+    windows: Sequence[WalkForwardWindowResult], *, initial_cash: float, chain_capital: bool,
+) -> float:
+    """Keep the high-water mark across OOS windows and their liquidations.
+
+    Reset-capital windows use the same additive PnL convention as the existing
+    aggregate ending equity. This is a stitched research curve, not a claim
+    that independently sized windows formed a continuously invested portfolio.
+    """
+    def equities() -> Iterable[float]:
+        accumulated_pnl = 0.0
+        for window in windows:
+            result = window.result
+            offset = 0.0 if chain_capital else accumulated_pnl
+            yield result.initial_cash + offset
+            for _, equity in result.equity_curve:
+                yield equity + offset
+            yield result.ending_equity + offset
+            accumulated_pnl += result.net_pnl
+
+    return round(_maximum_drawdown_percent(initial_cash, equities()), 8)
 
 
 def _risk_adjusted_ratios(
