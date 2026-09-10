@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -155,6 +156,38 @@ def _state() -> dict[str, object]:
 
 def _canonical(value: object) -> object:
     return json.loads(json.dumps(value, ensure_ascii=False, allow_nan=False))
+
+
+@pytest.mark.parametrize("change,expected,packet_regime", [
+    (2.4, "bull", "trend"), (-2.4, "bear", "trend"),
+    (0.49, None, None), (-0.49, None, None),
+    (8.1, "high_volatility", "high_volatility"),
+    (-8.1, "high_volatility", "high_volatility"),
+])
+def test_proposal_regime_preserves_verified_trend_direction(
+    tmp_path, monkeypatch, change, expected, packet_regime,
+):
+    database = _database(tmp_path)
+    worker = FakeWorker()
+    worker.database = database
+    data = FakeMarketData()
+    original_quote = data.quote
+    monkeypatch.setattr(data, "quote", lambda symbol: replace(
+        original_quote(symbol), change_24h_percent=change,
+    ))
+    stream = SharedVerifiedMarketStream(worker, data, FakeConsensus(), database=database)
+    quote = stream.quote("BTCUSDT")
+    proposal = AutonomousCouncilProposalProvider(
+        database, stream, news_reader=_positive_news,
+    )("BTCUSDT", quote, _state())
+
+    assert quote.change_24h_percent == change
+    if expected is None:
+        assert proposal is None  # A neutral feature still cannot create a proposal.
+        return
+    assert proposal is not None
+    assert proposal.regime == expected
+    assert proposal.evidence_packet.market_regime.value == packet_regime
 
 
 def test_verified_council_authorization_is_single_use_and_settles_reputation(tmp_path, monkeypatch) -> None:
