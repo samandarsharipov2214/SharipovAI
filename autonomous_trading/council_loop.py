@@ -137,7 +137,7 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         self._recover_pending_protective_executions()
 
     def _trace(self, symbol: str, status: str, reason: str, **extra: Any) -> dict[str, Any]:
-        rows = getattr(self._economic_capture, "rows", {})
+        rows = getattr(getattr(self, "_economic_capture", None), "rows", {})
         if symbol in rows:
             if extra.get("phase") == "decision_quality":
                 rows[symbol]["decision_quality"] = {k: v for k, v in extra.items()
@@ -170,7 +170,7 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         }
 
     def tick(self) -> None:
-        if self.economic_observer is None:
+        if getattr(self, "economic_observer", None) is None:
             self._tick_council()
             return
         # Capture scalars only. Source reads and evidence writes happen on a
@@ -195,13 +195,13 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                 self.economic_observer.failed += len(rows)
 
     def start(self) -> None:
-        if self.economic_observer is not None:
+        if getattr(self, "economic_observer", None) is not None:
             self.economic_observer.start()
         super().start()
 
     def stop(self) -> None:
         super().stop()
-        if self.economic_observer is not None:
+        if getattr(self, "economic_observer", None) is not None:
             self.economic_observer.stop()
 
     def _tick_council(self) -> None:
@@ -233,7 +233,7 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                     continue
 
                 position = self._state["positions"].get(symbol)
-                observation = getattr(self._economic_capture, "rows", {}).get(symbol)
+                observation = getattr(getattr(self, "_economic_capture", None), "rows", {}).get(symbol)
                 if observation is not None:
                     observation.update(decision_time_ms=self._now_ms(),
                         market_verified=market.get("verified") is True,
@@ -1824,7 +1824,7 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
 
     def snapshot(self) -> dict[str, Any]:
         state = super().snapshot()
-        state["economic_shadow"] = self.economic_observer.status() if self.economic_observer is not None else {
+        state["economic_shadow"] = self.economic_observer.status() if getattr(self, "economic_observer", None) is not None else {
             "status": "NOT_INSTALLED", "execution_authority": False}
         traces = read_decision_traces(self.database, self.stream.symbols)
         shadow_records = state.get("v2_shadow_records", {})
