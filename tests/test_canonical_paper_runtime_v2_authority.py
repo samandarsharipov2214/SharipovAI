@@ -1,6 +1,8 @@
 import time
 from pathlib import Path
 
+import pytest
+
 from autonomous_trading.canonical_runtime import CanonicalPaperDecisionRuntime
 from decision_quality import CandidateEvidencePacket
 from storage import ProjectDatabase
@@ -90,6 +92,52 @@ def _prepare_evidence(database: ProjectDatabase, decision_id: str) -> CandidateE
 
 def _assessment_time(packet: CandidateEvidencePacket) -> int:
     return packet.received_timestamp_ms + 100
+
+
+@pytest.mark.parametrize("action", ["BUY", "SELL", "WAIT"])
+@pytest.mark.parametrize("risk_blocked", [False, True])
+def test_regime_evidence_correction_preserves_v2_authority(tmp_path, monkeypatch, action, risk_blocked):
+    monkeypatch.setattr(time, "time", lambda: 1_789_030_000.0)
+    results = []
+    for regime in ("bull", "bear"):
+        database = ProjectDatabase(f"sqlite:///{tmp_path / (regime + '.db')}")
+        runtime = CanonicalPaperDecisionRuntime(database)
+        decision_id = "regime-evidence-comparison"
+        packet = _prepare_evidence(database, decision_id)
+        if risk_blocked:
+            evidence = database.get_json("risk_assessments", f"risk-{decision_id}")["value"]
+            evidence["blocks"] = ["deterministic_risk_veto"]
+            evidence["assessment"]["allowed_virtual"] = False
+            evidence["assessment"]["hard_blocks"] = ["deterministic_risk_veto"]
+            database.put_json("risk_assessments", f"risk-{decision_id}", evidence)
+        authorization = runtime.assess_entry(
+            decision_id,
+            (_payload("market_intelligence", action), _payload("news_intelligence", action),
+             _payload("portfolio_engine", "WAIT"), _payload("risk_engine", "WAIT")),
+            packet, general_controller_decision=TradingDecision.WAIT,
+            now_ms=_assessment_time(packet), regime=regime,
+        )
+        assessment = authorization.assessment
+        assert assessment.regime == regime
+        assert runtime.quality.get_assessment(decision_id).regime == regime
+        results.append({
+            "authorized": authorization.authorized, "decision": authorization.decision,
+            "action": assessment.action, "confidence": assessment.confidence,
+            "agreement": assessment.agreement, "quality_score": assessment.quality_score,
+            "weighted_scores": assessment.weighted_scores, "blocked": assessment.blocked,
+            "candidate": authorization.candidate_result.candidate.to_dict(),
+            "validation": authorization.candidate_result.validation,
+            "downgrades": authorization.candidate_result.downgrade_reasons,
+        })
+        if risk_blocked or action == "WAIT":
+            assert authorization.authorized is False
+        else:
+            assert authorization.authorized is True
+            settlement = runtime.settle_exit(decision_id, net_pnl=-0.16, drawdown_contribution=0.16)
+            assert settlement["net_pnl"] == -0.16
+            assert settlement["realized_outcome"] == "LOSS"
+            assert settlement["reputation_recorded"] is False
+    assert results[0] == results[1]
 
 
 def test_gc_v2_overrides_legacy_wait_and_provider_side_for_paper(tmp_path):

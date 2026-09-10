@@ -315,7 +315,7 @@ class AutonomousCouncilProposalProvider:
             agent_payloads=tuple(eligible),
             evidence_packet=packet,
             general_controller_decision=directive,
-            regime=_meta_regime(regime),
+            regime=_meta_regime(regime, change_24h_percent=change),
         )
 
     def last_market_evidence(self, symbol: str) -> dict[str, Any]:
@@ -500,9 +500,17 @@ def _market_regime(change: float, turnover: float, min_turnover: float) -> Marke
     return MarketRegime.RANGE
 
 
-def _meta_regime(regime: MarketRegime) -> str:
+def _meta_regime(regime: MarketRegime, *, change_24h_percent: float) -> str:
+    # TREND describes magnitude, not direction. Preserve the sign of the same
+    # verified feature used by the proposal instead of labeling every trend bull.
+    # This is evidence metadata; the V2 directional authority uses the unchanged
+    # specialist payloads and canonical risk/security gates.
+    if regime is MarketRegime.TREND:
+        change = _finite_or_none(change_24h_percent)
+        if change is None or change == 0:
+            return "unknown"
+        return "bull" if change > 0 else "bear"
     return {
-        MarketRegime.TREND: "bull",
         MarketRegime.RANGE: "sideways",
         MarketRegime.HIGH_VOLATILITY: "high_volatility",
         MarketRegime.ILLIQUID: "unknown",
