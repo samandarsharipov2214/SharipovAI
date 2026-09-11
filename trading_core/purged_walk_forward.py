@@ -11,6 +11,7 @@ from dataclasses import dataclass, replace
 
 from .backtest import (
     EventDrivenBacktester, Strategy, StrategyFactory, _walk_forward_drawdown_percent,
+    _walk_forward_slices,
 )
 from .costs import validate_market_event
 from .models import (
@@ -83,21 +84,13 @@ class PurgedWalkForwardBacktester:
 
         windows: list[WalkForwardWindowResult] = []
         current_cash = self.backtest_config.initial_cash
-        test_start = self.config.train_events + self.config.embargo_events
-        window_index = 0
-
-        while test_start + self.config.test_events <= len(ordered):
-            train_end = test_start - self.config.embargo_events
-            train_start = 0 if self.config.anchored else train_end - self.config.train_events
-            if train_start < 0:
-                break
-
-            train = ordered[train_start:train_end]
-            test = ordered[test_start:test_start + self.config.test_events]
-            if len(train) < self.config.train_events or len(test) != self.config.test_events:
-                break
-            if train[-1].timestamp_ms >= test[0].timestamp_ms:
-                raise ValueError("purged walk-forward training must end before OOS evaluation")
+        slices = _walk_forward_slices(
+            ordered, train_events=self.config.train_events,
+            test_events=self.config.test_events, step_events=self.config.step_events,
+            anchored=self.config.anchored, embargo_events=self.config.embargo_events,
+        )
+        for window_index, (train_slice, test_slice) in enumerate(slices):
+            train, test = ordered[train_slice], ordered[test_slice]
 
             strategy = strategy_factory(tuple(train), window_index)
             initial_cash = (
@@ -125,8 +118,6 @@ class PurgedWalkForwardBacktester:
             )
             if self.config.chain_capital:
                 current_cash = result.ending_equity
-            test_start += self.config.step_events
-            window_index += 1
 
         if len(windows) < self.config.minimum_windows:
             raise ValueError(
@@ -188,6 +179,8 @@ class PurgedWalkForwardBacktester:
                 "test_events": self.config.test_events,
                 "step_events": self.config.step_events,
                 "oos_overlap_allowed": False,
+                "window_boundary_unit": "complete_timestamp_batches",
+                "event_count_contract": "minimum_rows_rounded_to_timestamp_boundaries",
             },
         )
 
