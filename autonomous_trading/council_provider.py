@@ -14,7 +14,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from news_monitor.agent_network import agent_detail
-from news_intelligence.council_lineage import opinion_news_lineage
+from news_intelligence.council_lineage import compact_denominator_lineage, opinion_news_lineage
 from risk_engine import CanonicalRiskService
 from storage import ProjectDatabase, ProjectDomainStore
 from trading_candidate import (
@@ -231,7 +231,7 @@ class AutonomousCouncilProposalProvider:
                 "evidence_ids": sorted(set(news_evidence)),
                 "agents": [item["agent_id"] for item in opinions if item["agent_id"] in _NEWS_AGENTS],
                 "verified_market_data": True,
-                "opinion_lineage": news_lineage,
+                "opinion_lineage": self._persist_news_lineage(news_lineage),
             },
         )
         self._put_once(
@@ -390,6 +390,25 @@ class AutonomousCouncilProposalProvider:
             ),
             evidence_ids,
         )
+
+    def _persist_news_lineage(self, lineage: dict[str, Any]) -> dict[str, Any]:
+        try:
+            compact, snapshot_id, snapshot = compact_denominator_lineage(lineage)
+            if snapshot_id is not None:
+                self._put_once("council_news_denominator_snapshots", snapshot_id, snapshot)
+            return compact
+        except Exception as error:
+            # Optional provenance I/O cannot change authority or fall back to
+            # embedding thousands of repeated rows in every assessment.
+            incomplete = {}
+            for agent_id, opinion in lineage.items():
+                detail = dict(opinion)
+                missing = len(detail.pop("denominator_only_items", ()))
+                detail.update(status="ERROR", denominator_snapshot_id=None,
+                    denominator_item_indices=[], denominator_unavailable_count=missing,
+                    denominator_error_type=type(error).__name__)
+                incomplete[agent_id] = detail
+            return incomplete
 
     def _put_once(self, namespace: str, key: str, value: Mapping[str, Any]) -> None:
         existing = self.database.get_json(namespace, key)
