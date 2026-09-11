@@ -38,7 +38,18 @@ def news_memory_lineage(row: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def opinion_news_lineage(memories: Sequence[Mapping[str, Any]], *, now_ms: int) -> dict[str, Any]:
-    """Preserve order and multiplicity of the provider's last-50 aggregation."""
+    """Describe the last-50 vote inputs and all confirmation-denominator rows."""
+    # Earlier eligible rows affect only len(memories), not impact/credibility
+    # averages or the confirmation numerator. Keep that distinction explicit.
+    denominator_only = []
+    for memory in memories[:-50]:
+        raw = memory.get("source_lineage")
+        raw = raw if isinstance(raw, Mapping) else {}
+        denominator_only.append({
+            "memory_id": _text(memory.get("key")),
+            "created_at_seconds": _timestamp(memory.get("created_at")),
+            "memory_updated_at_ms": _timestamp(raw.get("memory_updated_at_ms")),
+        })
     items = []
     for memory in memories[-50:]:
         raw = memory.get("source_lineage")
@@ -55,17 +66,23 @@ def opinion_news_lineage(memories: Sequence[Mapping[str, Any]], *, now_ms: int) 
         )})
         items.append(item)
     complete = sum(all(item.get(key) is not None for key in (
-        "memory_id", "source_id", "article_id", "exact_link_sha256", "memory_updated_at_ms",
+        "memory_id", "memory_namespace", "source_id", "producer_id", "article_id",
+        "published_at", "exact_link_sha256", "memory_updated_at_ms", "fetch_received_at_ms",
     )) for item in items)
-    future = sum(item["memory_updated_at_ms"] is not None and item["memory_updated_at_ms"] > now_ms for item in items)
+    denominator_complete = all(all(value is not None for value in item.values()) for item in denominator_only)
+    future = sum(item["memory_updated_at_ms"] is not None and item["memory_updated_at_ms"] > now_ms
+                 for item in [*items, *denominator_only])
     known = any(item["source_id"] or item["article_id"] or item["exact_link_sha256"] for item in items)
     errors = sum(item["lineage_error_type"] is not None for item in items)
     return {
-        "schema_version": 1,
-        "status": "COMPLETE" if items and complete == len(items) else "PARTIAL" if known else "UNAVAILABLE",
+        "schema_version": 2,
+        "status": "COMPLETE" if items and complete == len(items) and denominator_complete
+                  else "PARTIAL" if known else "UNAVAILABLE",
         "captured_at_ms": now_ms,
         "eligible_memory_count": len(memories),
         "consumed_memory_count": len(items),
+        "confirmation_denominator_count": len(memories),
+        "denominator_only_items": denominator_only,
         "complete_lineage_count": complete,
         "rows_available_after_capture": future,
         "lineage_error_count": errors,

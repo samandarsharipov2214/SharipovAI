@@ -74,12 +74,65 @@ def test_lineage_uses_exact_selected_rows_and_keeps_duplicates(tmp_path, monkeyp
     assert [r["memory_id"] for r in result["items"]] == ids
     assert result["eligible_memory_count"] == 55
     assert result["consumed_memory_count"] == result["complete_lineage_count"] == 50
+    assert result["confirmation_denominator_count"] == 55
+    assert result["denominator_only_items"] == [
+        {"memory_id": r["key"], "created_at_seconds": (NOW - 1000) // 1000,
+         "memory_updated_at_ms": NOW - 1000}
+        for r in rows[:5]
+    ]
+    assert result["schema_version"] == 2
     assert result["status"] == "COMPLETE"
     assert result["symbol_relevance"] == "NOT_EVALUATED"
     assert result["policy_influence"] == "NONE"
     assert opinion["confidence"] == 73.0 and opinion["action"] == "BUY"
     assert "source_lineage" not in opinion and "evidence_ids" not in opinion
     assert provider._news_opinion("finance_ai", now_ms=NOW) == (opinion, ids)
+
+
+@pytest.mark.parametrize("missing", ["fetch_received_at_ms", "published_at", "producer_id", "memory_namespace"])
+def test_missing_origin_or_freshness_fields_mean_partial_lineage(missing):
+    descriptor = news_memory_lineage(row())
+    descriptor.pop(missing)
+    result = opinion_news_lineage([{"key": "memory-1", "source_lineage": descriptor}], now_ms=NOW)
+    assert result["status"] == "PARTIAL"
+    assert result["complete_lineage_count"] == 0
+
+
+def test_denominator_only_rows_reproduce_confirmation_scores(tmp_path, monkeypatch):
+    db = ProjectDatabase(f"sqlite:///{tmp_path / 'denominator.db'}")
+    rows = [row(str(i)) for i in range(55)]
+    for item in rows:
+        item["value"]["fetched"]["verified"] = False
+    provider = AutonomousCouncilProposalProvider(db, object(), news_reader=reader_for(monkeypatch, db, rows))
+    lineage = {}
+    opinion, _ = provider._news_opinion("finance_ai", now_ms=NOW, lineage=lineage)
+    detail = lineage["finance_ai"]
+    numerator = sum(item["needs_confirmation"] for item in detail["items"])
+    denominator = len(detail["items"]) + len(detail["denominator_only_items"])
+    assert numerator == 50 and denominator == 55
+    assert opinion["evidence_score"] == round(92.0 * (1 - numerator / denominator * 0.5), 6)
+    assert opinion["risk_score"] == round(20.0 + numerator / denominator * 60.0, 6)
+
+
+@pytest.mark.parametrize("missing", ["key", "created_at", "source_lineage"])
+def test_missing_denominator_only_identity_is_partial(missing):
+    memory = {"key": "memory-1", "created_at": NOW // 1000,
+              "source_lineage": news_memory_lineage(row())}
+    denominator_row = copy.deepcopy(memory)
+    denominator_row.pop(missing)
+    result = opinion_news_lineage([denominator_row] + [memory] * 50, now_ms=NOW)
+    assert result["status"] == "PARTIAL"
+    assert result["complete_lineage_count"] == 50
+    assert result["confirmation_denominator_count"] == 51
+
+
+@pytest.mark.parametrize("timestamp", [None, 0, -1, True, "1800000000000"])
+def test_invalid_fetch_timestamp_is_partial(timestamp):
+    descriptor = news_memory_lineage(row())
+    descriptor["fetch_received_at_ms"] = timestamp
+    result = opinion_news_lineage([{"key": "memory-1", "source_lineage": descriptor}], now_ms=NOW)
+    assert result["status"] == "PARTIAL"
+    assert result["items"][0]["fetch_received_at_ms"] is None
 
 
 def test_missing_lineage_never_implies_independent_or_verified_sources():
