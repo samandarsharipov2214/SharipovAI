@@ -14,6 +14,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from news_monitor.agent_network import agent_detail
+from news_intelligence.council_lineage import opinion_news_lineage
 from risk_engine import CanonicalRiskService
 from storage import ProjectDatabase, ProjectDomainStore
 from trading_candidate import (
@@ -167,8 +168,9 @@ class AutonomousCouncilProposalProvider:
         ]
 
         news_evidence: list[str] = []
+        news_lineage: dict[str, Any] = {}
         for agent_id in _NEWS_AGENTS:
-            payload, evidence_ids = self._news_opinion(agent_id, now_ms=now_ms)
+            payload, evidence_ids = self._news_opinion(agent_id, now_ms=now_ms, lineage=news_lineage)
             if payload is not None:
                 opinions.append(payload)
                 news_evidence.extend(evidence_ids)
@@ -229,6 +231,7 @@ class AutonomousCouncilProposalProvider:
                 "evidence_ids": sorted(set(news_evidence)),
                 "agents": [item["agent_id"] for item in opinions if item["agent_id"] in _NEWS_AGENTS],
                 "verified_market_data": True,
+                "opinion_lineage": news_lineage,
             },
         )
         self._put_once(
@@ -322,7 +325,9 @@ class AutonomousCouncilProposalProvider:
         """Return the exact evidence snapshot consumed by the latest provider call."""
         return dict(self._last_market_evidence.get(_symbol(symbol), {}))
 
-    def _news_opinion(self, agent_id: str, *, now_ms: int) -> tuple[dict[str, Any] | None, list[str]]:
+    def _news_opinion(
+        self, agent_id: str, *, now_ms: int, lineage: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any] | None, list[str]]:
         try:
             detail = self.news_reader(agent_id, run_now=False)
         except TypeError:
@@ -368,6 +373,12 @@ class AutonomousCouncilProposalProvider:
         confirmation_ratio = confirmations / len(memories)
         evidence_score = max(35.0, average_credibility * (1.0 - confirmation_ratio * 0.5))
         risk = min(85.0, 20.0 + confirmation_ratio * 60.0 + (15.0 if action == "SELL" else 0.0))
+        if lineage is not None:
+            try:
+                lineage[agent_id] = opinion_news_lineage(memories, now_ms=now_ms)
+            except Exception as error:
+                lineage[agent_id] = {"status": "ERROR", "error_type": type(error).__name__,
+                    "policy_influence": "NONE"}
         return (
             _opinion(
                 agent_id,
