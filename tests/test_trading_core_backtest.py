@@ -204,9 +204,11 @@ def _critical_alpha_dataset(tmp_path: Path) -> Path:
 
 def test_critical_suite_executes_preregistered_alpha_path_and_one_shot_receipt(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Keep the new Alpha path inside the existing critical trading-core coverage gate."""
 
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'canonical.sqlite3'}")
     manifest_path = _critical_alpha_dataset(tmp_path)
     strategy_config = RegimeFilteredBreakoutConfig(
         breakout_window=5,
