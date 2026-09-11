@@ -9,7 +9,9 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, replace
 
-from .backtest import EventDrivenBacktester, Strategy, StrategyFactory
+from .backtest import (
+    EventDrivenBacktester, Strategy, StrategyFactory, _walk_forward_drawdown_percent,
+)
 from .costs import validate_market_event
 from .models import (
     BacktestConfig,
@@ -153,8 +155,9 @@ class PurgedWalkForwardBacktester:
                 profitable / len(windows) * 100.0,
                 8,
             ),
-            max_drawdown_percent=max(
-                window.result.max_drawdown_percent for window in windows
+            max_drawdown_percent=_walk_forward_drawdown_percent(
+                windows, initial_cash=self.backtest_config.initial_cash,
+                chain_capital=self.config.chain_capital,
             ),
             total_fees=round(
                 sum(window.result.total_fees for window in windows),
@@ -176,6 +179,10 @@ class PurgedWalkForwardBacktester:
                 "embargo_events": self.config.embargo_events,
                 "anchored": self.config.anchored,
                 "chain_capital": self.config.chain_capital,
+                "drawdown_basis": (
+                    "chained_oos_equity" if self.config.chain_capital
+                    else "stitched_reset_window_pnl"
+                ),
                 "window_count": len(windows),
                 "train_events": self.config.train_events,
                 "test_events": self.config.test_events,
