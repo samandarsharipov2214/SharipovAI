@@ -282,6 +282,7 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                             "general_controller_directive": proposal.general_controller_decision.value,
                             "side": packet.side.value, "market_regime": packet.market_regime.value,
                             "sources": list(packet.data_sources), "signal_evidence": list(packet.signal_evidence),
+                            "news_assessment_id": packet.news_assessment_id,
                             "news_evidence": list(packet.news_evidence), "cost_snapshot_id": packet.cost_snapshot_id},
                         risk={"status": "ASSESSED", "score": packet.risk_score, "blocks": list(packet.risk_blocks)})
                 try:

@@ -23,6 +23,7 @@ from exchange_connector.market_data import MarketDataService
 from exchange_connector.multi_exchange_consensus import MultiExchangeConsensus
 from storage import ProjectDatabase, list_json_items
 from autonomous_trading.economic_observer import EconomicOpportunityObserver
+from news_intelligence.council_lineage import news_memory_lineage
 
 _NEWS_GROUPS = {
     "crypto_ai": ("crypto", "exchange", "token", "blockchain", "regulation"),
@@ -185,6 +186,11 @@ def _database_news_reader(database: ProjectDatabase) -> Callable[..., dict[str, 
                 continue
             reliability = _percentage(value.get("reliability"))
             fetched = value.get("fetched") if isinstance(value.get("fetched"), dict) else {}
+            try:
+                source_lineage = news_memory_lineage(row)
+            except Exception as error:
+                # Optional measurement cannot change a news vote or expose raw upstream errors.
+                source_lineage = {"status": "ERROR", "error_type": type(error).__name__}
             memory.append(
                 {
                     "key": str(row.get("key") or ""),
@@ -194,6 +200,7 @@ def _database_news_reader(database: ProjectDatabase) -> Callable[..., dict[str, 
                     "credibility_percent": reliability,
                     "urgency": str(value.get("urgency") or "low"),
                     "needs_confirmation": fetched.get("verified") is not True or reliability < 60.0,
+                    "source_lineage": source_lineage,
                 }
             )
         return {
