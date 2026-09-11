@@ -4,6 +4,7 @@ from __future__ import annotations
 import math
 import statistics
 import time
+from bisect import bisect_left, bisect_right
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import replace
 from typing import Protocol
@@ -557,18 +558,13 @@ class WalkForwardBacktester:
 
         windows: list[WalkForwardWindowResult] = []
         current_cash = self.backtest_config.initial_cash
-        test_start = self.config.train_events
-        window_index = 0
-
-        while test_start + self.config.test_events <= len(ordered):
-            train_start = 0 if self.config.anchored else max(
-                0,
-                test_start - self.config.train_events,
-            )
-            train = ordered[train_start:test_start]
-            test = ordered[test_start:test_start + self.config.test_events]
-            if len(train) < self.config.train_events:
-                break
+        slices = _walk_forward_slices(
+            ordered, train_events=self.config.train_events,
+            test_events=self.config.test_events, step_events=self.config.step_events,
+            anchored=self.config.anchored,
+        )
+        for window_index, (train_slice, test_slice) in enumerate(slices):
+            train, test = ordered[train_slice], ordered[test_slice]
 
             strategy = strategy_factory(tuple(train), window_index)
             initial_cash = (
@@ -596,8 +592,6 @@ class WalkForwardBacktester:
             )
             if self.config.chain_capital:
                 current_cash = result.ending_equity
-            test_start += self.config.step_events
-            window_index += 1
 
         if len(windows) < self.config.minimum_windows:
             raise ValueError(
@@ -655,6 +649,9 @@ class WalkForwardBacktester:
                 "train_events": self.config.train_events,
                 "test_events": self.config.test_events,
                 "step_events": self.config.step_events,
+                "window_boundary_unit": "complete_timestamp_batches",
+                "event_count_contract": "minimum_rows_rounded_to_timestamp_boundaries",
+                "oos_overlap_allowed": False,
             },
         )
 
@@ -663,8 +660,47 @@ class WalkForwardBacktester:
             value = getattr(self.config, name)
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                 raise ValueError(f"walk-forward {name} must be a positive integer")
-        if self.config.step_events > self.config.test_events:
-            raise ValueError("walk-forward step_events cannot exceed test_events")
+        if self.config.step_events < self.config.test_events:
+            raise ValueError("walk-forward step_events must be >= test_events")
+
+
+def _walk_forward_slices(
+    events: Sequence[MarketEvent], *, train_events: int, test_events: int,
+    step_events: int, anchored: bool, embargo_events: int = 0,
+) -> Iterable[tuple[slice, slice]]:
+    """Keep simultaneous symbols together at every chronological boundary.
+
+    Row budgets are minimums: round outward to complete timestamp batches.
+    Unique-timestamp inputs retain their exact row windows. The embargo is a
+    minimum row gap, not a promise about the availability of forward labels;
+    strategy factories must still enforce their own label-availability cutoff.
+    """
+    boundaries = [0]
+    boundaries.extend(i for i in range(1, len(events))
+                      if events[i - 1].timestamp_ms != events[i].timestamp_ms)
+    boundaries.append(len(events))
+
+    def ceil_boundary(index: int) -> int:
+        return boundaries[bisect_left(boundaries, index)]
+
+    def floor_boundary(index: int) -> int:
+        return boundaries[bisect_right(boundaries, index) - 1]
+
+    if train_events + embargo_events + test_events > len(events):
+        return
+    first_train_end = ceil_boundary(train_events)
+    if first_train_end + embargo_events + test_events > len(events):
+        return
+    test_start = ceil_boundary(first_train_end + embargo_events)
+    while test_start + test_events <= len(events):
+        train_end = floor_boundary(test_start - embargo_events)
+        train_start = 0 if anchored else floor_boundary(train_end - train_events)
+        test_end = ceil_boundary(test_start + test_events)
+        yield slice(train_start, train_end), slice(test_start, test_end)
+        next_start = max(test_end, test_start + step_events)
+        if next_start + test_events > len(events):
+            break
+        test_start = ceil_boundary(next_start)
 
 
 def _maximum_drawdown_percent(initial_equity: float, equities: Iterable[float]) -> float:
