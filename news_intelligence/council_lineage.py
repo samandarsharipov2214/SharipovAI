@@ -12,6 +12,11 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 
+_ORIGIN_FIELDS = (
+    "memory_namespace", "source_id", "producer_id", "article_id", "published_at", "exact_link_sha256",
+)
+
+
 def _text(value: Any) -> str | None:
     return (value.strip() or None) if isinstance(value, str) else None
 
@@ -23,6 +28,11 @@ def _timestamp(value: Any) -> int | None:
 def _valid_source_time(item: Mapping[str, Any], now_ms: int) -> bool:
     updated, fetched = item.get("memory_updated_at_ms"), item.get("fetch_received_at_ms")
     return updated is not None and fetched is not None and fetched <= updated <= now_ms
+
+
+def _complete_source(item: Mapping[str, Any], now_ms: int) -> bool:
+    return (_valid_source_time(item, now_ms) and item["lineage_error_type"] is None
+            and all(item.get(key) is not None for key in ("memory_id", *_ORIGIN_FIELDS)))
 
 
 def news_memory_lineage(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -52,6 +62,7 @@ def opinion_news_lineage(memories: Sequence[Mapping[str, Any]], *, now_ms: int) 
         raw = memory.get("source_lineage")
         raw = raw if isinstance(raw, Mapping) else {}
         denominator_only.append({
+            **{key: _text(raw.get(key)) for key in _ORIGIN_FIELDS},
             "memory_id": _text(memory.get("key")),
             "created_at_seconds": _timestamp(memory.get("created_at")),
             "memory_updated_at_ms": _timestamp(raw.get("memory_updated_at_ms")),
@@ -62,9 +73,7 @@ def opinion_news_lineage(memories: Sequence[Mapping[str, Any]], *, now_ms: int) 
     for memory in memories[-50:]:
         raw = memory.get("source_lineage")
         raw = raw if isinstance(raw, Mapping) else {}
-        item = {key: _text(raw.get(key)) for key in (
-            "memory_namespace", "source_id", "producer_id", "article_id", "published_at", "exact_link_sha256",
-        )}
+        item = {key: _text(raw.get(key)) for key in _ORIGIN_FIELDS}
         item.update({key: _timestamp(raw.get(key)) for key in ("memory_updated_at_ms", "fetch_received_at_ms")})
         item["memory_id"] = _text(memory.get("key"))
         item["lineage_error_type"] = _text(raw.get("error_type"))
@@ -73,14 +82,10 @@ def opinion_news_lineage(memories: Sequence[Mapping[str, Any]], *, now_ms: int) 
             "impact", "impact_score", "credibility_percent", "needs_confirmation",
         )})
         items.append(item)
-    complete = sum(_valid_source_time(item, now_ms) and item["lineage_error_type"] is None
-                  and all(item.get(key) is not None for key in (
-        "memory_id", "memory_namespace", "source_id", "producer_id", "article_id",
-        "published_at", "exact_link_sha256", "memory_updated_at_ms", "fetch_received_at_ms",
-    )) for item in items)
-    denominator_complete = all(item["memory_id"] is not None and item["created_at_seconds"] is not None
+    complete = sum(_complete_source(item, now_ms) for item in items)
+    denominator_complete = all(item["created_at_seconds"] is not None
         and item["created_at_seconds"] <= now_ms // 1000
-        and _valid_source_time(item, now_ms) and item["lineage_error_type"] is None for item in denominator_only)
+        and _complete_source(item, now_ms) for item in denominator_only)
     future = sum(
         any(item.get(key) is not None and item[key] > now_ms
             for key in ("memory_updated_at_ms", "fetch_received_at_ms"))
@@ -121,7 +126,7 @@ def compact_denominator_lineage(opinions: Mapping[str, Mapping[str, Any]]) -> tu
     Indices retain order and multiplicity. This deduplicates storage only;
     neither the vote numerator nor its denominator is deduplicated.
     """
-    fields = ["memory_id", "created_at_seconds", "memory_updated_at_ms",
+    fields = ["memory_id", *_ORIGIN_FIELDS, "created_at_seconds", "memory_updated_at_ms",
               "fetch_received_at_ms", "lineage_error_type"]
     records, indices, compact = [], {}, {}
     for agent_id, opinion in opinions.items():

@@ -76,8 +76,7 @@ def test_lineage_uses_exact_selected_rows_and_keeps_duplicates(tmp_path, monkeyp
     assert result["consumed_memory_count"] == result["complete_lineage_count"] == 50
     assert result["confirmation_denominator_count"] == 55
     assert result["denominator_only_items"] == [
-        {"memory_id": r["key"], "created_at_seconds": (NOW - 1000) // 1000,
-         "memory_updated_at_ms": NOW - 1000, "fetch_received_at_ms": NOW - 2000,
+        {**news_memory_lineage(r), "memory_id": r["key"], "created_at_seconds": (NOW - 1000) // 1000,
          "lineage_error_type": None}
         for r in rows[:5]
     ]
@@ -125,6 +124,46 @@ def test_missing_denominator_only_identity_is_partial(missing):
     assert result["status"] == "PARTIAL"
     assert result["complete_lineage_count"] == 50
     assert result["confirmation_denominator_count"] == 51
+
+
+@pytest.mark.parametrize("field", [
+    "memory_namespace", "source_id", "producer_id", "article_id", "published_at", "exact_link_sha256",
+])
+@pytest.mark.parametrize("invalid", [None, "", "  ", 123])
+def test_incomplete_denominator_origin_cannot_be_complete(field, invalid):
+    memory = {"key": "memory-1", "created_at": NOW // 1000,
+              "source_lineage": news_memory_lineage(row())}
+    older = copy.deepcopy(memory)
+    older["source_lineage"][field] = invalid
+    result = opinion_news_lineage([older] + [memory] * 50, now_ms=NOW)
+    assert result["status"] == "PARTIAL"
+    assert result["complete_lineage_count"] == 50
+    compact, _, snapshot = compact_denominator_lineage({"finance_ai": result})
+    restored = dict(zip(snapshot["record_fields"], snapshot["records"][0]))
+    assert restored[field] is None
+    assert compact["finance_ai"]["confirmation_denominator_count"] == 51
+
+
+def test_denominator_origin_versions_survive_snapshot_roundtrip(tmp_path):
+    db = ProjectDatabase(f"sqlite:///{tmp_path / 'origin.db'}")
+    provider = AutonomousCouncilProposalProvider(db, object())
+    memory = {"key": "same-memory", "created_at": NOW // 1000,
+              "source_lineage": news_memory_lineage(row())}
+    original = opinion_news_lineage([memory] * 51, now_ms=NOW)
+    first = provider._persist_news_lineage({"finance_ai": original})["finance_ai"]
+    snapshot_id = first["denominator_snapshot_id"]
+    snapshot = db.get_json("council_news_denominator_snapshots", snapshot_id)["value"]
+    restored = dict(zip(snapshot["record_fields"], snapshot["records"][0]))
+    assert restored == original["denominator_only_items"][0]
+    for field, value in memory["source_lineage"].items():
+        assert restored[field] == value
+    assert original["status"] == "COMPLETE"
+    changed = copy.deepcopy(memory)
+    changed["source_lineage"]["source_id"] = "corrected-publisher"
+    later = opinion_news_lineage([changed] + [memory] * 50, now_ms=NOW)
+    second = provider._persist_news_lineage({"finance_ai": later})["finance_ai"]
+    assert second["denominator_snapshot_id"] != snapshot_id
+    assert db.get_json("council_news_denominator_snapshots", snapshot_id)["value"] == snapshot
 
 
 @pytest.mark.parametrize("timestamp", [None, 0, -1, True, "1800000000000"])
@@ -217,7 +256,9 @@ def test_thousand_row_snapshot_is_shared_and_persisted_once(tmp_path, monkeypatc
     snapshot = db.get_json(*puts[0])["value"]
     assert len(snapshot["records"]) == 950
     assert len(json.dumps(first).encode()) < 225_000
-    assert len(json.dumps(snapshot).encode()) < 125_000
+    # Full origin is stored once per unique row version, shared by all members
+    # and unchanged proposals; the assessment itself keeps its original bound.
+    assert len(json.dumps(snapshot).encode()) < 325_000
     assert all(len(detail["denominator_item_indices"]) == 950 for detail in first.values())
 
 
@@ -282,6 +323,32 @@ def test_denominator_storage_failure_preserves_full_proposal_and_authority(tmp_p
         assessment = db.get_json("council_news_assessments", proposal.evidence_packet.news_assessment_id)["value"]
         assert {detail["status"] for detail in assessment["opinion_lineage"].values()} == ({"ERROR"} if fails else {"COMPLETE"})
         assert "private detail" not in json.dumps(assessment)
+    assert outputs[0] == outputs[1]
+
+
+def test_denominator_origin_status_does_not_change_proposal_or_authority(tmp_path, monkeypatch):
+    monkeypatch.setattr("time.time", lambda: NOW / 1000)
+    monkeypatch.setattr("decision_quality.service.datetime", FrozenDateTime)
+    outputs = []
+    for missing in (False, True):
+        db = ProjectDatabase(f"sqlite:///{tmp_path / ('origin-' + str(missing))}.db")
+        rows = [row(str(i)) for i in range(55)]
+        if missing:
+            for r in rows[:5]:
+                r["value"]["fetched"].pop("source_id")
+        worker = FakeWorker()
+        worker.database = db
+        stream = SharedVerifiedMarketStream(worker, FakeMarketData(), FakeConsensus(), database=db)
+        quote = replace(stream.quote("BTCUSDT"), change_24h_percent=2.4)
+        proposal = AutonomousCouncilProposalProvider(
+            db, stream, news_reader=reader_for(monkeypatch, db, rows))("BTCUSDT", quote, _state())
+        assert proposal is not None
+        auth = CanonicalPaperDecisionRuntime(db).assess_entry(
+            proposal.decision_id, proposal.agent_payloads, proposal.evidence_packet,
+            general_controller_decision=proposal.general_controller_decision, now_ms=NOW, regime=proposal.regime)
+        outputs.append((proposal, auth.to_dict()))
+        assessment = db.get_json("council_news_assessments", proposal.evidence_packet.news_assessment_id)["value"]
+        assert {d["status"] for d in assessment["opinion_lineage"].values()} == ({"PARTIAL"} if missing else {"COMPLETE"})
     assert outputs[0] == outputs[1]
 
 
