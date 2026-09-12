@@ -144,6 +144,20 @@ def test_incomplete_denominator_origin_cannot_be_complete(field, invalid):
     assert compact["finance_ai"]["confirmation_denominator_count"] == 51
 
 
+@pytest.mark.parametrize("field", [
+    "memory_namespace", "source_id", "producer_id", "article_id", "published_at", "exact_link_sha256",
+])
+def test_origin_only_denominator_is_available_as_partial(field):
+    older = {"source_lineage": {field: "known-origin"}}
+    legacy = {"key": "legacy", "created_at": NOW // 1000}
+    result = opinion_news_lineage([older] + [legacy] * 50, now_ms=NOW)
+    assert result["status"] == "PARTIAL"
+    assert result["complete_lineage_count"] == 0
+    _, _, snapshot = compact_denominator_lineage({"finance_ai": result})
+    restored = dict(zip(snapshot["record_fields"], snapshot["records"][0]))
+    assert restored[field] == "known-origin"
+
+
 def test_denominator_origin_versions_survive_snapshot_roundtrip(tmp_path):
     db = ProjectDatabase(f"sqlite:///{tmp_path / 'origin.db'}")
     provider = AutonomousCouncilProposalProvider(db, object())

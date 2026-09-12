@@ -95,6 +95,7 @@ def opinion_news_lineage(memories: Sequence[Mapping[str, Any]], *, now_ms: int) 
     known = (
         any(item["source_id"] or item["article_id"] or item["exact_link_sha256"] for item in items)
         or any(any(item.get(key) is not None for key in (
+            *_ORIGIN_FIELDS,
             "memory_id", "created_at_seconds", "memory_updated_at_ms",
             "fetch_received_at_ms", "lineage_error_type",
         )) for item in denominator_only)
