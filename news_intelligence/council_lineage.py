@@ -79,11 +79,21 @@ def opinion_news_lineage(memories: Sequence[Mapping[str, Any]], *, now_ms: int) 
         "published_at", "exact_link_sha256", "memory_updated_at_ms", "fetch_received_at_ms",
     )) for item in items)
     denominator_complete = all(item["memory_id"] is not None and item["created_at_seconds"] is not None
+        and item["created_at_seconds"] <= now_ms // 1000
         and _valid_source_time(item, now_ms) and item["lineage_error_type"] is None for item in denominator_only)
-    future = sum(any(item.get(key) is not None and item[key] > now_ms
-                     for key in ("memory_updated_at_ms", "fetch_received_at_ms"))
-                 for item in [*items, *denominator_only])
-    known = any(item["source_id"] or item["article_id"] or item["exact_link_sha256"] for item in items)
+    future = sum(
+        any(item.get(key) is not None and item[key] > now_ms
+            for key in ("memory_updated_at_ms", "fetch_received_at_ms"))
+        or (item.get("created_at_seconds") is not None and item["created_at_seconds"] > now_ms // 1000)
+        for item in [*items, *denominator_only]
+    )
+    known = (
+        any(item["source_id"] or item["article_id"] or item["exact_link_sha256"] for item in items)
+        or any(any(item.get(key) is not None for key in (
+            "memory_id", "created_at_seconds", "memory_updated_at_ms",
+            "fetch_received_at_ms", "lineage_error_type",
+        )) for item in denominator_only)
+    )
     errors = sum(item["lineage_error_type"] is not None for item in [*items, *denominator_only])
     return {
         "schema_version": 2,
