@@ -404,9 +404,13 @@ class AutonomousCouncilProposalProvider:
             for agent_id, opinion in lineage.items():
                 detail = dict(opinion)
                 missing = len(detail.pop("denominator_only_items", ()))
-                detail.update(status="ERROR", denominator_snapshot_id=None,
-                    denominator_item_indices=[], denominator_unavailable_count=missing,
-                    denominator_error_type=type(error).__name__)
+                if missing:
+                    detail.update(status="ERROR", denominator_snapshot_id=None,
+                        denominator_item_indices=[], denominator_unavailable_count=missing,
+                        denominator_error_type=type(error).__name__)
+                else:
+                    detail.update(denominator_snapshot_id=None, denominator_item_indices=[],
+                        denominator_unavailable_count=0, denominator_error_type=None)
                 incomplete[agent_id] = detail
             return incomplete
 
