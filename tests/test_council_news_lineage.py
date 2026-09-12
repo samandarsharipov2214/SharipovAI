@@ -158,6 +158,26 @@ def test_denominator_only_error_is_preserved():
     assert result["denominator_only_items"][0]["lineage_error_type"] == "ValueError"
 
 
+def test_future_denominator_eligibility_time_is_partial_and_reported():
+    memory = {"key": "memory-1", "created_at": NOW // 1000,
+              "source_lineage": news_memory_lineage(row())}
+    future = copy.deepcopy(memory)
+    future["created_at"] = NOW // 1000 + 1
+    result = opinion_news_lineage([future] + [memory] * 50, now_ms=NOW)
+    assert result["status"] == "PARTIAL"
+    assert result["rows_available_after_capture"] == 1
+
+
+def test_known_denominator_only_lineage_makes_assessment_partial():
+    known = {"key": "known-old", "created_at": NOW // 1000,
+             "source_lineage": news_memory_lineage(row("known-old"))}
+    legacy = {"key": "legacy", "created_at": NOW // 1000}
+    result = opinion_news_lineage([known] + [legacy] * 50, now_ms=NOW)
+    assert result["status"] == "PARTIAL"
+    assert result["complete_lineage_count"] == 0
+    assert result["denominator_only_items"][0]["memory_id"] == "known-old"
+
+
 def test_compact_denominator_preserves_order_duplicates_and_errors():
     memories = [{"key": str(i), "created_at": NOW // 1000,
                  "source_lineage": news_memory_lineage(row(str(i)))} for i in range(55)]
@@ -217,6 +237,23 @@ def test_denominator_storage_failure_keeps_vote_and_marks_missing_evidence(tmp_p
     assert failed["finance_ai"]["denominator_unavailable_count"] == 5
     assert "denominator_only_items" not in failed["finance_ai"]
     assert "private database" not in json.dumps(failed)
+
+
+def test_snapshot_failure_preserves_agents_without_denominator_rows(tmp_path, monkeypatch):
+    db = ProjectDatabase(f"sqlite:///{tmp_path / 'mixed-snapshot-error.db'}")
+    provider = AutonomousCouncilProposalProvider(db, object(), news_reader=lambda *a, **k: {"memory": []})
+    memory = {"key": "memory-1", "created_at": NOW // 1000,
+              "source_lineage": news_memory_lineage(row())}
+    short = opinion_news_lineage([memory], now_ms=NOW)
+    long = opinion_news_lineage([memory] * 51, now_ms=NOW)
+    monkeypatch.setattr(provider, "_put_once", lambda *a, **k: (_ for _ in ()).throw(OSError("boom")))
+    failed = provider._persist_news_lineage({"short": short, "long": long})
+    assert failed["short"]["status"] == "COMPLETE"
+    assert failed["short"]["denominator_unavailable_count"] == 0
+    assert failed["short"]["denominator_error_type"] is None
+    assert failed["long"]["status"] == "ERROR"
+    assert failed["long"]["denominator_unavailable_count"] == 1
+    assert failed["long"]["denominator_error_type"] == "OSError"
 
 
 def test_denominator_storage_failure_preserves_full_proposal_and_authority(tmp_path, monkeypatch):
