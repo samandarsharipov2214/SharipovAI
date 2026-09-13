@@ -109,18 +109,44 @@ def _summary(records: list[dict[str, Any]]) -> dict[str, Any]:
             "portfolio_net_expectancy": None, "profit_factor": None}
 
 
+def _abstention_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Describe quote outcomes after actual actions, without counterfactual fills."""
+    groups = defaultdict(list)
+    for record in records:
+        proposal = record["proposal_present"]
+        population = ("proposal" if proposal is True else "no_proposal" if proposal is False
+                      else "proposal_status_unknown")
+        groups[(population, record["actual_paper_status"] or "UNKNOWN")].append(record)
+    result = []
+    for (population, action), members in sorted(groups.items()):
+        values = [r["long_markout_percent_excluding_impact"] for r in members if r["status"] == "OBSERVED"]
+        result.append({"population": population, "actual_paper_status": action,
+            "selected_anchors": len(members), "coverage": dict(Counter(r["status"] for r in members)),
+            "observed_labels": len(values), "mean_long_markout_percent_excluding_impact": _mean(values),
+            "positive_long_markouts": sum(v > 0 for v in values) if values else None,
+            "worst_long_markout_percent_excluding_impact": min(values) if values else None,
+            "portfolio_counterfactual_net_pnl": None})
+    return {"groups": result,
+            "interpretation": "Quoted long paths after recorded actions; WAIT profitability, missed executable trades and available capital are not established."}
+
+
 def fixed_horizon_markouts(
     rows: Sequence[Mapping[str, Any]], *, cutoff_ms: int,
     horizons_seconds: Sequence[int] = HORIZONS_SECONDS,
+    anchor_population: str = "proposals",
 ) -> dict[str, Any]:
-    """Label first proposals per symbol, choosing anchors before outcome checks.
+    """Label chronological anchors per symbol before outcome checks.
 
+    The default selects proposals. Explicit all_opportunities also includes
+    WAIT/no-proposal records, retaining their actual action and signal absence.
     The next anchor reserves the whole horizon plus quote tolerance, even when
     the first anchor lacks a quote/cost/label. Do not replace missing outcomes
     with later successful observations. Cross-symbol dependence remains.
     Both entry and label persistence must be available by the explicit cutoff.
     A SELL opinion is a directional label only, never a fabricated spot short.
     """
+    if anchor_population not in {"proposals", "all_opportunities"}:
+        raise ValueError("anchor_population must be proposals or all_opportunities")
     cutoff = _timestamp(cutoff_ms)
     horizons = tuple(horizons_seconds)
     if (not horizons or any(isinstance(h, bool) or not isinstance(h, int) or h <= 0 for h in horizons)
@@ -154,7 +180,8 @@ def fixed_horizon_markouts(
         next_at = {}
         for row in available:
             key, at = (row["scope"], row["symbol"]), row["decision_time_ms"]
-            if row.get("proposal_present") is not True or at < next_at.get(key, 0):
+            if ((anchor_population == "proposals" and row.get("proposal_present") is not True)
+                    or at < next_at.get(key, 0)):
                 continue
             target = at + horizon * 1000
             next_at[key] = target + LABEL_TOLERANCE_MS + 1
@@ -164,6 +191,9 @@ def fixed_horizon_markouts(
                       "regime": row.get("regime"), "horizon_seconds": horizon, "signals": _signals(row),
                       "actual_paper_status": (row.get("result") or {}).get("status"),
                       "status": "MISSING_FUTURE_QUOTE", "complete_net_return_percent": None}
+            if anchor_population == "all_opportunities":
+                record["proposal_present"] = row.get("proposal_present")
+                record["actual_paper_phase"] = (row.get("result") or {}).get("phase")
             records.append(record)
             entry, cost = _quote(row), _cost(row)
             if entry is None:
@@ -199,7 +229,7 @@ def fixed_horizon_markouts(
                     "cash_paid": cash_paid, "cash_received": cash_received,
                     "fee_rate_frozen_at_entry": fee, "slippage_fraction_frozen_at_entry": slippage,
                     "market_impact": None}})
-    return {"schema_version": 1, "owner": "learning_engine", "cutoff_ms": cutoff,
+    report = {"schema_version": 1, "owner": "learning_engine", "cutoff_ms": cutoff,
         "source_rows": len(rows), "available_source_rows": len(available),
         "source_sha256": hashlib.sha256(json.dumps(list(rows), sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest(),
         "horizons": {str(h): _summary([r for r in records if r["horizon_seconds"] == h]) for h in horizons},
@@ -212,3 +242,9 @@ def fixed_horizon_markouts(
             "BUY summaries are conditional on available labels; compare coverage and actions before comparing models.",
             "SELL is direction only. The cash reference is isolated zero-yield cash, not the existing PAPER portfolio.",
             "Same-symbol intervals do not overlap; symbols and shared evidence may still be correlated."]}
+    if anchor_population == "all_opportunities":
+        report["anchor_population"] = anchor_population
+        report["abstention_diagnostics"] = {str(h): _abstention_summary([
+            r for r in records if r["horizon_seconds"] == h]) for h in horizons}
+        report["limitations"].append("All-opportunity anchors include missing proposals; absent Council/DQ opinions are not fabricated WAIT votes.")
+    return report
