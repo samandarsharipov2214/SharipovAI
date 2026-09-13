@@ -176,11 +176,11 @@ class ProjectDatabase:
         if self.backend == "sqlite":
             path = Path(self.dsn.removeprefix("sqlite:///"))
             path.parent.mkdir(parents=True, exist_ok=True)
-            connection = sqlite3.connect(path, timeout=10, isolation_level=None)
+            # WAL promotion can return SQLITE_BUSY immediately when two callers
+            # initialize a new file. Bound setup retries ourselves, then restore
+            # the existing ten-second transaction busy timeout below.
+            connection = sqlite3.connect(path, timeout=0, isolation_level=None)
             connection.row_factory = sqlite3.Row
-            connection.execute("PRAGMA journal_mode=WAL")
-            connection.execute("PRAGMA foreign_keys=ON")
-            connection.execute("PRAGMA busy_timeout=10000")
         else:
             try:
                 import psycopg  # type: ignore
@@ -191,6 +191,26 @@ class ProjectDatabase:
             except Exception as exc:  # pragma: no cover - external service
                 raise DatabaseUnavailable(f"PostgreSQL connection failed: {type(exc).__name__}: {exc}") from exc
         try:
+            if self.backend == "sqlite":
+                deadline = time.monotonic() + 10.0
+                while True:
+                    try:
+                        connection.execute("PRAGMA journal_mode=WAL")
+                        break
+                    except sqlite3.OperationalError as error:
+                        remaining = deadline - time.monotonic()
+                        # Extended codes (for example BUSY_RECOVERY) retain the
+                        # primary result in their low byte. Do not retry based
+                        # on error text or replay any caller transaction.
+                        code = getattr(error, "sqlite_errorcode", None)
+                        contention = isinstance(code, int) and (code & 0xFF) in {
+                            sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED,
+                        }
+                        if not contention or remaining <= 0:
+                            raise
+                        time.sleep(min(0.01, remaining))
+                connection.execute("PRAGMA foreign_keys=ON")
+                connection.execute("PRAGMA busy_timeout=10000")
             yield connection
         finally:
             connection.close()
