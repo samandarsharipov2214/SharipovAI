@@ -189,3 +189,66 @@ def test_cli_preserves_previous_evidence_and_uses_explicit_cutoff(tmp_path, monk
         main()
     assert output.read_bytes() == result
     assert "output exists" in capsys.readouterr().err
+
+
+def test_all_opportunities_retains_wait_and_does_not_fabricate_council_votes():
+    wait = row("wait", proposal=False, council=None, decision_quality=None)
+    future = row("label", 1000, proposal=False)
+    original = copy.deepcopy([wait, future])
+    assert diagnose(original)["records"] == []
+    report = fixed_horizon_markouts(original, cutoff_ms=START+30_000,
+                                   horizons_seconds=(1,), anchor_population="all_opportunities")
+    record = report["records"][0]
+    assert record["opportunity_id"] == "wait" and record["proposal_present"] is False
+    assert record["signals"] == {} and record["actual_paper_status"] == "WAIT"
+    group = report["abstention_diagnostics"]["1"]["groups"][0]
+    assert group["population"] == "no_proposal" and group["observed_labels"] == 1
+    assert group["mean_long_markout_percent_excluding_impact"] < 0
+    assert group["portfolio_counterfactual_net_pnl"] is None
+    assert report["execution_authority"] is False
+    assert [wait, future] == original
+
+
+def test_no_proposal_missing_quote_reserves_interval_before_better_candidate():
+    rows = [row("missing", proposal=False, quote=None), row("better", 1),
+            row("label", 1000, proposal=False), row("next", 11_001, proposal=False),
+            row("next_label", 12_001, proposal=False)]
+    report = fixed_horizon_markouts(rows, cutoff_ms=START+30_000,
+                                   horizons_seconds=(1,), anchor_population="all_opportunities")
+    assert [r["opportunity_id"] for r in report["records"]] == ["missing", "next"]
+    assert [r["status"] for r in report["records"]] == ["INVALID_ENTRY_QUOTE", "OBSERVED"]
+    group = report["abstention_diagnostics"]["1"]["groups"][0]
+    assert group["selected_anchors"] == 2 and group["observed_labels"] == 1
+
+
+def test_all_population_cannot_use_late_persistence_or_unknown_proposal_as_false():
+    rows = [row("unknown", proposal=None), row("late", 1000, proposal=False)]
+    rows[1]["recorded_at_ms"] = START+30_001
+    report = fixed_horizon_markouts(rows, cutoff_ms=START+30_000,
+                                   horizons_seconds=(1,), anchor_population="all_opportunities")
+    group = report["abstention_diagnostics"]["1"]["groups"][0]
+    assert group["population"] == "proposal_status_unknown"
+    assert group["coverage"] == {"MISSING_FUTURE_QUOTE": 1}
+    assert group["mean_long_markout_percent_excluding_impact"] is None
+    assert group["positive_long_markouts"] is None
+
+
+def test_population_selection_is_explicit_and_default_output_is_identical():
+    rows = [row("wait", proposal=False), row("proposal", 1), row("label", 1001, proposal=False)]
+    assert fixed_horizon_markouts(rows, cutoff_ms=START+30_000, horizons_seconds=(1,),
+                                 anchor_population="proposals") == diagnose(rows)
+    with pytest.raises(ValueError, match="anchor_population"):
+        fixed_horizon_markouts(rows, cutoff_ms=START+30_000, anchor_population="profitable_only")
+
+
+def test_cli_explicit_all_population_reports_no_proposal_actions(tmp_path, monkeypatch):
+    from scripts.paper_opportunity_markouts import main
+    source, output = tmp_path / "source.json", tmp_path / "result.json"
+    source.write_text(json.dumps([row("wait", proposal=False, council=None, decision_quality=None),
+                                  row("label", 300_000, proposal=False)]))
+    monkeypatch.setattr("sys.argv", ["markouts", "--source", str(source), "--output", str(output),
+        "--cutoff-ms", str(START+300_001), "--anchor-population", "all_opportunities"])
+    main()
+    report = json.loads(output.read_text())
+    assert report["anchor_population"] == "all_opportunities"
+    assert report["abstention_diagnostics"]["300"]["groups"][0]["population"] == "no_proposal"
