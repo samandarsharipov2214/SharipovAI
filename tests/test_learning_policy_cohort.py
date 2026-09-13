@@ -4,7 +4,7 @@ import copy
 
 import pytest
 
-from learning_engine.paper_economic_shadow import assess_opportunity, digest, read_sources
+from learning_engine.paper_economic_shadow import assess_opportunity, digest, read_sources, record_policy_equivalence
 from storage import ProjectDatabase
 from test_paper_economic_shadow import START, opportunity, sources
 
@@ -158,13 +158,78 @@ def test_linked_exit_observation_preserves_separate_entry_and_exit_lineage():
 def test_database_reads_equivalence_asof_and_keeps_source_limits(tmp_path, monkeypatch):
     db = ProjectDatabase(f"sqlite:///{tmp_path / 'policy.db'}")
     db.initialize()
-    db.put_json("paper_policy_equivalence", "link", linked_sources()["policy_links"][0]["value"])
-    stored = db.get_json("paper_policy_equivalence", "link")["updated_at_ms"]
+    record_policy_equivalence(db, linked_sources()["policy_links"][0]["value"])
+    stored = db.list_events("paper_policy_equivalence", limit=1)[0]["created_at_ms"]
     assert read_sources(db, "scope-a", asof_ms=stored)["policy_links"] == []
     assert len(read_sources(db, "scope-a", asof_ms=stored+1)["policy_links"]) == 1
     assert read_sources(db, "scope-a", asof_ms=stored+1)["epochs"] == []
     monkeypatch.setattr("learning_engine.paper_economic_shadow.SOURCE_LIMIT", 0)
     assert read_sources(db, "scope-a", asof_ms=stored+1)["coverage"] == "SOURCE_LIMIT_EXCEEDED"
+
+
+@pytest.mark.parametrize("later_status", ["verified", "revoked"])
+def test_append_only_versions_preserve_earlier_decisions_in_one_async_batch(tmp_path, monkeypatch, later_status):
+    from autonomous_trading.economic_observer import EconomicOpportunityObserver
+
+    db = ProjectDatabase(f"sqlite:///{tmp_path / 'history.db'}")
+    db.initialize()
+    data = linked_sources()
+    verified = data.pop("policy_links")[0]["value"]
+    for namespace, records in [
+        ("paper_trades:scope-a", [(r["value"]["trade_id"], r) for r in data["trades"]]),
+        ("self_learning_outcomes_v2", list(data["outcomes"].items())),
+        ("paper_strategy_epochs", [(r["value"]["epoch_id"], r) for r in data["epochs"]]),
+    ]:
+        for key, row in records:
+            monkeypatch.setattr("storage.project_database.time.time", lambda row=row: row["stored_at_ms"] / 1000)
+            db.put_json(namespace, key, row["value"])
+    monkeypatch.setattr("storage.project_database.time.time", lambda: (START+4000)/1000)
+    record_policy_equivalence(db, verified)
+    early = opportunity(opportunity_id="early", paper_build_sha="b"*40, decision_time_ms=START+4500)
+    expected = assess_opportunity(early, read_sources(db, "scope-a", asof_ms=START+4500))
+    monkeypatch.setattr("storage.project_database.time.time", lambda: (START+4500)/1000)
+    record_policy_equivalence(db, {**verified, "status": later_status, "verification_sha256": "b" * 64})
+    # An overwritten KV value is irrelevant: authoritative events are retained.
+    db.put_json("paper_policy_equivalence", "mutable", {**verified, "status": "revoked"})
+    data = read_sources(db, "scope-a", asof_ms=START+5000)
+    assert len(data["policy_links"]) == 2
+    assert assess_opportunity(early, data) == expected
+    before = expected["learning_context"]["policy_cohort"]
+    after = assess(data)["learning_context"]["policy_cohort"]
+    assert before["cohort"]["sample_size"] == 1
+    assert before["verification_sha256"] == "a" * 64
+    if later_status == "revoked":
+        assert after["status"] == "EQUIVALENCE_REVOKED" and after["cohort"] is None
+    else:
+        assert after["verification_sha256"] == "b" * 64
+        assert after["cohort"] == before["cohort"]
+    earlier = read_sources(db, "scope-a", asof_ms=START+4500)
+    assert len(earlier["policy_links"]) == 1
+    assert len(db.list_events("paper_policy_equivalence", limit=10)) == 2
+    # The real observer processes both captured decisions only after the update.
+    monkeypatch.setattr("storage.project_database.time.time", lambda: (START+5500)/1000)
+    observer = EconomicOpportunityObserver(db)
+    observer.record_batch([early, opportunity(opportunity_id="late", paper_build_sha="b" * 40)])
+    rows = {r["entity_id"]: r["payload"]
+            for r in db.list_events("paper_economic_opportunities:scope-a", limit=10)}
+    contexts = {key: db.get_json("paper_learning_shadow_contexts", row["learning_context_id"])["value"]
+                for key, row in rows.items()}
+    assert contexts["early"] == expected["learning_context"]
+    assert contexts["late"]["policy_cohort"] == after
+    assert all(r["learning_sample_size"] == 0 and r["execution_authority"] is False
+               and r["edge"]["expected_net_edge_percent"] is None for r in rows.values())
+    assert read_sources(db, "scope-a", asof_ms=START+5000) == data
+
+
+def test_same_millisecond_revocation_is_ambiguous_and_mutable_only_link_is_ignored(tmp_path):
+    db = ProjectDatabase(f"sqlite:///{tmp_path / 'ambiguous.db'}")
+    db.initialize()
+    data = linked_sources()
+    value = data["policy_links"][0]["value"]
+    db.put_json("paper_policy_equivalence", "mutable", value)
+    assert read_sources(db, "scope-a")["policy_links"] == []
+    data["policy_links"].append({"stored_at_ms": START+4000, "value": {**value, "status": "revoked"}})
+    assert assess(data)["learning_context"]["policy_cohort"]["status"] == "AMBIGUOUS_EQUIVALENCE"
 
 
 def test_observer_keeps_captured_history_and_default_support_after_new_link(tmp_path, monkeypatch):

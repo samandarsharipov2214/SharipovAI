@@ -37,16 +37,21 @@ def finite(value: Any) -> float | None:
 
 def read_sources(database: ProjectDatabase, scope: str, *, asof_ms: int | None = None) -> dict[str, Any]:
     """One bounded canonical database snapshot; never silently truncate support."""
-    namespaces = (f"paper_trades:{scope}", "self_learning_outcomes_v2", "paper_strategy_epochs",
-                  "paper_policy_equivalence")
+    namespaces = (f"paper_trades:{scope}", "self_learning_outcomes_v2", "paper_strategy_epochs")
+    cutoff = int(time.time() * 1000) + 1 if asof_ms is None else asof_ms
     with database.connect() as connection:
         database._begin(connection)
         rows = database._fetchall(connection,
             "SELECT namespace,item_key,value_json,updated_at_ms FROM project_kv "
-            "WHERE namespace IN (?,?,?,?) AND updated_at_ms < ? ORDER BY namespace,item_key LIMIT ?",
-            (*namespaces, int(time.time() * 1000) + 1 if asof_ms is None else asof_ms, SOURCE_LIMIT + 1))
+            "WHERE namespace IN (?,?,?) AND updated_at_ms < ? ORDER BY namespace,item_key LIMIT ?",
+            (*namespaces, cutoff, SOURCE_LIMIT + 1))
+        events = database._fetchall(connection,
+            "SELECT payload_json,created_at_ms FROM project_events "
+            "WHERE namespace=? AND entity_type=? AND created_at_ms < ? "
+            "ORDER BY created_at_ms,event_id LIMIT ?",
+            ("paper_policy_equivalence", "equivalence", cutoff, SOURCE_LIMIT + 1))
         connection.rollback()
-    if len(rows) > SOURCE_LIMIT:
+    if len(rows) + len(events) > SOURCE_LIMIT:
         return {"coverage": "SOURCE_LIMIT_EXCEEDED", "trades": [], "outcomes": {}, "epochs": [], "policy_links": []}
     result: dict[str, Any] = {"coverage": "COMPLETE_SNAPSHOT", "trades": [], "outcomes": {}, "epochs": [], "policy_links": []}
     for row in rows:
@@ -55,11 +60,28 @@ def read_sources(database: ProjectDatabase, scope: str, *, asof_ms: int | None =
             result["trades"].append(document)
         elif row["namespace"] == namespaces[1]:
             result["outcomes"][row["item_key"]] = document
-        elif row["namespace"] == namespaces[2]:
-            result["epochs"].append(document)
         else:
-            result["policy_links"].append(document)
+            result["epochs"].append(document)
+    result["policy_links"] = [{"value": json.loads(r["payload_json"]),
+                               "stored_at_ms": int(r["created_at_ms"])} for r in events]
     return result
+
+
+def record_policy_equivalence(database: ProjectDatabase, record: Mapping[str, Any]) -> str:
+    """Append verification or revocation using the physical registration clock.
+
+    Call only after independent verification; this API grants no authority.
+    Historical events are retained, so a later revocation cannot rewrite an
+    earlier captured decision. Readers reject conflicting same-millisecond
+    events instead of guessing their order from random event identifiers.
+    """
+    value = dict(record)
+    identity = [value.get(k) for k in ("scope", "observation_epoch_id", "policy_evaluation_id")]
+    if not all(isinstance(v, str) and v.strip() for v in identity):
+        raise ValueError("policy equivalence scope, observation and evaluation identities are required")
+    if value.get("status") not in {"verified", "revoked"}:
+        raise ValueError("policy equivalence status must be verified or revoked")
+    return database.append_event("paper_policy_equivalence", "equivalence", digest(identity), value)
 
 
 def _epoch(epochs: list, *, scope: str, at_ms: int, build: str, policy: str,
@@ -113,6 +135,17 @@ def _policy_cohort(sources: Mapping[str, Any], matched: list[dict], *,
              and epoch_id != UNKNOWN_EPOCH]
     if not links:
         return None
+    # Keep all versions in the snapshot: one worker batch can straddle a
+    # revocation, so select the latest version separately at each decision.
+    latest: dict[str, list[dict]] = {}
+    for row in links:
+        key = str(row["value"].get("policy_evaluation_id"))
+        previous = latest.get(key)
+        if previous is None or row["stored_at_ms"] > previous[0]["stored_at_ms"]:
+            latest[key] = [row]
+        elif row["stored_at_ms"] == previous[0]["stored_at_ms"]:
+            previous.append(row)
+    links = [row for versions in latest.values() for row in versions]
     result = {"status": "INVALID_EQUIVALENCE", "cohort": None,
               "support_status": "INSUFFICIENT_EVIDENCE", "execution_authority": False,
               "policy_influence": "SHADOW_ONLY"}
@@ -121,6 +154,8 @@ def _policy_cohort(sources: Mapping[str, Any], matched: list[dict], *,
     if len(links) != 1:
         return {**result, "status": "AMBIGUOUS_EQUIVALENCE"}
     link, stored = links[0]["value"], links[0]["stored_at_ms"]
+    if link.get("status") == "revoked":
+        return {**result, "status": "EQUIVALENCE_REVOKED"}
     members, evidence = link.get("epoch_ids"), link.get("verification_sha256")
     if (type(link.get("schema_version")) is not int or link["schema_version"] != 1 or link.get("status") != "verified"
             or link.get("policy_changed") is not False or link.get("risk_budget_changed") is not False
