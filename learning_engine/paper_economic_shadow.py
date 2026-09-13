@@ -37,25 +37,28 @@ def finite(value: Any) -> float | None:
 
 def read_sources(database: ProjectDatabase, scope: str, *, asof_ms: int | None = None) -> dict[str, Any]:
     """One bounded canonical database snapshot; never silently truncate support."""
-    namespaces = (f"paper_trades:{scope}", "self_learning_outcomes_v2", "paper_strategy_epochs")
+    namespaces = (f"paper_trades:{scope}", "self_learning_outcomes_v2", "paper_strategy_epochs",
+                  "paper_policy_equivalence")
     with database.connect() as connection:
         database._begin(connection)
         rows = database._fetchall(connection,
             "SELECT namespace,item_key,value_json,updated_at_ms FROM project_kv "
-            "WHERE namespace IN (?,?,?) AND updated_at_ms < ? ORDER BY namespace,item_key LIMIT ?",
+            "WHERE namespace IN (?,?,?,?) AND updated_at_ms < ? ORDER BY namespace,item_key LIMIT ?",
             (*namespaces, int(time.time() * 1000) + 1 if asof_ms is None else asof_ms, SOURCE_LIMIT + 1))
         connection.rollback()
     if len(rows) > SOURCE_LIMIT:
-        return {"coverage": "SOURCE_LIMIT_EXCEEDED", "trades": [], "outcomes": {}, "epochs": []}
-    result: dict[str, Any] = {"coverage": "COMPLETE_SNAPSHOT", "trades": [], "outcomes": {}, "epochs": []}
+        return {"coverage": "SOURCE_LIMIT_EXCEEDED", "trades": [], "outcomes": {}, "epochs": [], "policy_links": []}
+    result: dict[str, Any] = {"coverage": "COMPLETE_SNAPSHOT", "trades": [], "outcomes": {}, "epochs": [], "policy_links": []}
     for row in rows:
         document = {"value": json.loads(row["value_json"]), "stored_at_ms": int(row["updated_at_ms"])}
         if row["namespace"] == namespaces[0]:
             result["trades"].append(document)
         elif row["namespace"] == namespaces[1]:
             result["outcomes"][row["item_key"]] = document
-        else:
+        elif row["namespace"] == namespaces[2]:
             result["epochs"].append(document)
+        else:
+            result["policy_links"].append(document)
     return result
 
 
@@ -91,6 +94,83 @@ def _stats(rows: list[dict]) -> dict[str, Any]:
         "profit_factor": math.fsum(wins) / -math.fsum(losses) if losses else None,
         "statistic_role": "DESCRIPTIVE_CLOSED_TRADE_COHORT_NOT_FORECAST",
     }
+
+
+def _policy_cohort(sources: Mapping[str, Any], matched: list[dict], *,
+                   epoch_id: str, scope: str, regime: str, at_ms: int) -> dict | None:
+    """Optional descriptive continuity, never inferred from a version string.
+
+    An immutable, separately verified equivalence record must target the current
+    observation epoch. Its evidence digest attests reviewed entry/exit behavior
+    and configuration equivalence; unchanged core policy/risk/cost versions are
+    also checked here. Registering such evidence cannot change an earlier input.
+    The original build cohort and all forecast/authority outputs stay unchanged.
+    """
+    links = [r for r in sources.get("policy_links", [])
+             if r["stored_at_ms"] < at_ms and isinstance(r.get("value"), Mapping)
+             and r["value"].get("scope") == scope
+             and r["value"].get("observation_epoch_id") == epoch_id
+             and epoch_id != UNKNOWN_EPOCH]
+    if not links:
+        return None
+    result = {"status": "INVALID_EQUIVALENCE", "cohort": None,
+              "support_status": "INSUFFICIENT_EVIDENCE", "execution_authority": False,
+              "policy_influence": "SHADOW_ONLY"}
+    if sources.get("coverage") != "COMPLETE_SNAPSHOT":
+        return {**result, "status": "INCOMPLETE_SOURCE"}
+    if len(links) != 1:
+        return {**result, "status": "AMBIGUOUS_EQUIVALENCE"}
+    link, stored = links[0]["value"], links[0]["stored_at_ms"]
+    members, evidence = link.get("epoch_ids"), link.get("verification_sha256")
+    if (type(link.get("schema_version")) is not int or link["schema_version"] != 1 or link.get("status") != "verified"
+            or link.get("policy_changed") is not False or link.get("risk_budget_changed") is not False
+            or link.get("configuration_unchanged") is not True or link.get("entry_exit_policy_unchanged") is not True
+            or not isinstance(evidence, str) or len(evidence) != 64
+            or any(c not in "0123456789abcdef" for c in evidence)
+            or not isinstance(members, list) or len(members) < 2
+            or any(not isinstance(v, str) or not v or v == UNKNOWN_EPOCH for v in members)
+            or len(set(members)) != len(members) or epoch_id not in members
+            or link.get("policy_evaluation_id") not in members):
+        return result
+    epochs = [r["value"] for r in sources["epochs"] if r["stored_at_ms"] <= stored
+              and r["value"].get("scope") == scope and r["value"].get("epoch_id") in members]
+    if len(epochs) != len(members) or {e["epoch_id"] for e in epochs} != set(members):
+        return result
+    if any((start := finite(e.get("epoch_start_ms"))) is None or not 0 < start <= at_ms for e in epochs):
+        return result
+    for field in ("strategy_version", "decision_policy_version", "risk_version", "cost_model_version"):
+        values = [e.get(field) for e in epochs]
+        if not all(isinstance(v, str) and v.strip() for v in values) or len(set(values)) != 1:
+            return result
+    eligible, lineage = [], []
+    excluded_exit_policy = 0
+    # matched already contains only unique, reconciled, as-of BUY/SELL pairs.
+    # Resolve the SELL's build independently: an equivalent entry does not
+    # establish that a later exit ran under the same verified policy.
+    sells = {r["value"].get("trade_id"): r["value"] for r in sources["trades"]
+             if r["value"].get("side") == "SELL" and r["stored_at_ms"] < at_ms}
+    for row in matched:
+        if (row["entry_epoch"] not in members or regime.lower() in {"unknown", "", "none"}
+                or row["regime"] != regime):
+            continue
+        sell = sells.get(row["trade_id"], {})
+        exit_epoch = _epoch(sources["epochs"], scope=scope, at_ms=row["closed_at_ms"],
+            build=str(sell.get("paper_build_sha") or "unknown"),
+            policy=str(sell.get("paper_strategy_version") or "unknown"), known_by_ms=at_ms)
+        if exit_epoch not in members:
+            excluded_exit_policy += 1
+            continue
+        eligible.append(row)
+        lineage.append({"outcome_id": row["outcome_id"], "entry_epoch_id": row["entry_epoch"],
+                        "exit_policy_epoch_id": exit_epoch})
+    return {**result, "status": "VERIFIED_EQUIVALENCE_DESCRIPTIVE_ONLY",
+        "policy_evaluation_id": link["policy_evaluation_id"], "observation_epoch_id": epoch_id,
+        "entry_epoch_ids": sorted(members), "verification_sha256": evidence,
+        "equivalence_available_at_ms": stored, "cohort": _stats(eligible),
+        "trade_epoch_lineage": lineage, "excluded_exit_policy_count": excluded_exit_policy,
+        "evidence_outcome_ids": [r["outcome_id"] for r in eligible],
+        "evidence_digest": digest([r["source_digest"] for r in eligible]),
+        "forecast_role": "NOT_A_FORECAST; original build cohort and edge support remain separately reported"}
 
 
 def assess_opportunity(opportunity: Mapping[str, Any], sources: Mapping[str, Any]) -> dict[str, Any]:
@@ -180,6 +260,10 @@ def assess_opportunity(opportunity: Mapping[str, Any], sources: Mapping[str, Any
         "same_symbol_prior_reconciled_closes": len(matched),
         "support_status": "INSUFFICIENT_EVIDENCE", "confidence_adjustment": None,
         "execution_authority": False, "policy_influence": "SHADOW_ONLY"}
+    policy_cohort = _policy_cohort(sources, matched, epoch_id=epoch_id,
+                                    scope=scope, regime=regime, at_ms=at)
+    if policy_cohort is not None:
+        context["policy_cohort"] = policy_cohort
     quote = opportunity.get("quote") or {}
     bid, ask = finite(quote.get("bid_price")), finite(quote.get("ask_price"))
     quote_time = int(quote.get("received_at_unix_ms") or 0)
