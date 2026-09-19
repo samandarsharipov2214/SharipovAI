@@ -70,6 +70,9 @@ def test_default_local_database_is_single_file(monkeypatch: pytest.MonkeyPatch, 
 
 
 def _wal_failure(monkeypatch, *, code, failures, statement="PRAGMA journal_mode=WAL"):
+    from threading import get_ident
+    from types import SimpleNamespace
+    test_thread = get_ident()
     original_connect = sqlite3.connect
     connections = []
 
@@ -89,12 +92,27 @@ def _wal_failure(monkeypatch, *, code, failures, statement="PRAGMA journal_mode=
             return super().execute(sql, *args, **kwargs)
 
     def connect(*args, **kwargs):
+        if get_ident() != test_thread:
+            return original_connect(*args, **kwargs)
         connection = original_connect(*args, factory=InterruptedConnection, **kwargs)
         connections.append(connection)
         return connection
 
-    monkeypatch.setattr("storage.project_database.sqlite3.connect", connect)
+    # Do not inject failures into unrelated SQLite clients or runtime workers.
+    monkeypatch.setattr("storage.project_database.sqlite3",
+                        SimpleNamespace(**{**vars(sqlite3), "connect": connect}))
     return connections
+
+
+def _database_clock(monkeypatch, *, sleep, monotonic=None):
+    import time
+    from threading import get_ident
+    from types import SimpleNamespace
+    test_thread = get_ident()
+    monkeypatch.setattr("storage.project_database.time", SimpleNamespace(
+        time=time.time,
+        monotonic=lambda: monotonic() if monotonic and get_ident() == test_thread else time.monotonic(),
+        sleep=lambda delay: sleep(delay) if get_ident() == test_thread else time.sleep(delay)))
 
 
 @pytest.mark.parametrize("code", [
@@ -119,8 +137,8 @@ def test_sqlite_wal_busy_recovers_without_changing_transaction_settings(tmp_path
 def test_sqlite_wal_permanent_busy_has_bounded_wait_and_closes_connection(tmp_path, monkeypatch, code):
     connections = _wal_failure(monkeypatch, code=code, failures=None)
     clock = [0.0]
-    monkeypatch.setattr("storage.project_database.time.monotonic", lambda: clock[0])
-    monkeypatch.setattr("storage.project_database.time.sleep", lambda delay: clock.__setitem__(0, clock[0] + delay))
+    _database_clock(monkeypatch, monotonic=lambda: clock[0],
+                    sleep=lambda delay: clock.__setitem__(0, clock[0] + delay))
     with pytest.raises(sqlite3.OperationalError) as error:
         with ProjectDatabase(f"sqlite:///{tmp_path / 'bounded.db'}").connect():
             pytest.fail("a permanently busy database must not be yielded")
@@ -133,7 +151,7 @@ def test_sqlite_wal_permanent_busy_has_bounded_wait_and_closes_connection(tmp_pa
 @pytest.mark.parametrize("code", [sqlite3.SQLITE_READONLY, sqlite3.SQLITE_IOERR, sqlite3.SQLITE_ERROR, None])
 def test_sqlite_wal_nonbusy_failure_is_immediate_and_closes_connection(tmp_path, monkeypatch, code):
     connections = _wal_failure(monkeypatch, code=code, failures=None)
-    monkeypatch.setattr("storage.project_database.time.sleep", lambda _: pytest.fail("must not retry non-busy errors"))
+    _database_clock(monkeypatch, sleep=lambda _: pytest.fail("must not retry non-busy errors"))
     with pytest.raises(sqlite3.OperationalError) as error:
         with ProjectDatabase(f"sqlite:///{tmp_path / 'readonly.db'}").connect():
             pytest.fail("setup failure must propagate")
@@ -197,7 +215,7 @@ def test_sqlite_caller_transaction_failure_is_not_replayed(tmp_path, monkeypatch
     calls = 0
     error = sqlite3.OperationalError("caller transaction busy")
     error.sqlite_errorcode = sqlite3.SQLITE_BUSY
-    monkeypatch.setattr("storage.project_database.time.sleep", lambda _: pytest.fail("must not replay caller"))
+    _database_clock(monkeypatch, sleep=lambda _: pytest.fail("must not replay caller"))
     with pytest.raises(sqlite3.OperationalError) as raised:
         with ProjectDatabase(f"sqlite:///{tmp_path / 'caller.db'}").connect() as connection:
             calls += 1
@@ -206,3 +224,20 @@ def test_sqlite_caller_transaction_failure_is_not_replayed(tmp_path, monkeypatch
     assert calls == 1
     with pytest.raises(sqlite3.ProgrammingError, match="closed"):
         connection.execute("SELECT 1")
+
+
+def test_wal_fault_and_clock_do_not_leak_into_background_workers(tmp_path, monkeypatch):
+    import time
+    import storage.project_database as module
+    connections = _wal_failure(monkeypatch, code=sqlite3.SQLITE_BUSY, failures=None)
+    _database_clock(monkeypatch, monotonic=lambda: -1,
+                    sleep=lambda _: pytest.fail("background sleep reached the test clock"))
+    def worker():
+        assert module.time.monotonic() >= 0
+        module.time.sleep(0.001)
+        with ProjectDatabase(f"sqlite:///{tmp_path / 'worker.db'}").connect() as connection:
+            return connection.execute("SELECT 1").fetchone()[0]
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        assert pool.submit(worker).result(timeout=5) == 1
+    assert connections == []
+    assert time.monotonic() >= 0

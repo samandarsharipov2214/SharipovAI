@@ -284,3 +284,10 @@ and independence limitations from the original report still block any claim of
 validated economic alpha. The News page's urgency-first ordering visibly placed
 Sep 4/Sep 12 items near the top; that independent presentation fix belongs in a
 separate small PR.
+
+Continuation validation: 190 directly affected trading/shadow/settlement tests
+passed. Exact-head Phase 13 CI exposed an unrelated pre-existing SQLite test
+race: global fault/clock mocks also intercepted a live News test worker, advancing
+the fake deadline twice (20s vs 10s). Fault injection and fake time now apply only
+to the test thread/module; a concurrent-worker regression and all 21 database
+tests pass. Production database code is unchanged. Broader CI remains mandatory.
