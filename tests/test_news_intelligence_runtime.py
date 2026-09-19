@@ -75,3 +75,31 @@ def test_news_network_constructs_with_injected_collector() -> None:
     # collector is injectable for deterministic tests.  Construction itself
     # must never require a network call.
     assert network.snapshot()["status"] == "stopped"
+
+
+def test_failed_and_empty_fetches_do_not_look_idle_or_refresh_article_freshness():
+    from dataclasses import replace
+    from news_intelligence.hub import NewsHub
+    agent = SourceAgent(definition=_definition())
+    hub = NewsHub()
+    failure = replace(_fetch(), verified=False, error="HTTP 403", status_code=403, item_count=0)
+    hub.ingest(agent, [], failure)
+    status = agent.status()
+    assert status["status"] == "error"
+    assert status["last_error"] == "HTTP 403"
+    assert status["last_http_status"] == 403
+    assert status["last_run_at_ms"] == failure.received_at_ms
+    assert status["last_seen_at_ms"] == 0
+    hub.ingest(agent, [_article()], _fetch())
+    seen = agent.status()["last_seen_at_ms"]
+    hub.ingest(agent, [], failure)
+    assert agent.status()["status"] == "error"
+    assert agent.status()["last_seen_at_ms"] == seen
+    # Recovery on an already-seen article must clear the previous failure.
+    hub.ingest(agent, [_article()], _fetch())
+    assert agent.status()["status"] == "active"
+    assert agent.status()["last_error"] == ""
+    seen = agent.status()["last_seen_at_ms"]
+    hub.ingest(agent, [], replace(_fetch(), item_count=0))
+    assert agent.status()["last_seen_at_ms"] == seen
+    assert agent.status()["last_action"] == "source returned no articles"

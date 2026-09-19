@@ -46,14 +46,30 @@ class SourceAgent:
         self._last_action = "ожидание первого реального RSS-цикла"
         self._last_error = ""
         self._last_seen_at_ms = 0
+        self._last_run_at_ms = 0
+        self._last_http_status = None
         self._accepted = 0
         self._duplicates = 0
+
+    def observe_fetch(self, fetched: SourceFetch) -> None:
+        """Record attempts even when no article reaches register()."""
+        self._last_run_at_ms = fetched.received_at_ms
+        self._last_http_status = fetched.status_code
+        self._last_error = fetched.error
+        if fetched.error or not fetched.verified:
+            self._status = "error"
+            self._last_action = "source fetch failed"
+        elif fetched.item_count == 0:
+            self._status = "idle"
+            self._last_action = "source returned no articles"
+        # A failed/empty fetch must not refresh last_seen_at_ms for articles.
 
     def register(self, article: NewsArticle, fetched: SourceFetch) -> NewsEnvelope | None:
         self._last_seen_at_ms = int(time.time() * 1000)
         if article.article_id in self._seen:
             self._duplicates += 1
-            self._status = "active"
+            self._status = "active" if fetched.verified else "degraded"
+            self._last_error = fetched.error
             self._last_action = "повторная статья пропущена как дубликат"
             return None
 
@@ -87,6 +103,8 @@ class SourceAgent:
             "last_action": self._last_action,
             "last_error": self._last_error,
             "last_seen_at_ms": self._last_seen_at_ms,
+            "last_run_at_ms": self._last_run_at_ms,
+            "last_http_status": self._last_http_status,
             "heartbeat_age_seconds": age_seconds,
             "accepted": self._accepted,
             "duplicates": self._duplicates,

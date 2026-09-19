@@ -78,6 +78,7 @@ class NewsHub:
         self._restore()
 
     def ingest(self, agent: SourceAgent, articles: list[NewsArticle], fetched: SourceFetch) -> HubIngestResult:
+        agent.observe_fetch(fetched)
         accepted = 0
         duplicates = 0
         critical = 0
