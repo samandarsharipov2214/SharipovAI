@@ -27,7 +27,7 @@ def test_page_runtime_coordinator_precedes_every_current_renderer():
         "runtime_trace_v46.js?v=46",
         "ai_center_v44.js?v=45",
         "system_status_v44.js?v=45",
-        "news_center_v12.js?v=25",
+        "news_center_v12.js?v=26",
         "tradingview_market_v32.js?v=45",
         "market_intelligence_v33.js?v=33",
         "campaign_operations_v36.js?v=36",
