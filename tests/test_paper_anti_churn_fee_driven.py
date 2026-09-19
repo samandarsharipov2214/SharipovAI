@@ -4,6 +4,7 @@ import os
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from autonomous_trading.council_loop import CouncilAuthorizedPaperLoop, CouncilEntryProposal
 from autonomous_trading.decision_trace import read_decision_trace
@@ -281,8 +282,11 @@ def _open_long(loop, stream, plan, clock, decision_id: str, *, price: float = MI
     clock.advance(1_000)
     stream.current = _quote(price, now_ms=clock.now_ms())
     _plan_buy(plan, decision_id, now_ms=clock.now_ms())
+    # Lifecycle fixtures explicitly supply stub economic support. Production's
+    # canonical packet has none; missing-edge behavior is tested separately.
     consumed_before = list(loop.decision_runtime.consumed)
-    loop.tick()
+    with patch.object(loop, "_explicit_expected_edge", return_value=1_000_000.0):
+        loop.tick()
     assert SYMBOL in loop._state["positions"]
     assert decision_id in loop.decision_runtime.consumed
     assert loop.decision_runtime.consumed[-1] == decision_id
@@ -363,7 +367,7 @@ def test_c_market_not_moved_enough_to_cover_costs(tmp_path, monkeypatch) -> None
     assert SYMBOL not in loop._state["positions"]
 
 
-def test_d_new_evidence_and_sufficient_price_move_may_pass(tmp_path, monkeypatch) -> None:
+def test_d_new_id_and_sufficient_past_price_move_still_wait_without_edge(tmp_path, monkeypatch) -> None:
     loop, stream, plan, runtime, clock = _build_loop(tmp_path, monkeypatch)
     _open_long(loop, stream, plan, clock, "eth-buy-d1")
     _close_long(loop, stream, plan, clock, "eth-sell-d1")
@@ -379,9 +383,9 @@ def test_d_new_evidence_and_sufficient_price_move_may_pass(tmp_path, monkeypatch
     )
     loop.tick()
 
-    assert helper_reason is None
-    assert SYMBOL in loop._state["positions"]
-    assert "eth-buy-d2" in runtime.consumed
+    assert "prospective_edge_unavailable" in helper_reason
+    assert SYMBOL not in loop._state["positions"]
+    assert "eth-buy-d2" not in runtime.consumed
 
 
 def test_e_protective_exit_is_never_delayed_by_anti_churn(tmp_path, monkeypatch) -> None:

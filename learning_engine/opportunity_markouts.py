@@ -202,6 +202,12 @@ def fixed_horizon_markouts(
             if cost is None:
                 record["status"] = "ENTRY_COST_UNAVAILABLE"
                 continue
+            # An asynchronous capture can arrive after the horizon. Its claimed
+            # decision time cannot establish a prospective, immutable forecast.
+            # Retain this anchor as missing; never replace it with a later winner.
+            if row["recorded_at_ms"] >= target:
+                record["status"] = "CAPTURE_NOT_FROZEN_BEFORE_HORIZON"
+                continue
             if target > cutoff:
                 record["status"] = "HORIZON_NOT_ELAPSED"
                 continue
@@ -239,6 +245,7 @@ def fixed_horizon_markouts(
             "Entry ask and future bid charge spread once; entry-time fee/slippage assumptions are frozen for both legs.",
             "Quantity-dependent impact, executable depth, rounding, inventory and capital constraints are not modeled.",
             "Anchors are chosen before quote, cost and outcome checks; missing anchors are retained.",
+            "Directional opinions must be durably captured before the horizon; direction accuracy is not calibrated economic edge.",
             "BUY summaries are conditional on available labels; compare coverage and actions before comparing models.",
             "SELL is direction only. The cash reference is isolated zero-yield cash, not the existing PAPER portfolio.",
             "Same-symbol intervals do not overlap; symbols and shared evidence may still be correlated."]}

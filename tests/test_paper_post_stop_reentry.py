@@ -133,10 +133,10 @@ def test_expiry_preserves_cost_gate_and_new_trade_epoch(tmp_path, monkeypatch):
     monkeypatch.setenv("SHARIPOVAI_BUILD_SHA", "a" * 40)
     loop, stream, plan, runtime, clock = _build_loop(tmp_path, monkeypatch, post_stop_policy_mode="enforce")
     _open_long(loop, stream, plan, clock, "entry-epoch")
-    assert loop._state["positions"][SYMBOL]["paper_strategy_version"] == PAPER_REENTRY_POLICY_VERSION + ":enforce"
+    assert loop._state["positions"][SYMBOL]["paper_strategy_version"] == loop.PAPER_ENTRY_POLICY_VERSION + ":post-stop-enforce"
     _close_long(loop, stream, plan, clock, "unused", authorized=False)
     close = loop._state["last_close_by_symbol"][SYMBOL]
-    assert loop._state["trades"][-1]["entry_strategy_version"] == PAPER_REENTRY_POLICY_VERSION + ":enforce"
+    assert loop._state["trades"][-1]["entry_strategy_version"] == loop.PAPER_ENTRY_POLICY_VERSION + ":post-stop-enforce"
     clock.ms = close["closed_at_ms"] + PAPER_POST_STOP_COOLDOWN_MS
     stream.current = _quote(close["close_price"], now_ms=clock.now_ms())
     _plan_buy(plan, "expired-but-cost-not-covered", now_ms=clock.now_ms())
@@ -145,7 +145,7 @@ def test_expiry_preserves_cost_gate_and_new_trade_epoch(tmp_path, monkeypatch):
     assert not loop._state["positions"]
     _open_long(loop, stream, plan, clock, "fresh-entry", price=MID + 100)
     new = loop._state["trades"][-1]
-    assert new["paper_strategy_version"] == PAPER_REENTRY_POLICY_VERSION + ":enforce"
+    assert new["paper_strategy_version"] == loop.PAPER_ENTRY_POLICY_VERSION + ":post-stop-enforce"
     assert new["paper_build_sha"] == "a" * 40
 
 
@@ -164,7 +164,7 @@ def test_default_observation_records_would_block_but_preserves_baseline_entry(tm
     assert assessment["last_close_trade_id"] == stopped["trade_id"]
     assert assessment["candidate_decision_id"] == "observed-reentry"
     assert assessment["observed_at_ms"] <= trade["created_at_ms"]
-    assert trade["paper_strategy_version"] == PAPER_REENTRY_POLICY_VERSION + ":observe"
+    assert trade["paper_strategy_version"] == loop.PAPER_ENTRY_POLICY_VERSION + ":post-stop-observe"
     assert "observed-reentry" in runtime.consumed
     stored = loop.database.get_json(loop.trade_namespace, trade["trade_id"])["value"]
     assert stored["post_stop_reentry_assessment"] == assessment
