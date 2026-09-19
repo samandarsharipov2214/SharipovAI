@@ -52,6 +52,19 @@ def test_fee_and_slippage_assumptions_are_frozen_at_entry():
     assert expected["source_sha256"] != actual["source_sha256"]
 
 
+@pytest.mark.parametrize("delay", [1000, 1001, 2000])
+def test_delayed_capture_cannot_become_prospective_support(delay):
+    entry = row("late-capture", recorded_at_ms=START + delay)
+    later = row("replacement", 500)
+    label = row("label", 1000, proposal=False)
+    report = diagnose([entry, later, label])
+    record, = report["records"]
+    assert record["opportunity_id"] == "late-capture"
+    assert record["status"] == "CAPTURE_NOT_FROZEN_BEFORE_HORIZON"
+    assert report["horizons"]["1"]["signals"]["market_intelligence"]["observed_labels_with_signal"] == 0
+    assert report["execution_authority"] is False
+
+
 def test_right_direction_is_not_economic_edge_and_sell_is_not_a_short():
     entry, future = row("entry"), row("future", 1000, proposal=False)
     entry["council"]["opinions"].append({"agent_id": "finance_ai", "action": "SELL", "data_verified": True})

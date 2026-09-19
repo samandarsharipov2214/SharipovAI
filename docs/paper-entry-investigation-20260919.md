@@ -211,3 +211,76 @@ exists, a distinct candidate must produce at least 50 NEW closes over at least
 portfolio max drawdown <= 5%, no safety/accounting/lookahead violations, and
 results not dependent on one abnormal winner. Carry-in and prior-policy trades
 cannot count toward that gate. The present containment alone cannot pass it.
+
+## Continuation: prospective path and temporary containment
+
+The narrow producer search found no eligible economic forecast. The only other
+`expected_edge` producer is `learning.autonomous_learning_cycle.SCENARIOS`, a
+hard-coded simulator. It must never feed the canonical trading packet. The
+observer explicitly returns null expected return/uncertainty; fixed-horizon
+markouts are outcome labels; neither is an economic forecast. Bare numeric
+aliases on packets, candidates, authorizations or assessments are now rejected,
+even when finite and large. They lack units, timestamps, horizon, uncertainty
+and reviewed provenance. Invalid required cost estimates BLOCK.
+
+The smallest honest shadow architecture already runs. Council opinions, verified
+BBO, decision time, build/policy identity, signal/news/cost evidence IDs and frozen
+fee/slippage assumptions are captured before canonical assessment in
+`CouncilAuthorizedPaperLoop`; `EconomicOpportunityObserver` appends immutable,
+content-digested `paper_economic_opportunities:<scope>` records to ProjectDatabase.
+The bounded asynchronous queue reports gaps/failures. It continues collecting
+BUY opinions and WAIT/no-proposal observations while entries are contained.
+`learning_engine.opportunity_markouts.fixed_horizon_markouts` evaluates the
+existing directional opinions at the already-defined 5m/15m/30m/1h/4h horizons,
+with coverage, direction hit rate and long quote returns after spread, fees and
+base slippage. The offline CLI is `python -m scripts.paper_opportunity_markouts`.
+No horizon is selected from outcomes, no economic prediction is invented, and
+no existing replay or cooldown analysis was repeated in this continuation.
+
+A newly tested chronology guard excludes captures persisted at/after the target
+horizon, retaining them as missing anchors instead of replacing them. This closes
+an asynchronous recording loophole: a claimed early decision timestamp alone
+cannot prove that the opinion was frozen before the outcome. Captures are not
+claimed to be durable before the entry itself; they are sufficient only for
+shadow directional diagnostics when durable before the evaluation horizon.
+Direction accuracy is not probability calibration, return calibration or alpha.
+Quantity-dependent impact, depth, capital paths and economic uncertainty remain
+missing from these labels. No shadow metric can authorize execution.
+
+Release scope is explicitly **temporary fail-closed containment**, not a finished
+profitable strategy. No safer supported active candidate was found: prior-price
+movement, uncalibrated Council scores, simulator constants and descriptive means
+all fail the required forecast contract. Leaving the reproduced P0 enabled would
+continue authorizing economically unsupported entries. Protective/Council exits,
+settlement and learning remain active; zero new entries is not a success metric.
+The runtime `entry_economics` status exposes this limitation and blocked promotion.
+
+Promotion requires a separate reviewed candidate under Market Intelligence /
+Decision Quality, using Learning Engine's immutable evidence: register model
+version, training/validation cutoffs, horizon and evaluation protocol **before**
+new outcomes; capture predictions durably before entry; bind them to candidate,
+symbol, side, quantity, build, source evidence and expiry; specify gross-return
+units and a calibrated uncertainty bound. All feature/label availability must
+precede prediction time. Evaluate on untouched chronological data, measure
+missingness and cross-symbol dependence, compare a declared baseline, and include
+fees, spread, slippage and quantity-dependent impact exactly once. A conservative
+return bound must strictly exceed all-in round-trip cost times 1.5 in the same
+units. Existing Risk, Security and General Controller gates remain necessary.
+Passing research review only permits a distinct guarded PAPER candidate; the
+50-new-closes / 7-day economic gate above is still required. No automatic
+promotion, profitability claim, Mainnet or Testnet execution is introduced.
+
+On 19 September, authenticated **running Uvicorn HTTP** checks confirmed Market
+live/verified (age <1s), PAPER worker active, canonical GC V2 authority, advisory
+DQ, Risk/Security vetoes, portfolio sizing, shared DB NewsHub consumption, and
+Learning/shadow observation (3,270 records, zero failed/dropped at capture).
+Canonical NewsAgentNetwork was running at cycle 104, ~30s cycle age, 8 active
+sources / 4 idle; bridge consumers all attached. Social News autorun was alive,
+175 articles, 104 published that UTC day, 35/55 working RSS and 20 failed/empty.
+The Web2 compatibility feed is separate from Council's injected
+`project_database.news_memory` reader, not a second trading authority. Neither
+thread lifecycle needs repair. Remaining Council news polarity, publication-time
+and independence limitations from the original report still block any claim of
+validated economic alpha. The News page's urgency-first ordering visibly placed
+Sep 4/Sep 12 items near the top; that independent presentation fix belongs in a
+separate small PR.

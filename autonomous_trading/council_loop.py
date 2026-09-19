@@ -1531,6 +1531,8 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
             return post_stop_reason
         try:
             round_trip = self._estimate_entry_round_trip(symbol, quote, last)
+            if finite(round_trip.all_in) is None or round_trip.all_in < 0:
+                raise ValueError("finite nonnegative all-in cost required")
         except Exception as exc:
             return (
                 f"{self.ANTI_CHURN_COST_UNAVAILABLE}: round-trip cost estimate unavailable "
@@ -1675,25 +1677,13 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         authorization: PaperDecisionAuthorization,
         packet: Any,
     ) -> float | None:
-        """Use a packet/candidate expected-edge field if present. Never invent one."""
+        """No validated producer is connected to the canonical packet yet.
 
-        candidate = authorization.candidate_result.candidate
-        sources = (
-            packet,
-            candidate,
-            authorization,
-            getattr(authorization, "assessment", None),
-        )
-        for source in sources:
-            value = self._read_finite_field(
-                source,
-                "expected_edge",
-                "expected_pnl",
-                "expected_gross_edge",
-                "estimated_edge",
-            )
-            if value is not None:
-                return value
+        Bare numeric aliases have no units, horizon, availability, uncertainty
+        or provenance. Even a large finite value is not execution evidence.
+        Promotion requires a reviewed canonical forecast contract; shadow
+        outcomes and descriptive means must never enter through these aliases.
+        """
         return None
 
     def _packet_reported_cost(
@@ -1822,6 +1812,14 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
 
     def snapshot(self) -> dict[str, Any]:
         state = super().snapshot()
+        state["entry_economics"] = {
+            "status": "TEMPORARY_FAIL_CLOSED_CONTAINMENT",
+            "prospective_edge_producer": None,
+            "promotion_status": "BLOCKED_NO_VALIDATED_PROSPECTIVE_EDGE",
+            "shadow_path": "paper_economic_opportunities -> fixed_horizon_markouts",
+            "shadow_role": "directional calibration only; no economic forecast",
+            "profitability_proven": False,
+        }
         state["economic_shadow"] = self.economic_observer.status() if getattr(self, "economic_observer", None) is not None else {
             "status": "NOT_INSTALLED", "execution_authority": False}
         traces = read_decision_traces(self.database, self.stream.symbols)

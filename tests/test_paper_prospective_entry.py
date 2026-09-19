@@ -39,7 +39,7 @@ def test_large_move_and_new_id_cannot_replace_unknown_edge(tmp_path, monkeypatch
     assert "prospective_edge_unavailable" in loop._state["last_reason"]
 
 
-@pytest.mark.parametrize("edge", [None, float("nan"), float("inf"), True])
+@pytest.mark.parametrize("edge", [None, float("nan"), float("inf"), True, 1_000_000.0])
 def test_invalid_edge_is_unknown_instead_of_falling_back_to_price(tmp_path, monkeypatch, edge):
     loop, stream, plan, runtime, clock = _build_loop(tmp_path, monkeypatch)
     _plan_buy(plan, "invalid-edge", now_ms=clock.now_ms())
@@ -75,10 +75,52 @@ def test_first_entry_must_strictly_exceed_full_cost_cushion(tmp_path, monkeypatc
     loop, stream, plan, runtime, clock = _build_loop(tmp_path, monkeypatch)
     _plan_buy(plan, "insufficient-first-edge", now_ms=clock.now_ms())
     cost = loop._estimate_entry_round_trip(SYMBOL, stream.current, None)
-    plan["authorization"].expected_edge = coverage * cost.all_in * loop.ANTI_CHURN_COST_MARGIN
+    monkeypatch.setattr(loop, "_explicit_expected_edge",
+        lambda *args: coverage * cost.all_in * loop.ANTI_CHURN_COST_MARGIN)
     loop.tick()
     assert runtime.consumed == []
     assert "anti_churn_cost_not_covered" in loop._state["last_reason"]
+
+
+@pytest.mark.parametrize("alias", ["expected_edge", "expected_pnl", "expected_gross_edge", "estimated_edge"])
+@pytest.mark.parametrize("location", ["packet", "candidate", "authorization", "assessment"])
+def test_unsigned_unversioned_edge_aliases_never_authorize(tmp_path, monkeypatch, alias, location):
+    loop, stream, plan, runtime, clock = _build_loop(tmp_path, monkeypatch)
+    _plan_buy(plan, "unvalidated-alias", now_ms=clock.now_ms())
+    auth = plan["authorization"]
+    sources = {"candidate": auth.candidate_result.candidate, "authorization": auth,
+               "assessment": auth.assessment, "packet": {alias: 1_000_000.0}}
+    if location != "packet":
+        setattr(sources[location], alias, 1_000_000.0)
+    assert loop._explicit_expected_edge(auth, sources["packet"] if location == "packet" else None) is None
+    loop.tick()
+    assert not runtime.consumed and not loop._state["positions"]
+
+
+def test_containment_keeps_collecting_predecision_opinions_for_shadow(tmp_path, monkeypatch):
+    from test_paper_economic_observer import Capture
+    loop, stream, plan, runtime, clock = _build_loop(tmp_path, monkeypatch)
+    loop.economic_observer = Capture()
+    _plan_buy(plan, "shadow-despite-wait", now_ms=clock.now_ms())
+    loop.tick()
+    captured, = loop.economic_observer.rows
+    assert captured["council"]["opinions"][0]["action"] == "BUY"
+    assert captured["council"]["cost_snapshot_id"] == "cost-1"
+    assert captured["quote"]["received_at_unix_ms"] <= captured["decision_time_ms"]
+    assert captured["result"]["status"] == "WAIT"
+    assert not runtime.consumed and not loop._state["trades"]
+
+
+@pytest.mark.parametrize("cost", [float("nan"), float("inf"), -1, True, None])
+def test_invalid_required_cost_blocks_instead_of_waiting_for_edge(tmp_path, monkeypatch, cost):
+    from types import SimpleNamespace
+    loop, stream, plan, runtime, clock = _build_loop(tmp_path, monkeypatch)
+    _plan_buy(plan, "bad-required-cost", now_ms=clock.now_ms())
+    monkeypatch.setattr(loop, "_estimate_entry_round_trip", lambda *args: SimpleNamespace(all_in=cost))
+    loop.tick()
+    assert loop._state["last_action"] == "BLOCK"
+    assert "anti_churn_cost_unavailable" in loop._state["last_reason"]
+    assert not runtime.consumed and not loop._state["trades"]
 
 
 def test_chronological_screen_does_not_use_a_late_persisted_stop():

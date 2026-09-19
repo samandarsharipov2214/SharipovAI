@@ -4,6 +4,7 @@ import os
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from autonomous_trading.council_loop import CouncilAuthorizedPaperLoop, CouncilEntryProposal
 from autonomous_trading.decision_trace import read_decision_trace
@@ -283,9 +284,9 @@ def _open_long(loop, stream, plan, clock, decision_id: str, *, price: float = MI
     _plan_buy(plan, decision_id, now_ms=clock.now_ms())
     # Lifecycle fixtures explicitly supply stub economic support. Production's
     # canonical packet has none; missing-edge behavior is tested separately.
-    plan["authorization"].expected_edge = 1_000_000.0
     consumed_before = list(loop.decision_runtime.consumed)
-    loop.tick()
+    with patch.object(loop, "_explicit_expected_edge", return_value=1_000_000.0):
+        loop.tick()
     assert SYMBOL in loop._state["positions"]
     assert decision_id in loop.decision_runtime.consumed
     assert loop.decision_runtime.consumed[-1] == decision_id
