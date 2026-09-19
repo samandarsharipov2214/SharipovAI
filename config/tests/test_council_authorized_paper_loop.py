@@ -33,6 +33,9 @@ from trading_candidate import (
 def _fill_math_uses_large_paper_book(monkeypatch) -> None:
     """These tests size notionals for a 10k book. Production default is 100."""
     monkeypatch.setenv("AUTONOMOUS_PAPER_INITIAL_CASH", "10000")
+    # Exercise execution/settlement after an explicitly satisfied economics
+    # precondition. The real missing-edge gate has its own integration tests.
+    monkeypatch.setattr(CouncilAuthorizedPaperLoop, "_explicit_expected_edge", lambda *args: 1_000_000.0)
 
 
 @dataclass
@@ -1216,6 +1219,9 @@ def test_cost_model_exception_never_falls_back_to_optimistic_quote(tmp_path, mon
 
     class RaisingCostModel(_FaultCostModel):
         def estimate(self, *_args, **_kwargs):
+            raise RuntimeError("simulated cost model failure")
+
+        def estimate_round_trip(self, *_args, **_kwargs):
             raise RuntimeError("simulated cost model failure")
 
     loop = CouncilAuthorizedPaperLoop(

@@ -64,14 +64,16 @@ class PaperExecutionRejected(RuntimeError):
 class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
     """Autonomous paper loop whose new entries require council authorization."""
 
-    # Expected edge / price move must cover this multiple of all-in round-trip cost.
-    # This is a cost-coverage margin, not a time wait.
+    # Prospective edge must cover this multiple of all-in round-trip cost.
+    # This is a cost cushion, not a calibrated forecast uncertainty estimate.
+    PAPER_ENTRY_POLICY_VERSION = "paper-prospective-edge-v1"
     ANTI_CHURN_COST_MARGIN = 1.5
     ANTI_CHURN_TURNOVER_WINDOW_MS = 15 * 60 * 1000
     ANTI_CHURN_MAX_ROUND_TRIPS = 3
     ANTI_CHURN_FEE_EQUITY_FRACTION = 0.005
     ANTI_CHURN_REENTRY = "anti_churn_reentry"
     ANTI_CHURN_COST_NOT_COVERED = "anti_churn_cost_not_covered"
+    ANTI_CHURN_COST_UNAVAILABLE = "anti_churn_cost_unavailable"
     ANTI_CHURN_TURNOVER_LIMIT = "anti_churn_turnover_limit"
 
     def __init__(
@@ -163,7 +165,7 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
     def _strategy_evidence(self) -> dict[str, str]:
         build_sha = os.getenv("SHARIPOVAI_BUILD_SHA", "").strip().lower()
         return {
-            "paper_strategy_version": f"{PAPER_REENTRY_POLICY_VERSION}:{self.post_stop_policy_mode}",
+            "paper_strategy_version": f"{self.PAPER_ENTRY_POLICY_VERSION}:post-stop-{self.post_stop_policy_mode}",
             "paper_build_sha": build_sha
             if len(build_sha) == 40 and all(c in "0123456789abcdef" for c in build_sha)
             else "unknown",
@@ -409,7 +411,7 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                 if anti_churn_reason:
                     action = (
                         "BLOCK"
-                        if anti_churn_reason.startswith(self.ANTI_CHURN_TURNOVER_LIMIT)
+                        if anti_churn_reason.startswith((self.ANTI_CHURN_TURNOVER_LIMIT, self.ANTI_CHURN_COST_UNAVAILABLE))
                         else "WAIT"
                     )
                     self._trace(
@@ -1527,14 +1529,11 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         }
         if post_stop_reason and self.post_stop_policy_mode == "enforce":
             return post_stop_reason
-        if last is None:
-            return None
-
         try:
             round_trip = self._estimate_entry_round_trip(symbol, quote, last)
         except Exception as exc:
             return (
-                f"{self.ANTI_CHURN_COST_NOT_COVERED}: round-trip cost estimate unavailable "
+                f"{self.ANTI_CHURN_COST_UNAVAILABLE}: round-trip cost estimate unavailable "
                 f"({type(exc).__name__}: {exc})"
             )
         packet = proposal.evidence_packet if proposal is not None else None
@@ -1548,10 +1547,8 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         packet_cost = packet_percent / 100.0 * notional if packet_percent > 0 and notional > 0 else 0.0
         all_in = max(float(round_trip.all_in), packet_cost)
         required = all_in * self.ANTI_CHURN_COST_MARGIN
-        last_price = float(last.get("close_price") or 0.0)
-        price_move_value = abs(current_mid - last_price) * estimate_qty
         edge = self._explicit_expected_edge(authorization, packet)
-        same_identity = self._same_buy_identity(last, authorization)
+        same_identity = last is not None and self._same_buy_identity(last, authorization)
 
         if same_identity:
             return (
@@ -1560,22 +1557,22 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                 f"all_in={all_in:.8f} required={required:.8f}"
             )
 
-        if edge is not None:
-            if edge + 1e-12 < required:
-                return (
-                    f"{self.ANTI_CHURN_COST_NOT_COVERED}: expected_edge={edge:.8f} "
-                    f"does not cover {self.ANTI_CHURN_COST_MARGIN}x all-in round-trip "
-                    f"cost {all_in:.8f} (required {required:.8f})"
-                )
-            return None
-
-        # Fail-closed hysteresis: no reliable expected-edge evidence, so the
-        # market itself must have moved enough to cover all-in cost + margin.
-        if price_move_value + 1e-12 < required:
+        # Applies to first entries as well as re-entry after every exit. A past
+        # move, fresh quote ID, liquidity check or cross-exchange agreement says
+        # nothing about the return *after* this BUY. The canonical packet has no
+        # validated forecast producer today, so it must abstain. Do not promote
+        # the descriptive learning cohort or impact-derived confidence to edge.
+        if edge is None:
             return (
-                f"{self.ANTI_CHURN_COST_NOT_COVERED}: price move {price_move_value:.8f} "
+                f"{self.ANTI_CHURN_COST_NOT_COVERED}: prospective_edge_unavailable; "
+                f"fees+spread+slippage (impact included)={all_in:.8f}; "
+                "validated prospective return and uncertainty evidence required"
+            )
+        if edge <= required:
+            return (
+                f"{self.ANTI_CHURN_COST_NOT_COVERED}: expected_edge={edge:.8f} "
                 f"does not cover {self.ANTI_CHURN_COST_MARGIN}x all-in round-trip "
-                f"cost {all_in:.8f} (required {required:.8f}); fees+spread+slippage participate"
+                f"cost {all_in:.8f} (required >{required:.8f})"
             )
         return None
 
@@ -1726,7 +1723,7 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                 raw = source.get(name)
             else:
                 raw = getattr(source, name, None)
-            if raw is None:
+            if raw is None or isinstance(raw, bool):
                 continue
             try:
                 parsed = float(raw)
