@@ -1,6 +1,6 @@
 """Bounded chronological PAPER diagnostics, never an alternate portfolio replay.
 
-Consumes an explicit read-only export with ``trades`` and optional immutable
+Consumes an explicit read-only export with ``trades`` and immutable
 ``trade_storage_times``. Screens use only earlier, available baseline closes.
 Removed pairs have no replacement fills; retained-pair PnL is not candidate PnL.
 """
@@ -52,7 +52,7 @@ def diagnose(document):
     if not isinstance(trades, list) or len(trades) > MAX_LEGS:
         raise ValueError("explicit export exceeds bounded trade-leg limit")
     stored = document.get("trade_storage_times", {})
-    seen, entries, closes, pairs = set(), {}, [], []
+    seen, entries, closes, pairs, settled = set(), {}, [], [], set()
     prior_by_entry = {}
     for t in sorted(trades, key=lambda t: (t["created_at_ms"], t["trade_id"])):
         tid, decision, symbol = t["trade_id"], t["decision_id"], t["symbol"]
@@ -67,9 +67,15 @@ def diagnose(document):
             # Equal-time/late-persisted outcomes cannot influence this entry.
             available = [c for c in closes if c["symbol"] == symbol
                          and c["created_at_ms"] < at
-                         and int(stored.get(c["trade_id"], c["created_at_ms"])) < at]
+                         and stored[c["trade_id"]] < at]
             prior_by_entry[decision] = available[-1] if available else None
         elif t["side"] == "SELL":
+            available_at = stored.get(tid)
+            if type(available_at) is not int or available_at < at:
+                raise ValueError("exact close persistence time required; cannot infer availability")
+            if decision in settled:
+                raise ValueError("duplicate settlement identity")
+            settled.add(decision)
             entry = entries.get(decision)
             if entry is None or entry["symbol"] != symbol or entry["created_at_ms"] >= at:
                 raise ValueError("close lacks prior same-symbol entry; export carry-in explicitly")
@@ -77,6 +83,8 @@ def diagnose(document):
             if qty <= 0 or not math.isclose(qty, sell_qty, rel_tol=1e-10, abs_tol=1e-12):
                 raise ValueError("quantity reconciliation failed")
             fees = number(entry["fee"]) + number(t["fee"])
+            if min(number(entry["fee"]), number(t["fee"])) < 0 or min(number(entry["price"]), number(t["price"])) <= 0:
+                raise ValueError("positive fill prices and nonnegative fees required")
             gross = (number(t["price"]) - number(entry["price"])) * qty
             net = number(t["net_pnl"])
             if not math.isclose(gross - fees, net, rel_tol=1e-8, abs_tol=1e-8):

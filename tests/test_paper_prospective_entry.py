@@ -93,10 +93,12 @@ def test_chronological_screen_does_not_use_a_late_persisted_stop():
               trade("s1", "d1", "SELL", 2000, 99, "protective_stop_loss"),
               trade("b2", "d2", "BUY", 3000, 100, "entry"),
               trade("s2", "d2", "SELL", 4000, 99, "protective_stop_loss")]
-    late = diagnose({"trades": trades, "trade_storage_times": {"s1": 3500}})
-    timely = diagnose({"trades": trades, "trade_storage_times": {"s1": 2500}})
+    late = diagnose({"trades": trades, "trade_storage_times": {"s1": 3500, "s2": 4500}})
+    timely = diagnose({"trades": trades, "trade_storage_times": {"s1": 2500, "s2": 4500}})
     key = "protective_stop_loss:15m"
     assert late["screens"][key]["screened_pairs"] == 0
     assert timely["screens"][key]["screened_pairs"] == 1
     assert late["baseline"]["net_pnl_usdt"] == pytest.approx(-2.4)
     assert late["baseline"]["portfolio_max_drawdown_percent"] is None
+    with pytest.raises(ValueError, match="cannot infer availability"):
+        diagnose({"trades": trades})
