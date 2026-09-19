@@ -147,9 +147,10 @@ due-cycle contract. The live route describes source agents, while the legacy
 `news_monitor.agent_network` is not the Council's injected news reader.
 
 `SourceAgent._analyze` produces an unsigned relevance/reliability/urgency score
-and a separate `bullish`/`bearish`/`neutral` label. `_news_opinion` recognizes
-`bullish` but omits `bearish` from its negative labels; positive score magnitude
-also makes neutral rows bullish. Earlier consumed labels included 1,529 neutral
+and a separate `bullish`/`bearish`/`neutral` label. `_news_opinion` correctly signs
+`bearish` negative, but positive score magnitude makes **neutral** rows bullish.
+Overlapping neutral rows can overwhelm the negative contributions in a group.
+Earlier consumed labels included 1,529 neutral
 and 266 bearish rows; recent labels included 1,494 neutral and 228 bearish rows.
 Nevertheless, most source-group votes were BUY: 157/173 earlier and 71/79 recent.
 
