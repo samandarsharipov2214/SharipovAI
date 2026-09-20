@@ -11,5 +11,15 @@
     "mainnet_write_requires_human_confirm": true,
     "withdraw_permission_forbidden": true,
     "secrets_must_not_be_committed": true
+  },
+  "local_adaptation": {
+    "profile": "SharipovAI",
+    "upstream_sha256_scope": "unmodified upstream SKILL.md before project overrides",
+    "notes": [
+      "Narrow skill activation to Bybit transport/protocol work",
+      "Disable session-start auto-update and repository mutation during normal tasks",
+      "Keep Mainnet writes behind SharipovAI project-level safety gate",
+      "Do not substitute simulated values for missing live data"
+    ]
   }
 }
