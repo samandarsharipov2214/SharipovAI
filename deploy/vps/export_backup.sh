@@ -7,6 +7,7 @@ COMPOSE_DIR=${COMPOSE_DIR:-$APP_DIR/deploy/vps}
 BACKUP_DIR=${BACKUP_DIR:-$COMPOSE_DIR/backups}
 CONTAINER=${CONTAINER:-sharipovai}
 KEEP=${KEEP:-7}
+MAX_RETAINED_GIB=${SHARIPOVAI_BACKUP_MAX_RETAINED_GIB:-4}
 MIN_FREE_DISK_GB=${SHARIPOVAI_BACKUP_MIN_FREE_DISK_GB:-20}
 RESERVE_MIB=${SHARIPOVAI_BACKUP_RESERVE_MIB:-512}
 # A 14+ GB integrity scan and logical capture exceed the old ten-minute
@@ -31,6 +32,10 @@ if ! [[ "$HELPER_TIMEOUT_SECONDS" =~ ^[1-9][0-9]{0,3}$ ]] || (( HELPER_TIMEOUT_S
 fi
 if ! [[ "$SIZE_PROBE_TIMEOUT_SECONDS" =~ ^[1-9][0-9]{0,2}$ ]] || (( SIZE_PROBE_TIMEOUT_SECONDS < 5 || SIZE_PROBE_TIMEOUT_SECONDS > 600 )); then
   fail 'SHARIPOVAI_BACKUP_SIZE_PROBE_TIMEOUT_SECONDS must be an integer between 5 and 600'
+fi
+
+if ! [[ "$MAX_RETAINED_GIB" =~ ^[1-9][0-9]?$ ]] || (( MAX_RETAINED_GIB > 20 )); then
+  fail 'SHARIPOVAI_BACKUP_MAX_RETAINED_GIB must be within 1..20'
 fi
 
 MIN_FREE_BYTES=$((MIN_FREE_DISK_GB * 1024 * 1024 * 1024))
@@ -644,31 +649,36 @@ if ! mv "$archive_tmp" "$archive"; then
   fail 'atomic backup archive publication failed'
 fi
 archive_tmp=''
+previous_archive=$(readlink -f "$BACKUP_DIR/latest.tar.gz" || true)
 ln -sfn "$(basename "$archive")" "$BACKUP_DIR/latest.tar.gz"
 ln -sfn "$(basename "$archive.sha256")" "$BACKUP_DIR/latest.tar.gz.sha256"
 
 # Pin the successfully published archive even if an older file has a future
 # mtime. Retention runs under the exporter lock and never follows symlinks.
-python3 - "$BACKUP_DIR" "$archive" "$KEEP" <<'PY'
+python3 - "$BACKUP_DIR" "$archive" "$KEEP" "$MAX_RETAINED_GIB" "$previous_archive" <<'PY'
 # BEGIN RETENTION_PYTHON
 import re
 import sys
 from pathlib import Path
 
 
-def retain_archives(root, active, keep):
+def retain_archives(root, active, keep, max_bytes=4 * 1024**3, previous=None):
     candidates = sorted((p for p in root.iterdir()
                          if re.fullmatch(r"sharipovai-[0-9]{8}T[0-9]{6}Z\.tar\.gz", p.name)
                          and p.is_file() and not p.is_symlink()),
                         key=lambda p: (p.stat().st_mtime_ns, p.name), reverse=True)
     latest = root / "latest.tar.gz"
     protected = {active.resolve(), latest.resolve()}
+    if previous is not None and previous.exists():
+        protected.add(previous.resolve())
     retained = set(protected)
+    retained_bytes = sum(p.stat().st_size for p in retained if p.is_file())
     for path in candidates:
         if path.resolve() in retained:
             continue
-        if len(retained) < keep:
+        if len(retained) < keep and retained_bytes + path.stat().st_size <= max_bytes:
             retained.add(path.resolve())
+            retained_bytes += path.stat().st_size
             continue
         path.unlink()
         checksum = path.with_name(path.name + ".sha256")
@@ -677,7 +687,8 @@ def retain_archives(root, active, keep):
 
 
 if __name__ == "__main__":
-    retain_archives(Path(sys.argv[1]), Path(sys.argv[2]), int(sys.argv[3]))
+    retain_archives(Path(sys.argv[1]), Path(sys.argv[2]), int(sys.argv[3]),
+                    int(sys.argv[4]) * 1024**3, Path(sys.argv[5]) if sys.argv[5] else None)
 # END RETENTION_PYTHON
 PY
 

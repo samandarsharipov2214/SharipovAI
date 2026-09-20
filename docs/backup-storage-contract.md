@@ -81,3 +81,10 @@ ownership, archive lifetimes, rollback and production evidence.
 The helper deadline is bounded to one hour and the systemd job to 75 minutes.
 The previous ten-minute helper budget was shorter than a 14+ GB integrity scan
 on the production VPS; the exporter lock still prevents overlapping runs.
+
+Retention now has both a count and byte budget: KEEP=7 and
+SHARIPOVAI_BACKUP_MAX_RETAINED_GIB=4 (bounded 1–20). Current and previous latest
+archives are always protected, even if those two alone exceed the byte budget;
+older archives are considered only within the remaining budget. This prevents
+seven growing archives from recreating the staging deadlock. Pruning still runs
+only after successful publication under the exporter lock.
