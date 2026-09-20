@@ -77,3 +77,7 @@ The backup job invokes explicit, bounded operational retention and storage metri
 sampling only after successful publication and only when the running application
 supports the lifecycle module. See `docs/storage-rootcause-20260920.md` for exact
 ownership, archive lifetimes, rollback and production evidence.
+
+The helper deadline is bounded to one hour and the systemd job to 75 minutes.
+The previous ten-minute helper budget was shorter than a 14+ GB integrity scan
+on the production VPS; the exporter lock still prevents overlapping runs.

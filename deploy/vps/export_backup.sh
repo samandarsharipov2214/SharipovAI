@@ -508,9 +508,11 @@ for db in sorted(source.iterdir()):
         else:
             with sqlite3.connect(target_db) as dst:
                 src.backup(dst, pages=128, progress=check_space)
+                src.execute("ROLLBACK")  # Release WAL pin before destination check.
                 if dst.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
                     raise RuntimeError("snapshot SQLite quick_check failed")
-        src.execute("ROLLBACK")
+        if src.in_transaction:
+            src.execute("ROLLBACK")
 if logical_databases:
     (destination / ".sqlite-logical.json").write_text(json.dumps(logical_databases))
 

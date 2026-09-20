@@ -86,28 +86,43 @@ def retain(db: ProjectDatabase, archive_dir: Path, *, retain_days: int = 7,
     state = db.get_json('storage_lifecycle', 'operational_cursor')
     cursors = dict(state['value']) if state else {}
     selected = []
+    selected_bytes = 0
+    byte_limit = False
     deadline = time.monotonic() + 20
     for namespace, entity_type in POLICIES.items():
         cursor = str(cursors.get(namespace, ''))
         with db.connect() as connection:
+            if db.backend == "sqlite":
+                connection.set_progress_handler(lambda: int(time.monotonic() >= deadline), 10000)
             entities = db._fetchall(connection,
                 'SELECT DISTINCT entity_id FROM project_events WHERE namespace=? AND entity_type=? AND entity_id>? ORDER BY entity_id LIMIT 100',
                 (namespace, entity_type, cursor))
             for entity in entities:
                 entity_id = entity['entity_id']
-                rows = db._fetchall(connection,
+                query = db._execute(connection,
                     'SELECT event_id,namespace,entity_type,entity_id,payload_json,created_at_ms FROM project_events WHERE namespace=? AND entity_type=? AND entity_id=? AND created_at_ms<? ORDER BY created_at_ms LIMIT ?',
                     (namespace, entity_type, entity_id, cutoff, max_rows-len(selected)))
-                selected.extend(dict(row) for row in rows)
+                columns = [item.name if hasattr(item, 'name') else item[0] for item in query.description]
+                while raw := query.fetchone():
+                    row = dict(zip(columns, raw))
+                    size = len(row['payload_json'].encode())
+                    if size > 65536:
+                        raise ValueError('unexpected operational payload; ownership requires review')
+                    if selected_bytes + size > 4 * 1024**2:
+                        byte_limit = True
+                        break
+                    selected.append(row)
+                    selected_bytes += size
+                query.close()
                 # Revisit a partially drained entity on the next invocation.
-                if len(selected) >= max_rows or time.monotonic() >= deadline:
+                if byte_limit or len(selected) >= max_rows or time.monotonic() >= deadline:
                     break
                 cursor = entity_id
             else:
                 if len(entities) < 100:
                     cursor = ''
         cursors[namespace] = cursor
-        if len(selected) >= max_rows or time.monotonic() >= deadline:
+        if byte_limit or len(selected) >= max_rows or time.monotonic() >= deadline:
             break
     result = {'cutoff_ms': cutoff, 'selected': len(selected), 'deleted': 0,
               'archive': None, 'batch_size': batch_size, 'retain_days': retain_days,

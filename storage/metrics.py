@@ -52,7 +52,8 @@ def collect(db: ProjectDatabase, backup_dir: Path) -> dict:
     if result['filesystem_free_bytes'] < 22*1024**3: result['alerts'].append('disk_low')
     if result['backup_age_seconds'] is None or result['backup_age_seconds'] > 7200: result['alerts'].append('backup_stale')
     if (result['growth_bytes_per_second'] or 0)*86400 > 256*1024**2: result['alerts'].append('abnormal_database_growth')
-    if result['retention'] is None or result['retention']['selected'] >= 5000: result['alerts'].append('retention_backlog')
+    if (result['retention'] is None or result['retention']['selected'] >= 5000
+            or now-result['retention']['checked_at_ms'] > 7200000): result['alerts'].append('retention_backlog')
     result['status'] = 'degraded' if result['alerts'] else 'ok'
     temporary = metrics_path.with_suffix('.partial')
     with temporary.open('w') as handle:
@@ -63,7 +64,10 @@ def collect(db: ProjectDatabase, backup_dir: Path) -> dict:
 
 
 def read_metrics() -> dict:
-    db = ProjectDatabase()
+    try:
+        db = ProjectDatabase()
+    except Exception:
+        return {"alerts": ["storage_metrics_unavailable"]}
     root = Path(db.dsn.removeprefix('sqlite:///')).parent if db.backend == 'sqlite' else Path(os.getenv('SHARIPOVAI_DATA_DIR', 'data'))
     try:
         value = json.loads((root / 'storage-metrics.json').read_text())

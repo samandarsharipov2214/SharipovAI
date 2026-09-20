@@ -14,14 +14,30 @@ def convert(db: ProjectDatabase, *, after: str = '', batch_size: int = 100, expa
     if not 1 <= batch_size <= 500:
         raise ValueError('batch size outside bounds')
     with db.connect() as connection:
-        rows = db._fetchall(connection,
-            'SELECT item_key,value_json FROM project_kv WHERE namespace=? AND item_key>? ORDER BY item_key LIMIT ?',
+        candidates = db._fetchall(connection,
+            'SELECT item_key,length(value_json) AS chars FROM project_kv WHERE namespace=? AND item_key>? ORDER BY item_key LIMIT ?',
             (NAMESPACE, after, batch_size))
+        rows = []
+        used = 0
+        for item in candidates:
+            if item['chars'] > 16 * 1024**2:
+                raise ValueError('evidence row exceeds migration memory budget')
+            if rows and used + item['chars'] > 4 * 1024**2:
+                break
+            row = db._fetchone(connection, 'SELECT item_key,value_json FROM project_kv WHERE namespace=? AND item_key=?', (NAMESPACE, item['item_key']))
+            used += len(row['value_json'].encode())
+            rows.append(row)
     changed = saved = 0
     replacements = []
+    processed = []
+    expanded_bytes = 0
     for row in rows:
         raw = row['value_json']
         original = unpack(raw)
+        if processed and expanded_bytes + len(original.encode()) > 4 * 1024**2:
+            break
+        processed.append(row)
+        expanded_bytes += len(original.encode())
         target = original if expand else (raw if original != raw else pack(NAMESPACE, raw))
         if unpack(target) != original:
             raise ValueError('lossless encoding verification failed')
@@ -40,7 +56,7 @@ def convert(db: ProjectDatabase, *, after: str = '', batch_size: int = 100, expa
             connection.commit()
         except BaseException:
             connection.rollback(); raise
-    return {'after': rows[-1]['item_key'] if rows else after, 'scanned': len(rows),
+    return {'after': processed[-1]['item_key'] if processed else after, 'scanned': len(processed),
             'changed': changed, 'payload_bytes_saved': saved}
 
 
