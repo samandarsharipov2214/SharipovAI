@@ -28,7 +28,11 @@ def verify_archive(path: Path) -> tuple[dict, list[dict]]:
             raise ValueError("unknown archive ownership")
         rows = []
         digest = hashlib.sha256()
-        for line in stream:
+        total_bytes = 0
+        while line := stream.readline(1024**2 + 1):
+            total_bytes += len(line.encode())
+            if total_bytes > 32 * 1024**2:
+                raise ValueError("archive exceeds aggregate byte budget")
             if len(rows) >= MAX_ROWS or len(line) > 1024**2:
                 raise ValueError("archive exceeds bounds")
             digest.update(line.encode())
