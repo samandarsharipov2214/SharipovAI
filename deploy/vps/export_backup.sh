@@ -697,7 +697,12 @@ PY
 if [[ "$running" == 'true' ]] && docker exec "$container_id" python -c 'import storage.lifecycle' >/dev/null 2>&1; then
   timeout --kill-after=5s 90s docker exec "$container_id" python -m scripts.project_db_retention \
     --apply --confirm I_APPROVE_BOUNDED_PROJECT_EVENT_RETENTION || log 'retention failed; inspect storage health'
-  timeout --kill-after=5s 30s docker exec "$container_id" python -m storage.metrics || log 'storage metrics collection failed'
+  # Host archives stay private. Supply only measured metadata after verified
+  # atomic publication; the application UID cannot traverse BACKUP_DIR.
+  timeout --kill-after=5s 30s docker exec "$container_id" python -m storage.metrics \
+    --verified-backup-bytes "$(stat -c %s "$archive")" \
+    --verified-backup-at-ms "$(( $(stat -c %Y "$archive") * 1000 ))" \
+    || log 'storage metrics collection failed'
 fi
 log "backup completed using $source_mode"
 echo "$archive"
