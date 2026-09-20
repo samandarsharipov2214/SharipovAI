@@ -58,12 +58,22 @@ Runtime endpoints:
 
 ## Crypto trading and Bybit
 The project-wide source of truth is `docs/crypto-trading-ai-architecture.md`.
-Every chat, Codex task and implementation touching crypto trading must read it
-before proposing or adding components.
+Read it when changing crypto-trading architecture, organ ownership,
+execution/risk boundaries, or when adding a trading subsystem. For isolated
+implementation, tests, or documentation changes, read only the relevant
+sections when needed.
 
 The official `skills/bybit-trading/SKILL.md` is a Bybit transport/protocol skill,
 not a new decision-making AI. It must stay behind the canonical organs and must
 never bypass Risk Engine, Decision Quality, General Controller or Security Guard.
+
+SharipovAI project rules override conflicting vendor defaults in that skill:
+- do not auto-update the skill or write downloaded modules during normal task execution;
+- use the skill only for Bybit transport/protocol work; it does not authorize trading decisions or real execution;
+- Mainnet writes remain blocked by SharipovAI policy; a skill-level `CONFIRM` does not unlock them;
+- use Testnet writes only when the task explicitly requires integration testing;
+- missing live data remains unavailable; never substitute simulated values;
+- infer spot/derivatives category from task context when clear, and ask only when ambiguity remains and would change the operation.
 
 Ownership rules:
 - market feeds, orderbook, funding, open interest and regime → `market_intelligence`;
@@ -128,31 +138,13 @@ The selective ECC adaptation rules and rollout order are fixed in
 surface into SharipovAI.
 
 ## Verification after changes
-Run at minimum:
+Run the smallest relevant tests and checks that verify the changed behavior.
+Expand to broader subsystem tests when a change crosses subsystem boundaries,
+changes shared contracts, or is being prepared for release/deployment.
 
-```bash
-python -m pytest news_monitor/tests/test_agent_network.py
-python -m pytest dashboard/tests/test_news_agent_network_api.py
-python -m pytest dashboard/tests/test_bot_communication_dashboard_integration.py
-python -m pytest dashboard/tests/test_evidence_vault_dashboard_integration.py
-python -m pytest dashboard/tests/test_learning_os_dashboard_integration.py
-python -m pytest tests/test_ai_architecture_registry.py
-```
-
-Then verify imports:
-
-```bash
-python -c "import dashboard; print(dashboard.app.title)"
-python -c "from news_monitor.agent_network import run_due_agents; print(run_due_agents(force=True)['status'])"
-python -c "from ai_architecture_registry import architecture_snapshot; print(architecture_snapshot()['canonical_ai_count'])"
-```
-
-Production checks after Render deploy:
-- `/api/social-news/rss/refresh`
-- `/api/news-agents/status`
-- `/api/realtime/status`
-- `/news-agents`
-- Telegram `/news`, `/audit`, `/status`
+Use import/runtime smoke checks only when the affected code path requires them.
+After a production deploy, verify the affected endpoints and dependent health
+checks; run the full production health suite only for broad releases.
 
 ## Safety
 - Never enable real exchange order placement automatically.
