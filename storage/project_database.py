@@ -18,6 +18,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
+from .evidence_codec import loads as evidence_loads, pack as pack_evidence
+
 _TRUE = {"1", "true", "yes", "on"}
 _SCHEMA_VERSION = 2
 _SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
@@ -281,7 +283,7 @@ class ProjectDatabase:
     ) -> int:
         namespace = _identifier(namespace, "namespace")
         key = _identifier(key, "key")
-        payload = _json(value)
+        payload = pack_evidence(namespace, _json(value))
         now = _now_ms()
         with self.connect() as connection:
             try:
@@ -328,7 +330,7 @@ class ProjectDatabase:
         if not row:
             return None
         return {
-            "value": json.loads(row["value_json"]),
+            "value": evidence_loads(row["value_json"]) if namespace == "council_news_assessments" else json.loads(row["value_json"]),
             "version": int(row["version"]),
             "updated_at_ms": int(row["updated_at_ms"]),
         }

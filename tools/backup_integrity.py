@@ -60,7 +60,7 @@ def verify_snapshot(snapshot: Path) -> dict[str, Any]:
     if not isinstance(manifest, dict):
         raise BackupIntegrityError("invalid backup manifest")
     schema = manifest.get("schema")
-    if isinstance(schema, bool) or not isinstance(schema, int) or schema != 1:
+    if isinstance(schema, bool) or not isinstance(schema, int) or schema not in (1, 2):
         raise BackupIntegrityError("unsupported backup manifest schema")
     entries = manifest.get("files")
     if not isinstance(entries, list):
@@ -122,6 +122,30 @@ def verify_snapshot(snapshot: Path) -> dict[str, Any]:
         extra = sorted(actual - expected)
         missing = sorted(expected - actual)
         raise BackupIntegrityError(f"backup manifest set mismatch: extra={extra[:10]}, missing={missing[:10]}")
+    if schema == 2:
+        logical = manifest.get("sqlite_logical")
+        if not isinstance(logical, list) or not logical:
+            raise BackupIntegrityError("logical snapshot metadata missing")
+        targets = set()
+        sources = set()
+        for item in logical:
+            if not isinstance(item, dict):
+                raise BackupIntegrityError("invalid logical snapshot entry")
+            path = _safe_relative_path(item.get("path")).as_posix()
+            target = _safe_relative_path(item.get("database_path")).as_posix()
+            if (path not in expected or path in sources or target in expected or target in targets
+                    or Path(target).suffix not in {".sqlite3", ".sqlite", ".db"}
+                    or item.get("format") != "sqlite-sql-jsonl-gzip-v1"
+                    or item.get("quick_check") != "ok"
+                    or not _SHA256_RE.fullmatch(str(item.get("stream_sha256", "")))):
+                raise BackupIntegrityError("invalid logical snapshot metadata")
+            for key in ("logical_bytes", "uncompressed_bytes", "statements"):
+                if type(item.get(key)) is not int or not 0 < item[key] <= MAX_TOTAL_BYTES * 4:
+                    raise BackupIntegrityError("invalid logical snapshot bounds")
+            targets.add(target)
+            sources.add(path)
+        if sum(item["logical_bytes"] for item in logical) > MAX_TOTAL_BYTES:
+            raise BackupIntegrityError("logical databases exceed restore budget")
     return manifest
 
 

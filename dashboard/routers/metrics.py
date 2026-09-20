@@ -12,6 +12,8 @@ router = APIRouter(tags=["observability"])
 @router.get("/metrics", include_in_schema=False)
 def prometheus_metrics(request: Request) -> Response:
     require_metrics_access(request)
+    from observability.metrics import update_storage_metrics
+    update_storage_metrics()
     return Response(
         content=generate_latest(),
         media_type=CONTENT_TYPE_LATEST,

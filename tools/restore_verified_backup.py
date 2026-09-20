@@ -47,6 +47,8 @@ def restore(snapshot: Path, destination: Path) -> dict[str, object]:
             json.dumps(manifest, ensure_ascii=False, sort_keys=True),
             encoding="utf-8",
         )
+        from tools.sqlite_logical_restore import materialize
+        manifest = materialize(envelope, manifest)
         verify_snapshot(envelope)
         _remove_path(rollback)
         if destination.exists():

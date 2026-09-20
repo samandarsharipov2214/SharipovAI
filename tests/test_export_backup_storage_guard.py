@@ -51,7 +51,7 @@ def test_backup_only_removes_stale_staging_after_exclusive_lock() -> None:
 
 def test_backup_helper_is_bounded_identifiable_and_still_isolated() -> None:
     text = _script()
-    assert "SHARIPOVAI_BACKUP_HELPER_TIMEOUT_SECONDS:-600" in text
+    assert "SHARIPOVAI_BACKUP_HELPER_TIMEOUT_SECONDS:-3600" in text
     assert 'timeout --foreground --kill-after=10s "${HELPER_TIMEOUT_SECONDS}s"' in text
     assert '--name "$helper_name"' in text
     assert "--label 'com.sharipovai.role=backup-helper'" in text
@@ -269,7 +269,7 @@ def test_live_size_probe_publishes_backup_after_valid_measurement(tmp_path, scen
         ("source_missing", 1, "No such file"), ("source_replaced", 1, "source changed"),
         ("outside", 1, "size probe failed"), ("traversal", 1, "size probe failed"),
         ("symlink", 1, "size probe failed"), ("root_diagnostic", 1, "size probe failed"),
-        ("huge", 1, "required=18446744074783293440B"),
+        ("huge", 1, "persistent data exceeds 20 GiB restore budget"),
     ],
 )
 def test_live_size_probe_fails_closed_before_staging(tmp_path, scenario, attempts, diagnostic):

@@ -232,7 +232,11 @@ class SystemHealthCenter:
             return _component("storage", evidence, ["critical: disk usage exceeds block threshold"], ["free disk space", "rotate logs and backups"])
         if used_percent >= self.disk_warning_percent:
             return _component("storage", evidence, ["disk usage exceeds warning threshold"], ["rotate logs and backups"])
-        return _component("storage", evidence, [], [])
+        from storage.metrics import read_metrics
+        sample = read_metrics()
+        evidence.extend(f"{key}={sample[key]}" for key in
+                        ("db_bytes", "wal_bytes", "growth_bytes_per_second", "backup_bytes", "backup_age_seconds") if key in sample)
+        return _component("storage", evidence, list(sample.get("alerts", ())), ["inspect storage lifecycle and backup job"] if sample.get("alerts") else [])
 
     def _backup(self) -> ComponentHealth:
         candidates = [

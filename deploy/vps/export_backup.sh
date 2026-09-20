@@ -7,12 +7,12 @@ COMPOSE_DIR=${COMPOSE_DIR:-$APP_DIR/deploy/vps}
 BACKUP_DIR=${BACKUP_DIR:-$COMPOSE_DIR/backups}
 CONTAINER=${CONTAINER:-sharipovai}
 KEEP=${KEEP:-7}
+MAX_RETAINED_GIB=${SHARIPOVAI_BACKUP_MAX_RETAINED_GIB:-4}
 MIN_FREE_DISK_GB=${SHARIPOVAI_BACKUP_MIN_FREE_DISK_GB:-20}
 RESERVE_MIB=${SHARIPOVAI_BACKUP_RESERVE_MIB:-512}
-# A production snapshot of the current ~6 GiB data volume takes slightly more
-# than five minutes at low I/O priority. Keep the helper bounded, but leave
-# enough time for a healthy SQLite backup to finish on the VPS.
-HELPER_TIMEOUT_SECONDS=${SHARIPOVAI_BACKUP_HELPER_TIMEOUT_SECONDS:-600}
+# A 14+ GB integrity scan and logical capture exceed the old ten-minute
+# deadline on this VPS. Keep a bounded hour for the read-only helper.
+HELPER_TIMEOUT_SECONDS=${SHARIPOVAI_BACKUP_HELPER_TIMEOUT_SECONDS:-3600}
 SIZE_PROBE_TIMEOUT_SECONDS=${SHARIPOVAI_BACKUP_SIZE_PROBE_TIMEOUT_SECONDS:-60}
 
 fail() { printf '[backup] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -32,6 +32,10 @@ if ! [[ "$HELPER_TIMEOUT_SECONDS" =~ ^[1-9][0-9]{0,3}$ ]] || (( HELPER_TIMEOUT_S
 fi
 if ! [[ "$SIZE_PROBE_TIMEOUT_SECONDS" =~ ^[1-9][0-9]{0,2}$ ]] || (( SIZE_PROBE_TIMEOUT_SECONDS < 5 || SIZE_PROBE_TIMEOUT_SECONDS > 600 )); then
   fail 'SHARIPOVAI_BACKUP_SIZE_PROBE_TIMEOUT_SECONDS must be an integer between 5 and 600'
+fi
+
+if ! [[ "$MAX_RETAINED_GIB" =~ ^[1-9][0-9]?$ ]] || (( MAX_RETAINED_GIB > 20 )); then
+  fail 'SHARIPOVAI_BACKUP_MAX_RETAINED_GIB must be within 1..20'
 fi
 
 MIN_FREE_BYTES=$((MIN_FREE_DISK_GB * 1024 * 1024 * 1024))
@@ -320,10 +324,23 @@ else
   fail 'persistent data size probe failed or timed out'
 fi
 [[ "$source_bytes" =~ ^[0-9]+$ ]] || fail 'persistent data size probe returned an invalid value'
+if ! python3 -c 'import sys; sys.exit(int(sys.argv[1]) > 20*1024**3)' "$source_bytes"; then
+  fail 'persistent data exceeds 20 GiB restore budget'
+fi
 # The live source and retained archives already consume filesystem space.
 # Reserve one complete staging copy here; compression is separately byte-capped
 # and continuously guarded below. No assumed compression ratio authorizes a write.
-require_free_space "$source_bytes" 'before staging persistent data'
+# Select a bounded logical snapshot when a full raw stage cannot fit. The
+# protected floor is identical in both formats; no compression ratio is assumed.
+snapshot_format='native'
+available=$(available_backup_bytes)
+if ! python3 -c 'import sys; sys.exit(int(sys.argv[1]) < sum(map(int,sys.argv[2:])))' "$available" "$MIN_FREE_BYTES" "$RESERVE_BYTES" "$source_bytes"; then
+  snapshot_format='logical'
+  require_free_space 1048576 'before compressed logical staging'
+else
+  require_free_space "$source_bytes" 'before staging persistent data'
+fi
+log "snapshot format=$snapshot_format source_bytes=$source_bytes"
 
 if run_low_priority timeout --foreground --kill-after=10s "${HELPER_TIMEOUT_SECONDS}s" \
   docker run --rm -i \
@@ -340,7 +357,11 @@ if run_low_priority timeout --foreground --kill-after=10s "${HELPER_TIMEOUT_SECO
     -v "$volume_name:/source:ro" \
     -v "$work/data:/backup" \
     --entrypoint python \
-    "$image_name" - "$source_mode" "$MIN_FREE_BYTES" "$RESERVE_BYTES" <<'PY'
+    "$image_name" - "$source_mode" "$MIN_FREE_BYTES" "$RESERVE_BYTES" "$snapshot_format" <<'PY'
+import gzip
+import hashlib
+import json
+import os
 import shutil
 import sqlite3
 import sys
@@ -350,6 +371,8 @@ source = Path("/source")
 destination = Path("/backup")
 source_mode = sys.argv[1]
 free_floor = int(sys.argv[2]) + int(sys.argv[3])
+snapshot_format = sys.argv[4]
+logical_databases = []
 
 
 def check_space(*_):
@@ -385,23 +408,119 @@ for item in source.iterdir():
     elif item.is_file():
         guarded_copy(item, target)
 
-# The source volume stays read-only. SQLite's backup API produces a consistent
-# snapshot for every canonical top-level SQLite database.
+# BEGIN LOGICAL_SNAPSHOT_PYTHON
+import gzip
+import hashlib
+import json
+import os
+import shutil
+
+class StagingBudget:
+    """Fixed budget prevents buffered allocation from spending the free floor."""
+    def __init__(self, root, floor):
+        self.root, self.floor = root, floor
+        self.remaining = shutil.disk_usage(root).free - floor - 1024 * 1024
+
+    def write(self, stream, data):
+        if len(data) > self.remaining or shutil.disk_usage(self.root).free < self.floor + len(data) + 1024 * 1024:
+            raise RuntimeError("logical snapshot disk budget exhausted")
+        count = stream.write(data)
+        if count != len(data):
+            raise OSError("short logical snapshot write")
+        self.remaining -= count
+        return count
+
+
+class BudgetStream:
+    def __init__(self, stream, budget):
+        self.stream, self.budget = stream, budget
+    def write(self, data):
+        return self.budget.write(self.stream, data)
+    def flush(self):
+        self.stream.flush()
+
+
+def logical_snapshot(src, target, budget):
+    # SQLite quote(text) truncates embedded NULs. Override iterdump's quote()
+    # with a lossless literal encoder, including blobs and infinite REALs.
+    def quote(value):
+        if value is None: return "NULL"
+        if isinstance(value, bytes): return "X'" + value.hex() + "'"
+        if isinstance(value, str):
+            if "\x00" in value:
+                return "CAST(X'" + value.encode("utf-8").hex() + "' AS TEXT)"
+            return "'" + value.replace("'", "''") + "'"
+        if isinstance(value, float) and abs(value) == float("inf"):
+            return "-9e999" if value < 0 else "9e999"
+        return repr(value)
+    src.create_function("quote", 1, quote)
+    virtual = src.execute("SELECT name,sql FROM sqlite_schema WHERE type='table' AND upper(sql) LIKE 'CREATE VIRTUAL TABLE%'").fetchall()
+    for name, ddl in virtual:
+        if not any(module in ddl.lower() for module in ("using fts5", "using fts4", "using fts3", "using rtree")):
+            raise RuntimeError("unsupported virtual table in logical snapshot")
+    # iterdump emits both virtual rows and their shadow tables. Only the shadow
+    # data can be restored before the writable_schema definition is reloaded.
+    virtual_inserts = tuple('INSERT INTO "' + name.replace('"', '""') + '" VALUES(' for name, _ in virtual)
+
+    # A pinned read transaction includes committed WAL data. iterdump reads
+    # through SQLite, never by copying live database or WAL files.
+    digest = hashlib.sha256()
+    statements = raw_bytes = 0
+    logical_bytes = src.execute("PRAGMA page_count").fetchone()[0] * src.execute("PRAGMA page_size").fetchone()[0]
+    with target.open("xb") as stream:
+        with gzip.GzipFile(fileobj=BudgetStream(stream, budget), mode="wb", mtime=0) as output:
+            for statement in src.iterdump():
+                if virtual_inserts and statement.startswith(virtual_inserts):
+                    continue
+                # JSON-lines preserves embedded newlines and statement boundaries.
+                data = (json.dumps(statement, ensure_ascii=True) + "\n").encode()
+                if len(data) > 64 * 1024 * 1024:
+                    raise RuntimeError("SQLite statement exceeds snapshot budget")
+                digest.update(data)
+                raw_bytes += len(data)
+                statements += 1
+                output.write(data)
+        stream.flush()
+        os.fsync(stream.fileno())
+    # Verify the actual compressed bytes before publication, not just the writer.
+    observed = hashlib.sha256()
+    with gzip.open(target, "rb") as stream:
+        for data in iter(lambda: stream.read(1024 * 1024), b""):
+            observed.update(data)
+    if observed.hexdigest() != digest.hexdigest():
+        raise RuntimeError("logical snapshot readback mismatch")
+    return {"format": "sqlite-sql-jsonl-gzip-v1", "statements": statements,
+            "uncompressed_bytes": raw_bytes, "logical_bytes": logical_bytes,
+            "stream_sha256": digest.hexdigest(), "quick_check": "ok"}
+# END LOGICAL_SNAPSHOT_PYTHON
+
+budget = StagingBudget(destination, free_floor)
 for db in sorted(source.iterdir()):
     if db.suffix.lower() not in sqlite_suffixes:
         continue
     target_db = destination / db.name
-    with sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True) as src, sqlite3.connect(target_db) as dst:
+    with sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True) as src:
         check_space()
-        # Pin a read snapshot across bounded backup steps. Without this explicit
-        # transaction, a busy writer can restart the incremental copy forever.
         src.execute("BEGIN")
         src.execute("SELECT name FROM sqlite_schema LIMIT 1").fetchone()
-        src.backup(dst, pages=128, progress=check_space)
-        src.execute("ROLLBACK")  # Release source/WAL retention before checking dst.
-        result = dst.execute("PRAGMA quick_check").fetchone()
-        if not result or result[0] != "ok":
-            raise RuntimeError(f"database quick_check failed: {db.name}: {result!r}")
+        if snapshot_format == "logical":
+            if src.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
+                raise RuntimeError("source SQLite quick_check failed")
+            target = target_db.with_name(db.name + ".sql.jsonl.gz")
+            metadata = logical_snapshot(src, target, budget)
+            metadata.update(path=target.name, database_path=db.name)
+            logical_databases.append(metadata)
+        else:
+            with sqlite3.connect(target_db) as dst:
+                src.backup(dst, pages=128, progress=check_space)
+                src.execute("ROLLBACK")  # Release WAL pin before destination check.
+                if dst.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
+                    raise RuntimeError("snapshot SQLite quick_check failed")
+        if src.in_transaction:
+            src.execute("ROLLBACK")
+if logical_databases:
+    (destination / ".sqlite-logical.json").write_text(json.dumps(logical_databases))
+
 PY
 then
   :
@@ -430,6 +549,9 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+logical_path = root / "data/.sqlite-logical.json"
+logical_databases = json.loads(logical_path.read_text()) if logical_path.exists() else []
+logical_path.unlink(missing_ok=True)
 files = []
 for path in sorted((root / "data").rglob("*")):
     if path.is_symlink():
@@ -443,7 +565,8 @@ for path in sorted((root / "data").rglob("*")):
 if not files:
     raise RuntimeError("backup contains no files")
 manifest = {
-    "schema": 1,
+    "schema": 2 if logical_databases else 1,
+    "sqlite_logical": logical_databases,
     "created_at": datetime.now(timezone.utc).isoformat(),
     "files": files,
     "file_count": len(files),
@@ -526,31 +649,36 @@ if ! mv "$archive_tmp" "$archive"; then
   fail 'atomic backup archive publication failed'
 fi
 archive_tmp=''
+previous_archive=$(readlink -f "$BACKUP_DIR/latest.tar.gz" || true)
 ln -sfn "$(basename "$archive")" "$BACKUP_DIR/latest.tar.gz"
 ln -sfn "$(basename "$archive.sha256")" "$BACKUP_DIR/latest.tar.gz.sha256"
 
 # Pin the successfully published archive even if an older file has a future
 # mtime. Retention runs under the exporter lock and never follows symlinks.
-python3 - "$BACKUP_DIR" "$archive" "$KEEP" <<'PY'
+python3 - "$BACKUP_DIR" "$archive" "$KEEP" "$MAX_RETAINED_GIB" "$previous_archive" <<'PY'
 # BEGIN RETENTION_PYTHON
 import re
 import sys
 from pathlib import Path
 
 
-def retain_archives(root, active, keep):
+def retain_archives(root, active, keep, max_bytes=4 * 1024**3, previous=None):
     candidates = sorted((p for p in root.iterdir()
                          if re.fullmatch(r"sharipovai-[0-9]{8}T[0-9]{6}Z\.tar\.gz", p.name)
                          and p.is_file() and not p.is_symlink()),
                         key=lambda p: (p.stat().st_mtime_ns, p.name), reverse=True)
     latest = root / "latest.tar.gz"
     protected = {active.resolve(), latest.resolve()}
+    if previous is not None and previous.exists():
+        protected.add(previous.resolve())
     retained = set(protected)
+    retained_bytes = sum(p.stat().st_size for p in retained if p.is_file())
     for path in candidates:
         if path.resolve() in retained:
             continue
-        if len(retained) < keep:
+        if len(retained) < keep and retained_bytes + path.stat().st_size <= max_bytes:
             retained.add(path.resolve())
+            retained_bytes += path.stat().st_size
             continue
         path.unlink()
         checksum = path.with_name(path.name + ".sha256")
@@ -559,9 +687,22 @@ def retain_archives(root, active, keep):
 
 
 if __name__ == "__main__":
-    retain_archives(Path(sys.argv[1]), Path(sys.argv[2]), int(sys.argv[3]))
+    retain_archives(Path(sys.argv[1]), Path(sys.argv[2]), int(sys.argv[3]),
+                    int(sys.argv[4]) * 1024**3, Path(sys.argv[5]) if sys.argv[5] else None)
 # END RETENTION_PYTHON
 PY
 
+# Maintenance is explicit and follows successful backup publication. During
+# pre-cutover export the old image may not implement this maintenance contract.
+if [[ "$running" == 'true' ]] && docker exec "$container_id" python -c 'import storage.lifecycle' >/dev/null 2>&1; then
+  timeout --kill-after=5s 90s docker exec "$container_id" python -m scripts.project_db_retention \
+    --apply --confirm I_APPROVE_BOUNDED_PROJECT_EVENT_RETENTION || log 'retention failed; inspect storage health'
+  # Host archives stay private. Supply only measured metadata after verified
+  # atomic publication; the application UID cannot traverse BACKUP_DIR.
+  timeout --kill-after=5s 30s docker exec "$container_id" python -m storage.metrics \
+    --verified-backup-bytes "$(stat -c %s "$archive")" \
+    --verified-backup-at-ms "$(( $(stat -c %Y "$archive") * 1000 ))" \
+    || log 'storage metrics collection failed'
+fi
 log "backup completed using $source_mode"
 echo "$archive"

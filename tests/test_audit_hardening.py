@@ -63,26 +63,26 @@ def test_retention_is_dry_run_by_default_and_protects_evidence(tmp_path: Path) -
     db = ProjectDatabase(f"sqlite:///{tmp_path / 'retention.db'}")
     db.initialize()
     old = int(time.time() * 1000) - 40 * 86_400_000
-    db.append_event("market_cache", "tick", "btc", {"price": 1}, created_at_ms=old)
+    db.append_event("market", "quote", "btc", {"price": 1}, created_at_ms=old)
     db.append_event("evidence", "proof", "keep", {"hash": "x"}, created_at_ms=old)
     result = run_retention(db=db, retain_days=30, batch_size=100, apply=False)
     assert result.eligible_rows == 1
     assert result.deleted_rows == 0
-    assert len(db.list_events("market_cache")) == 1
+    assert len(db.list_events("market")) == 1
     assert len(db.list_events("evidence")) == 1
 
 
-def test_retention_apply_deletes_only_unprotected_old_events(tmp_path: Path) -> None:
+def test_retention_apply_deletes_only_allowlisted_old_events(tmp_path: Path) -> None:
     db = ProjectDatabase(f"sqlite:///{tmp_path / 'retention.db'}")
     db.initialize()
     old = int(time.time() * 1000) - 40 * 86_400_000
     recent = int(time.time() * 1000)
-    db.append_event("market_cache", "tick", "old", {"price": 1}, created_at_ms=old)
-    db.append_event("market_cache", "tick", "new", {"price": 2}, created_at_ms=recent)
+    db.append_event("market", "quote", "old", {"price": 1}, created_at_ms=old)
+    db.append_event("market", "quote", "new", {"price": 2}, created_at_ms=recent)
     db.append_event("execution", "order", "protected", {"status": "x"}, created_at_ms=old)
     result = run_retention(db=db, retain_days=30, batch_size=100, apply=True)
     assert result.deleted_rows == 1
-    assert [item["entity_id"] for item in db.list_events("market_cache")] == ["new"]
+    assert [item["entity_id"] for item in db.list_events("market")] == ["new"]
     assert len(db.list_events("execution")) == 1
 
 
@@ -113,7 +113,7 @@ def test_retention_never_deletes_canonical_decision_risk_portfolio_or_learning_h
 
 def test_retention_rejects_dangerously_short_window(tmp_path: Path) -> None:
     db = ProjectDatabase(f"sqlite:///{tmp_path / 'retention.db'}")
-    with pytest.raises(ValueError, match="at least 7"):
+    with pytest.raises(ValueError, match="safe bounds"):
         run_retention(db=db, retain_days=1, batch_size=100, apply=False)
 
 
@@ -122,7 +122,7 @@ def test_retention_apply_backup_evidence_must_be_a_real_nonempty_file(tmp_path: 
     assert _valid_backup_evidence(None) is False
     assert _valid_backup_evidence(evidence) is False
     evidence.write_text("{}", encoding="utf-8")
-    assert _valid_backup_evidence(evidence) is True
+    assert _valid_backup_evidence(evidence) is False
 
 
 def test_restore_drill_validates_copy_without_mutating_source(tmp_path: Path) -> None:

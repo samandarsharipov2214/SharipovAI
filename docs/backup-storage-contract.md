@@ -48,3 +48,43 @@ active/latest retention. Existing exporter/runtime/timer/deploy tests remain gat
 Production acceptance separately requires a fresh hash-verified manifest, isolated
 restore, and `PRAGMA quick_check` for all three canonical application databases.
 An application-volume backup alone does not certify off-host or complete VPS recovery.
+
+## Large SQLite fallback (September 2026)
+
+When the native raw stage cannot fit, the same exporter uses schema 2 logical
+SQLite snapshots. The 20 GiB floor and 512 MiB reserve are unchanged. Each database
+is read through SQLite in a pinned read-only transaction, quick_checked and emitted
+as gzip-compressed JSON-lines of SQL statements. A lossless quote encoder preserves
+embedded NULs, blobs and Unicode; supported FTS/rtree shadow tables are retained
+without duplicate virtual-table inserts. Unknown virtual modules fail closed.
+Each stream has a hash, byte/statement counts, source logical size and quick_check
+result. The compressed bytes are read back before archive publication. Neither
+source DB nor WAL is copied at file level. Non-SQLite files retain existing capture
+semantics. Consumption is checked per compressed write with a fixed byte budget;
+a source larger than the existing 20 GiB restore envelope is rejected.
+
+`verify_snapshot` accepts both schemas. `restore_verified_backup` and
+`isolated_restore_drill` verify schema-2 archives, then materialize SQLite only in
+disposable staging. Statement/byte/hash limits, SQL filesystem-action denial,
+SQLite page limits and quick_check precede installation. Isolated restoration
+requires 1.5x source logical size plus 2 GiB runtime headroom; this is temporary
+recovery workspace, not a lower persistent-backup floor. A failed restore never
+installs partial data. Schema-2 backups require these updated restore tools;
+older tools reject the schema. Keep the prior verified native backup until an
+actual isolated schema-2 restore has passed.
+
+The backup job invokes explicit, bounded operational retention and storage metric
+sampling only after successful publication and only when the running application
+supports the lifecycle module. See `docs/storage-rootcause-20260920.md` for exact
+ownership, archive lifetimes, rollback and production evidence.
+
+The helper deadline is bounded to one hour and the systemd job to 75 minutes.
+The previous ten-minute helper budget was shorter than a 14+ GB integrity scan
+on the production VPS; the exporter lock still prevents overlapping runs.
+
+Retention now has both a count and byte budget: KEEP=7 and
+SHARIPOVAI_BACKUP_MAX_RETAINED_GIB=4 (bounded 1–20). Current and previous latest
+archives are always protected, even if those two alone exceed the byte budget;
+older archives are considered only within the remaining budget. This prevents
+seven growing archives from recreating the staging deadlock. Pruning still runs
+only after successful publication under the exporter lock.

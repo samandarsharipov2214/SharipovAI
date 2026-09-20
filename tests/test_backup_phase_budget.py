@@ -132,3 +132,16 @@ def test_huge_configuration_is_rejected_before_any_directory_mutation(tmp_path, 
     result = subprocess.run(["bash", str(SCRIPT)], env=os.environ | {name: str(2**64 + 1), "BACKUP_DIR": str(tmp_path / "absent")}, capture_output=True, text=True)
     assert result.returncode != 0
     assert not (tmp_path / "absent").exists()
+
+
+def test_retention_byte_budget_keeps_previous_verified_backup(tmp_path):
+    retain = embedded("RETENTION")["retain_archives"]
+    archives = [tmp_path / f"sharipovai-2026090{i}T100000Z.tar.gz" for i in range(1, 5)]
+    for path in archives:
+        path.write_bytes(b"12345678")
+        path.with_name(path.name + ".sha256").write_text("checksum")
+    active, previous = archives[-1], archives[-2]
+    (tmp_path / "latest.tar.gz").symlink_to(active.name)
+    retain(tmp_path, active, 7, max_bytes=18, previous=previous)
+    assert active.exists() and previous.exists()
+    assert not archives[0].exists() and not archives[1].exists()
