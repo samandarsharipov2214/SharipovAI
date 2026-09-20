@@ -71,6 +71,7 @@ def healthy_app(tmp_path: Path, monkeypatch) -> FastAPI:
         lambda _target: SimpleNamespace(total=100, used=40, free=60),
     )
 
+    monkeypatch.setattr("storage.metrics.read_metrics", lambda: {"alerts": [], "db_bytes": 4096, "wal_bytes": 0})
     app = FastAPI()
     database = FakeDatabase()
     app.state.project_database = database

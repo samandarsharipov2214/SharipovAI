@@ -33,7 +33,7 @@ WorkingDirectory=$APP_DIR/deploy/vps
 Environment=APP_DIR=$APP_DIR
 ExecStartPre=/usr/bin/test -x $SCRIPT
 ExecStart=/usr/bin/bash $SCRIPT
-TimeoutStartSec=20min
+TimeoutStartSec=75min
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7

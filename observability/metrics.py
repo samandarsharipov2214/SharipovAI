@@ -198,3 +198,20 @@ __all__ = [
     "resolve_http_route_label",
     "update_runtime_metrics",
 ]
+
+
+STORAGE_VALUES = Gauge("sharipovai_storage_value", "Bounded periodic storage measurements", ("measure",))
+STORAGE_ROWS = Gauge("sharipovai_storage_rows", "Exact retained row counts when bounded query completes", ("table", "namespace"))
+STORAGE_ALERTS = Gauge("sharipovai_storage_alert", "Storage lifecycle operational alert", ("alert",))
+
+
+def update_storage_metrics() -> None:
+    from storage.metrics import read_metrics
+    sample = read_metrics()
+    for name in ("db_bytes", "wal_bytes", "filesystem_free_bytes", "growth_bytes_per_second", "backup_age_seconds", "backup_bytes", "checked_at_ms"):
+        value = sample.get(name)
+        STORAGE_VALUES.labels(measure=name).set(float(value) if value is not None else float("nan"))
+    for row in sample.get("namespaces", ()):
+        STORAGE_ROWS.labels(table=row["table"], namespace=row["namespace"]).set(float(row["rows"]) if row["rows"] is not None else float("nan"))
+    for alert in ("wal_growth", "disk_low", "backup_stale", "abnormal_database_growth", "retention_backlog", "storage_metrics_stale", "storage_metrics_unavailable"):
+        STORAGE_ALERTS.labels(alert=alert).set(int(alert in sample.get("alerts", ())))

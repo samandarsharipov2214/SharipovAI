@@ -5,6 +5,7 @@ import json
 from typing import Any
 
 from .project_database import ProjectDatabase
+from .evidence_codec import loads as evidence_loads
 
 
 def list_json_items(
@@ -32,7 +33,7 @@ def list_json_items(
     return [
         {
             "key": row["item_key"],
-            "value": json.loads(row["value_json"]),
+            "value": evidence_loads(row["value_json"]) if clean_namespace == "council_news_assessments" else json.loads(row["value_json"]),
             "version": int(row["version"]),
             "updated_at_ms": int(row["updated_at_ms"]),
         }

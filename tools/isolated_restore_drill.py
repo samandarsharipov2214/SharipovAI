@@ -54,6 +54,8 @@ def run_restore_drill(snapshot: Path, destination_root: Path) -> dict[str, Any]:
         restored_snapshot.mkdir()
         shutil.copy2(source / "manifest.json", restored_snapshot / "manifest.json")
         shutil.copytree(source / "data", restored_snapshot / "data")
+        from tools.sqlite_logical_restore import materialize
+        materialize(restored_snapshot, manifest)
         restored_manifest = verify_snapshot(restored_snapshot)
 
         sqlite_checks = []
