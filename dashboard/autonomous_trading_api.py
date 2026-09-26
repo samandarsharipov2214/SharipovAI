@@ -23,7 +23,8 @@ from exchange_connector.market_data import MarketDataService
 from exchange_connector.multi_exchange_consensus import MultiExchangeConsensus
 from storage import ProjectDatabase, list_json_items
 from autonomous_trading.economic_observer import EconomicOpportunityObserver
-from news_intelligence.council_lineage import news_memory_lineage
+from autonomous_trading.forecast_contract import ProspectiveForecastService
+from news_intelligence.council_lineage import news_memory_lineage, publication_seconds, news_event_identity
 
 _NEWS_GROUPS = {
     "crypto_ai": ("crypto", "exchange", "token", "blockchain", "regulation"),
@@ -81,6 +82,7 @@ def install_autonomous_trading_api(app: FastAPI) -> None:
         shadow_gate_provider=shadow_gate_provider,
         instrument_rules=instrument_rules,
         economic_observer=EconomicOpportunityObserver(database),
+        forecast_service=ProspectiveForecastService(database),
     )
     testnet_bridge = AutonomousTestnetBridge(database=database)
     app.state.market_stream = stream
@@ -194,8 +196,16 @@ def _database_news_reader(database: ProjectDatabase) -> Callable[..., dict[str, 
             memory.append(
                 {
                     "key": str(row.get("key") or ""),
-                    "created_at": int(row.get("updated_at_ms") or 0) // 1000,
+                    "created_at": publication_seconds(article.get("published_at")) or 0,
+                    "published_at": article.get("published_at"),
+                    "collected_at_ms": fetched.get("received_at_ms"),
+                    "memory_updated_at_ms": row.get("updated_at_ms"),
+                    "publication_quality": article.get("timestamp_quality", "source_timestamp"),
+                    "source_verified": fetched.get("verified") is True,
+                    "event_identity": news_event_identity(article),
                     "impact": str(value.get("impact") or "neutral"),
+                    # NewsHub score is relevance/credibility, not polarity.
+                    # Magnitude may weight a declared direction; neutral stays neutral.
                     "impact_score": _score(value.get("score")),
                     "credibility_percent": reliability,
                     "urgency": str(value.get("urgency") or "low"),

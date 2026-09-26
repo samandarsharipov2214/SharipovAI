@@ -16,7 +16,7 @@ from trading_candidate import TradingDecision
 from .council_provider import AutonomousCouncilProposalProvider as _BaseProvider, _symbol
 from .decision_trace import persist_decision_trace, read_decision_trace
 
-_NEWS_AGENTS = {"crypto_ai", "finance_ai", "economy_ai", "security_ai", "world_ai"}
+_NEWS_AGENTS = {"news_intelligence", "crypto_ai", "finance_ai", "economy_ai", "security_ai", "world_ai"}
 _REQUIRED_CONSENSUS_SOURCES = 3
 _MAX_QUOTE_AGE_MS = 2_000
 
@@ -84,11 +84,16 @@ class AutonomousCouncilProposalProvider(_BaseProvider):
         return read_decision_trace(self.database, symbol)
 
     def _record_wait(self, symbol: str, quote: Any, state: Mapping[str, Any], *, now_ms: int) -> None:
-        last = self.database.get_json("autonomous_council_runtime", symbol)
-        generated = 0
-        if isinstance(last, dict) and isinstance(last.get("value"), dict):
-            generated = int(last["value"].get("last_generated_at_ms") or 0)
+        generated = self._last_generated(symbol)
         if generated > 0 and now_ms - generated < self.proposal_interval_ms:
+            # An unchanged scheduler interval is not a new economic decision.
+            # Keep the last actual decision/rejection visible and avoid a write
+            # every tick. Market checks and protective exits still run each tick.
+            previous = read_decision_trace(self.database, symbol)
+            if previous and previous.get("decision_id"):
+                return
+            if previous and previous.get("next_proposal_due_at_ms") == generated + self.proposal_interval_ms:
+                return
             persist_decision_trace(
                 self.database,
                 symbol,
@@ -98,6 +103,7 @@ class AutonomousCouncilProposalProvider(_BaseProvider):
                     "reason": "waiting for the next canonical council proposal interval",
                     "proposal_interval_ms": self.proposal_interval_ms,
                     "next_proposal_in_ms": max(0, self.proposal_interval_ms - (now_ms - generated)),
+                    "next_proposal_due_at_ms": generated + self.proposal_interval_ms,
                 },
                 now_ms=now_ms,
             )
