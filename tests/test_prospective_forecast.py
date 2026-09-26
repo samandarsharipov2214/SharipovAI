@@ -22,6 +22,7 @@ def passing_artifact(expected=.02):
         "train_count": 1000, "calibration_count": 300, "test_count": 500,
         "data_span_days": 40, "test_span_days": 8,
         "test": {**group, "coverage": 1., "rmse": .0012, "zero_rmse": .0025,
+            "horizon_seconds": fc.HORIZON_SECONDS,
             "mean_baseline_mae": .0015, "directional_accuracy": .6, "interval_coverage": .95,
             "bias": .0001, "actionable_count": 60, "actionable_cost_adjusted_mean": .002,
             "by_symbol": {"ETHUSDT": group}, "by_regime": {"up_24h": group}},
@@ -132,6 +133,25 @@ def test_prediction_cannot_be_changed_without_reproducing_model(forecast):
     value["uncertainty"]["upper_fraction"] += .5
     resign(value)
     assert validate(value, service)[0] is None
+
+
+def test_inner_quote_timestamp_must_match_canonical_lineage(forecast):
+    value, service, _ = forecast
+    value["input_lineage"]["quote"]["received_at_unix_ms"] -= 1
+    value["input_lineage"]["quote_sha256"] = fc.digest(value["input_lineage"]["quote"])
+    resign(value)
+    assert validate(value, service) == (None, "forecast_input_lineage")
+
+
+@pytest.mark.parametrize("field,value", [("horizon_seconds", 900), ("train_count", 2000)])
+def test_review_does_not_override_validation_horizon_or_support(forecast, monkeypatch, field, value):
+    forecast_value, service, quote = forecast
+    report = service.artifact["validation"]
+    (report["test"] if field == "horizon_seconds" else report)[field] = value
+    service.artifact["validation_provenance"]["report_sha256"] = fc.digest(report)
+    monkeypatch.setattr(fc, "REVIEWED_MODELS", frozenset({fc.digest(service.artifact)}))
+    rebuilt = service.forecast("ETHUSDT", quote, as_of_ms=NOW)
+    assert validate(rebuilt, service)[0] is None
 
 
 def test_shadow_artifact_is_not_promoted(tmp_path, monkeypatch):

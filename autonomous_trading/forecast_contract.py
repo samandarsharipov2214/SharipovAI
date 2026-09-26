@@ -178,6 +178,7 @@ def validate_forecast(value: Any, *, symbol: str, now_ms: int,
             raise ValueError("forecast_stale")
         lineage = value["input_lineage"]
         if (lineage["quote_received_at_ms"] != quote_received_at_ms
+                or timestamp(lineage["quote"]["received_at_unix_ms"]) != quote_received_at_ms
                 or cutoff != max(quote_received_at_ms, timestamp(lineage["quote"]["feature_received_at_ms"]))
                 or lineage["quote"]["symbol"] != symbol or lineage["quote"]["verified"] is not True
                 or not lineage["source"]
@@ -203,6 +204,8 @@ def validate_forecast(value: Any, *, symbol: str, now_ms: int,
                 or value["training_window"] != artifact["training_window"]
                 or value["validation_provenance"] != artifact["validation_provenance"]
                 or value["support_count"] != artifact["support_count"]
+                or value["support_count"] != artifact["validation"]["train_count"]
+                or artifact["validation"]["test"]["horizon_seconds"] != horizon_seconds
                 or type(value["support_count"]) is not int or value["support_count"] < 1
                 or not math.isclose(expected, predict(artifact["model"], features), abs_tol=1e-12)
                 or radius != artifact["uncertainty_radius_fraction"]):
