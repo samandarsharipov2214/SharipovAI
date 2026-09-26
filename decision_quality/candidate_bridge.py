@@ -48,6 +48,8 @@ class CandidateEvidencePacket:
     risk_blocks: tuple[str, ...]
     expires_at_ms: int
     security_approval_id: str = ""
+    # Immutable canonical forecast document ID; no bare numerical edge aliases.
+    prospective_forecast_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,7 +102,9 @@ class DecisionCandidateBridge:
             min_consensus=min_consensus,
         )
         assessment_evidence_id = f"decision-assessment-{assessment.decision_id}"
-        signal_evidence = _unique(packet.signal_evidence + (assessment_evidence_id,))
+        forecast_evidence = (("paper-forecast:" + packet.prospective_forecast_id,)
+                             if packet.prospective_forecast_id else ())
+        signal_evidence = _unique(packet.signal_evidence + (assessment_evidence_id,) + forecast_evidence)
         risk_blocks = _unique(packet.risk_blocks + tuple(reasons if decision is TradingDecision.BLOCK else ()))
 
         candidate = TradingCandidate(

@@ -10,7 +10,8 @@ import copy
 import hashlib
 import math
 import os
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, replace
 from decimal import Decimal, ROUND_DOWN, ROUND_UP
 from threading import Thread, local
 from typing import Any, Callable, Mapping, Sequence
@@ -39,6 +40,7 @@ from .runtime_shadow_integration_v2 import RuntimeShadowV2
 from .trade_identity import new_trade_id
 from .economic_observer import EconomicOpportunityObserver
 from learning_engine.paper_economic_shadow import finite
+from .forecast_contract import HORIZON_SECONDS, ProspectiveForecastService, validate_forecast
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,7 +68,8 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
 
     # Prospective edge must cover this multiple of all-in round-trip cost.
     # This is a cost cushion, not a calibrated forecast uncertainty estimate.
-    PAPER_ENTRY_POLICY_VERSION = "paper-prospective-edge-v1"
+    decision_mode = "CANONICAL_COUNCIL_REQUIRED"
+    PAPER_ENTRY_POLICY_VERSION = "paper-prospective-edge-v2"
     ANTI_CHURN_COST_MARGIN = 1.5
     ANTI_CHURN_TURNOVER_WINDOW_MS = 15 * 60 * 1000
     ANTI_CHURN_MAX_ROUND_TRIPS = 3
@@ -90,17 +93,25 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         cost_model: ExecutionCostModel | None = None,
         post_stop_policy_mode: str = "observe",
         economic_observer: EconomicOpportunityObserver | None = None,
+        forecast_service: ProspectiveForecastService | None = None,
     ) -> None:
         if post_stop_policy_mode not in {"observe", "enforce"}:
             raise ValueError("post_stop_policy_mode must be observe or enforce")
         self.post_stop_policy_mode = post_stop_policy_mode
         self.economic_observer = economic_observer
+        self.forecast_service = forecast_service
         self._economic_capture = local()
         super().__init__(stream, database=database or decision_runtime.database)
+        self._wait_count_at_start = int(self._state.get("suppressed_wait_events", 0) or 0)
+        self._monitor_started = time.monotonic()
+        self._cycle_count = 0
+        self._last_cycle_duration = None
         if decision_runtime.database.dsn != self.database.dsn:
             raise ValueError("paper loop and decision runtime must use the same database")
         if economic_observer is not None and economic_observer.database.dsn != self.database.dsn:
             raise ValueError("economic observer must use the canonical PAPER database")
+        if forecast_service is not None and forecast_service.database.dsn != self.database.dsn:
+            raise ValueError("forecast service must use the canonical PAPER database")
         if float(shadow_timeout_seconds) <= 0:
             raise ValueError("shadow_timeout_seconds must be positive")
         self.decision_runtime = decision_runtime
@@ -172,6 +183,14 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         }
 
     def tick(self) -> None:
+        started = time.monotonic()
+        try:
+            self._capture_tick()
+        finally:
+            self._cycle_count += 1
+            self._last_cycle_duration = time.monotonic() - started
+
+    def _capture_tick(self) -> None:
         if getattr(self, "economic_observer", None) is None:
             self._tick_council()
             return
@@ -184,7 +203,9 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
             "council": None, "risk": {"status": "NOT_EVALUATED"},
             "result": {"status": "UNAVAILABLE", "reason": "cycle did not reach a decision"},
             "cost_model": {"fee_rate": self.cost_model.fee_rate,
-                           "slippage_bps": self.cost_model.slippage_bps}}
+                           "slippage_bps": self.cost_model.slippage_bps,
+                           "market_impact_bps": self.cost_model.market_impact_bps,
+                           "max_participation_rate": self.cost_model.max_participation_rate}}
             for symbol in self.stream.symbols}
         self._economic_capture.rows = rows
         try:
@@ -242,7 +263,7 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                         portfolio_before=self._proposal_state_snapshot(),
                         quote={key: finite(getattr(quote, key, None)) for key in (
                             "price", "bid_price", "ask_price", "received_at_unix_ms",
-                            "change_24h_percent", "volume_24h")})
+                            "change_24h_percent", "volume_24h", "feature_received_at_ms")})
                 if position:
                     # Capital-preservation exits are intentionally local and
                     # immediate.  If none fires, keep the position available
@@ -275,6 +296,22 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                     continue
 
                 decision_ts_ms = self._now_ms()
+                if self.forecast_service is not None:
+                    try:
+                        forecast = self.forecast_service.forecast(symbol, quote, as_of_ms=decision_ts_ms)
+                        proposal = replace(proposal, evidence_packet=replace(proposal.evidence_packet,
+                            prospective_forecast_id=forecast["forecast_id"]))
+                        if observation is not None:
+                            observation["prospective_forecast_id"] = forecast["forecast_id"]
+                    except Exception as exc:
+                        # Forecast/storage failure vetoes new exposure; SELL and
+                        # protective exits remain available through their gates.
+                        self.forecast_service.error = "forecast_generation_error:" + type(exc).__name__
+                        self.forecast_service.rejected += 1
+                        proposal = replace(proposal, evidence_packet=replace(proposal.evidence_packet,
+                            prospective_forecast_id=""))
+                        if observation is not None:
+                            observation["forecast_error"] = self.forecast_service.error
                 if observation is not None:
                     packet = proposal.evidence_packet
                     observation.update(decision_time_ms=decision_ts_ms,
@@ -428,6 +465,12 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
 
                 try:
                     prepared_entry = self._prepare_open(symbol, quote)
+                    exact_cost_reason = self._prepared_entry_cost_block(symbol, quote, authorization,
+                        proposal.evidence_packet, prepared_entry)
+                    if exact_cost_reason:
+                        self._trace(symbol, "WAIT", exact_cost_reason, phase="forecast_exact_cost")
+                        self._event("WAIT", exact_cost_reason, symbol)
+                        continue
                 except Exception as exc:
                     reason = f"paper_execution_preflight_error:{type(exc).__name__}: {exc}"
                     self._trace(symbol, "BLOCK", reason, phase="virtual_execution")
@@ -607,6 +650,9 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
             reason = "protective_stop_loss"
         elif move >= self.take_profit_percent:
             reason = "protective_take_profit"
+        elif (position.get("forecast_exit_at_ms") is not None
+                and self._now_ms() >= int(position["forecast_exit_at_ms"])):
+            reason = "protective_forecast_horizon"
         if reason is None:
             return
         state_before = copy.deepcopy(self._state)
@@ -737,6 +783,11 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         evidence = self._authorization_evidence(authorization)
         evidence.update(self._strategy_evidence())
         if clean_side == "BUY":
+            assessment = self._state.get("forecast_gate_assessments", {}).get(symbol, {})
+            if (assessment.get("status") == "ELIGIBLE" and assessment.get("forecast_id")
+                    and isinstance(assessment.get("as_of_ms"), int) and assessment["as_of_ms"] > 0):
+                evidence["forecast_evidence"] = copy.deepcopy(assessment)
+                evidence["forecast_exit_at_ms"] = assessment["as_of_ms"] + HORIZON_SECONDS * 1000
             evidence["post_stop_reentry_assessment"] = copy.deepcopy(
                 self._state.get("post_stop_reentry_assessments", {}).get(symbol)
             )
@@ -1111,6 +1162,9 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
             "reason": reason,
         }
         if entry_context:
+            if entry_context.get("forecast_evidence"):
+                position["forecast_evidence"] = copy.deepcopy(entry_context["forecast_evidence"])
+                position["forecast_exit_at_ms"] = entry_context["forecast_exit_at_ms"]
             position.update(
                 {
                     "decision_id": str(entry_context.get("decision_id") or ""),
@@ -1170,6 +1224,7 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
             "entry_fee": float(position.get("entry_fee", 0.0) or 0.0),
             "entry_strategy_version": str(position.get("paper_strategy_version") or "legacy_unversioned"),
             "entry_build_sha": str(position.get("paper_build_sha") or "unknown"),
+            "forecast_evidence": copy.deepcopy(position.get("forecast_evidence")),
             "entry_reference_price": float(
                 position.get("entry_reference_price", position.get("entry_price", 0.0)) or 0.0
             ),
@@ -1290,6 +1345,7 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                         "canonical_exit_protective": True,
                         "entry_strategy_version": self._pending_exit_context.get("entry_strategy_version", "legacy_unversioned"),
                         "entry_build_sha": self._pending_exit_context.get("entry_build_sha", "unknown"),
+                        "forecast_evidence": self._pending_exit_context.get("forecast_evidence"),
                     }
                 )
                 exit_decision_id = self._pending_exit_context.get("exit_decision_id", "")
@@ -1549,7 +1605,15 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         packet_cost = packet_percent / 100.0 * notional if packet_percent > 0 and notional > 0 else 0.0
         all_in = max(float(round_trip.all_in), packet_cost)
         required = all_in * self.ANTI_CHURN_COST_MARGIN
-        edge = self._explicit_expected_edge(authorization, packet)
+        return_fraction = self._explicit_expected_edge(authorization, packet)
+        # Gross midpoint simple return is dimensionless. Convert ONCE to USDT
+        # using the same quantity/midpoint as the round-trip cost calculation.
+        edge = return_fraction * notional if return_fraction is not None else None
+        assessment = self._state.get("forecast_gate_assessments", {}).get(symbol)
+        if assessment is not None:
+            assessment.update(notional_usdt=notional, conservative_edge_usdt=edge,
+                all_in_cost_usdt=all_in, required_cost_usdt=required,
+                status="ELIGIBLE" if edge is not None and edge > required else "WAIT")
         same_identity = last is not None and self._same_buy_identity(last, authorization)
 
         if same_identity:
@@ -1559,16 +1623,14 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                 f"all_in={all_in:.8f} required={required:.8f}"
             )
 
-        # Applies to first entries as well as re-entry after every exit. A past
-        # move, fresh quote ID, liquidity check or cross-exchange agreement says
-        # nothing about the return *after* this BUY. The canonical packet has no
-        # validated forecast producer today, so it must abstain. Do not promote
-        # the descriptive learning cohort or impact-derived confidence to edge.
+        # Applies equally to first entry and re-entry. Only a validated producer
+        # can supply prospective return; historical movement never supplies it.
         if edge is None:
             return (
                 f"{self.ANTI_CHURN_COST_NOT_COVERED}: prospective_edge_unavailable; "
                 f"fees+spread+slippage (impact included)={all_in:.8f}; "
-                "validated prospective return and uncertainty evidence required"
+                "validated prospective return and uncertainty evidence required; "
+                + str((assessment or {}).get("reason", "forecast_missing"))
             )
         if edge <= required:
             return (
@@ -1576,6 +1638,27 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                 f"does not cover {self.ANTI_CHURN_COST_MARGIN}x all-in round-trip "
                 f"cost {all_in:.8f} (required >{required:.8f})"
             )
+        return None
+
+    def _prepared_entry_cost_block(self, symbol, quote, authorization, packet, execution) -> str | None:
+        """Recheck expiry and economics at the EXACT rounded executable size."""
+        edge = self._explicit_expected_edge(authorization, packet)
+        if edge is None:
+            return "prospective_edge_unavailable_at_execution"
+        qty = float(execution["quantity"])
+        exit_leg = self._prepare_execution(symbol, quote, Side.SELL, Decimal(str(qty)))
+        cost = sum(float(leg[k]) for leg in (execution, exit_leg)
+                   for k in ("fee", "spread_cost", "slippage_cost"))
+        notional = qty * self._quote_mid(quote)
+        cost = max(cost, self._packet_reported_cost(authorization, packet) / 100 * notional)
+        required = self.ANTI_CHURN_COST_MARGIN * cost
+        assessment = self._state.get("forecast_gate_assessments", {}).get(symbol)
+        if assessment is not None:
+            assessment.update(notional_usdt=notional, conservative_edge_usdt=edge * notional,
+                all_in_cost_usdt=cost, required_cost_usdt=required,
+                status="ELIGIBLE" if edge * notional > required else "WAIT")
+        if edge * notional <= required:
+            return "anti_churn_cost_not_covered: exact_rounded_execution_cost"
         return None
 
     def _anti_churn_turnover_reason(self, symbol: str) -> str | None:
@@ -1677,14 +1760,30 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         authorization: PaperDecisionAuthorization,
         packet: Any,
     ) -> float | None:
-        """No validated producer is connected to the canonical packet yet.
-
-        Bare numeric aliases have no units, horizon, availability, uncertainty
-        or provenance. Even a large finite value is not execution evidence.
-        Promotion requires a reviewed canonical forecast contract; shadow
-        outcomes and descriptive means must never enter through these aliases.
-        """
-        return None
+        """Conservative gross return FRACTION; the caller converts it to USDT."""
+        identity = getattr(packet, "prospective_forecast_id", "")
+        service = self.forecast_service
+        candidate = authorization.candidate_result.candidate
+        value = None
+        try:
+            stored = self.database.get_json("paper_prospective_forecasts", identity) if identity else None
+            value = stored["value"] if stored else None
+            now = self._now_ms()
+            if stored and stored["updated_at_ms"] > now:
+                raise ValueError("forecast_not_physically_available")
+            edge, reason = validate_forecast(value, symbol=candidate.symbol, now_ms=now,
+                quote_received_at_ms=packet.received_timestamp_ms if packet else 0,
+                artifact=service.artifact if service else None)
+        except Exception as exc:
+            edge, reason = None, "forecast_read_error:" + type(exc).__name__
+        metadata = value if isinstance(value, Mapping) else {}
+        self._state.setdefault("forecast_gate_assessments", {})[candidate.symbol] = {
+            "forecast_id": identity or None, "reason": reason, "conservative_return_fraction": edge,
+            "as_of_ms": metadata.get("as_of_ms"), "horizon_seconds": HORIZON_SECONDS,
+            "model_sha256": metadata.get("model_sha256"), "execution_authority": False}
+        if edge is None and service:
+            service.rejected += 1
+        return edge
 
     def _packet_reported_cost(
         self,
@@ -1785,17 +1884,9 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
             source=str(getattr(quote, "source", "bybit_websocket_v5") or "bybit_websocket_v5"),
             volume=volume,
         )
-        try:
-            return self.cost_model.estimate_round_trip(event, quantity=quantity)
-        except ValueError:
-            event_no_volume = MarketEvent(
-                timestamp_ms=event.timestamp_ms,
-                symbol=event.symbol,
-                bid=event.bid,
-                ask=event.ask,
-                source=event.source,
-            )
-            return self.cost_model.estimate_round_trip(event_no_volume, quantity=quantity)
+        # An invalid participation/impact estimate is a veto, not permission to
+        # retry with volume removed and silently price market impact at zero.
+        return self.cost_model.estimate_round_trip(event, quantity=quantity)
 
     def _proposal_state_snapshot(self) -> dict[str, Any]:
         return {
@@ -1812,14 +1903,17 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
 
     def snapshot(self) -> dict[str, Any]:
         state = super().snapshot()
-        state["entry_economics"] = {
-            "status": "TEMPORARY_FAIL_CLOSED_CONTAINMENT",
-            "prospective_edge_producer": None,
-            "promotion_status": "BLOCKED_NO_VALIDATED_PROSPECTIVE_EDGE",
-            "shadow_path": "paper_economic_opportunities -> fixed_horizon_markouts",
-            "shadow_role": "directional calibration only; no economic forecast",
-            "profitability_proven": False,
-        }
+        elapsed = max(time.monotonic() - self._monitor_started, .001)
+        suppressed = int(state.get("suppressed_wait_events", 0) or 0)
+        state["work_metrics"] = {"cycle_count_this_process": self._cycle_count,
+            "last_cycle_duration_seconds": self._last_cycle_duration, "tick_seconds": self.tick_seconds,
+            "suppressed_wait_lifetime": suppressed,
+            "suppressed_wait_this_process": max(0, suppressed - self._wait_count_at_start),
+            "suppressed_wait_per_second": max(0, suppressed - self._wait_count_at_start) / elapsed,
+            "semantics": "cumulative suppression survives restart; process rate is operational telemetry"}
+        state["entry_economics"] = self.forecast_service.status() if self.forecast_service else {
+            "status": "UNAVAILABLE", "prospective_edge_producer": None,
+            "promotion_status": "BLOCKED_NO_VALIDATED_PROSPECTIVE_EDGE", "profitability_proven": False}
         state["economic_shadow"] = self.economic_observer.status() if getattr(self, "economic_observer", None) is not None else {
             "status": "NOT_INSTALLED", "execution_authority": False}
         traces = read_decision_traces(self.database, self.stream.symbols)

@@ -26,6 +26,9 @@ class StreamQuote:
     verified: bool = True
     bid_price: float | None = None
     ask_price: float | None = None
+    # Timestamp of the REST BBO / 24h features in the shared stream. A recent
+    # WebSocket price does not refresh these independently collected fields.
+    feature_received_at_ms: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

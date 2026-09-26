@@ -10,6 +10,35 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from typing import Any
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
+from news_monitor.event_identity import event_id_for_item
+
+
+def publication_seconds(value: Any) -> int | None:
+    """Source ISO/RFC news time only. Collection time is never a fallback."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            parsed = parsedate_to_datetime(value)
+        if parsed.tzinfo is None:
+            return None
+        return int(parsed.astimezone(UTC).timestamp())
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def news_event_identity(article: Mapping[str, Any]) -> str | None:
+    seconds = publication_seconds(article.get("published_at"))
+    if seconds is None:
+        return None
+    try:
+        return event_id_for_item({**article, "published_at": datetime.fromtimestamp(seconds, UTC).isoformat()})
+    except ValueError:
+        return None
 
 
 _ORIGIN_FIELDS = (

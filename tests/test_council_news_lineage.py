@@ -61,7 +61,7 @@ def test_shared_article_and_publisher_are_visible_without_copying_content():
     assert "https://" not in encoded and "unneeded" not in encoded and "Shared market" not in encoded
 
 
-def test_lineage_uses_exact_selected_rows_and_keeps_duplicates(tmp_path, monkeypatch):
+def test_lineage_uses_exact_selected_rows_after_duplicate_removal(tmp_path, monkeypatch):
     db = ProjectDatabase(f"sqlite:///{tmp_path / 'news.db'}")
     rows = [row(str(i)) for i in range(55)]
     rows[-1] = copy.deepcopy(rows[-2])  # Duplicate contribution must remain observable.
@@ -70,16 +70,12 @@ def test_lineage_uses_exact_selected_rows_and_keeps_duplicates(tmp_path, monkeyp
     lineage = {}
     opinion, ids = provider._news_opinion("finance_ai", now_ms=NOW, lineage=lineage)
     result = lineage["finance_ai"]
-    assert ids == [r["key"] for r in rows[-50:]]
+    assert ids == [rows[0]["key"]]
     assert [r["memory_id"] for r in result["items"]] == ids
-    assert result["eligible_memory_count"] == 55
-    assert result["consumed_memory_count"] == result["complete_lineage_count"] == 50
-    assert result["confirmation_denominator_count"] == 55
-    assert result["denominator_only_items"] == [
-        {**news_memory_lineage(r), "memory_id": r["key"], "created_at_seconds": (NOW - 1000) // 1000,
-         "lineage_error_type": None}
-        for r in rows[:5]
-    ]
+    assert result["eligible_memory_count"] == 1
+    assert result["consumed_memory_count"] == result["complete_lineage_count"] == 1
+    assert result["confirmation_denominator_count"] == 1
+    assert result["denominator_only_items"] == []
     assert result["schema_version"] == 2
     assert result["status"] == "COMPLETE"
     assert result["symbol_relevance"] == "NOT_EVALUATED"
@@ -98,7 +94,7 @@ def test_missing_origin_or_freshness_fields_mean_partial_lineage(missing):
     assert result["complete_lineage_count"] == 0
 
 
-def test_denominator_only_rows_reproduce_confirmation_scores(tmp_path, monkeypatch):
+def test_unverified_fetches_cannot_supply_directional_news(tmp_path, monkeypatch):
     db = ProjectDatabase(f"sqlite:///{tmp_path / 'denominator.db'}")
     rows = [row(str(i)) for i in range(55)]
     for item in rows:
@@ -106,12 +102,8 @@ def test_denominator_only_rows_reproduce_confirmation_scores(tmp_path, monkeypat
     provider = AutonomousCouncilProposalProvider(db, object(), news_reader=reader_for(monkeypatch, db, rows))
     lineage = {}
     opinion, _ = provider._news_opinion("finance_ai", now_ms=NOW, lineage=lineage)
-    detail = lineage["finance_ai"]
-    numerator = sum(item["needs_confirmation"] for item in detail["items"])
-    denominator = len(detail["items"]) + len(detail["denominator_only_items"])
-    assert numerator == 50 and denominator == 55
-    assert opinion["evidence_score"] == round(92.0 * (1 - numerator / denominator * 0.5), 6)
-    assert opinion["risk_score"] == round(20.0 + numerator / denominator * 60.0, 6)
+    assert opinion is None
+    assert lineage == {}
 
 
 @pytest.mark.parametrize("missing", ["key", "created_at", "source_lineage"])
@@ -248,7 +240,7 @@ def test_compact_denominator_preserves_order_duplicates_and_errors():
     assert compact_denominator_lineage({"a": original, "b": original}) == (compact, snapshot_id, snapshot)
 
 
-def test_thousand_row_snapshot_is_shared_and_persisted_once(tmp_path, monkeypatch):
+def test_thousand_duplicate_rows_keep_only_one_vote_input(tmp_path, monkeypatch):
     db = ProjectDatabase(f"sqlite:///{tmp_path / 'bounded.db'}")
     rows = [row(hashlib.sha256(str(i).encode()).hexdigest()) for i in range(1000)]
     provider = AutonomousCouncilProposalProvider(db, object(), news_reader=reader_for(monkeypatch, db, rows))
@@ -265,15 +257,10 @@ def test_thousand_row_snapshot_is_shared_and_persisted_once(tmp_path, monkeypatc
     assert first == provider._persist_news_lineage(lineage)
     snapshot_ids = {detail["denominator_snapshot_id"] for detail in first.values()}
     assert len(snapshot_ids) == 1
-    snapshot_id = snapshot_ids.pop()
-    assert puts == [("council_news_denominator_snapshots", snapshot_id)]
-    snapshot = db.get_json(*puts[0])["value"]
-    assert len(snapshot["records"]) == 950
-    assert len(json.dumps(first).encode()) < 225_000
-    # Full origin is stored once per unique row version, shared by all members
-    # and unchanged proposals; the assessment itself keeps its original bound.
-    assert len(json.dumps(snapshot).encode()) < 325_000
-    assert all(len(detail["denominator_item_indices"]) == 950 for detail in first.values())
+    assert snapshot_ids == {None}
+    assert puts == []
+    assert len(json.dumps(first).encode()) < 15_000
+    assert all(detail["consumed_memory_count"] == 1 for detail in first.values())
 
 
 def test_denominator_storage_failure_keeps_vote_and_marks_missing_evidence(tmp_path, monkeypatch):
@@ -282,6 +269,11 @@ def test_denominator_storage_failure_keeps_vote_and_marks_missing_evidence(tmp_p
     provider = AutonomousCouncilProposalProvider(db, object(), news_reader=reader_for(monkeypatch, db, rows))
     lineage = {}
     expected = provider._news_opinion("finance_ai", now_ms=NOW, lineage=lineage)
+    # The pure historical-lineage serializer still supports old denominator
+    # records; present-day deduplicated votes no longer create them.
+    memory = {"key": "memory-1", "created_at": NOW // 1000,
+              "source_lineage": news_memory_lineage(row())}
+    lineage["finance_ai"] = opinion_news_lineage([memory] * 55, now_ms=NOW)
     def fail(*args, **kwargs):
         raise OSError("private database connection detail")
     monkeypatch.setattr(provider, "_put_once", fail)
@@ -335,7 +327,8 @@ def test_denominator_storage_failure_preserves_full_proposal_and_authority(tmp_p
             general_controller_decision=proposal.general_controller_decision, now_ms=NOW, regime=proposal.regime)
         outputs.append((proposal, auth.to_dict()))
         assessment = db.get_json("council_news_assessments", proposal.evidence_packet.news_assessment_id)["value"]
-        assert {detail["status"] for detail in assessment["opinion_lineage"].values()} == ({"ERROR"} if fails else {"COMPLETE"})
+        # Deduplication leaves one consumed event and no denominator snapshot.
+        assert {detail["status"] for detail in assessment["opinion_lineage"].values()} == {"COMPLETE"}
         assert "private detail" not in json.dumps(assessment)
     assert outputs[0] == outputs[1]
 
@@ -395,7 +388,8 @@ def test_metadata_preserves_full_proposals_and_authorizations(tmp_path, monkeypa
     monkeypatch.setattr("time.time", lambda: NOW / 1000)
     monkeypatch.setattr("decision_quality.service.datetime", FrozenDateTime)
     source = row()
-    source["updated_at_ms"] = NOW - news_age_seconds * 1000
+    from datetime import UTC
+    source["value"]["article"]["published_at"] = datetime.fromtimestamp((NOW // 1000) - news_age_seconds, UTC).isoformat()
     outputs = []
     for with_metadata in (False, True):
         db = ProjectDatabase(f"sqlite:///{tmp_path / str(with_metadata)}.db")
@@ -408,8 +402,11 @@ def test_metadata_preserves_full_proposals_and_authorizations(tmp_path, monkeypa
             return detail
         worker = FakeWorker()
         worker.database = db
-        stream = SharedVerifiedMarketStream(worker, FakeMarketData(), FakeConsensus(), database=db)
-        quote = replace(stream.quote("BTCUSDT"), change_24h_percent=change)
+        data = FakeMarketData()
+        original_quote = data.quote
+        monkeypatch.setattr(data, "quote", lambda symbol: replace(original_quote(symbol), change_24h_percent=change))
+        stream = SharedVerifiedMarketStream(worker, data, FakeConsensus(), database=db)
+        quote = stream.quote("BTCUSDT")
         proposal = AutonomousCouncilProposalProvider(db, stream, news_reader=read)("BTCUSDT", quote, _state())
         if proposal is None:
             outputs.append((None, None))
@@ -473,3 +470,44 @@ def test_opportunity_capture_references_the_exact_news_assessment(tmp_path, monk
     _open_long(loop, stream, plan, clock, "lineage-entry")
     assert capture.rows[0]["council"]["news_assessment_id"] == plan["proposal"].evidence_packet.news_assessment_id
     assert runtime.consumed == ["lineage-entry"]
+
+
+@pytest.mark.parametrize("mutation", ["unknown", "future", "archive", "future_collection", "missing_collection"])
+def test_collection_time_never_refreshes_invalid_publication(tmp_path, monkeypatch, mutation):
+    from datetime import UTC
+    db = ProjectDatabase(f"sqlite:///{tmp_path / 'freshness.db'}")
+    item = row()
+    item["updated_at_ms"] = NOW
+    if mutation == "unknown":
+        item["value"]["article"]["published_at"] = None
+    elif mutation == "future":
+        item["value"]["article"]["published_at"] = datetime.fromtimestamp(NOW / 1000 + 60, UTC).isoformat()
+    elif mutation == "archive":
+        item["value"]["article"]["timestamp_quality"] = "archive"
+    elif mutation == "future_collection":
+        item["value"]["fetched"]["received_at_ms"] = NOW + 1
+    else:
+        item["value"]["fetched"]["received_at_ms"] = None
+    provider = AutonomousCouncilProposalProvider(db, object(), news_reader=reader_for(monkeypatch, db, [item]))
+    assert provider._news_opinion("crypto_ai", now_ms=NOW) == (None, [])
+
+
+def test_positive_relevance_does_not_turn_neutral_news_into_buy(tmp_path, monkeypatch):
+    db = ProjectDatabase(f"sqlite:///{tmp_path / 'polarity.db'}")
+    item = row()
+    item["value"].update(impact="neutral", score=99.)
+    provider = AutonomousCouncilProposalProvider(db, object(), news_reader=reader_for(monkeypatch, db, [item]))
+    opinion, ids = provider._news_opinion("crypto_ai", now_ms=NOW)
+    assert opinion["action"] == "WAIT"
+    assert ids == [item["key"]]
+
+
+def test_syndicated_event_cannot_supply_several_news_confirmations(tmp_path, monkeypatch):
+    db = ProjectDatabase(f"sqlite:///{tmp_path / 'syndication.db'}")
+    items = [row("one", source="publisher-a", link="https://a.example/story"),
+             row("two", source="publisher-b", link="https://b.example/copy")]
+    provider = AutonomousCouncilProposalProvider(db, object(), news_reader=reader_for(monkeypatch, db, items))
+    seen = set()
+    first, ids = provider._news_opinion("crypto_ai", now_ms=NOW, excluded_ids=seen)
+    assert first and len(ids) == 1
+    assert provider._news_opinion("finance_ai", now_ms=NOW, excluded_ids=seen) == (None, [])

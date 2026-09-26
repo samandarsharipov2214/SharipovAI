@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import UTC, datetime
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -131,6 +132,10 @@ def _positive_news(agent_id: str, *, run_now: bool = False) -> dict[str, object]
             {
                 "key": f"news-{agent_id}",
                 "created_at": int(time.time()),
+                "published_at": datetime.fromtimestamp(time.time() - 1, UTC).isoformat(),
+                "source_verified": True,
+                "collected_at_ms": int(time.time() * 1000) - 1000,
+                "memory_updated_at_ms": int(time.time() * 1000) - 500,
                 "impact": "positive",
                 "impact_score": 30.0,
                 "credibility_percent": 92.0,
@@ -156,6 +161,25 @@ def _state() -> dict[str, object]:
 
 def _canonical(value: object) -> object:
     return json.loads(json.dumps(value, ensure_ascii=False, allow_nan=False))
+
+
+def test_council_consumes_exact_captured_quote_without_refetch(tmp_path, monkeypatch):
+    db = _database(tmp_path)
+    worker = FakeWorker()
+    worker.database = db
+    stream = SharedVerifiedMarketStream(worker, FakeMarketData(), FakeConsensus(), database=db)
+    quote = stream.quote("BTCUSDT")
+    def no_second_quote(*args):
+        raise AssertionError("second fetch could mix a later quote into decision evidence")
+    monkeypatch.setattr(worker, "quote", no_second_quote)
+    provider = AutonomousCouncilProposalProvider(db, stream, news_reader=_positive_news)
+    proposal = provider("BTCUSDT", quote, _state())
+    assert proposal is not None
+    evidence = db.get_json("council_market_evidence", "market-" + proposal.decision_id)["value"]
+    assert evidence["websocket_received_at_ms"] == quote.received_at_unix_ms
+    assert evidence["rest_received_at_ms"] == quote.feature_received_at_ms
+    with pytest.raises(RuntimeError, match="evidence cache"):
+        stream.evidence_for_quote("BTCUSDT", replace(quote, bid_price=1.))
 
 
 @pytest.mark.parametrize("change,expected,packet_regime", [

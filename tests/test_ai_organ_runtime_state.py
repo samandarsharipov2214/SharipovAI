@@ -151,3 +151,31 @@ def test_installer_requires_shared_database_and_registers_routes(tmp_path, monke
         response = client.get("/api/system/ai-organs")
         assert response.status_code == 200
         assert response.json()["organ_count"] == 9
+
+
+def test_one_failed_probe_does_not_hide_other_organs(tmp_path, monkeypatch):
+    configure_safe(monkeypatch)
+    db = database(tmp_path)
+    monitor = SafeAIOrganRuntimeMonitor(prepared_app(db), db, clock_ms=lambda: 5000)
+    def fail():
+        raise RuntimeError("private connection details")
+    monkeypatch.setattr(monitor, "_learning_engine", fail)
+    result = monitor.refresh()
+    states = {s["organ_id"]: s for s in result["organs"]}
+    assert len(states) == 9
+    assert states["learning_engine"]["status"] == "blocked"
+    assert tuple(states["learning_engine"]["blockers"]) == ("critical: learning_engine probe failed: RuntimeError",)
+    assert states["security_guard"]["status"] == "healthy"
+
+
+def test_snapshot_cannot_refresh_stale_health_by_reading_it(tmp_path, monkeypatch):
+    configure_safe(monkeypatch)
+    db = database(tmp_path)
+    monitor = SafeAIOrganRuntimeMonitor(prepared_app(db), db, clock_ms=lambda: 1000)
+    monitor.refresh()
+    monitor.clock_ms = lambda: 1_000_000
+    report = monitor.snapshot()
+    security = next(r for r in report["organs"] if r["organ_id"] == "security_guard")
+    assert security["status"] == "degraded"
+    assert report["checked_at_ms"] == 1000
+    assert report["observed_at_ms"] == 1_000_000

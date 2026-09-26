@@ -60,6 +60,13 @@ def nonblocking_loop_snapshot(loop: Any) -> dict[str, Any]:
     state["mutation_on_read"] = False
     state["wait_event_min_interval_seconds"] = loop.wait_event_min_interval_seconds
     state["snapshot_state_source"] = "project_database_fallback"
+    state["decision_mode"] = getattr(loop, "decision_mode", None)
+    forecast_service = getattr(loop, "forecast_service", None)
+    if forecast_service is not None:
+        state["entry_economics"] = forecast_service.status()
+    observer = getattr(loop, "economic_observer", None)
+    if observer is not None:
+        state["economic_shadow"] = observer.status()
     state["trade_history_count"] = _history_count(loop, "trade", state)
     state["event_history_count"] = _history_count(loop, "event", state)
     return state
