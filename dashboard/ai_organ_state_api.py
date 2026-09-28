@@ -102,8 +102,16 @@ class AIOrganRuntimeMonitor:
             return self.refresh()
         with self._lock:
             last_error = self._last_error
+        now = self.clock_ms()
+        for row in rows:
+            checked = int(row.get("checked_at_ms") or 0)
+            age = (now - checked) / 1000
+            if checked <= 0 or age < 0 or age > self.evidence_max_age_seconds:
+                row["blockers"] = [*row.get("blockers", ()), "organ observation is stale or future-dated"]
+                if row.get("status") == "healthy":
+                    row["status"] = "degraded"
         return {
-            **_summary([_state_from_dict(item) for item in rows], now_ms=self.clock_ms()),
+            **_summary([_state_from_dict(item) for item in rows], now_ms=now),
             "monitor_running": bool(self._thread and self._thread.is_alive()),
             "last_error": last_error,
             "evidence_max_age_seconds": self.evidence_max_age_seconds,
@@ -131,17 +139,16 @@ class AIOrganRuntimeMonitor:
         if now <= 0:
             raise ValueError("clock must return a positive timestamp")
         responsibility = {organ.id: organ.responsibility for organ in CANONICAL_AI_ORGANS}
-        return [
-            self._state("general_controller", responsibility, now, *self._general_controller()),
-            self._state("market_intelligence", responsibility, now, *self._market_intelligence()),
-            self._state("news_intelligence", responsibility, now, *self._news_intelligence()),
-            self._state("risk_engine", responsibility, now, *self._risk_engine()),
-            self._state("portfolio_engine", responsibility, now, *self._portfolio_engine()),
-            self._state("virtual_execution", responsibility, now, *self._virtual_execution()),
-            self._state("decision_quality", responsibility, now, *self._decision_quality()),
-            self._state("learning_engine", responsibility, now, *self._learning_engine()),
-            self._state("security_guard", responsibility, now, *self._security_guard()),
-        ]
+        states = []
+        for organ in CANONICAL_AI_ORGANS:
+            try:
+                evidence, blockers = getattr(self, "_" + organ.id)()
+            except Exception as exc:
+                # A failed service/read must not erase observations for every
+                # other organ. Do not copy DB connection details into status.
+                evidence, blockers = [], [f"critical: {organ.id} probe failed: {type(exc).__name__}"]
+            states.append(self._state(organ.id, responsibility, now, evidence, blockers))
+        return states
 
     @staticmethod
     def _state(
@@ -285,7 +292,8 @@ class AIOrganRuntimeMonitor:
         else:
             evidence.append("paper_execution_disabled_by_policy")
         try:
-            snapshot = loop.snapshot()
+            from autonomous_trading.status_snapshot import nonblocking_loop_snapshot
+            snapshot = nonblocking_loop_snapshot(loop)
         except Exception as exc:
             blockers.append(f"virtual execution snapshot failed: {type(exc).__name__}: {exc}")
             return evidence, blockers
@@ -444,7 +452,8 @@ def _summary(states: list[OrganRuntimeState], *, now_ms: int) -> dict[str, Any]:
         counts[state.status] = counts.get(state.status, 0) + 1
     return {
         "status": "healthy" if counts["blocked"] == 0 and counts["degraded"] == 0 else "degraded" if counts["blocked"] == 0 else "blocked",
-        "checked_at_ms": now_ms,
+        "checked_at_ms": min((state.checked_at_ms for state in states), default=0),
+        "observed_at_ms": now_ms,
         "organ_count": len(states),
         "counts": counts,
         "organs": [state.to_dict() for state in states],

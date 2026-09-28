@@ -14,7 +14,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from news_monitor.agent_network import agent_detail
-from news_intelligence.council_lineage import compact_denominator_lineage, opinion_news_lineage
+from news_intelligence.council_lineage import compact_denominator_lineage, opinion_news_lineage, publication_seconds
 from risk_engine import CanonicalRiskService
 from storage import ProjectDatabase, ProjectDomainStore
 from trading_candidate import (
@@ -81,17 +81,25 @@ class AutonomousCouncilProposalProvider:
             2.0,
         )
         self._last_market_evidence: dict[str, dict[str, Any]] = {}
+        self._generated_at: dict[str, int] = {}
+
+    def _last_generated(self, symbol: str) -> int:
+        if not hasattr(self, "_generated_at"):
+            self._generated_at = {}
+        if symbol not in self._generated_at:
+            last = self.database.get_json("autonomous_council_runtime", symbol)
+            self._generated_at[symbol] = int(last["value"].get("last_generated_at_ms") or 0) if last else 0
+        return self._generated_at[symbol]
 
     def __call__(self, symbol: str, quote: Any, state: Mapping[str, Any]) -> CouncilEntryProposal | None:
         now_ms = int(time.time() * 1000)
         clean_symbol = _symbol(symbol)
-        last = self.database.get_json("autonomous_council_runtime", clean_symbol)
-        if last is not None:
-            generated = int(last["value"].get("last_generated_at_ms") or 0)
-            if now_ms - generated < self.proposal_interval_ms:
-                return None
+        generated = self._last_generated(clean_symbol)
+        if now_ms - generated < self.proposal_interval_ms:
+            return None
 
-        market = self.stream.evidence(clean_symbol)
+        exact_evidence = getattr(self.stream, "evidence_for_quote", None)
+        market = exact_evidence(clean_symbol, quote) if callable(exact_evidence) else self.stream.evidence(clean_symbol)
         self._last_market_evidence[clean_symbol] = dict(market) if isinstance(market, Mapping) else {}
         if market.get("verified") is not True or market.get("synthetic_fallback_used") is True:
             return None
@@ -104,7 +112,7 @@ class AutonomousCouncilProposalProvider:
         if change is None or turnover is None or turnover < 0:
             return None
         market_timestamp_ms = int(getattr(quote, "received_at_unix_ms", 0) or 0)
-        if market_timestamp_ms <= 0 or now_ms - market_timestamp_ms > _MAX_MARKET_AGE_MS:
+        if market_timestamp_ms <= 0 or not 0 <= now_ms - market_timestamp_ms <= _MAX_MARKET_AGE_MS:
             return None
 
         decision_id = f"paper-{clean_symbol}-{market_timestamp_ms}"
@@ -169,11 +177,27 @@ class AutonomousCouncilProposalProvider:
 
         news_evidence: list[str] = []
         news_lineage: dict[str, Any] = {}
+        news_opinions = []
+        used_news: set[str] = set()
         for agent_id in _NEWS_AGENTS:
-            payload, evidence_ids = self._news_opinion(agent_id, now_ms=now_ms, lineage=news_lineage)
+            payload, evidence_ids = self._news_opinion(agent_id, now_ms=now_ms, lineage=news_lineage,
+                                                      excluded_ids=used_news)
             if payload is not None:
-                opinions.append(payload)
+                news_opinions.append(payload)
                 news_evidence.extend(evidence_ids)
+        if news_opinions:
+            # Specialized news agents share feeds. Give their de-duplicated
+            # evidence one canonical organ voice; multiple feeds/agents do not
+            # establish independent editorial confirmation.
+            score = sum({"BUY": 1, "SELL": -1, "WAIT": 0}[p["action"]]
+                        * p["confidence"] for p in news_opinions)
+            news_vote = _opinion("news_intelligence", "BUY" if score > 0 else "SELL" if score < 0 else "WAIT",
+                sum(p["confidence"] for p in news_opinions) / len(news_opinions),
+                min(p["evidence_score"] for p in news_opinions),
+                max(p["risk_score"] for p in news_opinions),
+                "unique news events; one News Intelligence voice; source independence not established")
+            news_vote.update(evidence_ids=sorted(set(news_evidence)), independence_status="NOT_ESTABLISHED")
+            opinions.append(news_vote)
 
         if risk_blocks:
             opinions.append(
@@ -229,9 +253,11 @@ class AutonomousCouncilProposalProvider:
             {
                 "decision_id": decision_id,
                 "evidence_ids": sorted(set(news_evidence)),
-                "agents": [item["agent_id"] for item in opinions if item["agent_id"] in _NEWS_AGENTS],
+                "agents": [item["agent_id"] for item in news_opinions],
                 "verified_market_data": True,
                 "opinion_lineage": self._persist_news_lineage(news_lineage),
+                "child_opinions": news_opinions,
+                "independence_status": "NOT_ESTABLISHED",
             },
         )
         self._put_once(
@@ -313,6 +339,7 @@ class AutonomousCouncilProposalProvider:
                 "canonical_risk_service": self.risk_service.service_id,
             },
         )
+        self._generated_at[clean_symbol] = now_ms
         return CouncilEntryProposal(
             decision_id=decision_id,
             agent_payloads=tuple(eligible),
@@ -327,6 +354,7 @@ class AutonomousCouncilProposalProvider:
 
     def _news_opinion(
         self, agent_id: str, *, now_ms: int, lineage: dict[str, Any] | None = None,
+        excluded_ids: set[str] | None = None,
     ) -> tuple[dict[str, Any] | None, list[str]]:
         try:
             detail = self.news_reader(agent_id, run_now=False)
@@ -340,11 +368,30 @@ class AutonomousCouncilProposalProvider:
         if str(agent.get("status", "")).lower() != "active":
             return None, []
         cutoff = now_ms // 1000 - self.news_max_age_seconds
-        memories = [
-            item
-            for item in detail.get("memory", ())
-            if isinstance(item, Mapping) and int(item.get("created_at") or 0) >= cutoff
-        ]
+        seen = excluded_ids if excluded_ids is not None else set()
+        memories = []
+        for item in detail.get("memory", ()):
+            if not isinstance(item, Mapping):
+                continue
+            origin = item.get("source_lineage")
+            origin = origin if isinstance(origin, Mapping) else {}
+            published = publication_seconds(origin.get("published_at") or item.get("published_at"))
+            quality = item.get("publication_quality", item.get("timestamp_quality", "source_timestamp"))
+            if (published is None or not cutoff <= published <= now_ms // 1000
+                    or quality != "source_timestamp" or item.get("source_verified") is not True):
+                continue
+            # Both durable ingestion and fetch must already exist at decision time.
+            stored = origin.get("memory_updated_at_ms", item.get("memory_updated_at_ms"))
+            fetched = origin.get("fetch_received_at_ms", item.get("collected_at_ms"))
+            if (type(stored) is not int or type(fetched) is not int
+                    or not 0 < fetched <= stored <= now_ms):
+                continue
+            identities = {str(v) for v in (item.get("event_identity"), origin.get("exact_link_sha256"), item.get("key")) if v}
+            if not identities or identities & seen:
+                continue
+            seen.update(identities)
+            memories.append({**item, "created_at": published})
+        memories = sorted(memories, key=lambda item: (item["created_at"], str(item.get("key"))))[-50:]
         if not memories:
             return None, []
         signed: list[float] = []
@@ -355,9 +402,9 @@ class AutonomousCouncilProposalProvider:
             impact = str(item.get("impact") or "neutral").strip().lower()
             raw_score = _finite_or_none(item.get("impact_score")) or 0.0
             magnitude = min(abs(raw_score), 100.0)
-            if impact in _NEGATIVE or raw_score < 0:
+            if impact in _NEGATIVE:
                 signed.append(-magnitude)
-            elif impact in _POSITIVE or raw_score > 0:
+            elif impact in _POSITIVE:
                 signed.append(magnitude)
             else:
                 signed.append(0.0)
@@ -472,7 +519,7 @@ def _general_controller_directive(
         return TradingDecision.BLOCK
     buy = [item for item in opinions if item.get("action") == "BUY" and item.get("agent_id") != "risk_engine"]
     sell = [item for item in opinions if item.get("action") == "SELL"]
-    news_buy = any(item.get("agent_id") in _NEWS_AGENTS and item.get("action") == "BUY" for item in opinions)
+    news_buy = any(item.get("agent_id") in (*_NEWS_AGENTS, "news_intelligence") and item.get("action") == "BUY" for item in opinions)
     cash = _finite(state.get("cash", 0.0), "cash")
     if len(buy) >= 4 and not sell and news_buy and cash > 0:
         return TradingDecision.ALLOW

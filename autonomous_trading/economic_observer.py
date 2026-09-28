@@ -24,6 +24,9 @@ class EconomicOpportunityObserver:
         self.recorded = self.dropped = self.failed = 0
         self.error_type: str | None = None
         self.last_recorded_at_ms: int | None = None
+        self._source_watermark = None
+        self._sources = None
+        self.source_refreshes = self.source_cache_hits = 0
 
     def start(self) -> None:
         with self._lock:
@@ -53,6 +56,7 @@ class EconomicOpportunityObserver:
             "dropped": self.dropped, "failed": self.failed, "queued_batches": self.queue.qsize(),
             "error_type": self.error_type, "last_recorded_at_ms": self.last_recorded_at_ms,
             "worker_running": bool(self._thread and self._thread.is_alive()),
+            "source_refreshes": self.source_refreshes, "source_cache_hits": self.source_cache_hits,
             "coverage": "GAPS_PRESENT" if self.dropped or self.failed else "ASYNC_BEST_EFFORT",
             "execution_authority": False, "policy_influence": "SHADOW_ONLY"}
 
@@ -66,7 +70,27 @@ class EconomicOpportunityObserver:
         scope = rows[0]["scope"]
         if any(row["scope"] != scope for row in rows):
             raise ValueError("opportunity batch must have one canonical PAPER scope")
-        sources = read_sources(self.database, scope, asof_ms=max(row["decision_time_ms"] for row in rows))
+        cutoff = max(row["decision_time_ms"] for row in rows)
+        # Reuse immutable history only while its exact count/version/time
+        # watermark is unchanged. New outcomes, epochs and equivalence revokes
+        # invalidate it; every assessment still applies its own as-of cutoff.
+        with self.database.connect() as connection:
+            versions = self.database._fetchall(connection,
+                "SELECT namespace,COUNT(*) AS n,MAX(updated_at_ms) AS latest,SUM(version) AS revisions "
+                "FROM project_kv WHERE namespace IN (?,?,?) AND updated_at_ms < ? GROUP BY namespace",
+                (f"paper_trades:{scope}", "self_learning_outcomes_v2", "paper_strategy_epochs", cutoff))
+            links = self.database._fetchall(connection,
+                "SELECT COUNT(*) AS n,MAX(created_at_ms) AS latest FROM project_events "
+                "WHERE namespace=? AND entity_type=? AND created_at_ms < ?",
+                ("paper_policy_equivalence", "equivalence", cutoff))
+        watermark = digest([scope, versions, links])
+        if self._sources is None or watermark != self._source_watermark:
+            self._sources = read_sources(self.database, scope, asof_ms=cutoff)
+            self._source_watermark = watermark
+            self.source_refreshes += 1
+        else:
+            self.source_cache_hits += 1
+        sources = self._sources
         for row in rows:
             namespace = "paper_economic_opportunities:" + scope
             existing = self.database.list_events(namespace, entity_type="opportunity",

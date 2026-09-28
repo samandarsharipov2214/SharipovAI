@@ -123,6 +123,7 @@ class SharedVerifiedMarketStream:
             verified=True,
             bid_price=rest_bid,
             ask_price=rest_ask,
+            feature_received_at_ms=rest_received_at_ms,
         )
         exchange_timestamp_ms = _positive_int(
             websocket.get("exchange_timestamp_ms"), "exchange_timestamp_ms"
@@ -198,9 +199,14 @@ class SharedVerifiedMarketStream:
     def evidence(self, symbol: str) -> dict[str, Any]:
         clean = _symbol(symbol)
         quote = self.quote(clean)
+        return self.evidence_for_quote(clean, quote)
+
+    def evidence_for_quote(self, symbol: str, quote: StreamQuote) -> dict[str, Any]:
+        """Bind Council to the quote already captured, without a second fetch."""
+        clean = _symbol(symbol)
         with self._lock:
             cached = self._cache.get(clean)
-            if cached is None or cached[1].received_at_unix_ms != quote.received_at_unix_ms:
+            if cached is None or cached[1] != quote:
                 raise RuntimeError("market evidence cache is unavailable")
             return dict(cached[2])
 

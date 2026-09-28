@@ -73,6 +73,13 @@ Image retention precedes checkout mutation. A dirty checkout or unproven runtime
 identity blocks the operation. Health requires the Docker healthcheck and HTTP
 probe to pass within the existing bounded retry window.
 
+The main updater requires a fast-forward release and verifies the resulting exact
+SHA. It never hard-resets the checkout or changes `.env.vps` permissions. On
+failure it checks out the previous commit detached and restores the retained
+image, preserving the branch history. Unexpected local commits block before
+backup or deployment; environment content, mode and modification time are covered
+by the real-Git deployment/rollback fixtures.
+
 Rollback to a commit predating the context helper is supported because the context
 is captured before resetting the checkout. The retained image remains the rollback
 artifact; it is never rebuilt. This changes no database schema or execution authority.

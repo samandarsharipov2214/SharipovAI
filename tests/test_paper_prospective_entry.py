@@ -75,8 +75,9 @@ def test_first_entry_must_strictly_exceed_full_cost_cushion(tmp_path, monkeypatc
     loop, stream, plan, runtime, clock = _build_loop(tmp_path, monkeypatch)
     _plan_buy(plan, "insufficient-first-edge", now_ms=clock.now_ms())
     cost = loop._estimate_entry_round_trip(SYMBOL, stream.current, None)
+    notional = loop._anti_churn_quantity(stream.current, None) * loop._quote_mid(stream.current)
     monkeypatch.setattr(loop, "_explicit_expected_edge",
-        lambda *args: coverage * cost.all_in * loop.ANTI_CHURN_COST_MARGIN)
+        lambda *args: coverage * cost.all_in * loop.ANTI_CHURN_COST_MARGIN / notional)
     loop.tick()
     assert runtime.consumed == []
     assert "anti_churn_cost_not_covered" in loop._state["last_reason"]

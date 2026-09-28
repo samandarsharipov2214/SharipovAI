@@ -122,7 +122,7 @@ def test_update_and_rollback_scope_operations_to_actual_app_project():
         assert "docker compose up -d --no-deps --no-build sharipovai" in source
         assert "--remove-orphans" not in source
     source = (ROOT / "deploy/vps/update_from_main.sh").read_text()
-    assert source.index('retain_running_image_for_rollback "${previous_sha}"') < source.index('reset --hard "${target_sha}"')
+    assert source.index('retain_running_image_for_rollback "${previous_sha}"') < source.index('merge --ff-only "${target_sha}"')
     assert "production checkout is not clean" in source
 
 
@@ -156,7 +156,9 @@ def _bootstrap_fixture(tmp_path, *, mode="ok", broken_helper=False):
     _git(checkout, "commit", "-m", "Target introduces trusted helper")
     target = _git(checkout, "rev-parse", "HEAD")
     _git(checkout, "push", "origin", "main")
-    _git(checkout, "reset", "--hard", old)
+    _git(checkout, "checkout", "--detach", old)
+    _git(checkout, "branch", "-f", "main", old)
+    _git(checkout, "checkout", "main")
     app, proxy, image = runtime()
     app["Config"]["Env"] = [*map(lambda p: "=".join(p), LOCKS.items()), f"SHARIPOVAI_BUILD_SHA={old}"]
     image["Config"]["Labels"]["org.opencontainers.image.revision"] = old
@@ -236,10 +238,15 @@ path.write_text(json.dumps(s))
 @pytest.mark.parametrize("mode", ["ok", "candidate_unhealthy", "volume_drift"])
 def test_target_helper_bootstraps_old_checkout_and_rollback_uses_same_context(tmp_path, mode):
     checkout, script, env, old, target = _bootstrap_fixture(tmp_path, mode=mode)
+    protected = checkout / "deploy/vps/.env.vps"
+    protected.chmod(0o400)
+    protected_before = (protected.read_bytes(), protected.stat().st_mode, protected.stat().st_mtime_ns)
     assert not (checkout / "deploy/vps/runtime_compose_context.py").exists()
     result = subprocess.run(["bash", str(script)], env=env, capture_output=True, text=True, timeout=30)
     assert (result.returncode == 0) == (mode == "ok"), result.stdout + result.stderr
     assert _git(checkout, "rev-parse", "HEAD") == (target if mode == "ok" else old)
+    assert (protected.read_bytes(), protected.stat().st_mode, protected.stat().st_mtime_ns) == protected_before
+    assert _git(checkout, "rev-parse", "main") == target
     events = [json.loads(line) for line in Path(env["FAKE_LOG"]).read_text().splitlines()]
     capture = next(e for e in events if e.get("args") == ["container", "inspect", "sharipovai"])
     assert capture["checkout"] == old and not capture["checkout_has_helper"]
@@ -253,6 +260,21 @@ def test_target_helper_bootstraps_old_checkout_and_rollback_uses_same_context(tm
         assert event["override"] == runtime_context(*runtime(), SHA)["override"]
     assert sum("build" in e["args"] for e in composed) == 1
     assert sum("up" in e["args"] for e in composed) == (1 if mode == "ok" else 2)
+
+
+def test_divergent_local_commit_blocks_before_backup_and_remains_intact(tmp_path):
+    checkout, script, env, old, target = _bootstrap_fixture(tmp_path)
+    local = checkout / "preserved-work.txt"
+    local.write_text("Existing local work must survive.\n")
+    _git(checkout, "add", local.name)
+    _git(checkout, "commit", "-m", "Preserve independent local work")
+    local_head = _git(checkout, "rev-parse", "HEAD")
+    result = subprocess.run(["bash", str(script)], env=env, capture_output=True, text=True, timeout=30)
+    assert result.returncode != 0
+    assert "not a fast-forward" in result.stderr
+    assert _git(checkout, "rev-parse", "HEAD") == local_head
+    assert local.read_text() == "Existing local work must survive.\n"
+    assert not Path(env["FAKE_LOG"]).exists()
 
 
 @pytest.mark.parametrize("mode", ["current_unhealthy", "http_failure", "unsafe_target", "wrong_target", "invalid_helper"])
