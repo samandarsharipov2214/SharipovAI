@@ -123,4 +123,5 @@ def test_candidate_and_rollback_have_identical_immutable_probe_and_safe_defaults
         assert 'time.time()' not in function
         assert 'docker logs' not in function
         # The function is parsed before a checkout can replace its script file.
-        assert source.index('health_check()') < source.index('reset --hard')
+        mutation = 'merge --ff-only' if path.name == 'update_from_main.sh' else 'reset --hard'
+        assert source.index('health_check()') < source.index(mutation)

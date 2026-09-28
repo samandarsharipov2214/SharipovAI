@@ -274,7 +274,8 @@ rollback() {
   fi
   rollback_started=1
   log "deployment failed: ${reason}; rolling back to ${previous_sha}"
-  git -C "${APP_DIR}" reset --hard "${previous_sha}"
+  # Preserve branch history and refuse to discard unexpected checkout changes.
+  git -C "${APP_DIR}" checkout -q --detach "${previous_sha}"
   redeploy_pinned_release "${previous_sha}" "failed-deploy rollback"
   health_check || fail 'rollback container did not become healthy'
   verify_container_sha "${previous_sha}" || fail 'rollback container SHA is incorrect'
@@ -302,6 +303,9 @@ if [[ "${target_sha}" == "${previous_sha}" ]]; then
   verify_container_sha "${target_sha}" || fail 'current container does not embed the deployed SHA; rebuild required'
   exit 0
 fi
+
+git -C "${APP_DIR}" merge-base --is-ancestor "${previous_sha}" "${target_sha}" \
+  || fail 'release is not a fast-forward of the current checkout'
 
 for target_path in \
   deploy/vps/phase7_preflight.sh \
@@ -363,8 +367,9 @@ verify_container_sha "${previous_sha}" || fail 'runtime context changed during p
 trap 'rollback "unexpected error at line ${LINENO}"' ERR
 log "updating ${previous_sha} -> ${target_sha}"
 git -C "${APP_DIR}" checkout -q "${BRANCH}"
-git -C "${APP_DIR}" reset --hard "${target_sha}"
-chmod 600 "${compose_dir}/.env.vps"
+git -C "${APP_DIR}" merge --ff-only "${target_sha}"
+[[ "$(git -C "${APP_DIR}" rev-parse HEAD)" == "${target_sha}" ]] \
+  || fail 'checkout does not match the verified release SHA'
 set_build_provenance "${target_sha}"
 
 cd "${compose_dir}"

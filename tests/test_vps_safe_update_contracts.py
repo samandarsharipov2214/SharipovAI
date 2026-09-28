@@ -44,11 +44,13 @@ def test_update_is_locked_backup_first_and_never_cleans_runtime_files() -> None:
     assert "flock -n 9" in content
     assert "creating verified backup before code update" in content
     assert 'APP_DIR="${APP_DIR}" COMPOSE_DIR="${compose_dir}" bash "${backup_exporter_tmp}"' in content
-    assert 'git -C "${APP_DIR}" reset --hard "${target_sha}"' in content
+    assert 'git -C "${APP_DIR}" merge --ff-only "${target_sha}"' in content
     assert content.index("creating verified backup before code update") < content.index(
-        'reset --hard "${target_sha}"'
+        'merge --ff-only "${target_sha}"'
     )
     assert "git clean" not in content
+    assert "reset --hard" not in content
+    assert 'chmod 600 "${compose_dir}/.env.vps"' not in content
 
 
 def test_update_materializes_backup_exporter_from_immutable_target() -> None:
@@ -85,7 +87,7 @@ def test_update_validates_financial_locks_before_build_and_rollback() -> None:
 def test_update_rolls_back_exact_commit_and_requires_health() -> None:
     content = _text(UPDATE)
     assert 'previous_sha="$(git -C "${APP_DIR}" rev-parse HEAD)"' in content
-    assert 'reset --hard "${previous_sha}"' in content
+    assert 'checkout -q --detach "${previous_sha}"' in content
     assert "health_check || rollback" in content
     assert "rollback container did not become healthy" in content
     assert "docker inspect --format" in content

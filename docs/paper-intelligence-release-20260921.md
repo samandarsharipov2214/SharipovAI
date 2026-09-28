@@ -186,3 +186,59 @@ new closed trades over ≥7 days, wins > losses, positive net PnL/expectancy/ret
 profit factor ≥1.20, drawdown ≤5%, no accounting/safety/look-ahead defect and no
 single abnormal winner dominating the result. Shadow forecasts and OOS diagnostics
 cannot satisfy that gate. No trades will be manufactured to meet it.
+
+## Release review — 27 September
+
+The exact-packet runtime regression exposed a lifecycle mismatch: optional
+forecast access assumed `__init__` had run, and tick finalization then masked that
+error with an uninitialized cycle counter. Optional inference now has an explicit
+unavailable default. Normal construction eagerly initializes process telemetry;
+partial/recovery construction initializes it once before ticking or reading
+metrics. Persisted suppression counts are excluded from the new process rate.
+Failed ticks still count and retain their original error. Nonblocking status
+retains these scalar metrics while execution holds its lock. No required trading
+dependency or authorization is synthesized.
+
+Full-diff review also tightened two provenance boundaries. Forecast validation
+now binds the exact Council decision as-of separately from quote identity and
+freshness. The evaluator no longer accepts an untouched-holdout boolean: it must
+consume a range in the canonical registry before evaluating labels, then bind
+the completed claim to the report hash. Failed attempts remain consumed.
+Promotion and execution both require that matching completed canonical receipt;
+reviewing an artifact hash cannot override a missing, changed or incomplete
+receipt. Unsealed research remains explicitly ineligible. The preserved original
+failed artifact has not been refitted, relabeled or promoted.
+
+Acceptance now checks unmatched BUYs and open quantities in older PAPER scopes
+as well as the active scope. Fresh pre-release ProjectDatabase evidence still
+contains 2,186 executions and 1,093 settlements, with no orphans, PnL/Learning
+mismatches, pending intents or account discrepancies. Local and public health
+both returned HTTP 200; all exchange write paths remained locked.
+
+Focused lifecycle/provenance/acceptance checks passed, including the original
+exact-packet regression, unavailable-producer BUY containment, failed-tick
+telemetry, repeated/failed holdout consumption, forged receipt rejection and
+exact-as-of mismatch. All 932 tracked Python sources compiled, critical imports
+and hard execution locks passed. The complete suite and exact-head GitHub CI
+remain mandatory release gates; test fixtures never become production evidence.
+
+## Resume verification — 28 September
+
+The existing local changes were retained. The original exact-packet regression
+and the requested ordered lifecycle, forecast, Council, PAPER, acceptance, news,
+authority/veto and settlement/Learning suites pass (286 test executions). Fresh
+canonical acceptance still reconciles 2,186 executions and 1,093 settlements,
+with zero orphans, quantity/PnL/Learning discrepancies, open positions or pending
+execution intents. The historic failed holdout remains unchanged and unpromoted.
+
+Deployment review found that the canonical updater used hard resets and changed
+environment-file permissions. It now requires a fast-forward release, verifies
+the exact checkout SHA and uses a detached previous checkout for retained-image
+rollback, without modifying `.env.vps`. Real-Git fixtures verify successful
+deployment, rollback, preservation of divergent local work and unchanged private
+environment content/mode/time; 104 focused deployment checks pass. The pending
+executable mode of the backup verifier is carried into this PR as well.
+
+Release remains conditional on exact-head CI, a fresh verified canonical backup,
+healthy PAPER-only deployment and post-deployment reconciliation. A busy SQLite
+checkpoint is reported as busy; it cannot justify manual WAL/SHM deletion.
