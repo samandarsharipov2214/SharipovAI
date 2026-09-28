@@ -64,4 +64,4 @@ def test_updater_uses_target_backup_exporter_before_checkout() -> None:
 
     assert 'git -C "${APP_DIR}" show "${target_sha}:deploy/vps/export_backup.sh"' in source
     assert 'APP_DIR="${APP_DIR}" COMPOSE_DIR="${compose_dir}" bash "${backup_exporter_tmp}"' in source
-    assert source.index('bash "${backup_exporter_tmp}"') < source.index('git -C "${APP_DIR}" reset --hard "${target_sha}"')
+    assert source.index('bash "${backup_exporter_tmp}"') < source.index('git -C "${APP_DIR}" merge --ff-only "${target_sha}"')
