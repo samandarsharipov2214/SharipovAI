@@ -108,10 +108,12 @@ class AutonomousPaperRuntimeRegressionTests(unittest.TestCase):
         loop.decision_mode = "CANONICAL_COUNCIL_REQUIRED"
         loop.forecast_service = SimpleNamespace(status=lambda: {"status": "SHADOW", "execution_authority": False})
         loop.economic_observer = SimpleNamespace(status=lambda: {"worker_running": True})
+        loop.work_metrics = lambda: {"cycle_count_this_process": 3}
         snapshot = nonblocking_loop_snapshot(loop)
         self.assertEqual(snapshot["decision_mode"], loop.decision_mode)
         self.assertEqual(snapshot["entry_economics"]["status"], "SHADOW")
         self.assertTrue(snapshot["economic_shadow"]["worker_running"])
+        self.assertEqual(snapshot["work_metrics"]["cycle_count_this_process"], 3)
 
     def test_wait_trace_reuses_exact_canonical_market_evidence(self):
         provider = AutonomousCouncilProposalProvider.__new__(AutonomousCouncilProposalProvider)

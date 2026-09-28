@@ -50,6 +50,7 @@ class CandidateEvidencePacket:
     security_approval_id: str = ""
     # Immutable canonical forecast document ID; no bare numerical edge aliases.
     prospective_forecast_id: str = ""
+    prospective_forecast_as_of_ms: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

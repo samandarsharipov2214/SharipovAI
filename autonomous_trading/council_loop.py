@@ -66,6 +66,11 @@ class PaperExecutionRejected(RuntimeError):
 class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
     """Autonomous paper loop whose new entries require council authorization."""
 
+    # Optional inference is unavailable until explicitly installed. This also
+    # holds for recovered/partially constructed loops; no artifact means no edge.
+    forecast_service: ProspectiveForecastService | None = None
+    _monitor_started: float | None = None
+
     # Prospective edge must cover this multiple of all-in round-trip cost.
     # This is a cost cushion, not a calibrated forecast uncertainty estimate.
     decision_mode = "CANONICAL_COUNCIL_REQUIRED"
@@ -102,10 +107,7 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         self.forecast_service = forecast_service
         self._economic_capture = local()
         super().__init__(stream, database=database or decision_runtime.database)
-        self._wait_count_at_start = int(self._state.get("suppressed_wait_events", 0) or 0)
-        self._monitor_started = time.monotonic()
-        self._cycle_count = 0
-        self._last_cycle_duration = None
+        self._initialize_cycle_metrics()
         if decision_runtime.database.dsn != self.database.dsn:
             raise ValueError("paper loop and decision runtime must use the same database")
         if economic_observer is not None and economic_observer.database.dsn != self.database.dsn:
@@ -182,7 +184,21 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
             else "unknown",
         }
 
+    def _initialize_cycle_metrics(self) -> None:
+        """Start process telemetry once, after canonical state is available.
+
+        Normal construction initializes eagerly. Recovery/partial construction
+        starts at its first tick or metrics read, excluding persisted WAITs from
+        the process rate. Required trading dependencies are never synthesized.
+        """
+        if self._monitor_started is None:
+            self._wait_count_at_start = int(self._state.get("suppressed_wait_events", 0) or 0)
+            self._cycle_count = 0
+            self._last_cycle_duration = None
+            self._monitor_started = time.monotonic()
+
     def tick(self) -> None:
+        self._initialize_cycle_metrics()
         started = time.monotonic()
         try:
             self._capture_tick()
@@ -300,7 +316,8 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                     try:
                         forecast = self.forecast_service.forecast(symbol, quote, as_of_ms=decision_ts_ms)
                         proposal = replace(proposal, evidence_packet=replace(proposal.evidence_packet,
-                            prospective_forecast_id=forecast["forecast_id"]))
+                            prospective_forecast_id=forecast["forecast_id"],
+                            prospective_forecast_as_of_ms=decision_ts_ms))
                         if observation is not None:
                             observation["prospective_forecast_id"] = forecast["forecast_id"]
                     except Exception as exc:
@@ -309,7 +326,7 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                         self.forecast_service.error = "forecast_generation_error:" + type(exc).__name__
                         self.forecast_service.rejected += 1
                         proposal = replace(proposal, evidence_packet=replace(proposal.evidence_packet,
-                            prospective_forecast_id=""))
+                            prospective_forecast_id="", prospective_forecast_as_of_ms=None))
                         if observation is not None:
                             observation["forecast_error"] = self.forecast_service.error
                 if observation is not None:
@@ -1773,7 +1790,8 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
                 raise ValueError("forecast_not_physically_available")
             edge, reason = validate_forecast(value, symbol=candidate.symbol, now_ms=now,
                 quote_received_at_ms=packet.received_timestamp_ms if packet else 0,
-                artifact=service.artifact if service else None)
+                as_of_ms=packet.prospective_forecast_as_of_ms if packet else None,
+                artifact=service.artifact if service else None, database=self.database)
         except Exception as exc:
             edge, reason = None, "forecast_read_error:" + type(exc).__name__
         metadata = value if isinstance(value, Mapping) else {}
@@ -1901,16 +1919,21 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
             "execution_authority": False,
         }
 
-    def snapshot(self) -> dict[str, Any]:
-        state = super().snapshot()
+    def work_metrics(self) -> dict[str, Any]:
+        """Scalar telemetry stays readable while the execution lock is busy."""
+        self._initialize_cycle_metrics()
         elapsed = max(time.monotonic() - self._monitor_started, .001)
-        suppressed = int(state.get("suppressed_wait_events", 0) or 0)
-        state["work_metrics"] = {"cycle_count_this_process": self._cycle_count,
+        suppressed = int(self._state.get("suppressed_wait_events", 0) or 0)
+        return {"cycle_count_this_process": self._cycle_count,
             "last_cycle_duration_seconds": self._last_cycle_duration, "tick_seconds": self.tick_seconds,
             "suppressed_wait_lifetime": suppressed,
             "suppressed_wait_this_process": max(0, suppressed - self._wait_count_at_start),
             "suppressed_wait_per_second": max(0, suppressed - self._wait_count_at_start) / elapsed,
             "semantics": "cumulative suppression survives restart; process rate is operational telemetry"}
+
+    def snapshot(self) -> dict[str, Any]:
+        state = super().snapshot()
+        state["work_metrics"] = self.work_metrics()
         state["entry_economics"] = self.forecast_service.status() if self.forecast_service else {
             "status": "UNAVAILABLE", "prospective_edge_producer": None,
             "promotion_status": "BLOCKED_NO_VALIDATED_PROSPECTIVE_EDGE", "profitability_proven": False}

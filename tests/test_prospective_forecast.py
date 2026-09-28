@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from types import SimpleNamespace
 
@@ -27,6 +28,15 @@ def passing_artifact(expected=.02):
             "bias": .0001, "actionable_count": 60, "actionable_cost_adjusted_mean": .002,
             "by_symbol": {"ETHUSDT": group}, "by_regime": {"up_24h": group}},
         "folds": [group, group, group]}
+    dataset_key = fc.digest(["canonical_paper_opportunities", "test_fixture"])
+    start, end = NOW - 1_000_000, NOW - 100_000
+    report["holdout_provenance"] = {"schema_version": 2,
+        "registry_scope": "canonical_project_database", "dataset_scope": "test_fixture",
+        "dataset_manifest_sha256": dataset_key,
+        "holdout_identity": hashlib.sha256(f"{dataset_key}:{start}:{end}".encode()).hexdigest(),
+        "final_oos_range": [start, end], "status": "started", "claim_id": "synthetic-test-claim",
+        "claimed_at_ms": NOW - 95_000, "source_sha256": "a" * 64,
+        "producer_version": fc.PRODUCER_VERSION, "validation_version": report["schema_version"]}
     return {"producer_version": fc.PRODUCER_VERSION, "horizon_seconds": fc.HORIZON_SECONDS,
         "model": {"means": [0., 0., 0.], "scales": [1., 1., 1.], "coefficients": [expected, 0., 0., 0.],
                   "baseline_mean": 0.},
@@ -40,6 +50,15 @@ def passing_artifact(expected=.02):
         "validation": report, "published_at_ms": NOW - 80_000, "execution_authority": False}
 
 
+def install_test_holdout(database, artifact):
+    """Synthetic receipt confined to the test's isolated ProjectDatabase."""
+    proof = artifact["validation"]["holdout_provenance"]
+    database.put_json("alpha_holdout_consumption", proof["dataset_manifest_sha256"],
+        {"schema_version": 2, "claims": {proof["holdout_identity"]: {**proof, "status": "completed",
+            "completed_at_ms": artifact["validation_provenance"]["validated_at_ms"],
+            "report_sha256": fc.digest(artifact["validation"])}}})
+
+
 @pytest.fixture
 def forecast(tmp_path, monkeypatch):
     artifact = passing_artifact()
@@ -47,6 +66,7 @@ def forecast(tmp_path, monkeypatch):
     path.write_text(json.dumps(artifact))
     database = ProjectDatabase(f"sqlite:///{tmp_path / 'canonical.db'}")
     database.initialize()
+    install_test_holdout(database, artifact)
     monkeypatch.setattr(fc.time, "time", lambda: NOW / 1000)
     monkeypatch.setattr(fc, "REVIEWED_MODELS", frozenset({fc.digest(artifact)}))
     service = fc.ProspectiveForecastService(database, artifact_path=path)
@@ -58,7 +78,8 @@ def forecast(tmp_path, monkeypatch):
 
 def validate(value, service, **changes):
     return fc.validate_forecast(value, **{"symbol": "ETHUSDT", "now_ms": NOW,
-        "quote_received_at_ms": NOW, "artifact": service.artifact, **changes})
+        "quote_received_at_ms": NOW, "as_of_ms": NOW,
+        "artifact": service.artifact, "database": service.database, **changes})
 
 
 def resign(value):
@@ -108,6 +129,11 @@ def test_stale_quote_mismatch_and_missing_uncertainty(forecast):
     value.pop("uncertainty")
     resign(value)
     assert validate(value, service)[0] is None
+
+
+@pytest.mark.parametrize("asof", [None, NOW - 1, NOW + 1, True])
+def test_quote_identity_and_review_cannot_replace_exact_decision_asof(forecast, asof):
+    assert validate(forecast[0], forecast[1], as_of_ms=asof) == (None, "forecast_asof_mismatch")
 
 
 def test_learning_or_database_cannot_self_promote(forecast, monkeypatch):
@@ -251,6 +277,52 @@ def test_evaluator_does_not_self_attest_untouched_holdout():
     artifact = evaluate(synthetic_rows(), cutoff_ms=NOW, source_coverage="COMPLETE_CUTOFF", evaluated_at_ms=NOW)
     assert artifact["validation"]["holdout_untouched"] is False
     assert "holdout_not_untouched" in artifact["validation"]["promotion_failures"]
+    with pytest.raises(TypeError, match="holdout_sealed"):
+        evaluate(synthetic_rows(), cutoff_ms=NOW, source_coverage="COMPLETE_CUTOFF", holdout_sealed=True)
+
+
+def test_evaluator_claims_and_completes_once_in_canonical_database(tmp_path, monkeypatch):
+    from trading_core.alpha_consumption import FinalOOSAlreadyConsumed
+    monkeypatch.setattr(fc.time, "time", lambda: NOW / 1000)
+    db = ProjectDatabase(f"sqlite:///{tmp_path / 'db'}")
+    rows = synthetic_rows()
+    artifact = evaluate(rows, cutoff_ms=NOW, source_coverage="COMPLETE_CUTOFF", database=db)
+    assert artifact["validation"]["holdout_untouched"] is True
+    assert fc.verified_holdout_receipt(artifact, db) is True
+    with pytest.raises(FinalOOSAlreadyConsumed):
+        evaluate(rows, cutoff_ms=NOW, source_coverage="COMPLETE_CUTOFF", database=db)
+
+
+def test_failed_evaluation_cannot_reopen_its_holdout(tmp_path, monkeypatch):
+    from trading_core.alpha_consumption import FinalOOSAlreadyConsumed
+    monkeypatch.setattr(fc.time, "time", lambda: NOW / 1000)
+    db = ProjectDatabase(f"sqlite:///{tmp_path / 'db'}")
+    rows = synthetic_rows(10)
+    with pytest.raises(ValueError, match="training_labels"):
+        evaluate(rows, cutoff_ms=NOW, source_coverage="COMPLETE_CUTOFF", database=db)
+    with pytest.raises(FinalOOSAlreadyConsumed):
+        evaluate(rows, cutoff_ms=NOW, source_coverage="COMPLETE_CUTOFF", database=db)
+
+
+@pytest.mark.parametrize("corruption", ["missing", "uncompleted", "different_report", "different_claim", "different_range"])
+def test_model_review_cannot_override_broken_holdout_receipt(forecast, corruption):
+    value, service, quote = forecast
+    proof = service.artifact["validation"]["holdout_provenance"]
+    registry = service.database.get_json("alpha_holdout_consumption", proof["dataset_manifest_sha256"])["value"]
+    receipt = registry["claims"][proof["holdout_identity"]]
+    if corruption == "missing":
+        registry["claims"] = {}
+    elif corruption == "uncompleted":
+        receipt["status"] = "started"
+    elif corruption == "different_report":
+        receipt["report_sha256"] = "b" * 64
+    elif corruption == "different_claim":
+        receipt["claim_id"] = "unrelated"
+    else:
+        receipt["final_oos_range"][0] += 1
+    service.database.put_json("alpha_holdout_consumption", proof["dataset_manifest_sha256"], registry)
+    assert validate(value, service) == (None, "forecast_holdout_receipt_unverified")
+    assert service.forecast("ETHUSDT", quote, as_of_ms=NOW)["status"] == "SHADOW"
 
 
 @pytest.mark.parametrize("field,value", [("coverage", 1.1), ("directional_accuracy", 2.),

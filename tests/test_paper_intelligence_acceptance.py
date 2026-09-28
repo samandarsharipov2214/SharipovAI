@@ -57,3 +57,18 @@ def test_matching_cash_and_equity_cannot_hide_account_reset(tmp_path):
     assert after["accounting_issues"] == []
     assert compare(before, after)["history_preserved"] is True
     assert compare(before, after)["cash_reconciled"] is False
+
+
+def test_inactive_scope_buy_requires_exact_open_position(tmp_path):
+    db = history(tmp_path)
+    buy = {"trade_id": "unclosed", "decision_id": "unclosed", "symbol": "ETHUSDT",
+        "side": "BUY", "price": 100., "quantity": 1., "fee": .1, "created_at_ms": 3000}
+    db.put_json("paper_trades:older", "unclosed", buy)
+    report = capture(db, scope="active")
+    assert report["orphans"] == [{"scope": "older", "decision_id": "unclosed", "kind": "unmatched_buy"}]
+    db.put_json("autonomous_paper_state", "older", {"positions": {"ETHUSDT": {**buy, "quantity": 2.}}})
+    assert capture(db, scope="active")["pnl_mismatches"] == [
+        {"scope": "older", "decision_id": "unclosed", "kind": "open_quantity_mismatch"}]
+    db.put_json("autonomous_paper_state", "older", {"positions": {"ETHUSDT": buy}})
+    report = capture(db, scope="active")
+    assert report["orphans"] == report["pnl_mismatches"] == []

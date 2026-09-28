@@ -61,6 +61,9 @@ def nonblocking_loop_snapshot(loop: Any) -> dict[str, Any]:
     state["wait_event_min_interval_seconds"] = loop.wait_event_min_interval_seconds
     state["snapshot_state_source"] = "project_database_fallback"
     state["decision_mode"] = getattr(loop, "decision_mode", None)
+    work_metrics = getattr(loop, "work_metrics", None)
+    if callable(work_metrics):
+        state["work_metrics"] = work_metrics()
     forecast_service = getattr(loop, "forecast_service", None)
     if forecast_service is not None:
         state["entry_economics"] = forecast_service.status()

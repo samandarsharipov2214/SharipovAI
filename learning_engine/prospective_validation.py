@@ -8,11 +8,13 @@ guarantee. Final holdout results are diagnostics, never future profit evidence.
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import time
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from typing import Any
+from uuid import uuid4
 
 from autonomous_trading.forecast_contract import (
     ARTIFACT_PATH, HORIZON_SECONDS, PRODUCER_VERSION, digest, number, predict, promotion_failures,
@@ -36,7 +38,8 @@ def claim_holdout(database, *, scope: str, start_ms: int, end_ms: int, source_sh
     A failed experiment remains consumed; there is no delete/retry escape hatch.
     """
     start, end = timestamp(start_ms), timestamp(end_ms)
-    if not scope or start > end or len(source_sha256) != 64:
+    if (not scope or start > end or len(source_sha256) != 64
+            or any(c not in "0123456789abcdef" for c in source_sha256)):
         raise ValueError("invalid holdout identity")
     dataset_key = digest(["canonical_paper_opportunities", scope])
 
@@ -50,6 +53,7 @@ def claim_holdout(database, *, scope: str, start_ms: int, end_ms: int, source_sh
             "validation_version": VALIDATION_VERSION, "claimed_at_ms": int(time.time() * 1000)}
 
     payload = claim(start, end, source_sha256, "started")
+    payload["claim_id"] = uuid4().hex
     legacy = json.loads(ARTIFACT_PATH.read_text())
     with _locked_claims(database, dataset_key) as claims:
         if legacy.get("export_provenance", {}).get("scope") == scope:
@@ -201,19 +205,37 @@ def metrics(rows: Sequence[Mapping[str, Any]], model: Mapping[str, Any], *,
 
 
 def evaluate(rows: Sequence[Mapping[str, Any]], *, cutoff_ms: int, source_coverage: str,
-             evaluated_at_ms: int | None = None, holdout_sealed: bool = False) -> dict:
-    """One fixed chronological experiment. Caller must seal its untouched source.
+             evaluated_at_ms: int | None = None, database=None) -> dict:
+    """One fixed experiment; a canonical claim precedes opening its labels.
 
     Every symbol shares time boundaries. A training/calibration label must be
     physically available strictly before the next period starts. Thus overlapping
     labels cannot cross any split even across symbols. No final-test refitting.
+    Without a database this is unsealed research and cannot attest untouched OOS.
+    A failed evaluation leaves its range consumed; callers cannot pass a boolean
+    or reuse a receipt to relabel an inspected holdout untouched.
     """
+    cutoff_ms = timestamp(cutoff_ms)
+    if not rows:
+        raise ValueError("no_captured_anchors")
+    first = min(timestamp(r["decision_time_ms"]) for r in rows)
+    span = cutoff_ms - first
+    if span <= 0:
+        raise ValueError("invalid_source_window")
+    cal_start, test_start = first + int(span * .6), first + int(span * .8)
+    claim = None
+    if database is not None:
+        scopes = {r["scope"] for r in rows}
+        if len(scopes) != 1:
+            raise ValueError("one_canonical_scope_required")
+        source_identity = hashlib.sha256()
+        for row in rows:
+            source_identity.update(digest(row).encode())
+        claim = claim_holdout(database, scope=scopes.pop(), start_ms=test_start,
+                             end_ms=cutoff_ms, source_sha256=source_identity.hexdigest())
     samples, source = dataset(rows, cutoff_ms=cutoff_ms)
     if not samples:
         raise ValueError("no_captured_anchors")
-    first = min(r["decision_time_ms"] for r in samples)
-    span = cutoff_ms - first
-    cal_start, test_start = first + int(span * .6), first + int(span * .8)
     valid = [r for r in samples if r["status"] == "OBSERVED" and r["features"] is not None]
     train = [r for r in valid if r["decision_time_ms"] < cal_start and r["label_available_at_ms"] < cal_start]
     calibration = [r for r in valid if cal_start <= r["decision_time_ms"] < test_start
@@ -231,10 +253,11 @@ def evaluate(rows: Sequence[Mapping[str, Any]], *, cutoff_ms: int, source_covera
                 "train_labels_available_through_ms": max(r["label_available_at_ms"] for r in ft),
                 "validation_start_ms": boundary, "validation_end_ms": end})
     evaluated = evaluated_at_ms or int(time.time() * 1000)
-    if evaluated < cutoff_ms:
+    if evaluated < cutoff_ms or claim and evaluated < claim["claimed_at_ms"]:
         raise ValueError("evaluation_before_source_cutoff")
     report = {"schema_version": VALIDATION_VERSION, **source, "source_coverage": source_coverage,
-        "asof_safe": True, "globally_purged": True, "holdout_untouched": holdout_sealed is True,
+        "asof_safe": True, "globally_purged": True, "holdout_untouched": claim is not None,
+        "holdout_provenance": claim,
         "feature_timestamps_verified": all(r.get("feature_timestamps_verified") is True for r in valid),
         "split_policy": "fixed_60_20_20_global_time; purge_labels_not_physically_available_before_boundary",
         "data_span_days": span / 86400000, "test_span_days": (cutoff_ms - test_start) / 86400000,
@@ -253,6 +276,12 @@ def evaluate(rows: Sequence[Mapping[str, Any]], *, cutoff_ms: int, source_covera
             "A passing forecast report still requires reviewed promotion and new prospective PAPER profitability evidence."]}
     report["promotion_failures"] = promotion_failures(report)
     report["status"] = "PASS" if not report["promotion_failures"] else "INSUFFICIENT_OR_FAILED_VALIDATION"
+    if claim is not None:
+        with _locked_claims(database, claim["dataset_manifest_sha256"]) as claims:
+            if claims.get(claim["holdout_identity"]) != claim:
+                raise ValueError("canonical_holdout_claim_changed")
+            claims[claim["holdout_identity"]] = {**claim, "status": "completed",
+                "report_sha256": digest(report), "completed_at_ms": evaluated}
     return {"producer_version": PRODUCER_VERSION, "horizon_seconds": HORIZON_SECONDS,
         "model": model, "uncertainty_radius_fraction": radius, "support_count": len(train),
         "training_window": {"start_ms": min(r["decision_time_ms"] for r in train),

@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from autonomous_trading.forecast_contract import digest
-from learning_engine.prospective_validation import claim_holdout, evaluate
+from learning_engine.prospective_validation import evaluate
 from storage import ProjectDatabase
 
 
@@ -52,13 +52,10 @@ def main() -> int:
     if not rows or any(r["scope"] != manifest["scope"] or not
                       0 < r["decision_time_ms"] <= r["recorded_at_ms"] <= cutoff for r in rows):
         raise ValueError("source scope or cutoff mismatch")
-    first = min(r["decision_time_ms"] for r in rows)
-    claim = claim_holdout(ProjectDatabase(), scope=manifest["scope"],
-        start_ms=first + int((cutoff - first) * .8), end_ms=cutoff, source_sha256=manifest["sha256"])
-    artifact = evaluate(rows, cutoff_ms=manifest["cutoff_ms"], source_coverage=manifest["coverage"], holdout_sealed=True)
+    artifact = evaluate(rows, cutoff_ms=cutoff, source_coverage=manifest["coverage"], database=ProjectDatabase())
     artifact["export_provenance"] = {"sha256": manifest["sha256"], "source_rows": len(rows),
         "scope": manifest["scope"], "holdout_seal_sha256": digest(json.loads(seal.read_text())),
-        "canonical_holdout_claim": claim}
+        "canonical_holdout_claim": artifact["validation"]["holdout_provenance"]}
     with args.output.open("x") as out:
         out.write(json.dumps(artifact, indent=2, allow_nan=False) + "\n")
     print(json.dumps({"model_sha256": digest(artifact), "status": artifact["validation"]["status"],

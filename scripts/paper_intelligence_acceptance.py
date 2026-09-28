@@ -88,6 +88,13 @@ def capture(database: ProjectDatabase, *, scope: str, since_ms: int = 0) -> dict
                   + buys[0].get("paper_build_sha", "UNKNOWN_LEGACY")) if buys else "ORPHAN"
         cohort_trades[cohort].extend(group)
         if not sells:
+            open_positions = (states.get(account_scope) or {}).get("positions") or {}
+            matching = [p for p in open_positions.values() if p.get("decision_id") == decision]
+            if len(buys) != 1 or len(matching) != 1:
+                orphans.append({"scope": account_scope, "decision_id": decision, "kind": "unmatched_buy"})
+            elif (matching[0].get("symbol", buys[0]["symbol"]) != buys[0]["symbol"]
+                    or not math.isclose(float(matching[0]["quantity"]), float(buys[0]["quantity"]), abs_tol=1e-10)):
+                mismatches.append({"scope": account_scope, "decision_id": decision, "kind": "open_quantity_mismatch"})
             continue
         if len(buys) != 1 or len(sells) != 1:
             orphans.append({"scope": account_scope, "decision_id": decision, "kind": "ambiguous_pair"})

@@ -372,6 +372,50 @@ def test_real_canonical_tick_invokes_shadow_with_the_exact_proposal_packet():
     assert seen[0]["proposal"].evidence_packet is packet
     assert seen[0]["authorization"] is authorization
     assert seen[0]["decision_ts_ms"] == 1_000_200
+    assert loop.forecast_service is None
+    assert loop._cycle_count == 1
+    assert loop._last_cycle_duration >= 0
+
+
+def test_partial_loop_metrics_start_once_and_do_not_mask_tick_errors(monkeypatch):
+    loop = object.__new__(CouncilAuthorizedPaperLoop)
+    loop._state = {"suppressed_wait_events": 500_000}
+    loop.tick_seconds = 5.0
+    now = [10.0]
+    monkeypatch.setattr("autonomous_trading.council_loop.time.monotonic", lambda: now[0])
+
+    def capture():
+        now[0] += .25
+        loop._state["suppressed_wait_events"] += 3
+
+    loop._capture_tick = capture
+    loop.tick()
+    metrics = loop.work_metrics()
+    assert metrics["cycle_count_this_process"] == 1
+    assert metrics["last_cycle_duration_seconds"] == .25
+    assert metrics["suppressed_wait_lifetime"] == 500_003
+    assert metrics["suppressed_wait_this_process"] == 3
+    assert metrics["suppressed_wait_per_second"] == 12.0
+
+    def broken_capture():
+        now[0] += .5
+        raise AttributeError("required trading dependency missing")
+
+    loop._capture_tick = broken_capture
+    with pytest.raises(AttributeError, match="required trading dependency missing"):
+        loop.tick()
+    metrics = loop.work_metrics()
+    assert metrics["cycle_count_this_process"] == 2
+    assert metrics["last_cycle_duration_seconds"] == .5
+    assert metrics["suppressed_wait_this_process"] == 3
+    assert metrics["suppressed_wait_per_second"] == 4.0
+
+    other = object.__new__(CouncilAuthorizedPaperLoop)
+    other._state = {"suppressed_wait_events": 900_000}
+    other.tick_seconds = 5.0
+    assert other.work_metrics()["cycle_count_this_process"] == 0
+    assert other.work_metrics()["suppressed_wait_this_process"] == 0
+    assert loop.work_metrics()["cycle_count_this_process"] == 2
 
 
 def test_shadow_exception_and_timeout_are_isolated_from_the_canonical_path():

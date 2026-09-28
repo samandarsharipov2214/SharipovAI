@@ -157,6 +157,8 @@ def _promotion_failures(report: Mapping[str, Any]) -> list[str]:
 def validate_forecast(value: Any, *, symbol: str, now_ms: int,
                       quote_received_at_ms: int, horizon_seconds: int = HORIZON_SECONDS,
                       artifact: Mapping[str, Any] | None = None,
+                      database=None,
+                      as_of_ms: int | None = None,
                       reviewed_models: frozenset[str] | None = None) -> tuple[float | None, str]:
     """Return a conservative dimensionless return, never an untyped USD alias."""
     if value is None:
@@ -174,6 +176,8 @@ def validate_forecast(value: Any, *, symbol: str, now_ms: int,
             ("as_of_ms", "feature_cutoff_ms", "generated_at_ms", "expires_at_ms"))
         if not cutoff <= asof <= created <= now_ms or asof - cutoff > QUOTE_MAX_AGE_MS:
             raise ValueError("forecast_future_or_asof_leakage")
+        if type(as_of_ms) is not int or asof != as_of_ms:
+            raise ValueError("forecast_asof_mismatch")
         if not 0 <= now_ms - asof <= MAX_AGE_MS or not now_ms < expires <= asof + MAX_AGE_MS:
             raise ValueError("forecast_stale")
         lineage = value["input_lineage"]
@@ -233,9 +237,43 @@ def validate_forecast(value: Any, *, symbol: str, now_ms: int,
                 and timestamp(validation["calibration_labels_available_through_ms"]) < timestamp(validation["holdout_start_ms"])
                 and timestamp(validation["calibration_labels_available_through_ms"]) >= timestamp(validation["calibration_start_ms"])):
             raise ValueError("forecast_calibration_leakage")
+        if not verified_holdout_receipt(artifact, database):
+            raise ValueError("forecast_holdout_receipt_unverified")
         return lower, "validated_prospective_return"
     except (AttributeError, KeyError, TypeError, ValueError, OverflowError) as error:
         return None, str(error) if isinstance(error, ValueError) else "forecast_malformed:" + type(error).__name__
+
+
+def verified_holdout_receipt(artifact: Mapping[str, Any], database) -> bool:
+    """A pinned model/boolean cannot replace the canonical completed OOS claim.
+
+    Storage errors propagate to the existing runtime failure boundary. Invalid
+    evidence is unavailable; no local receipt or alternative DB is a fallback.
+    """
+    if database is None:
+        return False
+    try:
+        proof = artifact["validation"]["holdout_provenance"]
+        provenance = artifact["validation_provenance"]
+        dataset_key = digest(["canonical_paper_opportunities", proof["dataset_scope"]])
+        start, end = proof["final_oos_range"]
+        identity = hashlib.sha256(f"{dataset_key}:{start}:{end}".encode()).hexdigest()
+        if (proof["registry_scope"] != "canonical_project_database"
+                or proof["dataset_manifest_sha256"] != dataset_key
+                or proof["holdout_identity"] != identity or not proof["claim_id"]
+                or proof["status"] != "started" or proof["producer_version"] != PRODUCER_VERSION
+                or proof["validation_version"] != artifact["validation"]["schema_version"]
+                or start != provenance["holdout_start_ms"] or end != provenance["holdout_end_ms"]
+                or not end <= timestamp(proof["claimed_at_ms"]) <= provenance["validated_at_ms"]):
+            return False
+        row = database.get_json("alpha_holdout_consumption", dataset_key)
+        receipt = row["value"]["claims"][identity] if row else None
+        return bool(receipt and receipt["status"] == "completed"
+            and all(receipt.get(k) == v for k, v in proof.items() if k != "status")
+            and receipt["report_sha256"] == provenance["report_sha256"] == digest(artifact["validation"])
+            and timestamp(receipt["completed_at_ms"]) == timestamp(provenance["validated_at_ms"]))
+    except (KeyError, TypeError, ValueError, AttributeError, OverflowError):
+        return False
 
 
 class ProspectiveForecastService:
@@ -268,7 +306,8 @@ class ProspectiveForecastService:
             raise ValueError("forecast_unverified_or_mismatched_quote")
         features = quote_features(frozen, as_of_ms=as_of_ms, require_timestamps=True)
         a = self.artifact
-        promoted = bool(a and digest(a) in REVIEWED_MODELS and not promotion_failures(a["validation"]))
+        promoted = bool(a and digest(a) in REVIEWED_MODELS and not promotion_failures(a["validation"])
+                        and verified_holdout_receipt(a, self.database))
         expected = predict(a["model"], features) if a and a.get("model") else None
         radius = a.get("uncertainty_radius_fraction") if a else None
         if radius is not None:
@@ -310,7 +349,8 @@ class ProspectiveForecastService:
 
     def status(self) -> dict:
         a = self.artifact
-        promoted = bool(a and digest(a) in REVIEWED_MODELS and not promotion_failures(a["validation"]))
+        promoted = bool(a and digest(a) in REVIEWED_MODELS and not promotion_failures(a["validation"])
+                        and verified_holdout_receipt(a, self.database))
         return {"prospective_edge_producer": PRODUCER_VERSION, "contract_version": CONTRACT_VERSION,
             "status": "DEGRADED" if self.error else "PROMOTED" if promoted else "SHADOW" if a else "UNAVAILABLE",
             "promotion_status": "PROMOTED" if promoted else "BLOCKED_VALIDATION_OR_REVIEW",

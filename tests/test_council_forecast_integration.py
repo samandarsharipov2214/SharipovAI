@@ -4,7 +4,7 @@ import json
 import pytest
 
 from autonomous_trading import forecast_contract as fc
-from test_prospective_forecast import NOW, passing_artifact
+from test_prospective_forecast import NOW, passing_artifact, install_test_holdout
 from test_paper_anti_churn_fee_driven import Clock, MID, SYMBOL, _build_loop, _plan_buy, _quote
 
 
@@ -12,6 +12,7 @@ def configured(tmp_path, monkeypatch, *, promoted=True, expected=.02):
     monkeypatch.setattr(fc.time, "time", lambda: NOW / 1000)
     loop, stream, plan, runtime, clock = _build_loop(tmp_path, monkeypatch, clock=Clock(NOW))
     artifact = passing_artifact(expected)
+    install_test_holdout(loop.database, artifact)
     path = tmp_path / "artifact.json"
     path.write_text(json.dumps(artifact))
     monkeypatch.setattr(fc, "REVIEWED_MODELS", frozenset({fc.digest(artifact)}) if promoted else frozenset())
@@ -21,6 +22,35 @@ def configured(tmp_path, monkeypatch, *, promoted=True, expected=.02):
     plan["proposal"] = replace(plan["proposal"], evidence_packet=replace(plan["proposal"].evidence_packet,
         received_timestamp_ms=NOW))
     return loop, stream, plan, runtime, clock
+
+
+def test_constructor_initializes_optional_service_and_cycle_metrics(tmp_path, monkeypatch):
+    loop, _, _, _, _ = _build_loop(tmp_path, monkeypatch)
+    assert loop.forecast_service is None
+    assert loop.economic_observer is None
+    metrics = loop.work_metrics()
+    assert metrics["cycle_count_this_process"] == 0
+    assert metrics["last_cycle_duration_seconds"] is None
+    loop.tick()
+    assert loop.work_metrics()["cycle_count_this_process"] == 1
+
+
+def test_absent_optional_service_rejects_even_a_persisted_promoted_forecast(tmp_path, monkeypatch):
+    loop, stream, plan, runtime, clock = configured(tmp_path, monkeypatch)
+    forecast = loop.forecast_service.forecast(SYMBOL, stream.current, as_of_ms=clock.now_ms())
+    assert forecast["status"] == "PROMOTED"
+    plan["proposal"] = replace(plan["proposal"], evidence_packet=replace(
+        plan["proposal"].evidence_packet, prospective_forecast_id=forecast["forecast_id"],
+        prospective_forecast_as_of_ms=clock.now_ms()))
+    del loop.forecast_service  # Recovery has not installed the optional producer.
+    before = loop._state["cash"]
+    loop.tick()
+    assert not runtime.consumed
+    assert loop._state["positions"] == {}
+    assert loop._state["cash"] == before
+    assert loop._state["last_action"] == "WAIT"
+    assert loop._state["forecast_gate_assessments"][SYMBOL]["reason"] == "forecast_model_provenance"
+    assert loop.snapshot()["entry_economics"]["status"] == "UNAVAILABLE"
 
 
 @pytest.mark.parametrize("promoted,expected", [(False, .5), (True, .005), (True, -.01)])
