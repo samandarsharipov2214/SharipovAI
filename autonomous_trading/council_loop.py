@@ -1789,7 +1789,9 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
             if stored and stored["updated_at_ms"] > now:
                 raise ValueError("forecast_not_physically_available")
             edge, reason = validate_forecast(value, symbol=candidate.symbol, now_ms=now,
-                quote_received_at_ms=packet.received_timestamp_ms if packet else 0,
+                # The provider binds market_timestamp_ms to the captured quote;
+                # packet receipt is later and is not the quote's identity.
+                quote_received_at_ms=packet.market_timestamp_ms if packet else 0,
                 as_of_ms=packet.prospective_forecast_as_of_ms if packet else None,
                 artifact=service.artifact if service else None, database=self.database)
         except Exception as exc:

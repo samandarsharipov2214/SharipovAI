@@ -20,8 +20,29 @@ def configured(tmp_path, monkeypatch, *, promoted=True, expected=.02):
     stream.current = replace(stream.current, feature_received_at_ms=NOW)
     _plan_buy(plan, "typed-first-entry", now_ms=NOW)
     plan["proposal"] = replace(plan["proposal"], evidence_packet=replace(plan["proposal"].evidence_packet,
-        received_timestamp_ms=NOW))
+        market_timestamp_ms=NOW, received_timestamp_ms=NOW))
     return loop, stream, plan, runtime, clock
+
+
+@pytest.mark.parametrize("wrong_quote", [False, True])
+@pytest.mark.parametrize("promoted", [False, True])
+def test_forecast_lineage_uses_quote_time_not_later_packet_receipt(tmp_path, monkeypatch, wrong_quote, promoted):
+    loop, stream, plan, runtime, _ = configured(tmp_path, monkeypatch, promoted=promoted)
+    quote_time = NOW - 500
+    stream.current = replace(stream.current, received_at_unix_ms=quote_time,
+                             feature_received_at_ms=quote_time)
+    plan["proposal"] = replace(plan["proposal"], evidence_packet=replace(
+        plan["proposal"].evidence_packet, market_timestamp_ms=quote_time - int(wrong_quote),
+        received_timestamp_ms=NOW - 100))
+    loop.tick()
+    if wrong_quote or not promoted:
+        assert not runtime.consumed
+        assert not loop._state["positions"]
+        assert loop._state["forecast_gate_assessments"][SYMBOL]["reason"] == (
+            "forecast_input_lineage" if wrong_quote else "forecast_not_promoted")
+    else:
+        assert runtime.consumed == ["typed-first-entry"]
+        assert loop._state["positions"][SYMBOL]["forecast_evidence"]["status"] == "ELIGIBLE"
 
 
 def test_constructor_initializes_optional_service_and_cycle_metrics(tmp_path, monkeypatch):
