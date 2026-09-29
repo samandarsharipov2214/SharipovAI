@@ -242,3 +242,39 @@ executable mode of the backup verifier is carried into this PR as well.
 Release remains conditional on exact-head CI, a fresh verified canonical backup,
 healthy PAPER-only deployment and post-deployment reconciliation. A busy SQLite
 checkpoint is reported as busy; it cannot justify manual WAL/SHM deletion.
+
+## Production acceptance follow-up — 29 September
+
+PR #469 merged at `19e6c8e6e469864921edda752872cc298056ffdc` after all seven
+head checks and the six applicable merged-main checks passed; the full suite had
+2,724 passing tests. The canonical updater deployed that exact SHA. Fresh checks
+confirmed checkout/build/OCI identity, healthy runtime, both HTTP health routes,
+unchanged protected files and all financial locks. Canonical history still has
+2,186 executions and 1,093 settlements, with unchanged hashes, reconciled cash,
+zero orphans/mismatches, no open positions and no new executions. Over 1,500 real
+SHADOW forecasts passed independent timestamp, quote and digest checks.
+
+Live acceptance exposed a remaining integration mismatch: the provider stores
+the captured quote time in `market_timestamp_ms`, but forecast validation received
+the later proposal `received_timestamp_ms`. The corrected call uses quote time;
+as-of, expiry, independent REST feature time and all promotion checks remain
+mandatory. Regression coverage reproduces a delayed packet, still rejects a
+different quote and keeps unpromoted evidence blocked. Synthetic reviewed models
+exist only in tests. The original failed holdout is also registered as consumed
+in production without reevaluation or a promotable v2 receipt.
+
+The successful deployment backup left a 2.37 GB WAL allocation available for reuse.
+Later automatic checkpoints reused that allocation, and the scheduled exporter
+correctly refused the aggregate source above its existing 20 GiB restore gate.
+Canonical SQLite connections now set a 64 MiB retained-journal limit. SQLite
+reclaims excess allocation only when the WAL safely resets; active readers and
+uncheckpointed data can exceed that size. A real SQLite regression keeps an old
+reader alive across a larger committed transaction, proves its snapshot remains
+valid, then verifies the normal reset releases space while every row survives.
+There is no manual sidecar deletion, forced checkpoint, history deletion, schema
+change or relaxed backup floor. See the
+[SQLite journal-size contract](https://www.sqlite.org/pragma.html#pragma_journal_size_limit).
+
+These acceptance corrections continue on the same trading-intelligence branch;
+the already merged PR is preserved. Their exact-head CI and canonical redeployment
+acceptance are separate requirements before the watchdog completion marker.

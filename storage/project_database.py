@@ -213,6 +213,10 @@ class ProjectDatabase:
                         time.sleep(min(0.01, remaining))
                 connection.execute("PRAGMA foreign_keys=ON")
                 connection.execute("PRAGMA busy_timeout=10000")
+                # SQLite may retain a backup-sized WAL indefinitely for reuse.
+                # Bound only the allocation after a safe WAL reset: readers and
+                # uncheckpointed transactions may still require a larger file.
+                connection.execute("PRAGMA journal_size_limit=67108864")
             yield connection
         finally:
             connection.close()

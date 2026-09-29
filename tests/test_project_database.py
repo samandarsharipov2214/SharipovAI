@@ -161,7 +161,8 @@ def test_sqlite_wal_nonbusy_failure_is_immediate_and_closes_connection(tmp_path,
         connections[0].execute("SELECT 1")
 
 
-@pytest.mark.parametrize("statement", ["PRAGMA foreign_keys=ON", "PRAGMA busy_timeout=10000"])
+@pytest.mark.parametrize("statement", ["PRAGMA foreign_keys=ON", "PRAGMA busy_timeout=10000",
+                                       "PRAGMA journal_size_limit=67108864"])
 def test_sqlite_later_setup_failure_closes_connection(tmp_path, monkeypatch, statement):
     connections = _wal_failure(monkeypatch, code=sqlite3.SQLITE_ERROR, failures=None, statement=statement)
     with pytest.raises(sqlite3.OperationalError):
@@ -241,3 +242,34 @@ def test_wal_fault_and_clock_do_not_leak_into_background_workers(tmp_path, monke
         assert pool.submit(worker).result(timeout=5) == 1
     assert connections == []
     assert time.monotonic() >= 0
+
+
+def test_sqlite_retained_wal_shrinks_after_reader_releases_without_losing_rows(tmp_path):
+    database = _db(tmp_path)
+    wal = tmp_path / "shared.db-wal"
+    with database.connect() as writer, database.connect() as reader:
+        limit = writer.execute("PRAGMA journal_size_limit").fetchone()[0]
+        assert limit == reader.execute("PRAGMA journal_size_limit").fetchone()[0] == 64 * 1024**2
+        writer.execute("PRAGMA wal_autocheckpoint=0")
+        writer.execute("CREATE TABLE preserved (id INTEGER PRIMARY KEY, payload BLOB)")
+        writer.execute("INSERT INTO preserved VALUES (0, zeroblob(65536))")
+        reader.execute("BEGIN")
+        assert reader.execute("SELECT count(*) FROM preserved").fetchone()[0] == 1
+        writer.execute("BEGIN IMMEDIATE")
+        writer.executemany("INSERT INTO preserved VALUES (?, zeroblob(65536))",
+                           ((i,) for i in range(1, 1101)))
+        writer.execute("COMMIT")
+        before = wal.stat().st_size
+        assert before > limit
+        checkpoint = writer.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+        assert checkpoint[1] > checkpoint[2]  # Reader still needs old frames.
+        assert wal.stat().st_size == before
+        assert reader.execute("SELECT count(*) FROM preserved").fetchone()[0] == 1
+        reader.execute("ROLLBACK")
+        checkpoint = writer.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+        assert checkpoint[1] == checkpoint[2]
+        # Ordinary next write resets/reuses the WAL; no manual file mutation.
+        writer.execute("INSERT INTO preserved VALUES (1101, zeroblob(65536))")
+        assert wal.stat().st_size <= limit
+        assert reader.execute("SELECT count(*), sum(length(payload)) FROM preserved").fetchone()[:] == (1102, 1102 * 65536)
+        assert reader.execute("PRAGMA quick_check").fetchone()[0] == "ok"
