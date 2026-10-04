@@ -1,0 +1,14 @@
+[Unit]
+Description=SharipovAI metadata-only future model readiness
+After=docker.service
+Requires=docker.service
+ConditionPathExists=/root/astra-sharipovai-engineering-DONE
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/sharipovai-repo
+ExecStart=/usr/bin/bash /opt/sharipovai-repo/deploy/vps/model_readiness_check.sh
+TimeoutStartSec=180
+Nice=15
+IOSchedulingClass=idle
+NoNewPrivileges=true

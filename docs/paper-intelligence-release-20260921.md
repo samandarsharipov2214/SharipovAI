@@ -278,3 +278,46 @@ change or relaxed backup floor. See the
 These acceptance corrections continue on the same trading-intelligence branch;
 the already merged PR is preserved. Their exact-head CI and canonical redeployment
 acceptance are separate requirements before the watchdog completion marker.
+
+## Final mission inspection — 4 October
+
+Remote main remains `7bfc9b66dd71bc745b7a5b581af4d77f46fb846e`; the production
+checkout/build/OCI remains `19e6c8e6e469864921edda752872cc298056ffdc`. The worktree
+and production checkout were clean. The original 3,279 trade/settlement content
+hashes are unchanged, all 2,186 executions reconcile, and all financial locks
+remain enabled. Database quick_check returned `ok` after 957.77 seconds. The
+42 delayed-lineage and retained-WAL focused tests pass.
+
+The fresh exact-main full-suite run
+[37182954469](https://github.com/samandarsharipov2214/SharipovAI/actions/runs/37182954469)
+found one failure among 2,730 tests: a cabinet test searched the entire payload
+for the word "demo", which appeared in a real news headline. The regression now
+uses an isolated headline containing that word and checks the actual canonical
+account authority fields. Production news content is preserved.
+
+Live organ observations were stale because the monitor sorted lifetime Risk,
+Portfolio and Decision Quality history every cycle. SQLite query plans confirmed
+temporary sorts despite LIMIT 1. Exact current Council trace identities already
+reference these immutable records. Following all five current decisions took
+0.054 seconds on the same production database. The monitor now uses those exact
+keys and event entity IDs, preserving original evidence timestamps and reporting
+missing or stale current evidence. No schema migration or new hot-path index is
+needed. Callers remain the safe installer, runtime/system health, watchdog and
+authenticated organ endpoints. Tests verify bounded identity reads, stale and
+missing evidence, per-organ failure isolation and unchanged authority.
+
+The [readiness mechanism](paper-model-readiness.md) and
+[frozen next-candidate specification](paper-next-model-specification.json) keep
+future evidence waiting outside Codex. Its tests cover provenance, missing labels,
+global boundary purge, source cursor integrity, six-hour cooldown and one request.
+Neither readiness nor this infrastructure change promotes the failed artifact.
+
+Deployment remains gated on a fresh canonical backup and verified recovery
+capacity. Inspection found a 1.975 GB retained WAL, a roughly 21.407 GB canonical
+database and approximately 23.1 GB free. The persistent source now exceeds the
+exporter's 20 GiB admission budget even excluding WAL/SHM. The prior successful
+archive is dated 29 September. The full isolated restore admission needs about
+32 GB, above available workspace. This PR does not relax either limit, delete
+history, force a checkpoint or edit production files to bypass release tooling.
+Rollback remains the retained previous OCI image and canonical updater; readiness
+rollback disables its timer while preserving its plan and one-shot claims.

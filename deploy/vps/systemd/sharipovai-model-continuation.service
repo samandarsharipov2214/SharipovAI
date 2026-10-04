@@ -1,0 +1,12 @@
+[Unit]
+Description=One requested Astra continuation after objective model readiness
+After=network-online.target docker.service
+ConditionPathExists=/root/astra-sharipovai-engineering-DONE
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/sharipovai-repo
+ExecStart=/usr/bin/bash /opt/sharipovai-repo/deploy/vps/model_continuation.sh
+TimeoutStartSec=infinity
+Nice=10
+IOSchedulingClass=idle

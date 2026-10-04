@@ -315,9 +315,11 @@ class AIOrganRuntimeMonitor:
             else:
                 blockers.append(f"critical: decision evidence module missing: {module_name}")
         try:
-            events = self.database.list_events(
-                "decision_quality", entity_type="decision_assessment", limit=1
-            )
+            events = [event for identity in self._current_decision_ids()
+                      for event in self.database.list_events(
+                          "decision_quality", entity_type="decision_assessment",
+                          entity_id=identity, limit=1)]
+            events.sort(key=lambda event: int(event.get("created_at_ms") or 0), reverse=True)
         except Exception as exc:
             blockers.append(f"decision evidence query failed: {type(exc).__name__}: {exc}")
         else:
@@ -392,7 +394,10 @@ class AIOrganRuntimeMonitor:
         label: str,
     ) -> None:
         try:
-            rows = list_json_items(self.database, namespace, limit=1, newest_first=True)
+            prefix = {"risk_assessments": "risk-", "portfolio_snapshots": "portfolio-"}[namespace]
+            rows = [row for identity in self._current_decision_ids()
+                    if (row := self.database.get_json(namespace, prefix + identity)) is not None]
+            rows.sort(key=lambda row: int(row.get("updated_at_ms") or 0), reverse=True)
         except Exception as exc:
             blockers.append(f"{label} evidence query failed: {type(exc).__name__}: {exc}")
             return
@@ -405,6 +410,17 @@ class AIOrganRuntimeMonitor:
             label,
             int(rows[0].get("updated_at_ms") or 0),
         )
+
+    def _current_decision_ids(self) -> list[str]:
+        # The trace is one row per symbol. The immutable evidence namespaces can
+        # contain millions of rows without an index ordered by update time.
+        # Follow exact current identities; never scan/sort lifetime history in a
+        # heartbeat or silently turn missing current evidence into healthy state.
+        traces = list_json_items(self.database, "council_decision_trace", limit=128)
+        return sorted({row["value"]["decision_id"] for row in traces
+                       if isinstance(row.get("value"), dict)
+                       and isinstance(row["value"].get("decision_id"), str)
+                       and row["value"]["decision_id"]})
 
     def _append_freshness(
         self,
