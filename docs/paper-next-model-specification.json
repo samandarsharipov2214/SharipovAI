@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "scope": "2ba720c9995d8d3653ba",
+  "owner": "learning_engine",
+  "symbols": [
+    "BNBUSDT",
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT",
+    "XRPUSDT"
+  ],
+  "family": "ridge_linear",
+  "features": [
+    "change_24h_percent/100",
+    "(ask-bid)/midpoint",
+    "log1p(turnover_24h)"
+  ],
+  "feature_policy": "independent feature_received_at_ms; verified nonfuture quote <=2s and REST features <=5s; immutable pre-horizon capture",
+  "target": "gross_midpoint_simple_return_fraction",
+  "horizon_seconds": 300,
+  "anchor_spacing_ms": 310001,
+  "label_tolerance_ms": 10000,
+  "split": "21 chronological train days, 7 calibration days, 8 untouched test days; global purge by physical label availability",
+  "development_search": {
+    "ridge": [
+      0.001,
+      0.01,
+      0.1,
+      1.0
+    ],
+    "expanding_train_days": [
+      [
+        0,
+        10,
+        14
+      ],
+      [
+        0,
+        14,
+        17
+      ],
+      [
+        0,
+        17,
+        21
+      ]
+    ],
+    "selection": "lowest mean fold MAE; exact ties select larger ridge; train-only standardization; zero and training-mean baselines mandatory; no test-driven retries"
+  },
+  "uncertainty": "95% nominal chronological calibration absolute residual radius; calibration cannot change features or hyperparameters",
+  "cost_model": "captured complete ExecutionCostModel parameters; fixed 10 USDT research notional; canonical BUY and SELL fee, spread, slippage and impact; midpoint denominator; strict 1.5x cost cushion",
+  "gates": {
+    "train_min": 500,
+    "calibration_min": 200,
+    "test_min": 200,
+    "source_days_min": 28,
+    "test_days_min": 7,
+    "coverage_min": 0.8,
+    "mae_zero_ratio_max": 0.98,
+    "rmse_better_than_zero": true,
+    "mae_better_than_training_mean": true,
+    "directional_accuracy_min": 0.52,
+    "interval_coverage_min": 0.9,
+    "actionable_min": 50,
+    "actionable_after_cost_mean_positive": true,
+    "stability": {
+      "chronological_folds_min": 3,
+      "each_fold_min": 50,
+      "each_fold_mae_strictly_better_than_zero": true,
+      "each_test_symbol_min": 50,
+      "each_test_regime_min": 50,
+      "each_group_mae_strictly_better_than_zero": true,
+      "group_counts_sum_to_test_count": true
+    },
+    "bias_abs_max_fraction_of_mae": 0.25
+  },
+  "holdout_policy": "Reserve future absolute dates and unique identity in ProjectDatabase at registration. Readiness sees metadata only. Fit/select on development only. Before evaluation consume the reserved range once in alpha_holdout_consumption. Failures remain consumed. Earlier observed shadow diagnostics and the failed legacy holdout are ineligible as final OOS.",
+  "promotion_policy": "Successful validation still requires reviewed immutable artifact binding; readiness has no promotion or execution authority. A failed development candidate may produce no model."
+}

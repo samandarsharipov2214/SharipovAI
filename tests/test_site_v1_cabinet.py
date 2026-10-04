@@ -155,6 +155,13 @@ def test_unauthenticated_cabinet_json_is_rejected(monkeypatch) -> None:
 
 def test_authenticated_cabinet_json_does_not_use_demo_api(monkeypatch) -> None:
     monkeypatch.delenv("SHARIPOVAI_DISABLE_AUTH", raising=False)
+    # News content is not an authority flag. A real headline may legitimately
+    # contain "demo"; isolate this test from the shared live news cache.
+    from news_monitor import storage as news_storage
+    headline = "Bank and SWIFT demo tokenized-equity dividends"
+    monkeypatch.setattr(news_storage, "load_news_state", lambda: {
+        "news": {"items": [{"title": headline, "source": "verified-test-source",
+                              "published_at": "2026-10-02T08:41:40+00:00"}]}})
     app = FastAPI()
     app.state.autonomous_paper_loop = FakeLoop(
         {
@@ -182,8 +189,9 @@ def test_authenticated_cabinet_json_does_not_use_demo_api(monkeypatch) -> None:
     assert payload["equity"] == 42.5
     assert payload["wait"] == "WAIT"
     assert payload["last_reason"] == "drawdown wait"
-    assert "demo" not in response.text.lower()
     assert payload["source_of_truth"] == "autonomous_paper"
+    assert payload["mode"] == "AUTONOMOUS_PAPER"
+    assert payload["news"][0]["title"] == headline
 
 
 def test_public_site_v1_html_and_login_redirect(monkeypatch) -> None:

@@ -8,7 +8,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from tools.backup_integrity import BackupIntegrityError, verify_snapshot
+from tools.backup_integrity import BackupIntegrityError, copy_snapshot_data, verify_snapshot
 
 
 class RestoreError(BackupIntegrityError):
@@ -42,7 +42,7 @@ def restore(snapshot: Path, destination: Path) -> dict[str, object]:
     moved_existing = False
     installed_new = False
     try:
-        shutil.copytree(source, envelope / "data", dirs_exist_ok=False)
+        copy_snapshot_data(source, envelope / "data", manifest)
         (envelope / "manifest.json").write_text(
             json.dumps(manifest, ensure_ascii=False, sort_keys=True),
             encoding="utf-8",

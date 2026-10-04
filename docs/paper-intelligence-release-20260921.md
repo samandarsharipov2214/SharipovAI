@@ -278,3 +278,115 @@ change or relaxed backup floor. See the
 These acceptance corrections continue on the same trading-intelligence branch;
 the already merged PR is preserved. Their exact-head CI and canonical redeployment
 acceptance are separate requirements before the watchdog completion marker.
+
+## Final mission inspection — 4 October
+
+Remote main remains `7bfc9b66dd71bc745b7a5b581af4d77f46fb846e`; the production
+checkout/build/OCI remains `19e6c8e6e469864921edda752872cc298056ffdc`. The worktree
+and production checkout were clean. The original 3,279 trade/settlement content
+hashes are unchanged, all 2,186 executions reconcile, and all financial locks
+remain enabled. Database quick_check returned `ok` after 957.77 seconds. The
+42 delayed-lineage and retained-WAL focused tests pass.
+
+The fresh exact-main full-suite run
+[37182954469](https://github.com/samandarsharipov2214/SharipovAI/actions/runs/37182954469)
+found one failure among 2,730 tests: a cabinet test searched the entire payload
+for the word "demo", which appeared in a real news headline. The regression now
+uses an isolated headline containing that word and checks the actual canonical
+account authority fields. Production news content is preserved.
+
+Live organ observations were stale because the monitor sorted lifetime Risk,
+Portfolio and Decision Quality history every cycle. SQLite query plans confirmed
+temporary sorts despite LIMIT 1. Exact current Council trace identities already
+reference these immutable records. Following all five current decisions took
+0.054 seconds on the same production database. The monitor now uses those exact
+keys and event entity IDs, preserving original evidence timestamps and reporting
+missing or stale current evidence. No schema migration or new hot-path index is
+needed. Callers remain the safe installer, runtime/system health, watchdog and
+authenticated organ endpoints. Tests verify bounded identity reads, stale and
+missing evidence, per-organ failure isolation and unchanged authority.
+
+The [readiness mechanism](paper-model-readiness.md) and
+[frozen next-candidate specification](paper-next-model-specification.json) keep
+future evidence waiting outside Codex. Its tests cover provenance, missing labels,
+global boundary purge, source cursor integrity, six-hour cooldown and one request.
+Neither readiness nor this infrastructure change promotes the failed artifact.
+
+Deployment remains gated on a fresh canonical backup and verified recovery
+capacity. Inspection found a 1.975 GB retained WAL, a roughly 21.407 GB canonical
+database and approximately 23.1 GB free. The persistent source now exceeds the
+exporter's 20 GiB admission budget even excluding WAL/SHM. The prior successful
+archive is dated 29 September. The full isolated restore admission needs about
+32 GB, above available workspace. This PR does not relax either limit, delete
+history, force a checkpoint or edit production files to bypass release tooling.
+Rollback remains the retained previous OCI image and canonical updater; readiness
+rollback disables its timer while preserving its plan and one-shot claims.
+
+## PR 470 review follow-up — 4 October
+
+Readiness now counts the full frozen window's expected anchors, including
+unpersisted observation gaps. Incremental state and the plan bind the checker
+version and source hashes. Completed scan batches survive deadline interruptions.
+Canonical integral-float quote timestamps use the same validator as forecasts;
+bools, strings, fractional and nonfinite timestamps remain invalid. The host
+installer records failed mutations, uses the wrapper lock before activating its
+timer, and preserves checker error output and exit codes. Tests exercise these
+failure paths with disposable databases and mocked host commands.
+
+The dependency audit identified PyJWT 2.13.0 vulnerabilities. Its exact pin is
+updated to 2.15.1; upstream fixes are documented in the
+[PyJWT changelog](https://pyjwt.readthedocs.io/en/stable/changelog.html).
+Authentication regression tests and exact-commit CI remain mandatory.
+
+The source database has grown beyond the existing 20 GiB backup admission limit.
+The VPS has no second disk, and available workspace cannot satisfy the backup
+and isolated-restore requirements. This is a release blocker, not authorization
+to skip backup, weaken integrity, delete history, or mark engineering complete.
+
+The reviewed backup capacity correction raises the shared, bounded source,
+archive and restore admission envelope to 32 GiB. Source identity checks,
+streamed size limits, manifests and hashes, safe path checks, database
+quick_check, the 20 GiB exporter free-space floor, the 512 MiB extra reserve,
+and the isolated restore's 2 GiB runtime reserve remain mandatory. Logical
+restore reserves up to 1.5 times database size (capped at the envelope), so the
+larger envelope does not authorize using this VPS's insufficient workspace.
+Backup/restore clients must use the matching reviewed tooling. Sparse-file and
+mock-export tests cover a 22 GiB source and rejection above 32 GiB without
+allocating that volume in CI. No production history is compressed or deleted.
+
+## Final PR 470 review follow-up — 4 October evening
+
+All current Council decision identities must resolve before Risk, Portfolio or
+Decision Quality can report healthy evidence. Freshness uses the oldest current
+assessment, so one fresh symbol cannot hide another symbol's stale record.
+The bounded readiness checker now fixes its physical event watermark before
+reading the validation clock; concurrent later writers remain for the next cycle.
+The host installer refuses dirty tracked/staged/untracked inputs before mutation,
+rechecks the checkout, and compares installed units to the committed Git blobs.
+Native archive extraction, restore copying and restore drills preserve the same
+2 GiB runtime reserve with admission and per-write free-space checks. Logical
+restore's existing larger workspace gate remains unchanged.
+
+The live evening reconciliation again preserves all 3,279 trade/settlement hashes:
+2,186 executions, 1,093 settlements, no orphans, PnL/Learning mismatches, accounting
+issues, open positions or pending executions. Canonical active cash remains
+100.18884118560003 USDT. Production is still on `19e6c8e6`, with the kill switch,
+sandbox and PAPER enabled and every exchange execution bridge disabled.
+
+The latest completed descriptive research contains 34,274 real SHADOW forecasts
+over 5.4215 source days, with 32,071 valid 300-second labels (93.57% coverage).
+The 810,918 earlier observations have no independent feature timestamps and are
+excluded from prospective promotion evidence. Of 264,255 later observations,
+263,885 verified quotes carry that timestamp. There are 6,625 valid nonoverlapping
+labels. Among 34,382 joined flat-account Council decisions, 11,821 (34.38%) have
+final bearish intent. The 11,307 bearish decisions with labels have mean short
+proxy return -0.2575% after exchange costs, before borrow/funding/liquidation
+costs. These data support retaining spot long-only behavior. The opened diagnostic
+cohort remains ineligible for the frozen future final OOS; no model is promoted.
+
+The current process reports five-second cadence, zero dropped/failed observer
+batches, 52,962 metadata cache hits and one source refresh across 52,963 cycles.
+Persisted organ evidence is stale under the old lifetime-sorting monitor, which
+is why the bounded monitor correction still requires production deployment.
+Backup/restore workspace remains the external release prerequisite. No completion
+marker is justified until the exact final main is deployed and accepted.

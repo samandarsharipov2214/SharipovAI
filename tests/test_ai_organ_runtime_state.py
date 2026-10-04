@@ -179,3 +179,62 @@ def test_snapshot_cannot_refresh_stale_health_by_reading_it(tmp_path, monkeypatc
     assert security["status"] == "degraded"
     assert report["checked_at_ms"] == 1000
     assert report["observed_at_ms"] == 1_000_000
+
+
+def test_heartbeat_follows_current_decisions_without_sorting_history(tmp_path, monkeypatch):
+    import dashboard.ai_organ_state_api as module
+    import storage.project_database as database_module
+    now = [1000]
+    monkeypatch.setattr(database_module, "_now_ms", lambda: now[0])
+    configure_safe(monkeypatch)
+    db = database(tmp_path)
+    identity = "paper-BTCUSDT-1000"
+    db.put_json("council_decision_trace", "BTCUSDT", {"decision_id": identity})
+    for namespace, prefix in (("risk_assessments", "risk-"), ("portfolio_snapshots", "portfolio-")):
+        db.put_json(namespace, prefix + identity, {"decision_id": identity})
+        now[0] = 999_999
+        db.put_json(namespace, "unrelated-newer-history", {})
+        now[0] = 1000
+    db.append_event("decision_quality", "decision_assessment", identity, {}, created_at_ms=1000)
+    original_list = module.list_json_items
+    def bounded_list(database, namespace, **kwargs):
+        assert namespace == "council_decision_trace"
+        return original_list(database, namespace, **kwargs)
+    monkeypatch.setattr(module, "list_json_items", bounded_list)
+    original_events = db.list_events
+    def bounded_events(namespace, **kwargs):
+        assert kwargs.get("entity_id") == identity
+        return original_events(namespace, **kwargs)
+    monkeypatch.setattr(db, "list_events", bounded_events)
+    monitor = SafeAIOrganRuntimeMonitor(prepared_app(db), db, clock_ms=lambda: 1000)
+    assert monitor._risk_engine()[1] == []
+    assert monitor._portfolio_engine()[1] == []
+    assert monitor._decision_quality()[1] == []
+    monitor.clock_ms = lambda: 1_000_000
+    for probe in (monitor._risk_engine, monitor._portfolio_engine, monitor._decision_quality):
+        assert any("stale" in reason for reason in probe()[1])
+    db.put_json("council_decision_trace", "BTCUSDT", {"decision_id": "missing-current-evidence"})
+    assert any("no persisted" in reason for reason in monitor._risk_engine()[1])
+
+
+def test_every_current_symbol_requires_fresh_evidence(tmp_path, monkeypatch):
+    import storage.project_database as database_module
+    configure_safe(monkeypatch)
+    now = [1_000_000]
+    monkeypatch.setattr(database_module, "_now_ms", lambda: now[0])
+    db = database(tmp_path)
+    monitor = SafeAIOrganRuntimeMonitor(prepared_app(db), db, clock_ms=lambda: 1_000_000)
+    for symbol in ("BTCUSDT", "ETHUSDT"):
+        db.put_json("council_decision_trace", symbol, {"decision_id": symbol})
+    for namespace, prefix in (("risk_assessments", "risk-"), ("portfolio_snapshots", "portfolio-")):
+        db.put_json(namespace, prefix + "BTCUSDT", {})
+    db.append_event("decision_quality", "decision_assessment", "BTCUSDT", {}, created_at_ms=now[0])
+    probes = (monitor._risk_engine, monitor._portfolio_engine, monitor._decision_quality)
+    for probe in probes:
+        assert any("no persisted" in reason and "ETHUSDT" in reason for reason in probe()[1])
+    now[0] = 1000
+    for namespace, prefix in (("risk_assessments", "risk-"), ("portfolio_snapshots", "portfolio-")):
+        db.put_json(namespace, prefix + "ETHUSDT", {})
+    db.append_event("decision_quality", "decision_assessment", "ETHUSDT", {}, created_at_ms=now[0])
+    for probe in probes:
+        assert any("stale" in reason for reason in probe()[1])
