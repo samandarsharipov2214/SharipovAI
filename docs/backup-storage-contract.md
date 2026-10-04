@@ -37,8 +37,8 @@ the existing restore verifier remains compatible. Reverting restores the stricte
 two-copy preflight and can block backups again when disk is tight.
 
 The restore verifier's independent 5 GiB per-file limit also rejected the real
-6+ GiB canonical SQLite database. Its per-file budget now equals the existing
-20 GiB total snapshot budget; aggregate extraction limits, member counts, path
+6+ GiB canonical SQLite database. Its per-file budget equals the bounded
+total snapshot budget; aggregate extraction limits, member counts, path
 validation, symlink rejection and exact manifest hashes remain enforced.
 
 Verification: `tests/test_backup_phase_budget.py` exercises insufficient/exact
@@ -61,7 +61,7 @@ Each stream has a hash, byte/statement counts, source logical size and quick_che
 result. The compressed bytes are read back before archive publication. Neither
 source DB nor WAL is copied at file level. Non-SQLite files retain existing capture
 semantics. Consumption is checked per compressed write with a fixed byte budget;
-a source larger than the existing 20 GiB restore envelope is rejected.
+a source larger than the restore envelope is rejected.
 
 `verify_snapshot` accepts both schemas. `restore_verified_backup` and
 `isolated_restore_drill` verify schema-2 archives, then materialize SQLite only in
@@ -88,3 +88,19 @@ archives are always protected, even if those two alone exceed the byte budget;
 older archives are considered only within the remaining budget. This prevents
 seven growing archives from recreating the staging deadlock. Pruning still runs
 only after successful publication under the exporter lock.
+
+## October 2026 capacity admission
+
+The canonical database now exceeds 20 GiB. Source, archive and restore limits
+share a bounded 32 GiB envelope. This increases accepted dataset size while
+preserving the exporter floor, reserve, hashes, path checks and integrity checks.
+Logical materialization still reserves 1.5x source size (capped at 32 GiB) plus
+2 GiB runtime headroom. The production VPS currently lacks that workspace.
+
+Native archive extraction admits each complete member before creating it;
+verified restoration and drills admit the entire copy before writing data.
+Both preserve 2 GiB runtime headroom plus 1 MiB write slack, enforce a fixed
+allocation budget, and check current free space before every 1 MiB write.
+Concurrent disk consumption aborts staging and cannot install a partial restore.
+Tests cover initial insufficiency, external consumption during all three paths,
+unchanged source/live destinations, and a simulated 22 GiB capacity boundary.

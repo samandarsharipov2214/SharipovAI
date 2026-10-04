@@ -161,6 +161,56 @@ def test_incremental_database_scan_reads_only_canonical_opportunities(prepared):
         check(db, now_ms=at + 2 * INTERVAL_MS)
 
 
+def test_live_watermark_precedes_validation_clock_and_defers_later_writers(prepared, monkeypatch):
+    from contextlib import contextmanager
+    import scripts.paper_forecast_readiness as runner
+    db, plan = prepared
+    at = plan["source_start_ms"]
+    clock = [at]
+    original = db.connect
+    inserted = [False]
+
+    class Connection:
+        def __init__(self, raw):
+            self.raw = raw
+
+        def __getattr__(self, key):
+            return getattr(self.raw, key)
+
+        def execute(self, sql, params=()):
+            if sql.startswith("SELECT coalesce(max(rowid)") and not inserted[0]:
+                inserted[0] = True
+                # Writer commits after invocation but before the watermark.
+                clock[0] += 100
+                e = event(plan, 1, clock[0] - 1)
+                db.append_event("paper_economic_opportunities:" + plan["scope"], "opportunity", "one",
+                                e["value"], created_at_ms=e["stored_at_ms"])
+            return self.raw.execute(sql, params)
+
+    @contextmanager
+    def connect():
+        with original() as raw:
+            yield Connection(raw)
+
+    def validation_clock():
+        assert inserted[0], "clock must follow the source watermark"
+        e = event(plan, 2, clock[0] + 1)
+        db.append_event("paper_economic_opportunities:" + plan["scope"], "opportunity", "two",
+                        e["value"], created_at_ms=e["stored_at_ms"])
+        return clock[0] / 1000
+
+    monkeypatch.setattr(db, "connect", connect)
+    monkeypatch.setattr(runner.time, "time", validation_clock)
+    # ProjectDatabase's own clock must remain independent of this simulated read.
+    monkeypatch.setattr("storage.project_database._now_ms", lambda: clock[0])
+    result = check(db)
+    state = db.get_json(NAMESPACE, "state")["value"]
+    assert result["source_rows"] == 1 and not state["fatal_errors"]
+    result = check(db, now_ms=clock[0] + INTERVAL_MS)
+    assert result["source_rows"] == 2
+    assert not db.get_json(NAMESPACE, "state")["value"]["fatal_errors"]
+
+
 def test_unpersisted_source_gaps_cannot_report_full_coverage(prepared):
     _, plan = prepared
     state = supported_state(plan)

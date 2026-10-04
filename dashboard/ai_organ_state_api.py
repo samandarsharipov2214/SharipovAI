@@ -315,11 +315,14 @@ class AIOrganRuntimeMonitor:
             else:
                 blockers.append(f"critical: decision evidence module missing: {module_name}")
         try:
-            events = [event for identity in self._current_decision_ids()
-                      for event in self.database.list_events(
-                          "decision_quality", entity_type="decision_assessment",
-                          entity_id=identity, limit=1)]
-            events.sort(key=lambda event: int(event.get("created_at_ms") or 0), reverse=True)
+            events = []
+            for identity in self._current_decision_ids():
+                current = self.database.list_events(
+                    "decision_quality", entity_type="decision_assessment",
+                    entity_id=identity, limit=1)
+                if not current:
+                    blockers.append(f"no persisted decision_assessment evidence for {identity}")
+                events.extend(current)
         except Exception as exc:
             blockers.append(f"decision evidence query failed: {type(exc).__name__}: {exc}")
         else:
@@ -330,7 +333,7 @@ class AIOrganRuntimeMonitor:
                     evidence,
                     blockers,
                     "decision_assessment",
-                    int(events[0].get("created_at_ms") or 0),
+                    min(int(event.get("created_at_ms") or 0) for event in events),
                 )
         return evidence, blockers
 
@@ -395,9 +398,13 @@ class AIOrganRuntimeMonitor:
     ) -> None:
         try:
             prefix = {"risk_assessments": "risk-", "portfolio_snapshots": "portfolio-"}[namespace]
-            rows = [row for identity in self._current_decision_ids()
-                    if (row := self.database.get_json(namespace, prefix + identity)) is not None]
-            rows.sort(key=lambda row: int(row.get("updated_at_ms") or 0), reverse=True)
+            rows = []
+            for identity in self._current_decision_ids():
+                row = self.database.get_json(namespace, prefix + identity)
+                if row is None:
+                    blockers.append(f"no persisted {label} evidence for {identity}")
+                else:
+                    rows.append(row)
         except Exception as exc:
             blockers.append(f"{label} evidence query failed: {type(exc).__name__}: {exc}")
             return
@@ -408,7 +415,7 @@ class AIOrganRuntimeMonitor:
             evidence,
             blockers,
             label,
-            int(rows[0].get("updated_at_ms") or 0),
+            min(int(row.get("updated_at_ms") or 0) for row in rows),
         )
 
     def _current_decision_ids(self) -> list[str]:

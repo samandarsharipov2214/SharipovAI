@@ -353,3 +353,40 @@ larger envelope does not authorize using this VPS's insufficient workspace.
 Backup/restore clients must use the matching reviewed tooling. Sparse-file and
 mock-export tests cover a 22 GiB source and rejection above 32 GiB without
 allocating that volume in CI. No production history is compressed or deleted.
+
+## Final PR 470 review follow-up — 4 October evening
+
+All current Council decision identities must resolve before Risk, Portfolio or
+Decision Quality can report healthy evidence. Freshness uses the oldest current
+assessment, so one fresh symbol cannot hide another symbol's stale record.
+The bounded readiness checker now fixes its physical event watermark before
+reading the validation clock; concurrent later writers remain for the next cycle.
+The host installer refuses dirty tracked/staged/untracked inputs before mutation,
+rechecks the checkout, and compares installed units to the committed Git blobs.
+Native archive extraction, restore copying and restore drills preserve the same
+2 GiB runtime reserve with admission and per-write free-space checks. Logical
+restore's existing larger workspace gate remains unchanged.
+
+The live evening reconciliation again preserves all 3,279 trade/settlement hashes:
+2,186 executions, 1,093 settlements, no orphans, PnL/Learning mismatches, accounting
+issues, open positions or pending executions. Canonical active cash remains
+100.18884118560003 USDT. Production is still on `19e6c8e6`, with the kill switch,
+sandbox and PAPER enabled and every exchange execution bridge disabled.
+
+The latest completed descriptive research contains 34,274 real SHADOW forecasts
+over 5.4215 source days, with 32,071 valid 300-second labels (93.57% coverage).
+The 810,918 earlier observations have no independent feature timestamps and are
+excluded from prospective promotion evidence. Of 264,255 later observations,
+263,885 verified quotes carry that timestamp. There are 6,625 valid nonoverlapping
+labels. Among 34,382 joined flat-account Council decisions, 11,821 (34.38%) have
+final bearish intent. The 11,307 bearish decisions with labels have mean short
+proxy return -0.2575% after exchange costs, before borrow/funding/liquidation
+costs. These data support retaining spot long-only behavior. The opened diagnostic
+cohort remains ineligible for the frozen future final OOS; no model is promoted.
+
+The current process reports five-second cadence, zero dropped/failed observer
+batches, 52,962 metadata cache hits and one source refresh across 52,963 cycles.
+Persisted organ evidence is stale under the old lifetime-sorting monitor, which
+is why the bounded monitor correction still requires production deployment.
+Backup/restore workspace remains the external release prerequisite. No completion
+marker is justified until the exact final main is deployed and accepted.

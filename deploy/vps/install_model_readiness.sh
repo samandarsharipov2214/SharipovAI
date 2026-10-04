@@ -5,6 +5,12 @@ umask 077
 APP_DIR=${APP_DIR:-/opt/sharipovai-repo}
 cd "$APP_DIR"
 expected=$(git rev-parse HEAD)
+require_reviewed_inputs() {
+  [[ "$(git rev-parse HEAD)" == "$expected" ]] || { echo 'readiness checkout changed' >&2; return 1; }
+  [[ -z "$(git status --porcelain --untracked-files=all)" ]] || { echo 'readiness requires a clean committed checkout' >&2; return 1; }
+  git diff --quiet "$expected" -- deploy/vps docs/paper-next-model-specification.json
+}
+require_reviewed_inputs
 docker exec -i sharipovai python - "$expected" <<'PY'
 import os,sys
 from storage import ProjectChangeLedger, ProjectDatabase
@@ -50,13 +56,17 @@ else:
  register(db,now_ms=int(time.time()*1000),template=template)
 PY
 for name in sharipovai-model-readiness.service sharipovai-model-readiness.timer sharipovai-model-continuation.service; do
+  require_reviewed_inputs
   install -m 0644 "deploy/vps/systemd/$name" "/etc/systemd/system/$name"
+  git show "$expected:deploy/vps/systemd/$name" | cmp - "/etc/systemd/system/$name"
 done
+require_reviewed_inputs
 systemctl daemon-reload
 # Finish the initial check under the service lock before the timer can elapse.
 bash deploy/vps/model_readiness_check.sh
 systemctl enable --now sharipovai-model-readiness.timer
 systemctl is-enabled --quiet sharipovai-model-readiness.timer
+require_reviewed_inputs
 docker exec -i sharipovai python - "$expected" <<'PY'
 import sys
 from storage import ProjectChangeLedger,ProjectDatabase

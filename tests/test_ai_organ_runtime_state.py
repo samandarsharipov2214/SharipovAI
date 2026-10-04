@@ -215,3 +215,26 @@ def test_heartbeat_follows_current_decisions_without_sorting_history(tmp_path, m
         assert any("stale" in reason for reason in probe()[1])
     db.put_json("council_decision_trace", "BTCUSDT", {"decision_id": "missing-current-evidence"})
     assert any("no persisted" in reason for reason in monitor._risk_engine()[1])
+
+
+def test_every_current_symbol_requires_fresh_evidence(tmp_path, monkeypatch):
+    import storage.project_database as database_module
+    configure_safe(monkeypatch)
+    now = [1_000_000]
+    monkeypatch.setattr(database_module, "_now_ms", lambda: now[0])
+    db = database(tmp_path)
+    monitor = SafeAIOrganRuntimeMonitor(prepared_app(db), db, clock_ms=lambda: 1_000_000)
+    for symbol in ("BTCUSDT", "ETHUSDT"):
+        db.put_json("council_decision_trace", symbol, {"decision_id": symbol})
+    for namespace, prefix in (("risk_assessments", "risk-"), ("portfolio_snapshots", "portfolio-")):
+        db.put_json(namespace, prefix + "BTCUSDT", {})
+    db.append_event("decision_quality", "decision_assessment", "BTCUSDT", {}, created_at_ms=now[0])
+    probes = (monitor._risk_engine, monitor._portfolio_engine, monitor._decision_quality)
+    for probe in probes:
+        assert any("no persisted" in reason and "ETHUSDT" in reason for reason in probe()[1])
+    now[0] = 1000
+    for namespace, prefix in (("risk_assessments", "risk-"), ("portfolio_snapshots", "portfolio-")):
+        db.put_json(namespace, prefix + "ETHUSDT", {})
+    db.append_event("decision_quality", "decision_assessment", "ETHUSDT", {}, created_at_ms=now[0])
+    for probe in probes:
+        assert any("stale" in reason for reason in probe()[1])

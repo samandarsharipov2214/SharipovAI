@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from tools.backup_integrity import BackupIntegrityError, verify_snapshot
+from tools.backup_integrity import BackupIntegrityError, copy_snapshot_data, verify_snapshot
 
 
 def _new_drill_directory(destination_root: Path, source: Path) -> Path:
@@ -53,7 +53,7 @@ def run_restore_drill(snapshot: Path, destination_root: Path) -> dict[str, Any]:
     try:
         restored_snapshot.mkdir()
         shutil.copy2(source / "manifest.json", restored_snapshot / "manifest.json")
-        shutil.copytree(source / "data", restored_snapshot / "data")
+        copy_snapshot_data(source / "data", restored_snapshot / "data", manifest)
         from tools.sqlite_logical_restore import materialize
         materialize(restored_snapshot, manifest)
         restored_manifest = verify_snapshot(restored_snapshot)

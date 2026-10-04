@@ -76,6 +76,53 @@ def test_restore_rejects_tampered_snapshot_without_touching_destination(tmp_path
     assert original.read_text(encoding="utf-8") == "keep"
 
 
+@pytest.mark.parametrize("operation", ["extract", "restore", "drill"])
+@pytest.mark.parametrize("pressure", ["initial", "concurrent"])
+def test_native_restore_paths_preserve_runtime_reserve(tmp_path, monkeypatch, operation, pressure):
+    from types import SimpleNamespace
+    import tools.backup_integrity as integrity
+    from tools.isolated_restore_drill import run_restore_drill
+    snapshot = _snapshot(tmp_path, b"x" * (2 * 1024**2))
+    archive = _archive(snapshot, tmp_path / "source.tar.gz")
+    destination = tmp_path / "destination"
+    if operation == "restore":
+        destination.mkdir()
+        (destination / "keep").write_text("unchanged")
+    floor = integrity.RESTORE_RESERVE_BYTES + 1024**2
+    free = [floor - 1 if pressure == "initial" else floor + 8 * 1024**2]
+    monkeypatch.setattr(integrity.shutil, "disk_usage", lambda _: SimpleNamespace(free=free[0]))
+    if pressure == "concurrent":
+        original = integrity.RestoreWorkspace.write
+        def competing_writer(self, output, chunk):
+            original(self, output, chunk)
+            free[0] = floor - 1
+        monkeypatch.setattr(integrity.RestoreWorkspace, "write", competing_writer)
+    action = {"extract": lambda: extract_verified_archive(archive, destination),
+              "restore": lambda: restore(snapshot, destination),
+              "drill": lambda: run_restore_drill(snapshot, destination)}[operation]
+    with pytest.raises(BackupIntegrityError, match="runtime reserve protected"):
+        action()
+    assert (snapshot / "data/sharipovai_shared.db").stat().st_size == 2 * 1024**2
+    if operation == "restore":
+        assert (destination / "keep").read_text() == "unchanged"
+        assert not (destination / "sharipovai_shared.db").exists()
+    elif operation == "extract":
+        assert not destination.exists()
+
+
+def test_native_large_envelope_requires_full_capacity_without_allocating_it(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import tools.backup_integrity as integrity
+    required = 22 * 1024**3
+    floor = integrity.RESTORE_RESERVE_BYTES + 1024**2
+    free = [floor + required - 1]
+    monkeypatch.setattr(integrity.shutil, "disk_usage", lambda _: SimpleNamespace(free=free[0]))
+    with pytest.raises(BackupIntegrityError, match="insufficient restore workspace"):
+        integrity.RestoreWorkspace(tmp_path, required)
+    free[0] += 1
+    assert integrity.RestoreWorkspace(tmp_path, required).remaining == required
+
+
 def test_restore_rejects_path_traversal(tmp_path: Path) -> None:
     snapshot = _snapshot(tmp_path)
     manifest_path, manifest = _manifest(snapshot)

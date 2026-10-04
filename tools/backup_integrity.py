@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import tarfile
 import tempfile
 from datetime import datetime
@@ -20,6 +21,7 @@ MAX_TOTAL_BYTES = 32 * 1024 * 1024 * 1024
 # envelope includes archive metadata; actual restore workspace is still reserved
 # independently and checked continuously by sqlite_logical_restore.
 MAX_FILE_BYTES = MAX_TOTAL_BYTES
+RESTORE_RESERVE_BYTES = 2 * 1024**3
 MAX_RELATIVE_PATH_LENGTH = 512
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _WINDOWS_RESERVED = {
@@ -31,6 +33,42 @@ _WINDOWS_RESERVED = {
 
 class BackupIntegrityError(RuntimeError):
     pass
+
+
+class RestoreWorkspace:
+    """Bound allocation and preserve runtime headroom during extraction/copy."""
+
+    def __init__(self, root: Path, required_bytes: int) -> None:
+        self.root = root
+        self.floor = RESTORE_RESERVE_BYTES + 1024**2  # delayed allocation slack
+        self.remaining = shutil.disk_usage(root).free - self.floor
+        self.admit(required_bytes)
+
+    def admit(self, amount: int) -> None:
+        if amount < 0 or amount > self.remaining or shutil.disk_usage(self.root).free < self.floor + amount:
+            raise BackupIntegrityError("insufficient restore workspace; runtime reserve protected")
+
+    def write(self, output, chunk: bytes) -> None:
+        self.admit(len(chunk))
+        output.write(chunk)
+        self.remaining -= len(chunk)
+
+
+def copy_snapshot_data(source: Path, destination: Path, manifest: dict) -> None:
+    """Copy a verified data tree with full admission and per-write guards."""
+    budget = RestoreWorkspace(destination.parent, sum(item["bytes"] for item in manifest["files"]))
+
+    def copy(source_file, target_file):
+        source_file, target_file = Path(source_file), Path(target_file)
+        if source_file.is_symlink() or not source_file.is_file():
+            raise BackupIntegrityError("snapshot source changed during copy")
+        with source_file.open("rb") as incoming, target_file.open("xb") as output:
+            while chunk := incoming.read(1024**2):
+                budget.write(output, chunk)
+        shutil.copystat(source_file, target_file)
+        return str(target_file)
+
+    shutil.copytree(source, destination, copy_function=copy)
 
 
 def sha256(path: Path) -> str:
@@ -185,6 +223,7 @@ def _extract_archive_members(archive: Path, destination: Path) -> None:
     file_count = 0
     member_count = 0
     total_bytes = 0
+    budget = RestoreWorkspace(destination, 0)
     try:
         opened = tarfile.open(archive, mode="r:gz")
     except (OSError, tarfile.TarError) as exc:
@@ -215,6 +254,9 @@ def _extract_archive_members(archive: Path, destination: Path) -> None:
             total_bytes += member.size
             if total_bytes > MAX_TOTAL_BYTES:
                 raise BackupIntegrityError("backup archive exceeds total size limit")
+            # Tar is streamed: admit each complete declared member before
+            # creating it, then check every write against external consumption.
+            budget.admit(member.size)
             target.parent.mkdir(parents=True, exist_ok=True)
             stream = opened.extractfile(member)
             if stream is None:
@@ -225,7 +267,7 @@ def _extract_archive_members(archive: Path, destination: Path) -> None:
                     chunk = stream.read(min(1024 * 1024, remaining))
                     if not chunk:
                         raise BackupIntegrityError(f"truncated archive member: {key}")
-                    output.write(chunk)
+                    budget.write(output, chunk)
                     remaining -= len(chunk)
                 if stream.read(1):
                     raise BackupIntegrityError(f"archive member size mismatch: {key}")

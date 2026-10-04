@@ -39,9 +39,17 @@ def register(db: ProjectDatabase, *, now_ms: int, template: dict) -> dict:
     return plan
 
 
-def check(db: ProjectDatabase, *, now_ms: int) -> dict:
+def check(db: ProjectDatabase, *, now_ms: int | None = None) -> dict:
     if db.backend != "sqlite":
         raise ValueError("readiness_cursor_requires_sqlite")
+    # Fix the physical watermark before taking the validation clock. Writers
+    # committed before this SELECT cannot appear to be from the future merely
+    # because registration/state reads took time. Later writers stay for the
+    # next cycle. Explicit clocks are for deterministic offline checks/tests.
+    with db.connect() as c:
+        high = c.execute("SELECT coalesce(max(rowid),0) FROM project_events").fetchone()[0]
+    if now_ms is None:
+        now_ms = int(time.time() * 1000)
     plan_record, record = db.get_json(NAMESPACE, "plan"), db.get_json(NAMESPACE, "state")
     if not plan_record or not record:
         raise ValueError("frozen_plan_or_state_missing")
@@ -58,7 +66,6 @@ def check(db: ProjectDatabase, *, now_ms: int) -> dict:
     deadline = time.monotonic() + 90
     processed = 0
     with db.connect() as c:
-        high = c.execute("SELECT coalesce(max(rowid),0) FROM project_events").fetchone()[0]
         if high < state["cursor"]:
             raise ValueError("canonical_event_cursor_regressed")
         if state["anchor_rowid"] is not None:
@@ -110,7 +117,7 @@ def main() -> int:
     db = ProjectDatabase()
     now = int(time.time() * 1000)
     try:
-        result = register(db, now_ms=now, template=json.loads(args.register.read_text())) if args.register else check(db, now_ms=now)
+        result = register(db, now_ms=now, template=json.loads(args.register.read_text())) if args.register else check(db)
     except Exception as error:
         print(json.dumps({"ready": False, "request_continuation": False, "error_type": type(error).__name__,
                           "error": str(error) if isinstance(error, ValueError) else "readiness_check_failed"}))
