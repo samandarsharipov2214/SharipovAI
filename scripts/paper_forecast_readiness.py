@@ -4,11 +4,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import sqlite3
 import time
 from pathlib import Path
 
 from autonomous_trading.forecast_contract import digest
-from learning_engine.forecast_readiness import DAY, INTERVAL_MS, NAMESPACE, advance, new_state, readiness
+from learning_engine.forecast_readiness import DAY, INTERVAL_MS, NAMESPACE, advance, algorithm_identity, new_state, readiness
 from storage import ProjectDatabase
 
 PLAN_ID = "paper-next-ridge-development-v2"
@@ -24,7 +25,8 @@ def register(db: ProjectDatabase, *, now_ms: int, template: dict) -> dict:
     plan = {**template, "plan_id": PLAN_ID, "registered_at_ms": now_ms,
             "source_start_ms": start, "calibration_start_ms": start + 21 * DAY,
             "holdout_start_ms": start + 28 * DAY, "holdout_end_ms": start + 36 * DAY,
-            "holdout_status": "RESERVED_UNOPENED", "execution_authority": False}
+            "holdout_status": "RESERVED_UNOPENED", "execution_authority": False,
+            "readiness_algorithm": algorithm_identity()}
     dataset_key = digest(["canonical_paper_opportunities", plan["scope"]])
     plan["holdout_identity"] = hashlib.sha256(
         f"{dataset_key}:{plan['holdout_start_ms']}:{plan['holdout_end_ms']}".encode()).hexdigest()
@@ -44,6 +46,8 @@ def check(db: ProjectDatabase, *, now_ms: int) -> dict:
     if not plan_record or not record:
         raise ValueError("frozen_plan_or_state_missing")
     plan, state = plan_record["value"], record["value"]
+    if state.get("algorithm") != plan.get("readiness_algorithm") or state.get("algorithm") != algorithm_identity():
+        raise ValueError("readiness_algorithm_changed")
     if now_ms - state["last_checked_at_ms"] < INTERVAL_MS:
         return {"ready": False, "request_continuation": False, "reasons": ["six_hour_cooldown"]}
     if digest(plan) != state["plan_sha256"]:
@@ -65,16 +69,22 @@ def check(db: ProjectDatabase, *, now_ms: int) -> dict:
     # reader before the next one, so the checker never pins a multi-hour WAL.
     while state["cursor"] < high and processed < MAX_EVENTS and time.monotonic() < deadline:
         end = min(high, state["cursor"] + 5000)
-        with db.connect() as c:
-            c.set_progress_handler(lambda: int(time.monotonic() > deadline), 10000)
-            rows = c.execute(
-                "SELECT rowid,event_id,payload_json,created_at_ms FROM project_events NOT INDEXED "
-                "WHERE rowid>? AND rowid<=? AND namespace=? AND entity_type='opportunity' ORDER BY rowid",
-                (state["cursor"], end, "paper_economic_opportunities:" + plan["scope"])).fetchall()
+        try:
+            with db.connect() as c:
+                c.set_progress_handler(lambda: int(time.monotonic() > deadline), 10000)
+                rows = c.execute(
+                    "SELECT rowid,event_id,payload_json,created_at_ms FROM project_events NOT INDEXED "
+                    "WHERE rowid>? AND rowid<=? AND namespace=? AND entity_type='opportunity' ORDER BY rowid",
+                    (state["cursor"], end, "paper_economic_opportunities:" + plan["scope"])).fetchall()
+        except sqlite3.OperationalError as error:
+            if getattr(error, "sqlite_errorcode", None) != sqlite3.SQLITE_INTERRUPT or time.monotonic() < deadline:
+                raise
+            break  # Preserve completed batches; retry this batch next cycle.
         events = [{"rowid": row[0], "event_id": row[1], "value": json.loads(row[2]), "stored_at_ms": row[3]} for row in rows]
         processed += end - state["cursor"]
         state = advance(state, plan, events, now_ms=now_ms)
         state["cursor"] = end
+        version = db.put_json(NAMESPACE, "state", state, expected_version=version)
     registry = db.get_json("alpha_holdout_consumption", digest(["canonical_paper_opportunities", plan["scope"]]))
     if not registry or registry["value"].get("schema_version") != 2:
         raise ValueError("canonical_holdout_registry_unavailable")

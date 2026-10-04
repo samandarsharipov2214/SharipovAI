@@ -25,6 +25,10 @@ also covers manual invocations and restarts. Each check reads at most 100,000
 physical event row IDs in 5,000-row ranges, with a 90-second deadline and short
 reader lifetimes. Incremental canonical state stores metadata counts, pending
 anchor timestamps and cursor identities; it stores no prices or return labels.
+Completed batches are persisted before the next query. A SQLite deadline
+interruption preserves progress and leaves that batch for the next cycle.
+Both plan and counters bind the checker version and source hashes, including
+feature validation. Algorithm changes require explicit reconciliation.
 Row-ID rewrites, regressing cursors, out-of-order source timestamps, changed plans,
 missing registry or incomplete scans fail closed. A restored/compacted database
 requires explicit cursor reconciliation; it never silently skips history.
@@ -33,7 +37,9 @@ Nonoverlapping anchors are reserved before quality checks. Required evidence
 includes verified quotes, independently captured feature timestamps, physical
 persistence before the horizon, complete captured costs, and a future quote and
 independent feature timestamp within 300–310 seconds. Training/calibration labels
-crossing the next boundary are purged. Missing anchors remain in coverage.
+crossing the next boundary are purged. Missing anchors remain in coverage. The denominator also includes the expected
+anchors for every frozen symbol across the entire source window, including
+outages and observations dropped before persistence.
 Readiness requires the whole frozen window, >=28 source days, >=7 test days,
 500/200/200 valid labels, >=80% coverage in each split, complete independent
 timestamps for verified quotes, >=50 test labels for each supported symbol and
@@ -47,7 +53,9 @@ canonical request starts the separate `sharipovai-model-continuation.service`.
 The continuation has an additional durable host claim and no timer/restart loop.
 A failed launch is an explicit operations failure requiring inspection; it is
 not retried every six hours. The existing unconditional Astra watchdog timer is
-disabled when engineering completes.
+disabled when engineering completes. Installer failures mark the canonical
+change ledger failed. The initial check uses the service lock before timer
+activation; failed checks preserve their JSON diagnostics and exit status.
 
 The continuation uses documented [Codex non-interactive execution](https://learn.chatgpt.com/docs/non-interactive-mode)
 and the explicitly requested `gpt-6-astra` model. Its prompt is

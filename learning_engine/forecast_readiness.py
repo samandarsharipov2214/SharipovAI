@@ -6,20 +6,32 @@ events. It contains counts/timestamps only, not prices, labels or model scores.
 from __future__ import annotations
 
 import copy
+import hashlib
 import math
+from pathlib import Path
 from typing import Any
 
-from autonomous_trading.forecast_contract import digest, quote_features
+from autonomous_trading.forecast_contract import digest, quote_features, timestamp
 
 DAY = 86_400_000
 INTERVAL_MS = 6 * 60 * 60 * 1000
 HORIZON_MS = 300_000
 TOLERANCE_MS = 10_000
 NAMESPACE = "paper_forecast_readiness"
+ALGORITHM_VERSION = "paper-readiness-metadata-v2"
+
+
+def algorithm_identity() -> dict:
+    root = Path(__file__).resolve().parent.parent
+    paths = ("learning_engine/forecast_readiness.py", "scripts/paper_forecast_readiness.py",
+             "autonomous_trading/forecast_contract.py")
+    return {"version": ALGORITHM_VERSION, "source_sha256": {
+        path: hashlib.sha256((root / path).read_bytes()).hexdigest() for path in paths}}
 
 
 def new_state(plan: dict, *, cursor: int) -> dict:
-    return {"plan_sha256": digest(plan), "cursor": cursor, "anchor_rowid": None,
+    return {"plan_sha256": digest(plan), "algorithm": algorithm_identity(),
+            "cursor": cursor, "anchor_rowid": None,
             "anchor_event_id": None, "last_checked_at_ms": 0, "rows": 0,
             "verified_quotes": 0, "feature_timestamp_present": 0,
             "first_source_ms": None, "last_source_ms": None, "symbols": {},
@@ -40,7 +52,11 @@ def partition(plan: dict, at: int) -> str | None:
 
 
 def _positive_time(value: Any) -> bool:
-    return type(value) is int and value > 0
+    try:
+        timestamp(value)  # Canonical capture encodes integral milliseconds as floats too.
+        return True
+    except (ValueError, TypeError, OverflowError):
+        return False
 
 
 def _quote_valid(row: dict) -> bool:
@@ -95,6 +111,8 @@ def _finish(state: dict, pending: dict, reason: str | None) -> None:
 
 def advance(state: dict, plan: dict, events: list[dict], *, now_ms: int) -> dict:
     """Reserve nonoverlapping anchors before quality checks; never inspect returns."""
+    if state.get("algorithm") != plan.get("readiness_algorithm") or state.get("algorithm") != algorithm_identity():
+        raise ValueError("readiness_algorithm_changed")
     state = copy.deepcopy(state)
     for event in events:
         row, rid = event["value"], event["rowid"]
@@ -154,8 +172,24 @@ def advance(state: dict, plan: dict, events: list[dict], *, now_ms: int) -> dict
     return state
 
 
+def expected_anchors(plan: dict, part: str) -> int:
+    """Clock-based denominator includes outages and rows never persisted.
+
+    Exclude the final horizon at each boundary, where no label can be available
+    without crossing the next partition. Count every frozen supported symbol.
+    """
+    boundaries = {"train": (plan["source_start_ms"], plan["calibration_start_ms"]),
+                  "calibration": (plan["calibration_start_ms"], plan["holdout_start_ms"]),
+                  "test": (plan["holdout_start_ms"], plan["holdout_end_ms"])}
+    lo, hi = boundaries[part]
+    duration = max(0, hi - lo - HORIZON_MS - TOLERANCE_MS)
+    return math.ceil(duration / (HORIZON_MS + TOLERANCE_MS + 1)) * len(plan["symbols"])
+
+
 def readiness(state: dict, plan: dict, *, now_ms: int, caught_up: bool, claims: dict) -> dict:
     reasons = list(state["fatal_errors"])
+    if state.get("algorithm") != plan.get("readiness_algorithm") or state.get("algorithm") != algorithm_identity():
+        reasons.append("readiness_algorithm_changed")
     if state["plan_sha256"] != digest(plan):
         reasons.append("frozen_plan_changed")
     if now_ms < plan["holdout_end_ms"]:
@@ -168,11 +202,15 @@ def readiness(state: dict, plan: dict, *, now_ms: int, caught_up: bool, claims: 
     completeness = state["feature_timestamp_present"] / state["verified_quotes"] if state["verified_quotes"] else 0
     if completeness < 1:
         reasons.append("independent_feature_timestamp_incomplete")
+    coverage = {}
     for part, minimum in (("train", 500), ("calibration", 200), ("test", 200)):
         counts = state["partitions"][part]
+        denominator = max(counts["anchors"], expected_anchors(plan, part))
+        coverage[part] = {"expected_anchors": denominator,
+                          "valid_fraction": counts["valid"] / denominator if denominator else 0}
         if counts["valid"] < minimum:
             reasons.append(part + "_support_insufficient")
-        if not counts["anchors"] or counts["valid"] / counts["anchors"] < .8:
+        if coverage[part]["valid_fraction"] < .8:
             reasons.append(part + "_coverage_below_80_percent")
     test = state["partitions"]["test"]
     test_span = ((test["last_valid_ms"] or 0) - (test["first_valid_ms"] or 0)) / DAY
@@ -189,6 +227,6 @@ def readiness(state: dict, plan: dict, *, now_ms: int, caught_up: bool, claims: 
     return {"ready": not reasons, "reasons": reasons, "source_span_days": span,
             "test_span_days": test_span, "feature_timestamp_completeness": completeness,
             "testable_matured_labels": sum(s["valid"] for s in state["partitions"].values()),
-            "partitions": state["partitions"], "rejections": state["rejections"],
+            "partitions": state["partitions"], "coverage": coverage, "rejections": state["rejections"],
             "holdout_identity": plan["holdout_identity"], "execution_authority": False,
             "holdout_opened": False, "model_promoted": False}

@@ -19,6 +19,22 @@ ledger.create_change(change_id='paper-readiness-install-'+sys.argv[1][:12], acto
  metadata={'rollback':'disable readiness timer; preserve canonical plan and consumed request state',
            'scope':'host systemd units; no runtime trade policy change'})
 PY
+mark_failed() {
+  local status="$1" line="$2"
+  trap - ERR
+  docker exec -i sharipovai python - "$expected" "$status" "$line" <<'FAILURE_PY' || true
+import sys
+from storage import ProjectChangeLedger, ProjectDatabase
+ledger = ProjectChangeLedger(ProjectDatabase())
+identity = 'paper-readiness-install-' + sys.argv[1][:12]
+current = ledger.get_change(identity)
+if current and current['status'] in ('planned', 'applied'):
+    ledger.set_status(identity, 'failed', actor='astra', verification={
+        'installer_exit_status': int(sys.argv[2]), 'installer_line': int(sys.argv[3])})
+FAILURE_PY
+  exit "$status"
+}
+trap 'mark_failed "$?" "$LINENO"' ERR
 docker exec -i sharipovai python - <<'PY'
 import json,time
 from pathlib import Path
@@ -37,9 +53,10 @@ for name in sharipovai-model-readiness.service sharipovai-model-readiness.timer 
   install -m 0644 "deploy/vps/systemd/$name" "/etc/systemd/system/$name"
 done
 systemctl daemon-reload
+# Finish the initial check under the service lock before the timer can elapse.
+bash deploy/vps/model_readiness_check.sh
 systemctl enable --now sharipovai-model-readiness.timer
 systemctl is-enabled --quiet sharipovai-model-readiness.timer
-docker exec sharipovai python -m scripts.paper_forecast_readiness
 docker exec -i sharipovai python - "$expected" <<'PY'
 import sys
 from storage import ProjectChangeLedger,ProjectDatabase
@@ -50,3 +67,4 @@ assert state['last_result']['ready'] is False and state['trigger_status']=='not_
 ledger.set_status(identity,'verified',actor='astra',verification={
  'timer_enabled':True,'canonical_metadata_check':state['last_result'],'continuation_requests':0})
 PY
+trap - ERR

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from autonomous_trading.forecast_contract import digest
-from learning_engine.forecast_readiness import DAY, INTERVAL_MS, NAMESPACE, advance, new_state, readiness
+from learning_engine.forecast_readiness import DAY, INTERVAL_MS, NAMESPACE, advance, expected_anchors, new_state, readiness
 from scripts.paper_forecast_readiness import check, register
 from storage import ProjectDatabase
 
@@ -44,6 +44,28 @@ def test_counts_mature_metadata_without_return_or_model_fields(prepared):
     assert state["execution_authority"] is False
     result = readiness(state, plan, now_ms=at + 400_000, caught_up=True, claims={})
     assert result["ready"] is False and result["holdout_opened"] is False
+
+
+def test_real_capture_integral_float_timestamps_are_accepted(prepared):
+    _, plan = prepared
+    at = plan["source_start_ms"]
+    events = [event(plan, 1, at), event(plan, 2, at + 300_000)]
+    for e in events:
+        for key in ("received_at_unix_ms", "feature_received_at_ms"):
+            e["value"]["quote"][key] = float(e["value"]["quote"][key])
+    state = advance(new_state(plan, cursor=0), plan, events, now_ms=at + 400_000)
+    assert state["partitions"]["train"]["valid"] == 1
+    assert state["feature_timestamp_present"] == state["verified_quotes"] == 2
+
+
+@pytest.mark.parametrize("bad", [True, 1.5, float("inf"), float("nan"), "1000"])
+def test_noncanonical_timestamp_types_never_count(prepared, bad):
+    _, plan = prepared
+    at = plan["source_start_ms"]
+    entry, future = event(plan, 1, at), event(plan, 2, at + 300_000)
+    entry["value"]["quote"]["feature_received_at_ms"] = bad
+    state = advance(new_state(plan, cursor=0), plan, [entry, future], now_ms=at + 400_000)
+    assert state["partitions"]["train"]["valid"] == 0
 
 
 @pytest.mark.parametrize("defect", ["missing_feature", "future_feature", "late_capture", "wrong_physical_time"])
@@ -83,10 +105,11 @@ def supported_state(plan):
     state.update(rows=5000, verified_quotes=5000, feature_timestamp_present=5000,
                  first_source_ms=plan["source_start_ms"], last_source_ms=plan["holdout_end_ms"])
     for part, stats in state["partitions"].items():
-        stats.update(anchors=1000, matured=1000, valid=900,
+        count = expected_anchors(plan, part)
+        stats.update(anchors=count, matured=count, valid=count,
                      first_valid_ms=plan["holdout_start_ms"], last_valid_ms=plan["holdout_end_ms"]-400_000,
-                     symbols={s:180 for s in plan["symbols"]},
-                     regimes={r:300 for r in ("up_24h", "down_24h", "range_24h")})
+                     symbols={s:count // len(plan["symbols"]) for s in plan["symbols"]},
+                     regimes={r:count // 3 for r in ("up_24h", "down_24h", "range_24h")})
     return state
 
 
@@ -136,3 +159,69 @@ def test_incremental_database_scan_reads_only_canonical_opportunities(prepared):
         c.execute("UPDATE project_events SET event_id='changed' WHERE rowid=?", (state["anchor_rowid"],))
     with pytest.raises(ValueError, match="cursor_rewritten"):
         check(db, now_ms=at + 2 * INTERVAL_MS)
+
+
+def test_unpersisted_source_gaps_cannot_report_full_coverage(prepared):
+    _, plan = prepared
+    state = supported_state(plan)
+    for part, counts in state["partitions"].items():
+        # Every surviving observation was valid, but 30% were never captured.
+        count = int(expected_anchors(plan, part) * .7)
+        counts.update(anchors=count, matured=count, valid=count)
+    result = readiness(state, plan, now_ms=plan["holdout_end_ms"] + 1, caught_up=True, claims={})
+    assert not result["ready"]
+    assert all(part + "_coverage_below_80_percent" in result["reasons"] for part in state["partitions"])
+    assert all(c["valid_fraction"] <= .7 for c in result["coverage"].values())
+
+
+def test_changed_algorithm_never_reuses_incremental_counters(prepared, monkeypatch):
+    import scripts.paper_forecast_readiness as runner
+    db, plan = prepared
+    state = supported_state(plan)
+    db.put_json(NAMESPACE, "state", state)
+    monkeypatch.setattr(runner, "algorithm_identity", lambda: {"version": "different"})
+    with pytest.raises(ValueError, match="readiness_algorithm_changed"):
+        check(db, now_ms=plan["holdout_end_ms"] + 1)
+    assert db.get_json(NAMESPACE, "state")["value"] == state
+
+
+def test_deadline_interruption_preserves_completed_batches(prepared, monkeypatch):
+    import sqlite3
+    from contextlib import contextmanager
+    import scripts.paper_forecast_readiness as runner
+    db, plan = prepared
+    at = plan["source_start_ms"]
+    with db.connect() as c:
+        c.execute("INSERT INTO project_events (event_id,namespace,entity_type,entity_id,payload_json,created_at_ms) "
+                  "VALUES ('gap','other','other','other','{}',?)", (at,))
+        c.execute("UPDATE project_events SET rowid=11000 WHERE event_id='gap'")
+    original = db.connect
+    clock, queries = [0], []
+
+    class InterruptedConnection:
+        def __init__(self, connection):
+            self.connection = connection
+        def __getattr__(self, name):
+            return getattr(self.connection, name)
+        def execute(self, sql, parameters=()):
+            if "NOT INDEXED" in sql:
+                queries.append(parameters[:2])
+                if len(queries) == 2:
+                    clock[0] = 91
+                    error = sqlite3.OperationalError("interrupted")
+                    error.sqlite_errorcode = sqlite3.SQLITE_INTERRUPT
+                    raise error
+            return self.connection.execute(sql, parameters)
+
+    @contextmanager
+    def connect():
+        with original() as c:
+            yield InterruptedConnection(c)
+    monkeypatch.setattr(db, "connect", connect)
+    monkeypatch.setattr(runner.time, "monotonic", lambda: clock[0])
+    first = check(db, now_ms=at + INTERVAL_MS)
+    assert first["cursor"] == 5000 and not first["ready"]
+    assert "source_cursor_not_caught_up" in first["reasons"]
+    second = check(db, now_ms=at + 2 * INTERVAL_MS)
+    assert second["cursor"] == 11000
+    assert queries[2][0] == 5000  # Completed prefix was not rescanned.

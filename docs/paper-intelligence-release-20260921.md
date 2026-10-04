@@ -321,3 +321,24 @@ archive is dated 29 September. The full isolated restore admission needs about
 history, force a checkpoint or edit production files to bypass release tooling.
 Rollback remains the retained previous OCI image and canonical updater; readiness
 rollback disables its timer while preserving its plan and one-shot claims.
+
+## PR 470 review follow-up — 4 October
+
+Readiness now counts the full frozen window's expected anchors, including
+unpersisted observation gaps. Incremental state and the plan bind the checker
+version and source hashes. Completed scan batches survive deadline interruptions.
+Canonical integral-float quote timestamps use the same validator as forecasts;
+bools, strings, fractional and nonfinite timestamps remain invalid. The host
+installer records failed mutations, uses the wrapper lock before activating its
+timer, and preserves checker error output and exit codes. Tests exercise these
+failure paths with disposable databases and mocked host commands.
+
+The dependency audit identified PyJWT 2.13.0 vulnerabilities. Its exact pin is
+updated to 2.15.1; upstream fixes are documented in the
+[PyJWT changelog](https://pyjwt.readthedocs.io/en/stable/changelog.html).
+Authentication regression tests and exact-commit CI remain mandatory.
+
+The source database has grown beyond the existing 20 GiB backup admission limit.
+The VPS has no second disk, and available workspace cannot satisfy the backup
+and isolated-restore requirements. This is a release blocker, not authorization
+to skip backup, weaken integrity, delete history, or mark engineering complete.
