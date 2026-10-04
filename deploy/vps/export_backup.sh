@@ -324,8 +324,8 @@ else
   fail 'persistent data size probe failed or timed out'
 fi
 [[ "$source_bytes" =~ ^[0-9]+$ ]] || fail 'persistent data size probe returned an invalid value'
-if ! python3 -c 'import sys; sys.exit(int(sys.argv[1]) > 20*1024**3)' "$source_bytes"; then
-  fail 'persistent data exceeds 20 GiB restore budget'
+if ! python3 -c 'import sys; sys.exit(int(sys.argv[1]) > 32*1024**3)' "$source_bytes"; then
+  fail 'persistent data exceeds 32 GiB restore budget'
 fi
 # The live source and retained archives already consume filesystem space.
 # Reserve one complete staging copy here; compression is separately byte-capped

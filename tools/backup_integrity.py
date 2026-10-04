@@ -13,10 +13,12 @@ from typing import Any
 
 MAX_BACKUP_FILES = 20_000
 MAX_ARCHIVE_MEMBERS = MAX_BACKUP_FILES * 2 + 10
-MAX_TOTAL_BYTES = 20 * 1024 * 1024 * 1024
+MAX_TOTAL_BYTES = 32 * 1024 * 1024 * 1024
 # A single canonical SQLite database may occupy the entire snapshot envelope.
 # The former independent 5 GiB limit rejected the real 6+ GiB production DB.
-# Keep the aggregate extraction limit unchanged, including archive metadata.
+# The canonical database exceeded 20 GiB in October 2026. The bounded aggregate
+# envelope includes archive metadata; actual restore workspace is still reserved
+# independently and checked continuously by sqlite_logical_restore.
 MAX_FILE_BYTES = MAX_TOTAL_BYTES
 MAX_RELATIVE_PATH_LENGTH = 512
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")

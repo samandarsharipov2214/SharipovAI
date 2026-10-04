@@ -204,8 +204,10 @@ if scenario == 'invalid':
 if scenario == 'negative':
     sys.stdout.buffer.write(b'-1\t' + os.fsencode(source) + b'\0')
     sys.exit(0)
-if scenario in ('huge', 'zero'):
-    size = b'18446744073709551616' if scenario == 'huge' else b'0'
+if scenario in ('huge', 'zero', 'grown', 'over_budget'):
+    size = {'huge': b'18446744073709551616', 'zero': b'0',
+            'grown': str(22 * 1024**3).encode(),
+            'over_budget': str(32 * 1024**3 + 1).encode()}[scenario]
     sys.stdout.buffer.write(size + b'\t' + os.fsencode(source) + b'\0')
     sys.exit(0)
 if scenario == 'extra_output':
@@ -240,7 +242,7 @@ os.execv(os.environ['REAL_DU'], [os.environ['REAL_DU'], *sys.argv[1:]])
     return result, attempts, time.monotonic() - started
 
 
-@pytest.mark.parametrize(("scenario", "attempts"), [("normal", 1), ("race", 2), ("zero", 1)])
+@pytest.mark.parametrize(("scenario", "attempts"), [("normal", 1), ("race", 2), ("zero", 1), ("grown", 1)])
 def test_live_size_probe_publishes_backup_after_valid_measurement(tmp_path, scenario, attempts):
     result, actual, _ = _live_size_export(tmp_path, scenario)
     assert result.returncode == 0, result.stderr
@@ -269,7 +271,8 @@ def test_live_size_probe_publishes_backup_after_valid_measurement(tmp_path, scen
         ("source_missing", 1, "No such file"), ("source_replaced", 1, "source changed"),
         ("outside", 1, "size probe failed"), ("traversal", 1, "size probe failed"),
         ("symlink", 1, "size probe failed"), ("root_diagnostic", 1, "size probe failed"),
-        ("huge", 1, "persistent data exceeds 20 GiB restore budget"),
+        ("huge", 1, "persistent data exceeds 32 GiB restore budget"),
+        ("over_budget", 1, "persistent data exceeds 32 GiB restore budget"),
     ],
 )
 def test_live_size_probe_fails_closed_before_staging(tmp_path, scenario, attempts, diagnostic):

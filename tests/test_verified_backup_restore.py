@@ -208,14 +208,14 @@ def test_archive_rejects_symlink_member(tmp_path: Path) -> None:
         extract_verified_archive(archive, tmp_path / "extracted")
 
 
-def test_large_canonical_database_fits_existing_total_envelope(tmp_path, monkeypatch):
+@pytest.mark.parametrize("size", [6_700_000_000, 22 * 1024**3])
+def test_large_canonical_database_fits_bounded_total_envelope(tmp_path, monkeypatch, size):
     # Sparse file exercises real stat/manifest size handling without allocating
     # gigabytes in CI. Hash correctness is covered by the tampering/restore tests.
     import tools.backup_integrity as integrity
 
     snapshot = _snapshot(tmp_path)
     target = snapshot / "data/sharipovai_shared.db"
-    size = 6_700_000_000
     with target.open("r+b") as stream:
         stream.truncate(size)
     manifest_path, manifest = _manifest(snapshot)

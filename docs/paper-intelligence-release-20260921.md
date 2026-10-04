@@ -342,3 +342,14 @@ The source database has grown beyond the existing 20 GiB backup admission limit.
 The VPS has no second disk, and available workspace cannot satisfy the backup
 and isolated-restore requirements. This is a release blocker, not authorization
 to skip backup, weaken integrity, delete history, or mark engineering complete.
+
+The reviewed backup capacity correction raises the shared, bounded source,
+archive and restore admission envelope to 32 GiB. Source identity checks,
+streamed size limits, manifests and hashes, safe path checks, database
+quick_check, the 20 GiB exporter free-space floor, the 512 MiB extra reserve,
+and the isolated restore's 2 GiB runtime reserve remain mandatory. Logical
+restore reserves up to 1.5 times database size (capped at the envelope), so the
+larger envelope does not authorize using this VPS's insufficient workspace.
+Backup/restore clients must use the matching reviewed tooling. Sparse-file and
+mock-export tests cover a 22 GiB source and rejection above 32 GiB without
+allocating that volume in CI. No production history is compressed or deleted.
