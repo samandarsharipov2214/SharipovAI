@@ -1,0 +1,26 @@
+[Unit]
+Description=SharipovAI bounded Astra supervisor
+Documentation=https://github.com/samandarsharipov2214/SharipovAI
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+ConditionPathExists=/opt/sharipovai-repo/deploy/vps/astra_supervisor_run.sh
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+Environment=SHARIPOVAI_REPO_DIR=/opt/sharipovai-repo
+EnvironmentFile=-/etc/sharipovai/astra-supervisor.env
+ExecStart=/usr/bin/bash /opt/sharipovai-repo/deploy/vps/astra_supervisor_run.sh
+TimeoutStartSec=3min
+Nice=15
+CPUQuota=25%
+MemoryMax=384M
+IOSchedulingClass=idle
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=read-only
+ProtectSystem=strict
+ReadWritePaths=/var/lib/sharipovai /run/lock
+UMask=0077
