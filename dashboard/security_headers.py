@@ -5,6 +5,11 @@ import os
 
 from fastapi import FastAPI, Request
 
+# Opt-in, narrowly scoped framing of the public Site V1 document. Never use
+# wildcard origins here: the authenticated cabinet is rendered by this page.
+_CHATGPT_FRAME_ANCESTORS = "frame-ancestors 'self' https://chatgpt.com https://chat.openai.com"
+_SITE_V1_DOCUMENTS = {"/", "/app"}
+
 
 def install_security_headers(app: FastAPI) -> None:
     if getattr(app.state, "security_headers_installed", False):
@@ -23,6 +28,22 @@ def install_security_headers(app: FastAPI) -> None:
         )
         response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
         response.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
+        # Only the Site V1 HTML shell may be embedded, and only when opted in.
+        # CSP restricts *all* frame ancestors; other routes keep XFO: DENY.
+        if (
+            _truthy(os.getenv("SHARIPOVAI_CHATGPT_EMBED_ENABLED", "0"))
+            and request.method in {"GET", "HEAD"}
+            and request.url.path in _SITE_V1_DOCUMENTS
+            and response.status_code == 200
+            and "text/html" in response.headers.get("content-type", "").lower()
+        ):
+            existing_csp = response.headers.get("Content-Security-Policy", "").strip()
+            # Preserve any stronger policy; multiple frame-ancestors directives
+            # can unintentionally weaken or conflict with upstream protections.
+            if "frame-ancestors" not in existing_csp.lower():
+                prefix = existing_csp.rstrip(" ;") + "; " if existing_csp else ""
+                response.headers["Content-Security-Policy"] = prefix + _CHATGPT_FRAME_ANCESTORS
+                response.headers.pop("X-Frame-Options", None)
         content_type = response.headers.get("content-type", "").lower()
         if request.url.path.startswith("/api/") or "text/html" in content_type:
             response.headers.setdefault(
