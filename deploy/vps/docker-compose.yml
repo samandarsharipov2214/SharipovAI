@@ -44,6 +44,8 @@ services:
       - .env.vps
     environment:
       ENVIRONMENT: production
+      # Only Site V1 HTML may be framed by explicitly allowed ChatGPT origins.
+      SHARIPOVAI_CHATGPT_EMBED_ENABLED: "${SHARIPOVAI_CHATGPT_EMBED_ENABLED:-1}"
       PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
       PORT: 8000
       SHARIPOVAI_DATA_DIR: /var/lib/sharipovai
