@@ -43,7 +43,7 @@ def install_security_headers(app: FastAPI) -> None:
             if "frame-ancestors" not in existing_csp.lower():
                 prefix = existing_csp.rstrip(" ;") + "; " if existing_csp else ""
                 response.headers["Content-Security-Policy"] = prefix + _CHATGPT_FRAME_ANCESTORS
-                response.headers.pop("X-Frame-Options", None)
+                del response.headers["X-Frame-Options"]
         content_type = response.headers.get("content-type", "").lower()
         if request.url.path.startswith("/api/") or "text/html" in content_type:
             response.headers.setdefault(
