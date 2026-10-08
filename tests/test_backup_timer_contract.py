@@ -20,7 +20,7 @@ def test_backup_timer_targets_production_repo_and_runs_at_least_hourly() -> None
     assert "RandomizedDelaySec=0" in source
     assert "systemctl enable --now sharipovai-backup.timer" in source
     assert "systemctl is-active --quiet sharipovai-backup.timer" in source
-    assert "NextElapseUSecRealtime" in source
+    assert "verify_backup_timer.sh" in source
 
 
 def test_backup_timer_verifies_first_archive_and_checksum() -> None:
@@ -44,5 +44,7 @@ def test_backup_verifier_fails_closed_on_stale_or_inactive_backup() -> None:
     assert '(( age <= MAX_AGE ))' in source
     assert "latest backup checksum verification failed" in source
     assert "NextElapseUSecRealtime" in source
+    assert "TimersCalendar" in source
+    assert "TimersCalendar" in source
     assert "LastTriggerUSec" in source
     assert "MAX_AGE=${BACKUP_MAX_AGE_SECONDS:-3600}" in source

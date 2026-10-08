@@ -72,7 +72,5 @@ test -s "$latest.sha256" || fail 'latest backup checksum is missing'
   sha256sum -c "$(basename "$latest.sha256")" >/dev/null
 ) || fail 'latest backup checksum verification failed'
 
-next_run=$(systemctl show sharipovai-backup.timer --property=NextElapseUSecRealtime --value)
-[[ -n "$next_run" ]] || fail 'backup timer has no next scheduled run'
 APP_DIR="$APP_DIR" BACKUP_MAX_AGE_SECONDS=3600 bash "$VERIFY"
-log "timer active; first verified backup: $latest; next run: $next_run"
+log "timer active; first verified backup: $latest"
