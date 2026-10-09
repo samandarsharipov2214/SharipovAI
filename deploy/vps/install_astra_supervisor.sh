@@ -12,7 +12,9 @@ for path in deploy/vps/astra_supervisor_run.sh tools/astra_supervisor.py scripts
   test -f "$APP_DIR/$path" || { echo "missing $path" >&2; exit 1; }
 done
 install -d -m 0700 /var/lib/sharipovai/astra-supervisor/tasks /run/lock /etc/sharipovai
-chmod 0750 "$APP_DIR/deploy/vps/astra_supervisor_run.sh"
+# The unit invokes this tracked script explicitly through /usr/bin/bash.  Do
+# not chmod it here: changing its executable bit makes the production checkout
+# dirty and fail-closes the canonical updater before its recovery gates.
 for unit in "$SERVICE" "$TIMER"; do
   install -m 0644 "$APP_DIR/deploy/vps/systemd/$unit" "/etc/systemd/system/$unit"
   cmp "$APP_DIR/deploy/vps/systemd/$unit" "/etc/systemd/system/$unit"
