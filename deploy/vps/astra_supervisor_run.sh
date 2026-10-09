@@ -36,7 +36,10 @@ case "$task" in
   paper_execution_diagnosis)
     tmp="$RESULT.tmp"
     rm -f "$tmp"
-    timeout 90s docker exec -i sharipovai python /workspace/scripts/astra_paper_diagnose.py >"$tmp"
+    # The production service hardening intentionally prevents the runtime user
+    # from reading the deployment checkout mounted at /workspace.  Execute the
+    # immutable application copy packaged in the running image instead.
+    timeout 90s docker exec -i sharipovai python /app/scripts/astra_paper_diagnose.py >"$tmp"
     python3 - "$tmp" "$RESULT" <<'PY'
 import json,os,sys
 src,dst=sys.argv[1:]
