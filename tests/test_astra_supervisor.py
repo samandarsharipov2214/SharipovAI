@@ -85,6 +85,8 @@ def test_host_contract_is_bounded_and_has_no_codex_or_production_mutation():
     timer = (root / "deploy/vps/systemd/sharipovai-astra-supervisor.timer").read_text()
     assert "flock -n" in runner
     assert "codex exec" in runner and "docker compose" not in runner
+    assert "/app/scripts/astra_paper_diagnose.py" in runner
+    assert "/workspace/scripts/astra_paper_diagnose.py" not in runner
     assert "ASTRA_CODEX_AUTOMATION" in runner and "CODEX_ACCESS_TOKEN" in runner
     assert "timeout 150s" in runner
     assert "CPUQuota=25%" in service and "MemoryMax=384M" in service
