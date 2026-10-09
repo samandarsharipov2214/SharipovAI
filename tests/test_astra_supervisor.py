@@ -93,3 +93,10 @@ def test_host_contract_is_bounded_and_has_no_codex_or_production_mutation():
     assert "RuntimeMaxSec" not in service  # systemd name is TimeoutStartSec for oneshot jobs.
     assert "TimeoutStartSec=3min" in service and "OnBootSec=7min" in timer
     assert "OnUnitInactiveSec=6h" in timer
+
+
+def test_installer_does_not_change_the_mode_of_a_tracked_runner():
+    root = Path(__file__).resolve().parents[1]
+    installer = (root / "deploy/vps/install_astra_supervisor.sh").read_text()
+    assert "chmod 0750" not in installer
+    assert "explicitly through /usr/bin/bash" in installer
