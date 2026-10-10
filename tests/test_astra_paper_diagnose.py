@@ -36,3 +36,15 @@ def test_diagnosis_reports_machine_readable_current_wait_reasons(tmp_path):
                        "XRPUSDT": "QUOTE_LINEAGE_REJECTED"}
     btc = next(row for row in result["symbols"] if row["symbol"] == "BTCUSDT")
     assert btc["candidate_side"] == "Buy" and btc["controller_final_intent"] == "BUY"
+
+
+def test_diagnosis_does_not_misclassify_anti_churn_as_stale_market_data(tmp_path):
+    database = ProjectDatabase(f"sqlite:///{tmp_path / 'diagnosis.sqlite3'}")
+    database.initialize()
+    database.put_json("council_decision_trace", "XRPUSDT", {
+        "symbol": "XRPUSDT", "updated_at_ms": 100, "status": "WAIT",
+        "quote_age_ms": 1500, "market_verified": True,
+        "reason": "anti_churn_cost_not_covered: prospective_edge_unavailable; forecast_not_promoted",
+    })
+    result = collect(database)
+    assert result["symbols"][0]["reason_code"] == "PROSPECTIVE_EDGE_UNAVAILABLE"

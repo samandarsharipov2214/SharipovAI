@@ -23,6 +23,11 @@ from storage import ProjectDatabase, list_json_items
 
 def _reason_code(trace: Mapping[str, Any]) -> str:
     reason = str(trace.get("reason") or "").lower()
+    # "prospective_edge_unavailable" contains the word "stale" only in some
+    # explanatory payloads.  It is an anti-churn/economic-evidence gate, not
+    # a market-data freshness failure when the trace itself has a fresh quote.
+    if "prospective_edge" in reason or "anti_churn_cost_not_covered" in reason:
+        return "PROSPECTIVE_EDGE_UNAVAILABLE"
     if "no market" in reason or "market_data" in reason:
         return "NO_MARKET_DATA"
     if "stale" in reason or "age" in reason:
