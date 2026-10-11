@@ -7,6 +7,7 @@ MAX_AGE=${BACKUP_MAX_AGE_SECONDS:-3600}
 TIMER=sharipovai-backup.timer
 SERVICE=sharipovai-backup.service
 STATUS_FILE=${SHARIPOVAI_BACKUP_TIMER_STATUS_FILE:-/var/lib/sharipovai/backup/last_timer_run.json}
+ALLOW_UNTRIGGERED=${BACKUP_ALLOW_UNTRIGGERED_TIMER:-0}
 
 fail() { printf '[backup-verify] ERROR: %s\n' "$*" >&2; exit 1; }
 log() { printf '[backup-verify] %s\n' "$*"; }
@@ -34,6 +35,7 @@ next_timer_run() {
   || fail 'APP_DIR must be a safe absolute path'
 [[ "$MAX_AGE" =~ ^[0-9]+$ ]] || fail 'BACKUP_MAX_AGE_SECONDS must be an integer'
 (( MAX_AGE > 0 && MAX_AGE <= 3600 )) || fail 'BACKUP_MAX_AGE_SECONDS must be between 1 and 3600'
+[[ "$ALLOW_UNTRIGGERED" == 0 || "$ALLOW_UNTRIGGERED" == 1 ]] || fail 'BACKUP_ALLOW_UNTRIGGERED_TIMER must be 0 or 1'
 
 systemctl is-enabled --quiet "$TIMER" || fail "$TIMER is not enabled"
 systemctl is-active --quiet "$TIMER" || fail "$TIMER is not active"
@@ -85,6 +87,6 @@ age=$(( now - modified ))
 next_run=$(next_timer_run || true)
 last_trigger=$(systemctl show "$TIMER" --property=LastTriggerUSec --value)
 [[ -n "$next_run" ]] || fail 'backup timer has no next scheduled run'
-[[ -n "$last_trigger" ]] || fail 'backup timer has no last trigger evidence'
+[[ -n "$last_trigger" || "$ALLOW_UNTRIGGERED" == 1 ]] || fail 'backup timer has no last trigger evidence'
 
 log "timer=active latest=$latest age_seconds=$age max_age_seconds=$MAX_AGE next_run=$next_run timer_outcome=${timer_outcome:-UNKNOWN}"

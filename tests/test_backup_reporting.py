@@ -63,3 +63,25 @@ def test_timer_records_export_result_without_requiring_tracked_executable_bit(tm
     assert result.returncode == (1 if code == 1 else 0)
     receipt = json.loads((state / "last_timer_run.json").read_text())
     assert receipt["outcome"] == outcome and receipt["exit_code"] == code
+
+
+@pytest.mark.parametrize('allow,expected', [('0',1),('1',0)])
+def test_new_timer_can_reuse_verified_deployment_backup_without_false_trigger(tmp_path,allow,expected):
+    import hashlib
+    backup=tmp_path/'deploy/vps/backups'; backup.mkdir(parents=True)
+    archive=backup/'snapshot.tar.gz'; archive.write_bytes(b'verified-test-archive')
+    (backup/'snapshot.tar.gz.sha256').write_text(hashlib.sha256(archive.read_bytes()).hexdigest()+'  snapshot.tar.gz\n')
+    (backup/'latest.tar.gz').symlink_to(archive.name)
+    bin_dir=tmp_path/'bin'; bin_dir.mkdir()
+    cmd=bin_dir/'systemctl'
+    cmd.write_text('''#!/bin/sh
+if [ "$1" = is-failed ]; then exit 1; fi
+case "$*" in *NextElapseUSecRealtime*) printf 'future-calendar-run\\n';; esac
+exit 0
+''')
+    cmd.chmod(0o755)
+    result=subprocess.run(['bash',str(DEPLOY/'verify_backup_timer.sh')],capture_output=True,timeout=5,
+        env=os.environ|{'APP_DIR':str(tmp_path),'PATH':str(bin_dir)+os.pathsep+os.environ['PATH'],
+                        'BACKUP_ALLOW_UNTRIGGERED_TIMER':allow,
+                        'SHARIPOVAI_BACKUP_TIMER_STATUS_FILE':str(tmp_path/'absent.json')})
+    assert result.returncode==expected, result.stderr
