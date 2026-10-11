@@ -10,7 +10,7 @@ STATUS_FILE="$STATE_DIR/last_timer_run.json"
 fail() { printf '[backup-timer] ERROR: %s\n' "$*" >&2; exit 1; }
 [[ "$APP_DIR" == /* && "$APP_DIR" != *$'\n'* && "$APP_DIR" != *'/../'* ]] || fail 'APP_DIR must be a safe absolute path'
 [[ "$STATE_DIR" == /* && "$STATE_DIR" != *$'\n'* && "$STATE_DIR" != *'/../'* ]] || fail 'state directory must be a safe absolute path'
-[[ -x "$EXPORTER" ]] || fail "backup exporter is missing or not executable: $EXPORTER"
+[[ -r "$EXPORTER" ]] || fail "backup exporter is missing or not readable: $EXPORTER"
 mkdir -p -m 0700 "$STATE_DIR"
 
 write_status() {

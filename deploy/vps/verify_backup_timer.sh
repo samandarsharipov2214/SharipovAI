@@ -40,7 +40,7 @@ systemctl is-active --quiet "$TIMER" || fail "$TIMER is not active"
 
 timer_outcome=''
 if [[ -f "$STATUS_FILE" ]]; then
-  readarray -t timer_status < <(python3 - "$STATUS_FILE" <<'PY'
+  status_text=$(python3 - "$STATUS_FILE" <<'PY'
 import json
 import sys
 try:
@@ -49,14 +49,21 @@ except (OSError, ValueError, TypeError) as exc:
     raise SystemExit(f"invalid timer status: {exc}")
 if value.get("schema") != 1 or value.get("outcome") not in {"VERIFIED", "SKIPPED_ACTIVE_EXPORT", "FAILED"}:
     raise SystemExit("invalid timer status schema or outcome")
+code = value.get("exit_code")
+if (type(code) is not int or not 0 <= code <= 255
+        or value["outcome"] == "VERIFIED" and code != 0
+        or value["outcome"] == "SKIPPED_ACTIVE_EXPORT" and code != 75
+        or value["outcome"] == "FAILED" and code == 0):
+    raise SystemExit("invalid timer status exit code")
 print(value["outcome"])
 print(value.get("exit_code", ""))
 PY
   ) || fail 'backup timer status is invalid'
+  readarray -t timer_status <<<"$status_text"
   timer_outcome=${timer_status[0]:-}
   [[ "$timer_outcome" != FAILED ]] || fail 'latest backup timer run failed'
 fi
-if systemctl is-failed --quiet "$SERVICE" && [[ "$timer_outcome" != SKIPPED_ACTIVE_EXPORT ]]; then
+if systemctl is-failed --quiet "$SERVICE"; then
   fail "$SERVICE is failed"
 fi
 
