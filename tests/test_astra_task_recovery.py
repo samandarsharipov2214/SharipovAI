@@ -66,3 +66,19 @@ def test_runner_has_actual_audit_handler_and_shared_maintenance_locks():
     assert '/app/scripts/astra_paper_audit.py' in text
     assert 'flock -sn 8' in text and 'flock -sn 7' in text
     assert '--lease-id "$lease"' in text
+
+
+def test_model_readiness_queues_development_without_launching_codex():
+    root=Path(__file__).resolve().parents[1]
+    source=(root/'deploy/vps/model_continuation.sh').read_text()
+    unit=(root/'deploy/vps/systemd/sharipovai-model-continuation.service').read_text()
+    assert 'enqueue_codex_task' in source and 'codex-model-readiness' in source
+    assert 'dangerously-bypass' not in source and 'codex exec' not in source
+    assert 'TimeoutStartSec=60' in unit
+
+
+def test_enqueue_cli_does_not_create_an_unexecuted_claim(tmp_path, monkeypatch):
+    monkeypatch.setattr(s, 'resource_state', lambda: {'safe':True})
+    path=tmp_path/'state.json'
+    s.main(['--state',str(path),'--status',str(tmp_path/'status.md'),'--enqueue-codex','codex-next'])
+    assert all(t['status']=='PENDING' and 'lease_id' not in t for t in s.read_state(path)['tasks'])

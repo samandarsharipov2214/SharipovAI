@@ -281,6 +281,8 @@ def main(argv: list[str] | None = None) -> int:
         # Completion must never claim a second task whose action the runner
         # discards. The next systemd invocation owns the next dispatch.
         action = {'action': 'CHECKPOINT', 'reason': 'task_result_saved', 'needs_codex': False}
+    elif args.enqueue_codex:
+        action = {'action': 'CHECKPOINT', 'reason': 'task_queued', 'needs_codex': False}
     else:
         action = next_action(state, resources, codex_available=args.codex_available)
     write_state(args.state, state)
