@@ -21,6 +21,8 @@ SCHEMA = 1
 LOCAL_PAPER_DIAGNOSIS = "paper_execution_diagnosis"
 CODEX_TASK = "codex_engineering"
 TASK_ID_RE = re.compile(r"codex-[a-z0-9-]{1,80}$")
+RUNNING_STATUSES = {"RUNNING", "IN_PROGRESS"}
+DEFAULT_LEASE_SECONDS = 180
 
 
 def _utc_now() -> str:
@@ -93,9 +95,45 @@ def _record(state: dict[str, Any], event: str, **detail: Any) -> None:
     del state["history"][:-100]
 
 
+def recover_expired_leases(state: dict[str, Any], *, now: float | None = None) -> list[str]:
+    """Return abandoned claims to PENDING before choosing work.
+
+    A process can disappear after claiming a task because of a reboot, crash,
+    or terminal loss.  Legacy state with IN_PROGRESS but no lease is treated as
+    abandoned so it cannot leave the scheduler permanently idle.
+    """
+    current = time.time() if now is None else float(now)
+    recovered: list[str] = []
+    for task in state["tasks"]:
+        if task.get("status") not in RUNNING_STATUSES:
+            continue
+        try:
+            expired = task.get("lease_expires_at") is None or float(task["lease_expires_at"]) <= current
+        except (TypeError, ValueError):
+            expired = True
+        if not expired:
+            continue
+        task["status"] = "PENDING"
+        task["checkpoint"] = task.get("checkpoint") or "recovered_abandoned_lease"
+        for key in ("owner", "started_at", "lease_expires_at"):
+            task.pop(key, None)
+        recovered.append(str(task.get("id") or ""))
+        _record(state, "task_recovered", task_id=task.get("id"), reason="lease_expired_or_missing")
+    return recovered
+
+
+def _claim(task: dict[str, Any]) -> None:
+    seconds = max(1, int(task.get("lease_seconds", DEFAULT_LEASE_SECONDS)))
+    task["status"] = "RUNNING"
+    task["owner"] = os.getenv("ASTRA_SUPERVISOR_OWNER", "local-supervisor")
+    task["started_at"] = _utc_now()
+    task["lease_expires_at"] = time.time() + seconds
+
+
 def next_action(
     state: dict[str, Any], resources: Mapping[str, Any], *, codex_available: bool = False,
 ) -> dict[str, Any]:
+    recover_expired_leases(state)
     pending = [task for task in state["tasks"] if task.get("status") == "PENDING"]
     if not pending:
         state["blocker"] = None
@@ -116,15 +154,17 @@ def next_action(
             state["blocker"] = {"code": "CODEX_AUTOMATION_AUTH_REQUIRED", "at": _utc_now(),
                                 "detail": "Provision a scoped Codex access token through the service environment."}
             return {"action": "WAIT", "reason": "codex_automation_auth_required", "needs_codex": True}
+        _claim(task)
         return {"action": "RUN_CODEX", "reason": "explicit_queued_task", "task_id": task["id"],
                 "needs_codex": True}
+    _claim(task)
     return {"action": "RUN_LOCAL", "reason": "local_task_pending", "task_id": task["id"], "needs_codex": False}
 
 
 def complete(state: dict[str, Any], task_id: str, result: Mapping[str, Any]) -> None:
     task = next((item for item in state["tasks"] if item.get("id") == task_id), None)
-    if task is None or task.get("status") != "PENDING":
-        raise ValueError("task is not pending")
+    if task is None or task.get("status") not in {"PENDING", *RUNNING_STATUSES}:
+        raise ValueError("task is not runnable")
     task["attempts"] = int(task.get("attempts", 0)) + 1
     ok = result.get("status") == "VERIFIED"
     if task.get("requires_codex"):
@@ -135,6 +175,8 @@ def complete(state: dict[str, Any], task_id: str, result: Mapping[str, Any]) -> 
     exhausted = int(task["attempts"]) >= int(task.get("max_attempts", 0))
     task["status"] = "VERIFIED" if ok else ("FAILED" if exhausted else "PENDING")
     task["checkpoint"] = result.get("output")
+    for key in ("owner", "started_at", "lease_expires_at"):
+        task.pop(key, None)
     state["last_result"] = dict(result)
     _record(state, "task_completed" if ok else "task_retry_pending" if not exhausted else "task_failed",
             task_id=task_id, result=dict(result))

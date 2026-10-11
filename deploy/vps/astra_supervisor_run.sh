@@ -71,6 +71,15 @@ PY
     python3 "$APP_DIR/tools/astra_supervisor.py" --state "$STATE" --status "$STATUS" --complete "$task" --result "$RESULT" --codex-available >/dev/null
     ;;
   *)
+    # Never leave an unknown claimed task marked RUNNING.  A future runner may
+    # add a handler, but the current attempt must close its durable lease with
+    # an explicit checkpoint rather than relying on a later timeout.
+    python3 - "$RESULT" "$task" <<'PY'
+import json,sys
+with open(sys.argv[1], 'w', encoding='utf-8') as handle:
+    json.dump({'status': 'FAILED', 'output': 'unsupported_local_task:' + sys.argv[2]}, handle)
+PY
+    python3 "$APP_DIR/tools/astra_supervisor.py" --state "$STATE" --status "$STATUS" --complete "$task" --result "$RESULT" >/dev/null
     exit 64
     ;;
 esac
