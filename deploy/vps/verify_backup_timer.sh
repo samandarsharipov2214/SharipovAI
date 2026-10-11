@@ -6,6 +6,7 @@ APP_DIR=${APP_DIR:-/opt/sharipovai-repo}
 MAX_AGE=${BACKUP_MAX_AGE_SECONDS:-3600}
 TIMER=sharipovai-backup.timer
 SERVICE=sharipovai-backup.service
+STATUS_FILE=${SHARIPOVAI_BACKUP_TIMER_STATUS_FILE:-/var/lib/sharipovai/backup/last_timer_run.json}
 
 fail() { printf '[backup-verify] ERROR: %s\n' "$*" >&2; exit 1; }
 log() { printf '[backup-verify] %s\n' "$*"; }
@@ -36,7 +37,26 @@ next_timer_run() {
 
 systemctl is-enabled --quiet "$TIMER" || fail "$TIMER is not enabled"
 systemctl is-active --quiet "$TIMER" || fail "$TIMER is not active"
-if systemctl is-failed --quiet "$SERVICE"; then
+
+timer_outcome=''
+if [[ -f "$STATUS_FILE" ]]; then
+  readarray -t timer_status < <(python3 - "$STATUS_FILE" <<'PY'
+import json
+import sys
+try:
+    value = json.load(open(sys.argv[1], encoding="utf-8"))
+except (OSError, ValueError, TypeError) as exc:
+    raise SystemExit(f"invalid timer status: {exc}")
+if value.get("schema") != 1 or value.get("outcome") not in {"VERIFIED", "SKIPPED_ACTIVE_EXPORT", "FAILED"}:
+    raise SystemExit("invalid timer status schema or outcome")
+print(value["outcome"])
+print(value.get("exit_code", ""))
+PY
+  ) || fail 'backup timer status is invalid'
+  timer_outcome=${timer_status[0]:-}
+  [[ "$timer_outcome" != FAILED ]] || fail 'latest backup timer run failed'
+fi
+if systemctl is-failed --quiet "$SERVICE" && [[ "$timer_outcome" != SKIPPED_ACTIVE_EXPORT ]]; then
   fail "$SERVICE is failed"
 fi
 
@@ -60,4 +80,4 @@ last_trigger=$(systemctl show "$TIMER" --property=LastTriggerUSec --value)
 [[ -n "$next_run" ]] || fail 'backup timer has no next scheduled run'
 [[ -n "$last_trigger" ]] || fail 'backup timer has no last trigger evidence'
 
-log "timer=active latest=$latest age_seconds=$age max_age_seconds=$MAX_AGE next_run=$next_run"
+log "timer=active latest=$latest age_seconds=$age max_age_seconds=$MAX_AGE next_run=$next_run timer_outcome=${timer_outcome:-UNKNOWN}"

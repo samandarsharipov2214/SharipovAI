@@ -4,6 +4,7 @@ umask 077
 
 APP_DIR=${APP_DIR:-/opt/sharipovai-repo}
 SCRIPT="$APP_DIR/deploy/vps/export_backup.sh"
+RUNNER="$APP_DIR/deploy/vps/backup_timer_run.sh"
 VERIFY="$APP_DIR/deploy/vps/verify_backup_timer.sh"
 SERVICE=/etc/systemd/system/sharipovai-backup.service
 TIMER=/etc/systemd/system/sharipovai-backup.timer
@@ -17,8 +18,9 @@ fi
 [[ "$APP_DIR" == /* && "$APP_DIR" != *$'\n'* && "$APP_DIR" != *'/../'* ]] \
   || fail 'APP_DIR must be a safe absolute path'
 [[ -f "$SCRIPT" ]] || fail "backup exporter is missing: $SCRIPT"
+[[ -f "$RUNNER" ]] || fail "backup timer runner is missing: $RUNNER"
 [[ -f "$VERIFY" ]] || fail "backup verifier is missing: $VERIFY"
-chmod 750 "$SCRIPT" "$VERIFY"
+chmod 750 "$SCRIPT" "$RUNNER" "$VERIFY"
 
 cat > "$SERVICE" <<EOF
 [Unit]
@@ -32,7 +34,8 @@ User=root
 WorkingDirectory=$APP_DIR/deploy/vps
 Environment=APP_DIR=$APP_DIR
 ExecStartPre=/usr/bin/test -x $SCRIPT
-ExecStart=/usr/bin/bash $SCRIPT
+ExecStartPre=/usr/bin/test -x $RUNNER
+ExecStart=/usr/bin/bash $RUNNER
 TimeoutStartSec=75min
 Nice=10
 IOSchedulingClass=best-effort

@@ -14,6 +14,10 @@ RESERVE_MIB=${SHARIPOVAI_BACKUP_RESERVE_MIB:-512}
 # deadline on this VPS. Keep a bounded hour for the read-only helper.
 HELPER_TIMEOUT_SECONDS=${SHARIPOVAI_BACKUP_HELPER_TIMEOUT_SECONDS:-3600}
 SIZE_PROBE_TIMEOUT_SECONDS=${SHARIPOVAI_BACKUP_SIZE_PROBE_TIMEOUT_SECONDS:-60}
+# The deployment path must fail closed when another export owns the lock.  The
+# timer wrapper may instead record a distinct, non-successful backup outcome
+# while leaving a healthy, fresh archive available for its next scheduled run.
+LOCK_BUSY_EXIT=${SHARIPOVAI_BACKUP_LOCK_BUSY_EXIT:-1}
 
 fail() { printf '[backup] ERROR: %s\n' "$*" >&2; exit 1; }
 log() { printf '[backup] %s\n' "$*"; }
@@ -37,6 +41,9 @@ fi
 if ! [[ "$MAX_RETAINED_GIB" =~ ^[1-9][0-9]?$ ]] || (( MAX_RETAINED_GIB > 20 )); then
   fail 'SHARIPOVAI_BACKUP_MAX_RETAINED_GIB must be within 1..20'
 fi
+if ! [[ "$LOCK_BUSY_EXIT" =~ ^(1|75)$ ]]; then
+  fail 'SHARIPOVAI_BACKUP_LOCK_BUSY_EXIT must be 1 or 75'
+fi
 
 MIN_FREE_BYTES=$((MIN_FREE_DISK_GB * 1024 * 1024 * 1024))
 RESERVE_BYTES=$((RESERVE_MIB * 1024 * 1024))
@@ -56,7 +63,8 @@ chmod 700 "$BACKUP_DIR"
 BACKUP_DIR=$(cd "$BACKUP_DIR" && pwd -P)
 exec 9>"$BACKUP_DIR/.export.lock"
 if ! flock -n 9; then
-  fail 'backup export is already running'
+  printf '[backup] SKIPPED_ACTIVE_EXPORT: backup export is already running\n' >&2
+  exit "$LOCK_BUSY_EXIT"
 fi
 
 cleanup_stale_staging() {
