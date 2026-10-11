@@ -27,6 +27,45 @@ def test_resource_guard_preserves_pending_checkpoint():
     assert state["tasks"][0]["status"] == "PENDING"
 
 
+def test_missing_lease_recovers_legacy_in_progress_task_and_claims_it():
+    state = supervisor.default_state()
+    task = state["tasks"][0]
+    task.update({"status": "IN_PROGRESS", "checkpoint": "before-crash"})
+
+    action = supervisor.next_action(state, safe_resources())
+
+    assert action["action"] == "RUN_LOCAL"
+    assert task["status"] == "RUNNING"
+    assert task["checkpoint"] == "before-crash"
+    assert task["owner"] == "local-supervisor"
+    assert task["lease_expires_at"] > 0
+    assert state["history"][-1]["event"] == "task_recovered"
+
+
+def test_expired_claim_recovers_but_live_claim_is_not_restarted():
+    state = supervisor.default_state()
+    task = state["tasks"][0]
+    task.update({"status": "RUNNING", "lease_expires_at": 99.0, "owner": "dead"})
+
+    assert supervisor.recover_expired_leases(state, now=100.0) == ["paper_execution_diagnosis"]
+    assert task["status"] == "PENDING"
+
+    task.update({"status": "RUNNING", "lease_expires_at": 101.0, "owner": "live"})
+    assert supervisor.recover_expired_leases(state, now=100.0) == []
+    assert task["status"] == "RUNNING"
+
+
+def test_completion_clears_claim_metadata_after_recovered_work():
+    state = supervisor.default_state()
+    action = supervisor.next_action(state, safe_resources())
+    assert action["action"] == "RUN_LOCAL"
+
+    supervisor.complete(state, "paper_execution_diagnosis", {"status": "VERIFIED", "output": "done.json"})
+    task = state["tasks"][0]
+    assert task["status"] == "VERIFIED"
+    assert not {"owner", "started_at", "lease_expires_at"} & task.keys()
+
+
 def test_codex_task_waits_for_explicit_automation_authentication():
     state = supervisor.default_state()
     state["tasks"] = [{"id": "fix", "status": "PENDING", "attempts": 0, "max_attempts": 1,
@@ -89,6 +128,7 @@ def test_host_contract_is_bounded_and_has_no_codex_or_production_mutation():
     assert "/workspace/scripts/astra_paper_diagnose.py" not in runner
     assert "ASTRA_CODEX_AUTOMATION" in runner and "CODEX_ACCESS_TOKEN" in runner
     assert "timeout 150s" in runner
+    assert "unsupported_local_task:" in runner
     assert "CPUQuota=25%" in service and "MemoryMax=384M" in service
     assert "RuntimeMaxSec" not in service  # systemd name is TimeoutStartSec for oneshot jobs.
     assert "TimeoutStartSec=3min" in service and "OnBootSec=7min" in timer
