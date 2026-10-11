@@ -13,6 +13,21 @@ RESULT="$STATE_DIR/paper_execution_diagnosis.json"
 install -d -m 0700 "$STATE_DIR" /run/lock
 exec 9>"$LOCK"
 flock -n 9 || exit 0
+export ASTRA_SUPERVISOR_PID=$$
+export ASTRA_SUPERVISOR_OWNER="systemd:${INVOCATION_ID:-manual}:$$"
+
+# Hold shared locks for the whole diagnostic so backup/deploy cannot begin
+# midway through a supposedly idle window. Existing locks are never removed.
+if [[ -f "$APP_DIR/deploy/vps/backups/.export.lock" ]]; then
+    exec 8<"$APP_DIR/deploy/vps/backups/.export.lock"
+    flock -sn 8 || export ASTRA_MAINTENANCE_BUSY=backup_export
+else
+    export ASTRA_MAINTENANCE_BUSY=backup_lock_unavailable
+fi
+if [[ -f /run/lock/sharipovai-deploy.lock ]]; then
+    exec 7</run/lock/sharipovai-deploy.lock
+    flock -sn 7 || export ASTRA_MAINTENANCE_BUSY=deployment
+fi
 
 codex_args=()
 if [[ "${ASTRA_CODEX_AUTOMATION:-0}" == 1 && -n "${CODEX_ACCESS_TOKEN:-}" ]]; then
@@ -32,14 +47,34 @@ import json,sys
 print(json.loads(sys.argv[1])["task_id"])
 PY
 )
+lease=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["lease_id"])' "$action")
+RESULT="$STATE_DIR/$task.json"
+record_failure() {
+    rc=$?
+    trap - EXIT
+    if (( rc != 0 )); then
+        python3 - "$RESULT" "$rc" <<'PY'
+import json,sys
+with open(sys.argv[1], 'w', encoding='utf-8') as stream:
+    json.dump({'status': 'FAILED', 'reason': 'runner_exit:' + sys.argv[2],
+               'output': sys.argv[1]+'.tmp'}, stream)
+PY
+        python3 "$APP_DIR/tools/astra_supervisor.py" --state "$STATE" --status "$STATUS" \
+            --complete "$task" --lease-id "$lease" --result "$RESULT" >/dev/null || true
+    fi
+    exit "$rc"
+}
+trap record_failure EXIT
 case "$task" in
-  paper_execution_diagnosis)
+  paper_execution_diagnosis|paper_root_cause_audit)
+    script=/app/scripts/astra_paper_diagnose.py
+    [[ "$task" != paper_root_cause_audit ]] || script=/app/scripts/astra_paper_audit.py
     tmp="$RESULT.tmp"
     rm -f "$tmp"
     # The production service hardening intentionally prevents the runtime user
     # from reading the deployment checkout mounted at /workspace.  Execute the
     # immutable application copy packaged in the running image instead.
-    timeout 90s docker exec -i sharipovai python /app/scripts/astra_paper_diagnose.py >"$tmp"
+    timeout 90s docker exec -i sharipovai python "$script" >"$tmp" 2>"$RESULT.stderr"
     python3 - "$tmp" "$RESULT" <<'PY'
 import json,os,sys
 src,dst=sys.argv[1:]
@@ -47,7 +82,7 @@ value=json.load(open(src, encoding="utf-8"))
 assert value["status"] == "VERIFIED" and value["read_only"] is True
 os.replace(src,dst)
 PY
-    python3 "$APP_DIR/tools/astra_supervisor.py" --state "$STATE" --status "$STATUS" --complete "$task" --result "$RESULT" >/dev/null
+    python3 "$APP_DIR/tools/astra_supervisor.py" --state "$STATE" --status "$STATUS" --complete "$task" --lease-id "$lease" --result "$RESULT" >/dev/null
     ;;
   codex-*)
     # Only a deliberately queued task file may start a bounded Codex session.
@@ -68,7 +103,7 @@ os.replace(log, log + '.completed')
 with open(result, 'w', encoding='utf-8') as handle:
     json.dump({'status': status, 'output': log + '.completed'}, handle)
 PY
-    python3 "$APP_DIR/tools/astra_supervisor.py" --state "$STATE" --status "$STATUS" --complete "$task" --result "$RESULT" --codex-available >/dev/null
+    python3 "$APP_DIR/tools/astra_supervisor.py" --state "$STATE" --status "$STATUS" --complete "$task" --lease-id "$lease" --result "$RESULT" --codex-available >/dev/null
     ;;
   *)
     # Never leave an unknown claimed task marked RUNNING.  A future runner may
@@ -79,7 +114,7 @@ import json,sys
 with open(sys.argv[1], 'w', encoding='utf-8') as handle:
     json.dump({'status': 'FAILED', 'output': 'unsupported_local_task:' + sys.argv[2]}, handle)
 PY
-    python3 "$APP_DIR/tools/astra_supervisor.py" --state "$STATE" --status "$STATUS" --complete "$task" --result "$RESULT" >/dev/null
+    python3 "$APP_DIR/tools/astra_supervisor.py" --state "$STATE" --status "$STATUS" --complete "$task" --lease-id "$lease" --result "$RESULT" >/dev/null
     exit 64
     ;;
 esac

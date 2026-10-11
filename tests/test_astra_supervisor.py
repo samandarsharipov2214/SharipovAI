@@ -15,8 +15,8 @@ def test_new_queue_runs_local_diagnosis_then_becomes_idle(tmp_path):
     state = supervisor.read_state(path)
     action = supervisor.next_action(state, safe_resources())
     assert action == {"action": "RUN_LOCAL", "reason": "local_task_pending",
-                      "task_id": "paper_execution_diagnosis", "needs_codex": False}
-    supervisor.complete(state, "paper_execution_diagnosis", {"status": "VERIFIED", "output": "diagnosis.json"})
+                      "task_id": "paper_execution_diagnosis", "needs_codex": False, 'lease_id': state['tasks'][0]['lease_id']}
+    supervisor.complete(state, "paper_execution_diagnosis", {"status": "VERIFIED", "output": "diagnosis.json"}, lease_id=action['lease_id'])
     assert supervisor.next_action(state, safe_resources())["action"] == "IDLE"
 
 
@@ -60,7 +60,7 @@ def test_completion_clears_claim_metadata_after_recovered_work():
     action = supervisor.next_action(state, safe_resources())
     assert action["action"] == "RUN_LOCAL"
 
-    supervisor.complete(state, "paper_execution_diagnosis", {"status": "VERIFIED", "output": "done.json"})
+    supervisor.complete(state, "paper_execution_diagnosis", {"status": "VERIFIED", "output": "done.json"}, lease_id=action['lease_id'])
     task = state["tasks"][0]
     assert task["status"] == "VERIFIED"
     assert not {"owner", "started_at", "lease_expires_at"} & task.keys()
@@ -81,7 +81,7 @@ def test_explicitly_queued_codex_task_runs_only_when_automation_is_provisioned()
                        "requires_codex": True, "kind": "codex"}]
     action = supervisor.next_action(state, safe_resources(), codex_available=True)
     assert action == {"action": "RUN_CODEX", "reason": "explicit_queued_task",
-                      "task_id": "codex-safe-fix", "needs_codex": True}
+                      "task_id": "codex-safe-fix", "needs_codex": True, 'lease_id': state['tasks'][0]['lease_id']}
 
 
 def test_failed_task_keeps_a_durable_checkpoint_until_its_bounded_retry_budget_is_exhausted():
