@@ -5,7 +5,7 @@ umask 077
 
 APP_DIR=${SHARIPOVAI_REPO_DIR:-/opt/sharipovai-repo}
 STATE_DIR=${ASTRA_SUPERVISOR_STATE_DIR:-/var/lib/sharipovai/astra-supervisor}
-LOCK=/run/lock/sharipovai-astra-supervisor.lock
+LOCK=${ASTRA_SUPERVISOR_LOCK_FILE:-/run/lock/sharipovai-astra-supervisor.lock}
 STATE="$STATE_DIR/astra_state.json"
 STATUS="$STATE_DIR/ASTRA_STATUS.md"
 RESULT="$STATE_DIR/paper_execution_diagnosis.json"
@@ -24,10 +24,8 @@ if [[ -f "$APP_DIR/deploy/vps/backups/.export.lock" ]]; then
 else
     export ASTRA_MAINTENANCE_BUSY=backup_lock_unavailable
 fi
-if [[ -f /run/lock/sharipovai-deploy.lock ]]; then
-    exec 7</run/lock/sharipovai-deploy.lock
-    flock -sn 7 || export ASTRA_MAINTENANCE_BUSY=deployment
-fi
+exec 7>>"${ASTRA_DEPLOY_LOCK_FILE:-/run/lock/sharipovai-deploy.lock}"
+flock -sn 7 || export ASTRA_MAINTENANCE_BUSY=deployment
 
 codex_args=()
 if [[ "${ASTRA_CODEX_AUTOMATION:-0}" == 1 && -n "${CODEX_ACCESS_TOKEN:-}" ]]; then
@@ -115,6 +113,7 @@ with open(sys.argv[1], 'w', encoding='utf-8') as handle:
     json.dump({'status': 'FAILED', 'output': 'unsupported_local_task:' + sys.argv[2]}, handle)
 PY
     python3 "$APP_DIR/tools/astra_supervisor.py" --state "$STATE" --status "$STATUS" --complete "$task" --lease-id "$lease" --result "$RESULT" >/dev/null
+    trap - EXIT
     exit 64
     ;;
 esac

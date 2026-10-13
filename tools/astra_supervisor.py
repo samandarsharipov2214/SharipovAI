@@ -213,7 +213,7 @@ def complete(state: dict[str, Any], task_id: str, result: Mapping[str, Any], *, 
     task = next((item for item in state["tasks"] if item.get("id") == task_id), None)
     if task is None or task.get("status") not in {"PENDING", *RUNNING_STATUSES}:
         raise ValueError("task is not runnable")
-    if task.get('lease_id') and task['lease_id'] != lease_id:
+    if (task.get('lease_id') or lease_id) and task.get('lease_id') != lease_id:
         raise ValueError('stale task completion lease')
     if task.get('status') == 'PENDING':  # Compatibility with pre-lease checkpoints.
         task['attempts'] = int(task.get('attempts', 0)) + 1

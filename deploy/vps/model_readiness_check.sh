@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 umask 077
+APP_DIR=${APP_DIR:-/opt/sharipovai-repo}
 exec 9>"${MODEL_READINESS_LOCK_FILE:-/run/lock/sharipovai-model-readiness.lock}"
 flock -n 9 || exit 0
 # Metadata scans share the same maintenance exclusion as local diagnostics.
-for lock in /opt/sharipovai-repo/deploy/vps/backups/.export.lock /run/lock/sharipovai-deploy.lock; do
-  [[ -f "$lock" ]] || { echo 'DEFERRED: maintenance lock unavailable'; exit 0; }
-done
-exec 8</opt/sharipovai-repo/deploy/vps/backups/.export.lock
-exec 7</run/lock/sharipovai-deploy.lock
+backup_lock=${ASTRA_EXPORT_LOCK_FILE:-$APP_DIR/deploy/vps/backups/.export.lock}
+[[ -f "$backup_lock" ]] || { echo 'DEFERRED: maintenance lock unavailable'; exit 0; }
+exec 8<"$backup_lock"
+exec 7>>"${ASTRA_DEPLOY_LOCK_FILE:-/run/lock/sharipovai-deploy.lock}"
 flock -sn 8 && flock -sn 7 || { echo 'DEFERRED: backup or deployment active'; exit 0; }
-if ! PYTHONPATH=/opt/sharipovai-repo python3 -c 'from tools.astra_supervisor import resource_state; raise SystemExit(not resource_state()["safe"])'; then
+if ! PYTHONPATH="$APP_DIR" python3 -c 'from tools.astra_supervisor import resource_state; raise SystemExit(not resource_state()["safe"])'; then
   echo 'DEFERRED: resource guard'
   exit 0
 fi

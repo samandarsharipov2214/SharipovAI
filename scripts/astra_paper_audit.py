@@ -80,6 +80,53 @@ def financials(trades: list[dict]) -> dict:
             'pair_mismatches': mismatches, 'open_decision_ids': sorted(open_ids), 'closed': closed}
 
 
+def reconcile_account(state: dict, trades: list[dict], report: dict) -> tuple[list[str], dict]:
+    issues = []
+    def amount(key):
+        value = state.get(key)
+        if type(value) not in (int, float) or not math.isfinite(value):
+            issues.append(key + '_invalid')
+            return math.nan
+        return value
+    cash, equity, unrealized = (amount(k) for k in ('cash', 'equity', 'unrealized_pnl'))
+    if cash < 0 or equity < 0:
+        issues.append('negative_cash_or_equity')
+    positions = state.get('positions') or {}
+    basis = 0.
+    open_buys = {t.get('decision_id'): t for t in trades
+                 if t['side'] == 'BUY' and t.get('decision_id') in report['open_decision_ids']}
+    for symbol, p in positions.items():
+        buy = open_buys.get(p.get('decision_id'))
+        quantity, price = p.get('quantity'), p.get('entry_price')
+        if any(type(v) not in (int, float) or not math.isfinite(v) or v <= 0 for v in (quantity, price)):
+            issues.append('invalid_position_basis')
+            continue
+        basis += quantity * price
+        if (not buy or buy['symbol'] != symbol
+                or not math.isclose(quantity, buy['quantity'], rel_tol=0, abs_tol=1e-10)
+                or not math.isclose(price, buy['price'], rel_tol=0, abs_tol=1e-8)):
+            issues.append('position_execution_mismatch')
+    if set(report['open_decision_ids']) != {p.get('decision_id') for p in positions.values()}:
+        issues.append('open_positions_mismatch')
+    if not math.isclose(equity, cash + basis + unrealized, rel_tol=1e-9, abs_tol=1e-6):
+        issues.append('equity_cash_positions_unrealized_mismatch')
+    for field, computed in [('realized_pnl', report['net_pnl_usdt']), ('total_fees', report['all_execution_fees_usdt'])]:
+        if not math.isclose(amount(field), computed, rel_tol=1e-9, abs_tol=1e-6):
+            issues.append(field + '_mismatch')
+    for field in ('pending_authorized_executions', 'pending_protective_executions'):
+        if state.get(field):
+            issues.append(field)
+    capital = {'status': 'NOT_VERIFIED', 'reason': 'capital_rebase_baseline_missing'}
+    if not state.get('paper_rebased_to_initial'):
+        initial = amount('configured_initial_cash')
+        expected = initial + math.fsum((1 if t['side'] == 'SELL' else -1) * t['price'] * t['quantity'] - t['fee'] for t in trades)
+        if not math.isclose(cash, expected, rel_tol=1e-9, abs_tol=1e-6):
+            issues.append('cash_execution_cashflow_mismatch')
+        capital = {'status': 'PASS' if not issues else 'FAIL',
+                   'expected_cash': expected if math.isfinite(expected) else None}
+    return sorted(set(issues)), capital
+
+
 def collect(path: Path, *, scope: str, since_ms: int, now_ms: int | None = None) -> dict:
     now_ms = int(time.time()*1000) if now_ms is None else now_ms
     deadline = time.monotonic() + 15
@@ -93,30 +140,47 @@ def collect(path: Path, *, scope: str, since_ms: int, now_ms: int | None = None)
             if row and len(row[0]) > MAX_ROW_BYTES:
                 raise ValueError('audit_row_limit')
             return loads(row[0]) if row else None
-        trades = []
-        for row in db.execute('SELECT value_json FROM project_kv WHERE namespace=? ORDER BY item_key LIMIT ?',
-                              ('paper_trades:' + scope, MAX_TRADES+1)):
-            if len(trades) >= MAX_TRADES or len(row[0]) > MAX_ROW_BYTES:
+        by_scope = defaultdict(list)
+        for index, row in enumerate(db.execute(
+                "SELECT namespace,value_json FROM project_kv WHERE namespace >= 'paper_trades:' "
+                "AND namespace < 'paper_trades;' ORDER BY namespace,item_key LIMIT ?", (MAX_TRADES+1,))):
+            if index >= MAX_TRADES or len(row[1]) > MAX_ROW_BYTES:
                 raise ValueError('audit_source_limit')
-            trades.append(loads(row[0]))
+            by_scope[row[0].split(':', 1)[1]].append(loads(row[1]))
+        trades = by_scope[scope]
         state = record('autonomous_paper_state', scope)
         if state is None:
             raise ValueError('canonical_scope_missing')
         report = financials(trades)
         linkage = []
-        for t in report['closed']:
+        closed = {}
+        for account_scope, rows in by_scope.items():
+            other = report if account_scope == scope else financials(rows)
+            linkage.extend({'scope': account_scope, **v} for v in other['pair_mismatches'])
+            for t in other['closed']:
+                if t['decision_id'] in closed:
+                    linkage.append({'decision_id': t['decision_id'], 'reason': 'duplicate_scope_decision'})
+                closed[t['decision_id']] = t
+        for t in closed.values():
             for namespace, key in (('paper_decision_settlements', t['decision_id']),
                                    ('self_learning_outcomes_v2', 'paper:' + t['decision_id'])):
                 row = record(namespace, key)
                 if not row or not math.isclose(float(row.get('net_pnl', math.inf)), t['net'], rel_tol=0, abs_tol=1e-7):
                     linkage.append({'decision_id': t['decision_id'], 'namespace': namespace})
+        for namespace in ('paper_decision_settlements', 'self_learning_outcomes_v2'):
+            # Settlement/outcome namespaces are shared across accounts. Use all
+            # bounded execution scopes so another account is never an orphan.
+            query = 'SELECT item_key FROM project_kv WHERE namespace=?'
+            if namespace == 'self_learning_outcomes_v2':
+                query += " AND item_key >= 'paper:' AND item_key < 'paper;'"
+            for index, (key,) in enumerate(db.execute(query + ' ORDER BY item_key LIMIT ?', (namespace, MAX_TRADES+1))):
+                if index >= MAX_TRADES:
+                    raise ValueError('audit_linkage_limit')
+                decision = key.removeprefix('paper:') if namespace == 'self_learning_outcomes_v2' else key
+                if decision not in closed:
+                    linkage.append({'decision_id': decision, 'namespace': namespace, 'reason': 'orphan_record'})
         del report['closed']
-        accounting = []
-        for field, computed in [('realized_pnl', report['net_pnl_usdt']), ('total_fees', report['all_execution_fees_usdt'])]:
-            if not math.isclose(float(state.get(field, math.inf)), computed, rel_tol=1e-9, abs_tol=1e-6):
-                accounting.append(field + '_mismatch')
-        if set(report['open_decision_ids']) != {p.get('decision_id') for p in (state.get('positions') or {}).values()}:
-            accounting.append('open_positions_mismatch')
+        accounting, capital = reconcile_account(state, trades, report)
         traces = []
         for key, _ in db.execute('SELECT item_key,updated_at_ms FROM project_kv WHERE namespace=? LIMIT 33',
                                 ('council_decision_trace',)):
@@ -133,6 +197,7 @@ def collect(path: Path, *, scope: str, since_ms: int, now_ms: int | None = None)
             'read_only': True, 'generated_at_ms': now_ms, 'scope': scope,
             'audit_completed': True, 'profitability_proven': False, 'historical_financials': report,
             'linkage_mismatches': linkage, 'accounting_issues': accounting,
+            'capital_reconciliation': capital,
             'account': {k:state.get(k) for k in ('cash','equity','configured_initial_cash','paper_rebased_to_initial',
                         'positions','pending_authorized_executions','pending_protective_executions')},
             'observation_window': {'since_ms': since_ms, 'until_ms': now_ms, 'executions': len(recent),

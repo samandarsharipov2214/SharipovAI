@@ -1,6 +1,7 @@
 """Exercise host wrappers with disposable commands, never systemd or Docker."""
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -13,10 +14,14 @@ def host(tmp_path):
     commands = tmp_path / "bin"
     commands.mkdir()
     log = tmp_path / "calls.log"
-    program = '''#!/usr/bin/env python3
+    program = '''#!PYTHON_EXECUTABLE
 import json, os, pathlib, sys
 name = pathlib.Path(sys.argv[0]).name
 args = sys.argv[1:]
+if name == 'python3':
+    if 'from tools.astra_supervisor import resource_state' in ' '.join(args):
+        sys.exit(0)
+    os.execv(sys.executable, [sys.executable, *args])
 source = sys.stdin.read() if (name == 'docker' and '-i' in args) or name == 'cmp' else ''
 with open(os.environ['CALL_LOG'], 'a') as out:
     out.write(json.dumps({'name': name, 'args': args, 'source': source}) + '\\n')
@@ -42,13 +47,17 @@ if name == 'cmp' and os.environ.get('FAIL_STAGE') == 'installed_content':
     sys.exit(12)
 if name == 'systemctl' and 'enable' in args and os.environ.get('FAIL_STAGE') == 'enable':
     sys.exit(10)
-'''
-    for name in ("docker", "git", "systemctl", "install", "cmp"):
+'''.replace('PYTHON_EXECUTABLE', sys.executable)
+    for name in ("docker", "git", "systemctl", "install", "cmp", "python3"):
         path = commands / name
         path.write_text(program)
         path.chmod(0o755)
+    export_lock = tmp_path / 'export.lock'
+    export_lock.touch()
     env = os.environ | {"PATH": str(commands) + os.pathsep + os.environ["PATH"],
                         "CALL_LOG": str(log), "APP_DIR": str(ROOT),
+                        "ASTRA_EXPORT_LOCK_FILE": str(export_lock),
+                        "ASTRA_DEPLOY_LOCK_FILE": str(tmp_path / 'deploy.lock'),
                         "MODEL_READINESS_LOCK_FILE": str(tmp_path / "readiness.lock")}
     return env, log
 
