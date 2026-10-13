@@ -20,7 +20,8 @@ fi
 [[ -f "$SCRIPT" ]] || fail "backup exporter is missing: $SCRIPT"
 [[ -f "$RUNNER" ]] || fail "backup timer runner is missing: $RUNNER"
 [[ -f "$VERIFY" ]] || fail "backup verifier is missing: $VERIFY"
-chmod 750 "$SCRIPT" "$RUNNER" "$VERIFY"
+# systemd invokes Bash explicitly; preserve the tracked checkout file modes.
+bash -n "$SCRIPT" "$RUNNER" "$VERIFY"
 
 cat > "$SERVICE" <<EOF
 [Unit]
@@ -33,8 +34,8 @@ Type=oneshot
 User=root
 WorkingDirectory=$APP_DIR/deploy/vps
 Environment=APP_DIR=$APP_DIR
-ExecStartPre=/usr/bin/test -x $SCRIPT
-ExecStartPre=/usr/bin/test -x $RUNNER
+ExecStartPre=/usr/bin/test -r $SCRIPT
+ExecStartPre=/usr/bin/test -r $RUNNER
 ExecStart=/usr/bin/bash $RUNNER
 TimeoutStartSec=75min
 Nice=10
@@ -62,7 +63,11 @@ EOF
 systemctl daemon-reload
 systemctl enable --now sharipovai-backup.timer
 systemctl reset-failed sharipovai-backup.service || true
-systemctl start sharipovai-backup.service
+if [[ "${SHARIPOVAI_BACKUP_TIMER_SKIP_INITIAL_RUN:-0}" == 1 ]]; then
+  log 'using existing backup; checksum and freshness verification still required'
+else
+  systemctl start sharipovai-backup.service
+fi
 systemctl is-enabled --quiet sharipovai-backup.timer
 systemctl is-active --quiet sharipovai-backup.timer
 systemctl is-failed --quiet sharipovai-backup.service && fail 'first backup service run failed'
@@ -75,5 +80,6 @@ test -s "$latest.sha256" || fail 'latest backup checksum is missing'
   sha256sum -c "$(basename "$latest.sha256")" >/dev/null
 ) || fail 'latest backup checksum verification failed'
 
-APP_DIR="$APP_DIR" BACKUP_MAX_AGE_SECONDS=3600 bash "$VERIFY"
+APP_DIR="$APP_DIR" BACKUP_ALLOW_UNTRIGGERED_TIMER="${SHARIPOVAI_BACKUP_TIMER_SKIP_INITIAL_RUN:-0}" \
+  BACKUP_MAX_AGE_SECONDS=3600 bash "$VERIFY"
 log "timer active; first verified backup: $latest"
