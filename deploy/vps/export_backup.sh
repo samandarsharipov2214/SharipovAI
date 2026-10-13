@@ -19,8 +19,15 @@ SIZE_PROBE_TIMEOUT_SECONDS=${SHARIPOVAI_BACKUP_SIZE_PROBE_TIMEOUT_SECONDS:-60}
 # while leaving a healthy, fresh archive available for its next scheduled run.
 LOCK_BUSY_EXIT=${SHARIPOVAI_BACKUP_LOCK_BUSY_EXIT:-1}
 
-fail() { printf '[backup] ERROR: %s\n' "$*" >&2; exit 1; }
-log() { printf '[backup] %s\n' "$*"; }
+# A disconnected observer must not turn a completed snapshot into a failed
+# export. Ignore SIGPIPE only for diagnostic writes, never for data pipelines.
+console_message() {
+  (trap '' PIPE; printf '%s\n' "$1") 2>/dev/null || {
+    logger -t sharipovai-backup -- "$1" 2>/dev/null || :
+  }
+}
+fail() { console_message "[backup] ERROR: $*" >&2; exit 1; }
+log() { console_message "[backup] $*"; }
 
 if ! [[ "$KEEP" =~ ^[1-9][0-9]{0,2}$ ]] || (( KEEP > 100 )); then
   fail 'KEEP must be an integer between 1 and 100'
@@ -63,7 +70,7 @@ chmod 700 "$BACKUP_DIR"
 BACKUP_DIR=$(cd "$BACKUP_DIR" && pwd -P)
 exec 9>"$BACKUP_DIR/.export.lock"
 if ! flock -n 9; then
-  printf '[backup] SKIPPED_ACTIVE_EXPORT: backup export is already running\n' >&2
+  console_message '[backup] SKIPPED_ACTIVE_EXPORT: backup export is already running' >&2
   exit "$LOCK_BUSY_EXIT"
 fi
 
@@ -713,4 +720,4 @@ if [[ "$running" == 'true' ]] && docker exec "$container_id" python -c 'import s
     || log 'storage metrics collection failed'
 fi
 log "backup completed using $source_mode"
-echo "$archive"
+console_message "$archive"
