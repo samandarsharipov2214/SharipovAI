@@ -80,6 +80,6 @@ test -s "$latest.sha256" || fail 'latest backup checksum is missing'
   sha256sum -c "$(basename "$latest.sha256")" >/dev/null
 ) || fail 'latest backup checksum verification failed'
 
-APP_DIR="$APP_DIR" BACKUP_MAX_AGE_SECONDS=3600 \
-  BACKUP_ALLOW_UNTRIGGERED_TIMER="${SHARIPOVAI_BACKUP_TIMER_SKIP_INITIAL_RUN:-0}" bash "$VERIFY"
+APP_DIR="$APP_DIR" BACKUP_ALLOW_UNTRIGGERED_TIMER="${SHARIPOVAI_BACKUP_TIMER_SKIP_INITIAL_RUN:-0}" \
+  BACKUP_MAX_AGE_SECONDS=3600 bash "$VERIFY"
 log "timer active; first verified backup: $latest"
