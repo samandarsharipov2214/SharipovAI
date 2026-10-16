@@ -79,24 +79,8 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def verify_snapshot(snapshot: Path) -> dict[str, Any]:
-    """Verify that snapshot contents exactly match a bounded manifest."""
-
-    raw_snapshot = Path(snapshot)
-    if raw_snapshot.is_symlink():
-        raise BackupIntegrityError("snapshot directory must not be a symlink")
-    snapshot = raw_snapshot.resolve()
-    manifest_path = snapshot / "manifest.json"
-    source = snapshot / "data"
-    if manifest_path.is_symlink() or source.is_symlink():
-        raise BackupIntegrityError("snapshot manifest and data directory must not be symlinks")
-    if not manifest_path.is_file() or not source.is_dir():
-        raise BackupIntegrityError("snapshot must contain manifest.json and data/")
-
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise BackupIntegrityError(f"invalid backup manifest: {exc}") from exc
+def validate_manifest(manifest: Any) -> dict[str, Any]:
+    """Validate the same bounded schema independently of its storage medium."""
     if not isinstance(manifest, dict):
         raise BackupIntegrityError("invalid backup manifest")
     schema = manifest.get("schema")
@@ -114,7 +98,6 @@ def verify_snapshot(snapshot: Path) -> dict[str, Any]:
 
     expected: set[str] = set()
     total_bytes = 0
-    source_root = source.resolve()
     for index, entry in enumerate(entries):
         if not isinstance(entry, dict):
             raise BackupIntegrityError(f"invalid backup entry at index {index}")
@@ -137,31 +120,6 @@ def verify_snapshot(snapshot: Path) -> dict[str, Any]:
         if not _SHA256_RE.fullmatch(expected_hash):
             raise BackupIntegrityError(f"invalid backup checksum: {key}")
 
-        path = source.joinpath(*relative.parts)
-        _reject_symlink_chain(source, path)
-        if not path.is_file():
-            raise BackupIntegrityError(f"backup file missing: {key}")
-        resolved = path.resolve()
-        if not resolved.is_relative_to(source_root):
-            raise BackupIntegrityError(f"unsafe backup path: {key}")
-        if path.stat().st_size != expected_bytes:
-            raise BackupIntegrityError(f"backup size mismatch: {key}")
-        if sha256(path) != expected_hash:
-            raise BackupIntegrityError(f"checksum mismatch: {key}")
-
-    actual: set[str] = set()
-    for path in source.rglob("*"):
-        relative = path.relative_to(source).as_posix()
-        if path.is_symlink():
-            raise BackupIntegrityError(f"backup symlink is forbidden: {relative}")
-        if path.is_file():
-            actual.add(relative)
-        elif not path.is_dir():
-            raise BackupIntegrityError(f"unsupported backup entry: {relative}")
-    if actual != expected:
-        extra = sorted(actual - expected)
-        missing = sorted(expected - actual)
-        raise BackupIntegrityError(f"backup manifest set mismatch: extra={extra[:10]}, missing={missing[:10]}")
     if schema == 2:
         logical = manifest.get("sqlite_logical")
         if not isinstance(logical, list) or not logical:
@@ -186,6 +144,52 @@ def verify_snapshot(snapshot: Path) -> dict[str, Any]:
             sources.add(path)
         if sum(item["logical_bytes"] for item in logical) > MAX_TOTAL_BYTES:
             raise BackupIntegrityError("logical databases exceed restore budget")
+    return manifest
+
+
+def verify_snapshot(snapshot: Path) -> dict[str, Any]:
+    """Verify that snapshot contents exactly match a bounded manifest."""
+    raw_snapshot = Path(snapshot)
+    if raw_snapshot.is_symlink():
+        raise BackupIntegrityError("snapshot directory must not be a symlink")
+    snapshot = raw_snapshot.resolve()
+    manifest_path = snapshot / "manifest.json"
+    source = snapshot / "data"
+    if manifest_path.is_symlink() or source.is_symlink():
+        raise BackupIntegrityError("snapshot manifest and data directory must not be symlinks")
+    if not manifest_path.is_file() or not source.is_dir():
+        raise BackupIntegrityError("snapshot must contain manifest.json and data/")
+    try:
+        manifest = validate_manifest(json.loads(manifest_path.read_text(encoding="utf-8")))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise BackupIntegrityError(f"invalid backup manifest: {exc}") from exc
+    expected = {_safe_relative_path(entry["path"]).as_posix() for entry in manifest["files"]}
+    source_root = source.resolve()
+    for entry in manifest["files"]:
+        key = _safe_relative_path(entry["path"]).as_posix()
+        path = source.joinpath(*_safe_relative_path(key).parts)
+        _reject_symlink_chain(source, path)
+        if not path.is_file():
+            raise BackupIntegrityError(f"backup file missing: {key}")
+        if not path.resolve().is_relative_to(source_root):
+            raise BackupIntegrityError(f"unsafe backup path: {key}")
+        if path.stat().st_size != entry["bytes"]:
+            raise BackupIntegrityError(f"backup size mismatch: {key}")
+        if sha256(path) != str(entry["sha256"]).strip().lower():
+            raise BackupIntegrityError(f"checksum mismatch: {key}")
+    actual: set[str] = set()
+    for path in source.rglob("*"):
+        relative = path.relative_to(source).as_posix()
+        if path.is_symlink():
+            raise BackupIntegrityError(f"backup symlink is forbidden: {relative}")
+        if path.is_file():
+            actual.add(relative)
+        elif not path.is_dir():
+            raise BackupIntegrityError(f"unsupported backup entry: {relative}")
+    if actual != expected:
+        extra = sorted(actual - expected)
+        missing = sorted(expected - actual)
+        raise BackupIntegrityError(f"backup manifest set mismatch: extra={extra[:10]}, missing={missing[:10]}")
     return manifest
 
 
@@ -330,4 +334,5 @@ __all__ = [
     "extract_verified_archive",
     "sha256",
     "verify_snapshot",
+    "validate_manifest",
 ]
