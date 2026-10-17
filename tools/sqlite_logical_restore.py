@@ -14,18 +14,35 @@ import shutil
 import sqlite3
 import time
 from pathlib import Path
+from typing import BinaryIO
 
 from tools.backup_integrity import BackupIntegrityError, MAX_TOTAL_BYTES, sha256
 
 
+def restore_budget(metadata: dict) -> int:
+    """Existing source/index allocation bound, shared with recovery planning."""
+    return min(MAX_TOTAL_BYTES, metadata["logical_bytes"] * 3 // 2 + 16 * 1024**2)
+
+
 def restore_database(source: Path, target: Path, metadata: dict, *, reserve_bytes: int = 2 * 1024**3) -> None:
+    with source.open("rb") as compressed:
+        restore_database_stream(compressed, target, metadata, reserve_bytes=reserve_bytes)
+
+
+def restore_database_stream(compressed: BinaryIO, target: Path, metadata: dict, *,
+                            reserve_bytes: int = 2 * 1024**3, deadline: float | None = None) -> None:
+    """Restore the same verified gzip stream without requiring a staging copy.
+
+    The caller owns the compressed input. Admission, SQL restrictions, deadlines
+    and integrity checks are shared with the original file-based restore path.
+    """
     if target.exists() or target.is_symlink():
         raise BackupIntegrityError("logical restore target already exists")
     # Rebuilding indexes can require temporary space as well as database pages.
-    budget = min(MAX_TOTAL_BYTES, metadata["logical_bytes"] * 3 // 2 + 16 * 1024**2)
+    budget = restore_budget(metadata)
     if shutil.disk_usage(target.parent).free < reserve_bytes + budget:
         raise BackupIntegrityError("insufficient isolated restore workspace")
-    deadline = time.monotonic() + 3600
+    deadline = min(time.monotonic() + 3600, deadline) if deadline is not None else time.monotonic() + 3600
     connection = sqlite3.connect(target)
     digest = hashlib.sha256()
     total = count = 0
@@ -45,7 +62,7 @@ def restore_database(source: Path, target: Path, metadata: dict, *, reserve_byte
                 return sqlite3.SQLITE_DENY
             return sqlite3.SQLITE_OK
         connection.set_authorizer(authorize)
-        with gzip.open(source, "rb") as stream:
+        with gzip.GzipFile(fileobj=compressed, mode="rb") as stream:
             while data := stream.readline(64 * 1024**2 + 1):
                 total += len(data)
                 count += 1
