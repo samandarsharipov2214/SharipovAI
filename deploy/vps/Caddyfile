@@ -4,7 +4,8 @@
     header {
         Strict-Transport-Security "max-age=31536000; includeSubDomains"
         X-Content-Type-Options "nosniff"
-        X-Frame-Options "SAMEORIGIN"
+        # The app sets X-Frame-Options: DENY for protected routes.
+        # Do not override its narrow Site V1 CSP frame-ancestors allowlist.
         Referrer-Policy "strict-origin-when-cross-origin"
         -Server
     }
