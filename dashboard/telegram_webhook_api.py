@@ -274,7 +274,7 @@ def _current_bot_username() -> str | None:
         return configured
     if _BOT_USERNAME_RESOLVED:
         return _BOT_USERNAME_CACHE
-    if time.monotonic() < _BOT_USERNAME_RETRY_AT or not _BOT_USERNAME_LOCK.acquire(blocking=False):
+    if not _BOT_USERNAME_LOCK.acquire(timeout=TELEGRAM_API_TIMEOUT + TELEGRAM_CONNECT_TIMEOUT):
         return None
     try:
         if _BOT_USERNAME_RESOLVED:

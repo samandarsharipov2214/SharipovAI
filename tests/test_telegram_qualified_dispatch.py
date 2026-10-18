@@ -91,3 +91,40 @@ def test_webhook_identity_lookup_runs_outside_event_loop(monkeypatch):
             response = await client.post("/telegram/webhook", headers={"X-Telegram-Bot-Api-Secret-Token": "fixture"}, json={"update_id": 1, "message": {"text": "/status@Our_Bot"}})
         assert response.status_code == 200
     asyncio.run(exercise())
+
+
+def test_concurrent_cold_start_commands_share_identity_lookup(monkeypatch):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    monkeypatch.delenv("TELEGRAM_BOT_USERNAME", raising=False)
+    monkeypatch.setattr(api, "_BOT_USERNAME_CACHE", None)
+    monkeypatch.setattr(api, "_BOT_USERNAME_RESOLVED", False)
+    monkeypatch.setattr(api, "_BOT_USERNAME_RETRY_AT", 0.0)
+    entered, release, waiting = threading.Event(), threading.Event(), threading.Event()
+    lock = threading.Lock()
+    class ObservedLock:
+        def acquire(self, **kwargs):
+            if lock.locked():
+                waiting.set()
+            return lock.acquire(**kwargs)
+        def release(self):
+            lock.release()
+    monkeypatch.setattr(api, "_BOT_USERNAME_LOCK", ObservedLock())
+    calls = []
+    def lookup(method):
+        calls.append(method)
+        entered.set()
+        assert release.wait(3)
+        return {"ok": True, "result": {"username": "Our_Bot"}}
+    monkeypatch.setattr(api, "_telegram", lookup)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(api._normalize_command_text, "/status@Our_Bot")
+        try:
+            assert entered.wait(3)
+            second = pool.submit(api._normalize_command_text, "/news@Our_Bot")
+            assert waiting.wait(3)
+        finally:
+            release.set()
+        assert first.result(timeout=3) == "/status"
+        assert second.result(timeout=3) == "/news"
+    assert calls == ["getMe"]

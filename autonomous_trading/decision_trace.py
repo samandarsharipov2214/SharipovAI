@@ -13,7 +13,7 @@ _MAX_LIST = 32
 # These phases begin a new observation, not an update to a previous proposal.
 _NEW_OBSERVATION_PHASES = frozenset({
     "preflight", "market_evidence", "market_verification", "market_stream",
-    "quote", "proposal_provider", "proposal_interval", "council",
+    "quote", "proposal_provider", "proposal_interval", "council", "protective_exit",
 })
 
 

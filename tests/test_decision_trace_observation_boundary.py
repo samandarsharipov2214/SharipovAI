@@ -21,3 +21,13 @@ def test_new_decision_identity_cannot_inherit_old_fields(tmp_path):
  persist_decision_trace(db,'BTCUSDT',{'decision_id':'old','authorized':True},now_ms=100)
  result=persist_decision_trace(db,'BTCUSDT',{'phase':'virtual_execution','decision_id':'new','status':'BLOCK'},now_ms=200)
  assert result['decision_id']=='new' and 'authorized' not in result
+
+
+@pytest.mark.parametrize("exit_fields", [{"decision_id": "entry", "status": "SELL"}, {"status": "BLOCK"}])
+def test_protective_exit_does_not_inherit_entry_vote(tmp_path, exit_fields):
+    db = ProjectDatabase(f"sqlite:///{tmp_path / 'trace.db'}")
+    db.initialize()
+    persist_decision_trace(db, "BTCUSDT", {"phase": "council", "decision_id": "entry", "authorized": True, "risk_blocks": [], "decision_quality_confidence": 1.0}, now_ms=100)
+    result = persist_decision_trace(db, "BTCUSDT", {"phase": "protective_exit", **exit_fields}, now_ms=200)
+    assert not {"authorized", "risk_blocks", "decision_quality_confidence"} & result.keys()
+    assert result["status"] == exit_fields["status"]
