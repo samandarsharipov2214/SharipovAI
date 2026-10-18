@@ -42,3 +42,30 @@ def test_news_uses_existing_evidence_renderer_not_llm(monkeypatch):
  monkeypatch.setattr(adapter,'_reply',lambda _:pytest.fail('news unexpectedly sent to LLM'))
  adapter.handle_message({'chat':{'id':1},'from':{'id':1},'text':'/news'})
  assert sent==['verified news fixture']
+
+
+@pytest.mark.parametrize("failure", [{"ok": False}, {"ok": True, "result": {}}, RuntimeError("offline")])
+def test_bot_identity_recovers_after_bounded_failure(monkeypatch, failure):
+    monkeypatch.delenv("TELEGRAM_BOT_USERNAME", raising=False)
+    monkeypatch.setattr(api, "_BOT_USERNAME_CACHE", None)
+    monkeypatch.setattr(api, "_BOT_USERNAME_RESOLVED", False)
+    monkeypatch.setattr(api, "_BOT_USERNAME_RETRY_AT", 0.0)
+    clock = [100.0]
+    calls = []
+    monkeypatch.setattr(api.time, "monotonic", lambda: clock[0])
+    def lookup(method):
+        calls.append(method)
+        if len(calls) == 1:
+            if isinstance(failure, Exception):
+                raise failure
+            return failure
+        return {"ok": True, "result": {"username": "Our_Bot"}}
+    monkeypatch.setattr(api, "_telegram", lookup)
+    assert api._normalize_command_text("/status@Our_Bot") is None
+    clock[0] = 159.0
+    assert api._normalize_command_text("/status@Our_Bot") is None
+    assert len(calls) == 1
+    clock[0] = 161.0
+    assert api._normalize_command_text("/status@Our_Bot") == "/status"
+    assert api._normalize_command_text("/status@Other_Bot") is None
+    assert len(calls) == 2

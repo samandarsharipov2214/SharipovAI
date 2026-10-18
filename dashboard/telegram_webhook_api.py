@@ -30,6 +30,8 @@ TELEGRAM_CONNECT_TIMEOUT = 5.0
 MINIAPP_MAX_AGE_SECONDS = int(os.getenv("TELEGRAM_INIT_DATA_MAX_AGE", "3600"))
 _BOT_USERNAME_CACHE: str | None = None
 _BOT_USERNAME_RESOLVED = False
+_BOT_USERNAME_RETRY_AT = 0.0
+_BOT_USERNAME_LOCK = threading.Lock()
 
 
 def schedule_telegram_webhook_autoconfigure(app: FastAPI) -> None:
@@ -264,24 +266,34 @@ def _owner_deploy_control_update(update: dict[str, Any]) -> bool:
 
 
 def _current_bot_username() -> str | None:
-    """Resolve the authenticated bot username once, failing closed when unavailable."""
-
-    global _BOT_USERNAME_CACHE, _BOT_USERNAME_RESOLVED
-    if _BOT_USERNAME_RESOLVED:
-        return _BOT_USERNAME_CACHE
-
+    """Cache successful identity only; transient failures retry after a cooldown."""
+    global _BOT_USERNAME_CACHE, _BOT_USERNAME_RESOLVED, _BOT_USERNAME_RETRY_AT
     configured = os.getenv("TELEGRAM_BOT_USERNAME", "").strip().lstrip("@").lower()
     if configured:
-        _BOT_USERNAME_CACHE = configured
-        _BOT_USERNAME_RESOLVED = True
         return configured
-
-    result = _telegram("getMe")
-    payload = result.get("result") if isinstance(result, dict) else None
-    username = str(payload.get("username") or "").strip().lstrip("@").lower() if isinstance(payload, dict) else ""
-    _BOT_USERNAME_CACHE = username or None
-    _BOT_USERNAME_RESOLVED = True
-    return _BOT_USERNAME_CACHE
+    if _BOT_USERNAME_RESOLVED:
+        return _BOT_USERNAME_CACHE
+    if time.monotonic() < _BOT_USERNAME_RETRY_AT or not _BOT_USERNAME_LOCK.acquire(blocking=False):
+        return None
+    try:
+        if _BOT_USERNAME_RESOLVED:
+            return _BOT_USERNAME_CACHE
+        if time.monotonic() < _BOT_USERNAME_RETRY_AT:
+            return None
+        # Set before I/O so exceptions also remain bounded and fail closed.
+        _BOT_USERNAME_RETRY_AT = time.monotonic() + 60.0
+        try:
+            result = _telegram("getMe")
+        except Exception:
+            return None
+        payload = result.get("result") if isinstance(result, dict) and result.get("ok") is True else None
+        username = str(payload.get("username") or "").strip().lstrip("@").lower() if isinstance(payload, dict) else ""
+        if username:
+            _BOT_USERNAME_CACHE = username
+            _BOT_USERNAME_RESOLVED = True
+        return _BOT_USERNAME_CACHE if _BOT_USERNAME_RESOLVED else None
+    finally:
+        _BOT_USERNAME_LOCK.release()
 
 
 def _normalize_command_text(text: str) -> str | None:
