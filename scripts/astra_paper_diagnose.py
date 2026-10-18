@@ -9,6 +9,7 @@ import argparse
 import json
 import sys
 import time
+from collections import Counter
 from collections.abc import Mapping
 from typing import Any
 
@@ -100,7 +101,10 @@ def collect(database: ProjectDatabase | None = None) -> dict[str, Any]:
     return {"status": "VERIFIED", "generated_at_ms": int(time.time() * 1000),
             "read_only": True, "symbols": results,
             "summary": {"symbols_observed": len(results),
-                        "natural_entries": sum(1 for item in results if item["status"] not in {"WAIT", "BLOCK"})}}
+                        "decision_status_counts": dict(Counter(item["status"] for item in results)),
+                        "executions_verified": False,
+                        "execution_count": None,
+                        "execution_source": "paper_trades:<scope>; latest traces are not an execution ledger"}}
 
 
 def main() -> int:

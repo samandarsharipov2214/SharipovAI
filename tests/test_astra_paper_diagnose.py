@@ -48,3 +48,15 @@ def test_diagnosis_does_not_misclassify_anti_churn_as_stale_market_data(tmp_path
     })
     result = collect(database)
     assert result["symbols"][0]["reason_code"] == "PROSPECTIVE_EDGE_UNAVAILABLE"
+
+
+def test_proposals_and_latest_trace_do_not_count_as_executions(tmp_path):
+    database = ProjectDatabase(f"sqlite:///{tmp_path / 'diagnosis.sqlite3'}")
+    database.initialize()
+    for symbol, status in (("BTCUSDT", "PROPOSAL"), ("ETHUSDT", "UNKNOWN"), ("SOLUSDT", "BUY")):
+        database.put_json("council_decision_trace", symbol, {"symbol": symbol, "status": status})
+    summary = collect(database)["summary"]
+    assert summary["decision_status_counts"] == {"PROPOSAL": 1, "UNKNOWN": 1, "BUY": 1}
+    assert summary["execution_count"] is None
+    assert summary["executions_verified"] is False
+    assert "natural_entries" not in summary

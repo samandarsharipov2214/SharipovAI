@@ -179,6 +179,7 @@ def setup_bot_commands() -> None:
         {"command": "learning", "description": "Обучение AI"},
         {"command": "reports", "description": "Отчёты"},
         {"command": "stress", "description": "Stress Lab"},
+        {"command": "news", "description": "Новости: источники и время"},
         {"command": "status", "description": "Статус системы"},
         {"command": "deploy", "description": "Обновить SharipovAI"},
         {"command": "deploy_status", "description": "Статус обновления"},
@@ -361,6 +362,9 @@ def handle_message(message: dict[str, Any]) -> None:
     elif command == "/agent":
         question = text.replace("/agent", "", 1).strip() or "General Controller, дай отчёт"
         answer = _reply(question)
+    elif command == "/news":
+        from telegram_bot import news_text
+        answer = news_text()
     elif command == "/trades":
         answer = _trades()
     elif command == "/ai":

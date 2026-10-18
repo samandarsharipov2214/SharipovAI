@@ -13,6 +13,7 @@ from urllib.parse import parse_qsl, urlparse
 import httpx
 from fastapi import BackgroundTasks, Body, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy import select
 
 from telegram_deploy_control import expected_bootstrap_owner, is_exact_owner, persisted_owner
@@ -30,6 +31,8 @@ TELEGRAM_CONNECT_TIMEOUT = 5.0
 MINIAPP_MAX_AGE_SECONDS = int(os.getenv("TELEGRAM_INIT_DATA_MAX_AGE", "3600"))
 _BOT_USERNAME_CACHE: str | None = None
 _BOT_USERNAME_RESOLVED = False
+_BOT_USERNAME_RETRY_AT = 0.0
+_BOT_USERNAME_LOCK = threading.Lock()
 
 
 def schedule_telegram_webhook_autoconfigure(app: FastAPI) -> None:
@@ -96,6 +99,12 @@ def install_telegram_webhook_api(app: FastAPI) -> None:
             update_id = int(update["update_id"])
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="invalid_telegram_update_id")
+        message = update.get("message")
+        if isinstance(message, dict):
+            normalized = await run_in_threadpool(_normalize_command_text, str(message.get("text") or ""))
+            if normalized is None:
+                return {"ok": True, "ignored": True, "reason": "foreign_or_unverified_bot_command"}
+            update = {**update, "message": {**message, "text": normalized}}
         if not claim_telegram_update(update_id):
             return {"ok": True, "duplicate": True, "update_id": update_id, "adapter": "shared_website_system"}
 
@@ -258,24 +267,49 @@ def _owner_deploy_control_update(update: dict[str, Any]) -> bool:
 
 
 def _current_bot_username() -> str | None:
-    """Resolve the authenticated bot username once, failing closed when unavailable."""
-
-    global _BOT_USERNAME_CACHE, _BOT_USERNAME_RESOLVED
-    if _BOT_USERNAME_RESOLVED:
-        return _BOT_USERNAME_CACHE
-
+    """Cache successful identity only; transient failures retry after a cooldown."""
+    global _BOT_USERNAME_CACHE, _BOT_USERNAME_RESOLVED, _BOT_USERNAME_RETRY_AT
     configured = os.getenv("TELEGRAM_BOT_USERNAME", "").strip().lstrip("@").lower()
     if configured:
-        _BOT_USERNAME_CACHE = configured
-        _BOT_USERNAME_RESOLVED = True
         return configured
+    if _BOT_USERNAME_RESOLVED:
+        return _BOT_USERNAME_CACHE
+    if not _BOT_USERNAME_LOCK.acquire(timeout=TELEGRAM_API_TIMEOUT + TELEGRAM_CONNECT_TIMEOUT):
+        return None
+    try:
+        if _BOT_USERNAME_RESOLVED:
+            return _BOT_USERNAME_CACHE
+        if time.monotonic() < _BOT_USERNAME_RETRY_AT:
+            return None
+        # Set before I/O so exceptions also remain bounded and fail closed.
+        _BOT_USERNAME_RETRY_AT = time.monotonic() + 60.0
+        try:
+            result = _telegram("getMe")
+        except Exception:
+            return None
+        payload = result.get("result") if isinstance(result, dict) and result.get("ok") is True else None
+        username = str(payload.get("username") or "").strip().lstrip("@").lower() if isinstance(payload, dict) else ""
+        if username:
+            _BOT_USERNAME_CACHE = username
+            _BOT_USERNAME_RESOLVED = True
+        return _BOT_USERNAME_CACHE if _BOT_USERNAME_RESOLVED else None
+    finally:
+        _BOT_USERNAME_LOCK.release()
 
-    result = _telegram("getMe")
-    payload = result.get("result") if isinstance(result, dict) else None
-    username = str(payload.get("username") or "").strip().lstrip("@").lower() if isinstance(payload, dict) else ""
-    _BOT_USERNAME_CACHE = username or None
-    _BOT_USERNAME_RESOLVED = True
-    return _BOT_USERNAME_CACHE
+
+def _normalize_command_text(text: str) -> str | None:
+    """Resolve own qualified commands without changing authorization or arguments."""
+    stripped = text.strip()
+    if not stripped.startswith("/"):
+        return text
+    parts = stripped.split(maxsplit=1)
+    command, separator, suffix = parts[0].partition("@")
+    if not separator:
+        return text
+    username = _current_bot_username()
+    if not username or suffix.lower() != username.lower():
+        return None
+    return command + (" " + parts[1] if len(parts) == 2 else "")
 
 
 def _normalize_owner_claim_text(text: str) -> str | None:
