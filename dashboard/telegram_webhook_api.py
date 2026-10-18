@@ -13,6 +13,7 @@ from urllib.parse import parse_qsl, urlparse
 import httpx
 from fastapi import BackgroundTasks, Body, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy import select
 
 from telegram_deploy_control import expected_bootstrap_owner, is_exact_owner, persisted_owner
@@ -100,7 +101,7 @@ def install_telegram_webhook_api(app: FastAPI) -> None:
             raise HTTPException(status_code=400, detail="invalid_telegram_update_id")
         message = update.get("message")
         if isinstance(message, dict):
-            normalized = _normalize_command_text(str(message.get("text") or ""))
+            normalized = await run_in_threadpool(_normalize_command_text, str(message.get("text") or ""))
             if normalized is None:
                 return {"ok": True, "ignored": True, "reason": "foreign_or_unverified_bot_command"}
             update = {**update, "message": {**message, "text": normalized}}

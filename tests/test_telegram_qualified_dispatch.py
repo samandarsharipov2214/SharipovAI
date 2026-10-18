@@ -69,3 +69,25 @@ def test_bot_identity_recovers_after_bounded_failure(monkeypatch, failure):
     assert api._normalize_command_text("/status@Our_Bot") == "/status"
     assert api._normalize_command_text("/status@Other_Bot") is None
     assert len(calls) == 2
+
+
+def test_webhook_identity_lookup_runs_outside_event_loop(monkeypatch):
+    import asyncio
+    import threading
+    import httpx
+    app = FastAPI()
+    monkeypatch.setattr(api, "_webhook_secret", lambda: "fixture")
+    monkeypatch.setattr(api, "claim_telegram_update", lambda _: True)
+    monkeypatch.setattr(api, "_approved_telegram_user_id", lambda _: 101)
+    monkeypatch.setattr(api, "handle_message", lambda _: None)
+    async def exercise():
+        loop_thread = threading.get_ident()
+        def normalize(text):
+            assert threading.get_ident() != loop_thread
+            return "/status"
+        monkeypatch.setattr(api, "_normalize_command_text", normalize)
+        api.install_telegram_webhook_api(app)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/telegram/webhook", headers={"X-Telegram-Bot-Api-Secret-Token": "fixture"}, json={"update_id": 1, "message": {"text": "/status@Our_Bot"}})
+        assert response.status_code == 200
+    asyncio.run(exercise())
