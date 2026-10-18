@@ -96,6 +96,12 @@ def install_telegram_webhook_api(app: FastAPI) -> None:
             update_id = int(update["update_id"])
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="invalid_telegram_update_id")
+        message = update.get("message")
+        if isinstance(message, dict):
+            normalized = _normalize_command_text(str(message.get("text") or ""))
+            if normalized is None:
+                return {"ok": True, "ignored": True, "reason": "foreign_or_unverified_bot_command"}
+            update = {**update, "message": {**message, "text": normalized}}
         if not claim_telegram_update(update_id):
             return {"ok": True, "duplicate": True, "update_id": update_id, "adapter": "shared_website_system"}
 
@@ -276,6 +282,21 @@ def _current_bot_username() -> str | None:
     _BOT_USERNAME_CACHE = username or None
     _BOT_USERNAME_RESOLVED = True
     return _BOT_USERNAME_CACHE
+
+
+def _normalize_command_text(text: str) -> str | None:
+    """Resolve own qualified commands without changing authorization or arguments."""
+    stripped = text.strip()
+    if not stripped.startswith("/"):
+        return text
+    parts = stripped.split(maxsplit=1)
+    command, separator, suffix = parts[0].partition("@")
+    if not separator:
+        return text
+    username = _current_bot_username()
+    if not username or suffix.lower() != username.lower():
+        return None
+    return command + (" " + parts[1] if len(parts) == 2 else "")
 
 
 def _normalize_owner_claim_text(text: str) -> str | None:
