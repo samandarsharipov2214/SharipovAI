@@ -10,6 +10,11 @@ from storage import ProjectDatabase
 TRACE_NAMESPACE = "council_decision_trace"
 _MAX_REASON = 800
 _MAX_LIST = 32
+# These phases begin a new observation, not an update to a previous proposal.
+_NEW_OBSERVATION_PHASES = frozenset({
+    "preflight", "market_evidence", "market_verification", "market_stream",
+    "quote", "proposal_provider", "proposal_interval", "council",
+})
 
 
 def _symbol(value: Any) -> str:
@@ -42,6 +47,10 @@ def persist_decision_trace(
     clean_symbol = _symbol(symbol)
     existing = database.get_json(TRACE_NAMESPACE, clean_symbol)
     payload = dict(existing.get("value") or {}) if isinstance(existing, dict) else {}
+    if updates.get("phase") in _NEW_OBSERVATION_PHASES:
+        payload = {}
+    elif updates.get("decision_id") and updates.get("decision_id") != payload.get("decision_id"):
+        payload = {}
     payload.update({str(key): _safe_value(value) for key, value in updates.items()})
     payload["symbol"] = clean_symbol
     payload["updated_at_ms"] = int(now_ms or time.time() * 1000)
