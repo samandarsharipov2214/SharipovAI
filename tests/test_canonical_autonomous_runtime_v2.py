@@ -59,6 +59,10 @@ class FakeWorker:
 
 
 class FakeMarketData(MarketDataService):
+    def provider_quote(self, provider: str, symbol: str) -> MarketQuote:
+        assert provider == "bybit"
+        return self.quote(symbol)
+
     def __init__(self) -> None:
         pass
 
@@ -507,3 +511,36 @@ def test_shared_quote_uses_ws_after_blocking_verification(tmp_path, monkeypatch,
     assert evidence['websocket_received_at_ms'] == quote.received_at_unix_ms
     assert evidence['websocket_exchange_timestamp_ms'] == initial + 2490
     assert stream.quote('BTCUSDT') == quote
+
+
+def test_shared_stream_refreshes_executable_bbo_after_consensus(tmp_path, monkeypatch):
+    worker = FakeWorker()
+    data = FakeMarketData()
+    old_rest = data.quote("BTCUSDT")
+    consensus = FakeConsensus()
+    cross = consensus.quote("BTCUSDT")
+    original = worker.quote
+    advanced = False
+
+    def remote_check(symbol):
+        nonlocal advanced
+        advanced = True
+        worker.received_at_ms += 1000
+        monkeypatch.setattr(worker, "quote", lambda symbol: {**original(symbol), "price": 60100.0})
+        return cross
+
+    def fresh_bbo(provider, symbol):
+        assert advanced and provider == "bybit"
+        return replace(old_rest, price=60100.0, bid_price=60099.0, ask_price=60101.0,
+                       received_at_unix_ms=worker.received_at_ms)
+
+    # quote() deliberately still offers the old cached BBO.
+    monkeypatch.setattr(data, "quote", lambda symbol: old_rest)
+    monkeypatch.setattr(data, "provider_quote", fresh_bbo)
+    monkeypatch.setattr(consensus, "quote", remote_check)
+    stream = SharedVerifiedMarketStream(worker, data, consensus, database=_database(tmp_path))
+    quote = stream.quote("BTCUSDT")
+    assert (quote.price, quote.bid_price, quote.ask_price) == (60100.0, 60099.0, 60101.0)
+    evidence = stream.evidence_for_quote("BTCUSDT", quote)
+    assert evidence["bybit_rest_best_ask"] == quote.ask_price
+    assert evidence["rest_received_at_ms"] == quote.feature_received_at_ms

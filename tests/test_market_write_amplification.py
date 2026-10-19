@@ -103,6 +103,10 @@ class _RestQuote:
 
 
 class _Rest:
+    def provider_quote(self, provider: str, symbol: str) -> _RestQuote:
+        assert provider == "bybit"
+        return self.quote(symbol)
+
     def __init__(self) -> None:
         self.calls = 0
         self.timestamp_ms = 1_000
