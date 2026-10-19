@@ -468,3 +468,42 @@ def test_dashboard_installer_uses_one_database_and_canonical_loop(tmp_path, monk
     assert app.state.autonomous_paper_loop.database is database
     assert app.state.canonical_paper_decision_runtime.database is database
     assert app.state.autonomous_paper_loop.snapshot()["entry_without_authorization_allowed"] is False
+
+
+@pytest.mark.parametrize('mode', ['fresh', 'divergent', 'misaligned', 'unavailable'])
+def test_shared_quote_uses_ws_after_blocking_verification(tmp_path, monkeypatch, mode):
+    database = _database(tmp_path)
+    worker = FakeWorker()
+    initial = worker.received_at_ms
+    data = FakeMarketData()
+    rest = data.quote('BTCUSDT')
+    monkeypatch.setattr(data, 'quote', lambda symbol: rest)
+    consensus = FakeConsensus()
+    cross = consensus.quote('BTCUSDT')
+    original = worker.quote
+
+    def verified_consensus(symbol):
+        # A new real-worker observation arrives while remote checks are in flight.
+        worker.received_at_ms = initial + (6000 if mode == 'misaligned' else 2500)
+        if mode == 'divergent':
+            monkeypatch.setattr(worker, 'quote', lambda symbol: {**original(symbol), 'price': 90000.0})
+        elif mode == 'unavailable':
+            def unavailable(symbol):
+                raise RuntimeError('worker disconnected during verification')
+            monkeypatch.setattr(worker, 'quote', unavailable)
+        return cross
+
+    monkeypatch.setattr(consensus, 'quote', verified_consensus)
+    stream = SharedVerifiedMarketStream(worker, data, consensus, database=database)
+    if mode != 'fresh':
+        with pytest.raises(RuntimeError, match={'divergent': 'deviates', 'misaligned': 'time-aligned', 'unavailable': 'disconnected'}[mode]):
+            stream.quote('BTCUSDT')
+        assert not stream._cache
+        return
+    quote = stream.quote('BTCUSDT')
+    assert quote.received_at_unix_ms == initial + 2500
+    assert quote.feature_received_at_ms == rest.received_at_unix_ms
+    evidence = stream.evidence_for_quote('BTCUSDT', quote)
+    assert evidence['websocket_received_at_ms'] == quote.received_at_unix_ms
+    assert evidence['websocket_exchange_timestamp_ms'] == initial + 2490
+    assert stream.quote('BTCUSDT') == quote
