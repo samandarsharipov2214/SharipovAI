@@ -544,3 +544,47 @@ def test_shared_stream_refreshes_executable_bbo_after_consensus(tmp_path, monkey
     evidence = stream.evidence_for_quote("BTCUSDT", quote)
     assert evidence["bybit_rest_best_ask"] == quote.ask_price
     assert evidence["rest_received_at_ms"] == quote.feature_received_at_ms
+
+@pytest.mark.parametrize("mode", ["fresh", "divergent", "misaligned", "unavailable"])
+def test_shared_quote_revalidates_after_blocking_operational_write(tmp_path, monkeypatch, mode):
+    worker, data, consensus = FakeWorker(), FakeMarketData(), FakeConsensus()
+    initial = worker.received_at_ms
+    initial_rest = data.quote("BTCUSDT")
+    original_quote = worker.quote
+    writes, rest_calls = [], []
+
+    def executable_bbo(provider, symbol):
+        rest_calls.append(worker.received_at_ms)
+        assert provider == "bybit"
+        return replace(initial_rest, received_at_unix_ms=(
+            initial if mode == "misaligned" else worker.received_at_ms))
+
+    def blocked_write(payload):
+        writes.append(dict(payload))
+        # Disk contention advances the worker while saving the operational sample.
+        worker.received_at_ms = initial + 6000
+        if mode == "divergent":
+            monkeypatch.setattr(worker, "quote", lambda symbol: {**original_quote(symbol), "price": 90000.0})
+        elif mode == "unavailable":
+            def disconnected(symbol):
+                raise RuntimeError("worker disconnected during persistence")
+            monkeypatch.setattr(worker, "quote", disconnected)
+
+    monkeypatch.setattr(data, "provider_quote", executable_bbo)
+    stream = SharedVerifiedMarketStream(worker, data, consensus, database=_database(tmp_path))
+    monkeypatch.setattr(stream.store, "save_market_quote", blocked_write)
+    if mode != "fresh":
+        with pytest.raises(RuntimeError, match={"divergent": "deviates", "misaligned": "time-aligned", "unavailable": "disconnected"}[mode]):
+            stream.quote("BTCUSDT")
+        assert not stream._cache
+    else:
+        quote = stream.quote("BTCUSDT")
+        assert quote.received_at_unix_ms == initial + 6000
+        assert quote.feature_received_at_ms == initial + 6000
+        evidence = stream.evidence_for_quote("BTCUSDT", quote)
+        assert evidence["websocket_received_at_ms"] == quote.received_at_unix_ms
+        assert evidence["rest_received_at_ms"] == quote.feature_received_at_ms
+        assert rest_calls == [initial, initial + 6000]
+        assert stream.quote("BTCUSDT") == quote
+    assert len(writes) == 1  # bounded refresh; never a write/retry loop
+    assert writes[0]["received_at_unix_ms"] == initial

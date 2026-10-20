@@ -76,6 +76,9 @@ class SharedVerifiedMarketStream:
         return None
 
     def quote(self, symbol: str) -> StreamQuote:
+        return self._verified_quote(symbol, persist_sample=True)
+
+    def _verified_quote(self, symbol: str, *, persist_sample: bool) -> StreamQuote:
         clean = _symbol(symbol)
         if clean not in self.symbols:
             raise RuntimeError(f"symbol is not configured in shared stream: {clean}")
@@ -83,7 +86,7 @@ class SharedVerifiedMarketStream:
         received_at_ms = _positive_int(websocket.get("received_at_ms"), "received_at_ms")
         with self._lock:
             cached = self._cache.get(clean)
-            if cached is not None and cached[0] == received_at_ms:
+            if persist_sample and cached is not None and cached[0] == received_at_ms:
                 return cached[1]
 
         cross = self.consensus.quote(clean)
@@ -160,13 +163,22 @@ class SharedVerifiedMarketStream:
             "raw_market_persistence_class": "operational_sample",
             "raw_market_persistence_interval_ms": self.market_event_persist_interval_ms,
         }
-        self._persist_operational_quote(
-            symbol=clean,
-            price=ws_price,
-            exchange_timestamp_ms=exchange_timestamp_ms,
-            received_at_ms=received_at_ms,
-            consensus_sources=list(cross.sources),
-        )
+        if persist_sample:
+            wrote = self._persist_operational_quote(
+                symbol=clean,
+                price=ws_price,
+                exchange_timestamp_ms=exchange_timestamp_ms,
+                received_at_ms=received_at_ms,
+                consensus_sources=list(cross.sources),
+            )
+            # A synchronous operational sample may wait behind SQLite writers.
+            # If the worker advanced meanwhile, verify a new complete quote:
+            # never attach a fresh timestamp to the previous REST/WS prices.
+            # The second pass neither reuses cache nor writes another sample.
+            if wrote:
+                current = self.worker.quote(clean)
+                if _positive_int(current.get("received_at_ms"), "received_at_ms") != received_at_ms:
+                    return self._verified_quote(clean, persist_sample=False)
         with self._lock:
             self._cache[clean] = (received_at_ms, quote, evidence)
         return quote
@@ -179,14 +191,14 @@ class SharedVerifiedMarketStream:
         exchange_timestamp_ms: int,
         received_at_ms: int,
         consensus_sources: list[str],
-    ) -> None:
+    ) -> bool:
         with self._lock:
             previous = self._last_persisted_exchange_ms.get(symbol)
             if (
                 previous is not None
                 and exchange_timestamp_ms - previous < self.market_event_persist_interval_ms
             ):
-                return
+                return False
             self.store.save_market_quote(
                 {
                     "provider": "bybit_websocket_v5",
@@ -202,6 +214,7 @@ class SharedVerifiedMarketStream:
                 }
             )
             self._last_persisted_exchange_ms[symbol] = exchange_timestamp_ms
+            return True
 
     def evidence(self, symbol: str) -> dict[str, Any]:
         clean = _symbol(symbol)
