@@ -20,7 +20,7 @@ name = pathlib.Path(sys.argv[0]).name
 args = sys.argv[1:]
 if name == 'python3':
     if 'from tools.astra_supervisor import resource_state' in ' '.join(args):
-        sys.exit(0)
+        sys.exit(int(os.environ.get('RESOURCE_BUSY', '0')))
     os.execv(sys.executable, [sys.executable, *args])
 source = sys.stdin.read() if (name == 'docker' and '-i' in args) or name == 'cmp' else ''
 with open(os.environ['CALL_LOG'], 'a') as out:
@@ -108,3 +108,55 @@ def test_dirty_checkout_refused_before_any_production_mutation(host, dirty):
                             env=env | {"DIRTY_STATUS": dirty}, capture_output=True, text=True)
     assert result.returncode != 0 and "clean committed checkout" in result.stderr
     assert all(entry["name"] == "git" for entry in calls(log))
+
+
+def test_busy_resources_defer_without_starting_metadata_scan(host):
+    env, log = host
+    result = subprocess.run(["bash", str(ROOT / "deploy/vps/model_readiness_check.sh")],
+                            env=env | {"RESOURCE_BUSY": "1"}, capture_output=True, text=True)
+    assert result.returncode == 75
+    assert "DEFERRED: resource guard" in result.stdout
+    assert not log.exists() or not any(c["name"] == "docker" for c in calls(log))
+
+
+def test_installer_accepts_deferral_and_records_no_fabricated_check(host):
+    import json
+    from types import ModuleType
+    env, log = host
+    result = subprocess.run(["bash", str(ROOT / "deploy/vps/install_model_readiness.sh")],
+                            env=env | {"RESOURCE_BUSY": "1"}, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    entries = calls(log)
+    assert not any("scripts.paper_forecast_readiness" in c["args"] for c in entries)
+    assert any(c["name"] == "systemctl" and "enable" in c["args"] for c in entries)
+    final = next(c for c in entries if "initial_check_status" in c["source"])
+    # Execute the actual embedded finalizer against an unscanned durable state.
+    # Its previous implementation raised KeyError('last_result') here.
+    source = final["source"]
+    harness = """
+import sys,types,json
+records=[]
+class DB:
+ def get_json(self,*args): return {'value':{'trigger_status':'not_requested'}}
+class Ledger:
+ def __init__(self,*args): pass
+ def set_status(self,*args,**kwargs): records.append(kwargs)
+m=types.ModuleType('storage');m.ProjectDatabase=DB;m.ProjectChangeLedger=Ledger
+sys.modules['storage']=m
+sys.argv=['-', 'a'*40, '75']
+exec(SOURCE)
+assert records[-1]['verification']['initial_check_status']=='DEFERRED'
+assert records[-1]['verification']['canonical_metadata_check'] is None
+assert records[-1]['verification']['continuation_requests']==0
+""".replace("SOURCE", repr(source))
+    check = subprocess.run([sys.executable, "-c", harness], capture_output=True, text=True)
+    assert check.returncode == 0, check.stderr
+
+
+def test_readiness_retries_only_explicit_deferrals_with_bounded_runtime():
+    service = (ROOT / "deploy/vps/systemd/sharipovai-model-readiness.service").read_text()
+    assert "Type=exec" in service and "RuntimeMaxSec=180" in service
+    assert "RestartForceExitStatus=75" in service and "SuccessExitStatus=75" in service
+    assert "RestartSec=10min" in service
+    assert "StartLimitBurst=7" in service and "StartLimitIntervalSec=2h" in service
+    assert "Restart=always" not in service and "Restart=on-failure" not in service

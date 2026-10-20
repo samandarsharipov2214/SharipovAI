@@ -63,18 +63,30 @@ done
 require_reviewed_inputs
 systemctl daemon-reload
 # Finish the initial check under the service lock before the timer can elapse.
-bash deploy/vps/model_readiness_check.sh
+initial_status=0
+bash deploy/vps/model_readiness_check.sh || initial_status=$?
+if (( initial_status != 0 && initial_status != 75 )); then
+  (exit "$initial_status")
+fi
 systemctl enable --now sharipovai-model-readiness.timer
 systemctl is-enabled --quiet sharipovai-model-readiness.timer
 require_reviewed_inputs
-docker exec -i sharipovai python - "$expected" <<'PY'
+docker exec -i sharipovai python - "$expected" "$initial_status" <<'PY'
 import sys
 from storage import ProjectChangeLedger,ProjectDatabase
 db=ProjectDatabase();ledger=ProjectChangeLedger(db);identity='paper-readiness-install-'+sys.argv[1][:12]
 ledger.set_status(identity,'applied',actor='astra')
 state=db.get_json('paper_forecast_readiness','state')['value']
-assert state['last_result']['ready'] is False and state['trigger_status']=='not_requested'
+result = state.get('last_result') if int(sys.argv[2]) == 0 else None
+assert state['trigger_status'] in ('not_requested', 'requested_once')
+if int(sys.argv[2]) == 0:
+ assert isinstance(result, dict), 'successful initial check has no durable result'
+# This verifies installation, not data readiness or a skipped diagnostic.
 ledger.set_status(identity,'verified',actor='astra',verification={
- 'timer_enabled':True,'canonical_metadata_check':state['last_result'],'continuation_requests':0})
+ 'scope':'timer installation', 'timer_enabled':True,
+ 'initial_check_status':'COMPLETED' if result is not None else 'DEFERRED',
+ 'canonical_metadata_check':result,
+ 'continuation_requests':int(state['trigger_status']=='requested_once')})
+print('READINESS_INSTALLATION=VERIFIED INITIAL_CHECK=' + ('COMPLETED' if result is not None else 'DEFERRED'))
 PY
 trap - ERR
