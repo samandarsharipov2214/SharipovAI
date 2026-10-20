@@ -65,7 +65,7 @@ systemctl daemon-reload
 # Finish the initial check under the service lock before the timer can elapse.
 initial_status=0
 bash deploy/vps/model_readiness_check.sh || initial_status=$?
-if (( initial_status != 0 && initial_status != 75 )); then
+if (( initial_status != 0 && initial_status != 75 && initial_status != 76 )); then
   (exit "$initial_status")
 fi
 systemctl enable --now sharipovai-model-readiness.timer

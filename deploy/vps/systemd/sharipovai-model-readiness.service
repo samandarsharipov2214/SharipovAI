@@ -3,7 +3,7 @@ Description=SharipovAI metadata-only future model readiness
 After=docker.service
 Requires=docker.service
 StartLimitIntervalSec=2h
-StartLimitBurst=7
+StartLimitBurst=10
 
 [Service]
 Type=exec
@@ -11,7 +11,7 @@ WorkingDirectory=/opt/sharipovai-repo
 ExecStart=/usr/bin/bash /opt/sharipovai-repo/deploy/vps/model_readiness_check.sh
 RuntimeMaxSec=180
 # Retry only expected resource deferrals; genuine checker failures stay failed.
-SuccessExitStatus=75
+SuccessExitStatus=75 76
 RestartForceExitStatus=75
 RestartSec=10min
 CPUQuota=25%
