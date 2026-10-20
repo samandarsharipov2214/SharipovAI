@@ -86,8 +86,12 @@ class SharedVerifiedMarketStream:
             if cached is not None and cached[0] == received_at_ms:
                 return cached[1]
 
-        ws_price = _positive_float(websocket.get("price"), "websocket price")
-        rest = self.market_data.quote(clean)
+        cross = self.consensus.quote(clean)
+        if cross.verified is not True or cross.source_count < 3:
+            raise RuntimeError("multi-exchange consensus is not verified")
+        # Executable BBO must be fetched after consensus, not reused from its
+        # earlier cache. This public provider interface performs a fresh read.
+        rest = self.market_data.provider_quote("bybit", clean)
         if rest.verified is not True:
             raise RuntimeError("REST market quote is not verified")
         if rest.source != "bybit":
@@ -100,11 +104,14 @@ class SharedVerifiedMarketStream:
             rest.received_at_unix_ms,
             "Bybit REST received_at_unix_ms",
         )
+        # REST/consensus may block while the shared worker receives newer ticks.
+        # Capture once after those calls, then validate and bind this exact quote.
+        # Never relabel an old price with a new timestamp or refresh after binding.
+        websocket = self.worker.quote(clean)
+        received_at_ms = _positive_int(websocket.get("received_at_ms"), "received_at_ms")
+        ws_price = _positive_float(websocket.get("price"), "websocket price")
         if abs(rest_received_at_ms - received_at_ms) > self.max_rest_bbo_alignment_ms:
             raise RuntimeError("Bybit REST BBO is not time-aligned with the verified WebSocket quote")
-        cross = self.consensus.quote(clean)
-        if cross.verified is not True or cross.source_count < 3:
-            raise RuntimeError("multi-exchange consensus is not verified")
         deviation = abs(ws_price - cross.price) / cross.price * 100.0
         if not math.isfinite(deviation) or deviation > self.max_ws_consensus_deviation_percent:
             raise RuntimeError(
