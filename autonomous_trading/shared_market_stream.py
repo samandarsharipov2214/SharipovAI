@@ -62,7 +62,8 @@ class SharedVerifiedMarketStream:
             maximum=900.0,
         )
         self._lock = threading.RLock()
-        self._cache: dict[str, tuple[int, StreamQuote, dict[str, Any]]] = {}
+        self._persistence_lock = threading.Lock()
+        self._cache: dict[str, tuple[tuple[Any, ...], StreamQuote, dict[str, Any]]] = {}
         self._last_persisted_exchange_ms: dict[str, int] = {}
 
     def start(self) -> None:
@@ -83,10 +84,10 @@ class SharedVerifiedMarketStream:
         if clean not in self.symbols:
             raise RuntimeError(f"symbol is not configured in shared stream: {clean}")
         websocket = self.worker.quote(clean)
-        received_at_ms = _positive_int(websocket.get("received_at_ms"), "received_at_ms")
+        tick_identity = _tick_identity(websocket)
         with self._lock:
             cached = self._cache.get(clean)
-            if persist_sample and cached is not None and cached[0] == received_at_ms:
+            if persist_sample and cached is not None and cached[0] == tick_identity:
                 return cached[1]
 
         cross = self.consensus.quote(clean)
@@ -164,7 +165,7 @@ class SharedVerifiedMarketStream:
             "raw_market_persistence_interval_ms": self.market_event_persist_interval_ms,
         }
         if persist_sample:
-            wrote = self._persist_operational_quote(
+            self._persist_operational_quote(
                 symbol=clean,
                 price=ws_price,
                 exchange_timestamp_ms=exchange_timestamp_ms,
@@ -172,15 +173,15 @@ class SharedVerifiedMarketStream:
                 consensus_sources=list(cross.sources),
             )
             # A synchronous operational sample may wait behind SQLite writers.
-            # If the worker advanced meanwhile, verify a new complete quote:
+            # This includes callers waiting behind a sample already written by
+            # another thread. If the worker advanced, verify a complete quote:
             # never attach a fresh timestamp to the previous REST/WS prices.
             # The second pass neither reuses cache nor writes another sample.
-            if wrote:
-                current = self.worker.quote(clean)
-                if _positive_int(current.get("received_at_ms"), "received_at_ms") != received_at_ms:
-                    return self._verified_quote(clean, persist_sample=False)
+            current = self.worker.quote(clean)
+            if _tick_identity(current) != _tick_identity(websocket):
+                return self._verified_quote(clean, persist_sample=False)
         with self._lock:
-            self._cache[clean] = (received_at_ms, quote, evidence)
+            self._cache[clean] = (_tick_identity(websocket), quote, evidence)
         return quote
 
     def _persist_operational_quote(
@@ -191,14 +192,14 @@ class SharedVerifiedMarketStream:
         exchange_timestamp_ms: int,
         received_at_ms: int,
         consensus_sources: list[str],
-    ) -> bool:
-        with self._lock:
+    ) -> None:
+        with self._persistence_lock:
             previous = self._last_persisted_exchange_ms.get(symbol)
             if (
                 previous is not None
                 and exchange_timestamp_ms - previous < self.market_event_persist_interval_ms
             ):
-                return False
+                return
             self.store.save_market_quote(
                 {
                     "provider": "bybit_websocket_v5",
@@ -214,7 +215,6 @@ class SharedVerifiedMarketStream:
                 }
             )
             self._last_persisted_exchange_ms[symbol] = exchange_timestamp_ms
-            return True
 
     def evidence(self, symbol: str) -> dict[str, Any]:
         clean = _symbol(symbol)
@@ -317,3 +317,14 @@ def _is_finite(value: Any) -> bool:
 
 
 __all__ = ["SharedVerifiedMarketStream"]
+
+
+def _tick_identity(tick: dict[str, Any]) -> tuple[Any, ...]:
+    """Receipt milliseconds alone cannot identify a burst of exchange updates."""
+    sequence = tick.get("sequence")
+    return (
+        _positive_int(tick.get("received_at_ms"), "received_at_ms"),
+        _positive_int(tick.get("exchange_timestamp_ms"), "exchange_timestamp_ms"),
+        _positive_int(sequence, "sequence") if sequence is not None else None,
+        _positive_float(tick.get("price"), "websocket price"),
+    )

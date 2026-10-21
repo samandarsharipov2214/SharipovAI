@@ -588,3 +588,52 @@ def test_shared_quote_revalidates_after_blocking_operational_write(tmp_path, mon
         assert stream.quote("BTCUSDT") == quote
     assert len(writes) == 1  # bounded refresh; never a write/retry loop
     assert writes[0]["received_at_unix_ms"] == initial
+
+@pytest.mark.parametrize("during_write", [True, False])
+def test_shared_quote_distinguishes_ticks_in_same_receipt_millisecond(tmp_path, monkeypatch, during_write):
+    worker, data, consensus = FakeWorker(), FakeMarketData(), FakeConsensus()
+    original = worker.quote
+    tick = {"sequence": 1, "price": 60000.0}
+    monkeypatch.setattr(worker, "quote", lambda symbol: {**original(symbol), **tick})
+    stream = SharedVerifiedMarketStream(worker, data, consensus, database=_database(tmp_path))
+    if during_write:
+        monkeypatch.setattr(stream.store, "save_market_quote",
+                            lambda payload: tick.update(sequence=2, price=60100.0))
+    else:
+        assert stream.quote("BTCUSDT").price == 60000.0
+        tick.update(sequence=2, price=60100.0)
+    result = stream.quote("BTCUSDT")
+    assert result.price == 60100.0
+    assert stream.evidence_for_quote("BTCUSDT", result)["websocket_price"] == 60100.0
+
+
+def test_shared_quote_waiting_behind_sample_revalidates_without_second_write(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    worker, data, consensus = FakeWorker(), FakeMarketData(), FakeConsensus()
+    initial = worker.received_at_ms
+    first_writing, second_waiting = threading.Event(), threading.Event()
+    stream = SharedVerifiedMarketStream(worker, data, consensus, database=_database(tmp_path))
+    original_persist = stream._persist_operational_quote
+    calls = []
+
+    def persist(**kwargs):
+        if first_writing.is_set():
+            second_waiting.set()
+        return original_persist(**kwargs)
+
+    def blocked_write(payload):
+        calls.append(payload)
+        first_writing.set()
+        assert second_waiting.wait(5), "second caller could not reach persistence"
+        worker.received_at_ms = initial + 2500
+
+    monkeypatch.setattr(stream, "_persist_operational_quote", persist)
+    monkeypatch.setattr(stream.store, "save_market_quote", blocked_write)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(stream.quote, "BTCUSDT")
+        assert first_writing.wait(5)
+        second = pool.submit(stream.quote, "BTCUSDT")
+        assert first.result(timeout=10).received_at_unix_ms == initial + 2500
+        assert second.result(timeout=10).received_at_unix_ms == initial + 2500
+    assert len(calls) == 1
