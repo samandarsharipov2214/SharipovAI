@@ -20,6 +20,14 @@ timestamp-valid matured support after boundary purging. Feature definitions,
 costs and all promotion gates are fixed before that future final range exists.
 The existing evaluator's relative 60/20/20 split cannot stand in for these dates.
 
+Expected lock/resource deferrals retry once per minute, with at most 100 service
+starts per two hours. This can catch the brief idle gap between hourly backups;
+a ten-minute cadence could repeatedly miss the same gap. Lock-busy attempts
+exit before Docker or a metadata scan. Real failures do not retry, and a cooldown
+skip stops retries. The 99-minute retry span still covers a 75-minute export.
+Resource pressure can still defer the check; the retry cap remains fail-closed.
+No Codex call, extra timer, or relaxed resource limit is introduced.
+
 The ordinary Python checker runs at most every six hours. A database cooldown
 also covers manual invocations and restarts. Each check reads at most 100,000
 physical event row IDs in 5,000-row ranges, with a 90-second deadline and short

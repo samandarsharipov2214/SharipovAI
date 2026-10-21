@@ -3,7 +3,7 @@ Description=SharipovAI metadata-only future model readiness
 After=docker.service
 Requires=docker.service
 StartLimitIntervalSec=2h
-StartLimitBurst=10
+StartLimitBurst=100
 
 [Service]
 Type=exec
@@ -13,7 +13,10 @@ RuntimeMaxSec=180
 # Retry only expected resource deferrals; genuine checker failures stay failed.
 SuccessExitStatus=75 76
 RestartForceExitStatus=75
-RestartSec=10min
+# Hourly exports can leave only a 60–90 second gap. Ten-minute retries
+# can repeatedly miss it. Lock-busy attempts exit before resource checks or scans.
+# At most 100 starts per two hours; 99 minutes also covers a 75-minute export.
+RestartSec=1min
 CPUQuota=25%
 MemoryMax=256M
 Nice=15
