@@ -161,8 +161,8 @@ def test_readiness_retries_only_explicit_deferrals_with_bounded_runtime():
     service = (ROOT / "deploy/vps/systemd/sharipovai-model-readiness.service").read_text()
     assert "Type=exec" in service and "RuntimeMaxSec=180" in service
     assert "RestartForceExitStatus=75" in service and "SuccessExitStatus=75" in service
-    assert "RestartSec=10min" in service
-    assert "StartLimitBurst=10" in service and "StartLimitIntervalSec=2h" in service
+    assert "RestartSec=1min" in service
+    assert "StartLimitBurst=100" in service and "StartLimitIntervalSec=2h" in service
     assert "Restart=always" not in service and "Restart=on-failure" not in service
 
 
@@ -193,3 +193,17 @@ def test_retry_window_outlasts_supported_backup_timeout():
     assert 75 < (burst - 1) * interval < 120
     assert "SuccessExitStatus=75 76" in service
     assert "RestartForceExitStatus=75\n" in service
+
+
+def test_retry_schedule_reaches_short_hourly_backup_idle_window():
+    """Replay a :57 attempt with exports holding the lock until :58:31."""
+    import re
+    service = (ROOT / "deploy/vps/systemd/sharipovai-model-readiness.service").read_text()
+    burst = int(re.search(r"StartLimitBurst=(\d+)", service)[1])
+    interval = int(re.search(r"RestartSec=(\d+)min", service)[1]) * 60
+    attempts = [57 * 60 + attempt * interval for attempt in range(burst)]
+    available = [t for t in attempts if t % 3600 >= 58 * 60 + 31]
+    assert available, "retries never reach the observed recurring backup idle window"
+    assert available[0] < 60 * 60, "must use the first idle window, not another hour of retries"
+    # No busy polling or unbounded retry budget; blocked checks exit before Docker/scan.
+    assert interval >= 60 and burst <= 100
