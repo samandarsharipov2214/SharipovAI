@@ -322,6 +322,47 @@ class ProjectDatabase:
                 connection.rollback()
                 raise
 
+    def put_immutable_json_batch(self, entries: list[tuple[str, str, Any]]) -> None:
+        """Insert a bounded evidence bundle atomically, never overwrite existing facts.
+
+        Identical replay preserves versions/timestamps. A collision or failed
+        insert rolls back every new member. Serialization happens before taking
+        the writer lock; no caller transaction is retried.
+        """
+        if not 1 <= len(entries) <= 64:
+            raise ValueError("immutable evidence bundle must contain 1..64 entries")
+        prepared = []
+        seen = set()
+        for namespace, key, value in entries:
+            namespace, key = _identifier(namespace, "namespace"), _identifier(key, "key")
+            if (namespace, key) in seen:
+                raise ValueError("duplicate immutable evidence key")
+            seen.add((namespace, key))
+            raw = _json(value)
+            prepared.append((namespace, key, pack_evidence(namespace, raw), json.loads(raw)))
+        now = _now_ms()
+        with self.connect() as connection:
+            try:
+                self._begin(connection, immediate=True)
+                # Stable ordering also avoids opposite-order PostgreSQL inserts.
+                for namespace, key, payload, value in sorted(prepared, key=lambda row: row[:2]):
+                    self._execute(connection, """
+                        INSERT INTO project_kv(namespace, item_key, value_json, version, updated_at_ms)
+                        VALUES (?, ?, ?, 1, ?)
+                        ON CONFLICT(namespace, item_key) DO NOTHING
+                    """, (namespace, key, payload, now))
+                    row = self._fetchone(connection,
+                        "SELECT value_json FROM project_kv WHERE namespace = ? AND item_key = ?",
+                        (namespace, key), lock=True)
+                    stored = (evidence_loads(row["value_json"])
+                              if namespace == "council_news_assessments" else json.loads(row["value_json"]))
+                    if stored != value:
+                        raise VersionConflict(f"immutable evidence collision: {namespace}/{key}")
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+
     def get_json(self, namespace: str, key: str) -> dict[str, Any] | None:
         namespace = _identifier(namespace, "namespace")
         key = _identifier(key, "key")

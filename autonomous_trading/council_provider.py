@@ -246,58 +246,61 @@ class AutonomousCouncilProposalProvider:
         news_id = f"news-{decision_id}"
         market_id = f"market-{decision_id}"
         risk_id = f"risk-{decision_id}"
-        self._put_once("council_market_evidence", market_id, {**market, "decision_id": decision_id})
-        self._put_once(
-            "council_news_assessments",
-            news_id,
-            {
-                "decision_id": decision_id,
-                "evidence_ids": sorted(set(news_evidence)),
-                "agents": [item["agent_id"] for item in news_opinions],
-                "verified_market_data": True,
-                "opinion_lineage": self._persist_news_lineage(news_lineage),
-                "child_opinions": news_opinions,
-                "independence_status": "NOT_ESTABLISHED",
-            },
-        )
-        self._put_once(
-            "portfolio_snapshots",
-            portfolio_id,
-            {
-                "decision_id": decision_id,
-                "cash": _finite(state.get("cash", 0.0), "cash"),
-                "equity": _finite(state.get("equity", 0.0), "equity"),
-                "open_symbols": list(state.get("open_symbols", ())),
-                "captured_at_ms": now_ms,
-                "environment": "paper",
-            },
-        )
-        self._put_once(
-            "cost_snapshots",
-            cost_id,
-            {
-                "decision_id": decision_id,
-                "estimated_fee_percent": self.fee_percent,
-                "estimated_slippage_percent": self.slippage_percent,
-                "captured_at_ms": now_ms,
-            },
-        )
-        self._put_once(
-            "risk_assessments",
-            risk_id,
-            {
-                "decision_id": decision_id,
-                "risk_score": risk_score,
-                "risk_level": risk_assessment.risk_level,
-                "blocks": list(risk_blocks),
-                "drawdown_percent": drawdown_percent,
-                "captured_at_ms": now_ms,
-                "canonical_service": self.risk_service.service_id,
-                "assessment": risk_assessment.to_dict(),
-            },
-        )
+        evidence_bundle = [
+            ("council_market_evidence", market_id, {**market, "decision_id": decision_id}),
+            (
+                "council_news_assessments",
+                news_id,
+                {
+                    "decision_id": decision_id,
+                    "evidence_ids": sorted(set(news_evidence)),
+                    "agents": [item["agent_id"] for item in news_opinions],
+                    "verified_market_data": True,
+                    "opinion_lineage": self._persist_news_lineage(news_lineage),
+                    "child_opinions": news_opinions,
+                    "independence_status": "NOT_ESTABLISHED",
+                },
+            ),
+            (
+                "portfolio_snapshots",
+                portfolio_id,
+                {
+                    "decision_id": decision_id,
+                    "cash": _finite(state.get("cash", 0.0), "cash"),
+                    "equity": _finite(state.get("equity", 0.0), "equity"),
+                    "open_symbols": list(state.get("open_symbols", ())),
+                    "captured_at_ms": now_ms,
+                    "environment": "paper",
+                },
+            ),
+            (
+                "cost_snapshots",
+                cost_id,
+                {
+                    "decision_id": decision_id,
+                    "estimated_fee_percent": self.fee_percent,
+                    "estimated_slippage_percent": self.slippage_percent,
+                    "captured_at_ms": now_ms,
+                },
+            ),
+            (
+                "risk_assessments",
+                risk_id,
+                {
+                    "decision_id": decision_id,
+                    "risk_score": risk_score,
+                    "risk_level": risk_assessment.risk_level,
+                    "blocks": list(risk_blocks),
+                    "drawdown_percent": drawdown_percent,
+                    "captured_at_ms": now_ms,
+                    "canonical_service": self.risk_service.service_id,
+                    "assessment": risk_assessment.to_dict(),
+                },
+            ),
+        ]
+        self.database.put_immutable_json_batch(evidence_bundle)
 
-        # Evidence writes are separate fail-closed transactions. Guard the
+        # Evidence is now one atomic immutable bundle. Guard the
         # remaining bridge window as well; immutable evidence may remain as an
         # audit of the abandoned attempt, but it cannot authorize PAPER.
         if int(time.time() * 1000) - market_timestamp_ms > _MAX_MARKET_AGE_MS:
@@ -340,6 +343,10 @@ class AutonomousCouncilProposalProvider:
             },
         )
         self._generated_at[clean_symbol] = now_ms
+        # The scheduler checkpoint can also wait on storage. A completed
+        # checkpoint is not permission to return an already expired quote.
+        if int(time.time() * 1000) - market_timestamp_ms > _MAX_MARKET_AGE_MS:
+            return None
         return CouncilEntryProposal(
             decision_id=decision_id,
             agent_payloads=tuple(eligible),
