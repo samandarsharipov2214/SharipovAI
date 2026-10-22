@@ -305,7 +305,9 @@ class EventDrivenBacktester:
             for position in positions.values()
         )
         net_pnl = ending_equity - self.config.initial_cash
-        sharpe, sortino = _risk_adjusted_ratios(equity_curve)
+        sharpe, sortino = _risk_adjusted_ratios(
+            equity_curve, initial_equity=self.config.initial_cash
+        )
         profit_factor = _profit_factor(closed_pnls)
         result = BacktestResult(
             initial_cash=round(self.config.initial_cash, 8),
@@ -339,6 +341,8 @@ class EventDrivenBacktester:
                 "leverage": 1.0,
                 "event_count": event_count,
                 "closed_trade_count": len(closed_pnls),
+                "risk_ratio_basis": "final_timestamp_equity_including_initial_capital",
+                "risk_ratios_annualized": False,
                 "execution_timing": self.config.execution_timing,
                 "pending_signals_unfilled": len(pending_signals),
                 "force_close_is_synthetic_finalization": bool(self.config.force_close_at_end),
@@ -738,13 +742,29 @@ def _walk_forward_drawdown_percent(
 
 def _risk_adjusted_ratios(
     equity_curve: Sequence[tuple[int, float]],
+    *,
+    initial_equity: float,
 ) -> tuple[float, float]:
-    if len(equity_curve) < 3:
+    """Observation-period ratios, including entry costs; not annualized.
+
+    Each timestamp contributes its final portfolio valuation. Intermediate
+    symbol updates and end-of-backtest liquidation are not extra periods.
+    Starting at initial capital preserves the first execution's costs.
+    """
+    observations: list[tuple[int, float]] = []
+    for timestamp, equity in equity_curve:
+        if observations and observations[-1][0] == timestamp:
+            observations[-1] = (timestamp, equity)
+        else:
+            observations.append((timestamp, equity))
+    if len(observations) < 2:
         return 0.0, 0.0
     returns: list[float] = []
-    for (_, previous), (_, current) in zip(equity_curve, equity_curve[1:]):
+    previous = initial_equity
+    for _, current in observations:
         if previous > 0:
             returns.append(current / previous - 1.0)
+        previous = current
     if len(returns) < 2:
         return 0.0, 0.0
     mean_return = statistics.fmean(returns)
