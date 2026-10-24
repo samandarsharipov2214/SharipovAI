@@ -204,3 +204,44 @@ def test_new_settlement_records_producer_revision_without_restamping_history(tmp
     monkeypatch.delenv('SHARIPOVAI_BUILD_SHA')
     unknown = runtime._put_settlement_once('unknown', {'decision_id': 'unknown', 'net_pnl': -1})
     assert unknown['producer_sha'] is None
+
+
+@pytest.mark.parametrize('row_count', [10_000, 10_001])
+def test_incomplete_history_scan_cannot_authorize_challenger(tmp_path, monkeypatch, row_count):
+    from types import SimpleNamespace
+    import learning_engine.self_learning_supervisor as module
+    monkeypatch.setenv('SELF_LEARNING_SOURCE_EXPERIMENT_ID', 'independent-experiment')
+    db = ProjectDatabase(f'sqlite:///{tmp_path / "coverage.db"}')
+    worker = module.SelfLearningSupervisor(db)
+    def rows(database, namespace, **kwargs):
+        assert kwargs['limit'] == 10_001
+        return [{'key': f'd-{i}', 'value': {'decision_id': f'd-{i}'}, 'version': 1, 'updated_at_ms': 1000} for i in range(row_count)]
+    monkeypatch.setattr(module, 'list_json_items', rows)
+    # An already-attributed exclusion updated after the oldest 10k rows is
+    # deliberately outside this window; no incomplete scan may imply clean data.
+    monkeypatch.setattr(worker.attribution, 'get', lambda key: {'exists': True})
+    monkeypatch.setattr(worker.attribution, 'summary', lambda: {})
+    monkeypatch.setattr(worker.attribution, 'agent_metrics', lambda **kwargs: [])
+    called = []
+    def evaluate(summary):
+        called.append(summary)
+        return SimpleNamespace(eligible=False, to_dict=lambda: {'eligible': False})
+    monkeypatch.setattr(worker.challengers, 'evaluate_learning_summary', evaluate)
+    result = worker.run_once(now_ms=3000)
+    assert result['settlement_quality_coverage_complete'] == (row_count == 10_000)
+    if row_count > 10_000:
+        assert not called
+        assert result['challenger']['reason'] == 'incomplete_settlement_quality_coverage'
+    else:
+        assert len(called) == 1
+
+
+@pytest.mark.parametrize('title', ['Exchange hacked; withdrawals halted', 'Exchange breaches and liquidations', 'Sanctions imposed; exchange banned'])
+def test_word_boundaries_preserve_real_event_inflections(title):
+    article = _article(definition(), {'title': title, 'published': '2026-10-24T10:00:00Z'})
+    result = SourceAgent(definition=definition()).register(article, fetch())
+    assert result.impact == 'bearish'
+    if 'banned' not in title:
+        assert result.urgency in {'high', 'critical'}
+    if 'hacked' in title:
+        assert result.urgency == 'critical'

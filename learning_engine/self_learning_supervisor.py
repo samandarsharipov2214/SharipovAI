@@ -52,9 +52,13 @@ class SelfLearningSupervisor:
         settlements = list_json_items(
             self.database,
             _SETTLEMENT_NAMESPACE,
-            limit=10_000,
+            limit=10_001,
             newest_first=False,
         )
+        # One extra row proves whether the bounded quality audit is complete.
+        # Never authorize research from an unseen remainder of retained history.
+        coverage_complete = len(settlements) <= 10_000
+        settlements = settlements[:10_000]
         for row in settlements:
             settlement = row.get("value")
             if not isinstance(settlement, Mapping):
@@ -96,7 +100,7 @@ class SelfLearningSupervisor:
         summary["agents"] = self.attribution.agent_metrics(limit=10_000)
         challenger_result: dict[str, Any] = {}
         source_experiment = os.getenv("SELF_LEARNING_SOURCE_EXPERIMENT_ID", "").strip()
-        if source_experiment and not contaminated:
+        if source_experiment and not contaminated and coverage_complete:
             try:
                 evaluation = self.challengers.evaluate_learning_summary(summary)
                 if evaluation.eligible:
@@ -124,7 +128,10 @@ class SelfLearningSupervisor:
                     "error": f"{type(exc).__name__}: {exc}",
                 }
 
-        if contaminated:
+        if not coverage_complete:
+            challenger_result = {"status": "blocked", "reason": "incomplete_settlement_quality_coverage",
+                                 "scanned_limit": 10_000, "execution_authority": False}
+        elif contaminated:
             challenger_result = {"status": "blocked", "reason": "explicitly_excluded_settlement_evidence",
                                  "contaminated_count": contaminated, "execution_authority": False}
 
@@ -142,12 +149,13 @@ class SelfLearningSupervisor:
             }
 
         state = {
-            "status": "degraded" if failed or excluded or development_result.get("status") in {"blocked", "error"} else "ok",
+            "status": "degraded" if failed or excluded or not coverage_complete or development_result.get("status") in {"blocked", "error"} else "ok",
             "processed_count": processed,
             "skipped_count": skipped,
             "failed_count": failed,
             "excluded_count": excluded,
             "contaminated_count": contaminated,
+            "settlement_quality_coverage_complete": coverage_complete,
             "errors": errors[-20:],
             "learning_summary": summary,
             "challenger": challenger_result,

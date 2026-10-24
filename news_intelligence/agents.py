@@ -125,18 +125,18 @@ class SourceAgent:
 
 def _analyze(definition: SourceDefinition, article: NewsArticle, fetched: SourceFetch) -> NewsEnvelope:
     text = f"{article.title} {article.summary}".lower()
-    bullish = sum(1 for word in _BULLISH if re.search(r"(?<!\w)" + re.escape(word) + r"(?!\w)", text))
-    bearish = sum(1 for word in _BEARISH if re.search(r"(?<!\w)" + re.escape(word) + r"(?!\w)", text))
+    bullish = sum(1 for word in _BULLISH if _contains_term(text, word))
+    bearish = sum(1 for word in _BEARISH if _contains_term(text, word))
     polarity = bullish - bearish
     sentiment = _clamp(polarity / max(bullish + bearish, 1), -1.0, 1.0)
 
-    market_hits = sum(1 for word in _MARKET_TERMS if re.search(r"(?<!\w)" + re.escape(word) + r"(?!\w)", text))
+    market_hits = sum(1 for word in _MARKET_TERMS if _contains_term(text, word))
     relevance = _clamp(0.25 + market_hits * 0.09, 0.0, 1.0)
     reliability = _clamp(float(definition.trust_score) / 100.0, 0.0, 1.0)
     if not fetched.verified:
         reliability = min(reliability, 0.25)
 
-    urgent_hits = sum(1 for word in _URGENT if re.search(r"(?<!\w)" + re.escape(word) + r"(?!\w)", text))
+    urgent_hits = sum(1 for word in _URGENT if _contains_term(text, word))
     urgency = "critical" if urgent_hits >= 2 and reliability >= 0.7 else "high" if urgent_hits else "medium" if abs(sentiment) >= 0.5 else "low"
     impact = "bullish" if sentiment > 0.15 else "bearish" if sentiment < -0.15 else "neutral"
     urgency_weight = {"low": 0.25, "medium": 0.5, "high": 0.8, "critical": 1.0}[urgency]
@@ -168,6 +168,22 @@ def _analyze(definition: SourceDefinition, article: NewsArticle, fetched: Source
         reasons=tuple(reasons),
         detected_at=datetime.now(UTC).replace(microsecond=0).isoformat(),
     )
+
+
+# Explicit event inflections preserve real alerts without matching unrelated
+# substrings (bank/ban, whether/ETH, corporate/rate).
+_EVENT_FORMS = {
+    "ban": ("banned", "banning"), "hack": ("hacked", "hacking"),
+    "exploit": ("exploited", "exploiting"), "halt": ("halted", "halting"),
+    "breach": ("breaches", "breached"), "attack": ("attacked", "attacking"),
+    "sanction": ("sanctioned",), "default": ("defaulted",),
+    "bankruptcy": ("bankruptcies",), "emergency": ("emergencies",),
+}
+
+
+def _contains_term(text: str, term: str) -> bool:
+    forms = (term, term + "s", *_EVENT_FORMS.get(term, ()))
+    return re.search(r"(?<!\w)(?:" + "|".join(re.escape(form) for form in forms) + r")(?!\w)", text) is not None
 
 
 def _clamp(value: float, minimum: float, maximum: float) -> float:

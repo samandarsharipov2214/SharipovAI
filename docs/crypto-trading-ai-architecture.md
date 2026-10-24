@@ -326,3 +326,9 @@ New canonical settlements record the running `SHARIPOVAI_BUILD_SHA` as
 `producer_sha`, explicitly scoped to `canonical_runtime.settlement`; this is not
 an attestation of the earlier entry/model build. Replays preserve the original
 record. Missing/invalid build identifiers remain unknown.
+
+The quality sweep remains bounded to 10,000 settlements plus one sentinel row.
+If that does not cover retained history, challenger creation is blocked with
+`incomplete_settlement_quality_coverage`; an unseen recently updated exclusion
+must never be mistaken for a clean corpus. Larger corpora need a separately
+validated paginated quality audit, not an unbounded scan on the production VPS.
