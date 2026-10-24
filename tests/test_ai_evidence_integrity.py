@@ -188,3 +188,19 @@ def test_worker_survives_failed_startup_event_and_retries_next_cycle():
     network.cycle = lambda: calls.append('cycle')
     network._run()
     assert calls == ['cycle']
+
+
+def test_new_settlement_records_producer_revision_without_restamping_history(tmp_path, monkeypatch):
+    from autonomous_trading.canonical_runtime import CanonicalPaperDecisionRuntime
+    db = ProjectDatabase(f'sqlite:///{tmp_path / "producer.db"}')
+    runtime = CanonicalPaperDecisionRuntime(db)
+    monkeypatch.setenv('SHARIPOVAI_BUILD_SHA', 'a' * 40)
+    first = runtime._put_settlement_once('first', {'decision_id': 'first', 'net_pnl': -3})
+    assert first['producer_sha'] == 'a' * 40
+    assert first['producer_component'] == 'canonical_runtime.settlement'
+    monkeypatch.setenv('SHARIPOVAI_BUILD_SHA', 'b' * 40)
+    assert runtime._put_settlement_once('first', first) == first
+    assert db.get_json('paper_decision_settlements', 'first')['version'] == 1
+    monkeypatch.delenv('SHARIPOVAI_BUILD_SHA')
+    unknown = runtime._put_settlement_once('unknown', {'decision_id': 'unknown', 'net_pnl': -1})
+    assert unknown['producer_sha'] is None

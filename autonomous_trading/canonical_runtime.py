@@ -10,6 +10,8 @@ This module never places real orders and accepts PAPER candidates only.
 from __future__ import annotations
 
 import math
+import os
+import re
 from dataclasses import dataclass, replace
 from typing import Any, Mapping, Sequence
 
@@ -363,6 +365,11 @@ class CanonicalPaperDecisionRuntime:
 
     def _put_settlement_once(self, decision_id: str, result: Mapping[str, Any]) -> dict[str, Any]:
         payload = dict(result)
+        # This is the producing settlement build, never an inferred entry/model
+        # revision. Existing settlements are returned unchanged on replay.
+        revision = os.getenv("SHARIPOVAI_BUILD_SHA", "").strip().lower()
+        payload["producer_sha"] = revision if re.fullmatch(r"[0-9a-f]{40}", revision) else None
+        payload["producer_component"] = "canonical_runtime.settlement"
         try:
             self.database.put_json(
                 self.settlement_namespace,

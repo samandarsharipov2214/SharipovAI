@@ -321,3 +321,8 @@ is subsequently excluded, challenger creation is blocked pending a reviewed
 projection rebuild, rather than silently continuing from contaminated aggregates.
 Legacy outcomes without quality/version attestation require retrospective review;
 this mechanism does not certify them or promote a model automatically.
+
+New canonical settlements record the running `SHARIPOVAI_BUILD_SHA` as
+`producer_sha`, explicitly scoped to `canonical_runtime.settlement`; this is not
+an attestation of the earlier entry/model build. Replays preserve the original
+record. Missing/invalid build identifiers remain unknown.

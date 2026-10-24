@@ -182,6 +182,7 @@ class SelfLearningSupervisor:
             "source_updated_at_ms": row["updated_at_ms"],
             "source_sha256": hashlib.sha256(encoded.encode()).hexdigest(),
             "producer_sha": settlement.get("producer_sha") or None,
+            "producer_component": settlement.get("producer_component") or None,
             "system_version": settlement.get("system_version") or None,
             "version_provenance": "source_declared" if settlement.get("producer_sha") or settlement.get("system_version") else "unknown_legacy",
             "quality_policy_version": 1,
