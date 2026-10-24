@@ -112,6 +112,34 @@ def test_source_quality_survives_restart_and_keeps_genuine_losses(tmp_path, monk
     assert db.get_json('self_learning_outcomes_v2', 'paper:d')['value']['net_pnl'] == -3
 
 
+@pytest.mark.parametrize('producer', [None, 'b' * 40])
+def test_preexisting_attribution_backfills_quality_without_replaying_loss(tmp_path, producer):
+    from learning_engine import SelfLearningSupervisor
+    db = ProjectDatabase(f'sqlite:///{tmp_path / "legacy.db"}')
+    db.initialize()
+    supervisor = SelfLearningSupervisor(db)
+    evidence = {**outcome(), 'outcome_id': 'paper:d', 'decision_id': 'd'}
+    supervisor.attribution.record(evidence)
+    source = {**evidence, 'settled_at_ms': 1500}
+    if producer:
+        source['producer_sha'] = producer
+    db.put_json('paper_decision_settlements', 'd', source, expected_version=0)
+    original = db.get_json('self_learning_outcomes_v2', 'paper:d')
+    assert db.get_json('self_learning_source_quality', 'd') is None
+    result = supervisor.run_once()
+    assert result['processed_count'] == 0 and result['skipped_count'] == 1
+    quality = db.get_json('self_learning_source_quality', 'd')
+    assert quality is not None
+    assert quality['value']['producer_sha'] == producer
+    assert quality['value']['version_provenance'] == ('source_declared' if producer else 'unknown_legacy')
+    assert quality['value']['source_version'] == 1
+    SelfLearningSupervisor(db).run_once()
+    assert db.get_json('self_learning_source_quality', 'd') == quality
+    assert db.get_json('self_learning_outcomes_v2', 'paper:d') == original
+    assert original['value']['net_pnl'] == -3
+    assert db.get_json('paper_decision_settlements', 'd')['value'] == source
+
+
 def test_failed_source_degrades_canonical_organ_instead_of_false_healthy(tmp_path):
     from types import SimpleNamespace
     from fastapi import FastAPI
@@ -222,6 +250,8 @@ def test_incomplete_history_scan_cannot_authorize_challenger(tmp_path, monkeypat
     monkeypatch.setattr(worker.attribution, 'get', lambda key: {'exists': True})
     monkeypatch.setattr(worker.attribution, 'summary', lambda: {})
     monkeypatch.setattr(worker.attribution, 'agent_metrics', lambda **kwargs: [])
+    # This tests scan coverage; persistence/replay is tested separately above.
+    monkeypatch.setattr(worker, '_record_source_quality', lambda *args, **kwargs: None)
     called = []
     def evaluate(summary):
         called.append(summary)
