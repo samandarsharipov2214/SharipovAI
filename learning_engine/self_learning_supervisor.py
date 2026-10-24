@@ -79,6 +79,10 @@ class SelfLearningSupervisor:
                 self._record_source_quality(row, decision_id, excluded_reason=str(exc))
                 continue
             if self.attribution.get(outcome_id) is not None:
+                # Upgrades must audit legacy inputs even when their outcome was
+                # already attributed. Persist lineage without replaying metrics
+                # or inventing a producer version for old financial records.
+                self._record_source_quality(row, decision_id)
                 skipped += 1
                 continue
             try:
