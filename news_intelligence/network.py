@@ -67,8 +67,8 @@ class NewsAgentNetwork:
             with self._lock:
                 self._running_cycle = False
             raise KeyError(f"Unknown source agent: {source_id}")
-        self.hub.event("cycle_started", "News agent cycle started", data={"source_id": source_id})
         try:
+            self.hub.event("cycle_started", "News agent cycle started", data={"source_id": source_id})
             fetched_results = self._collect_sources(selected_agents)
             for agent, (articles, fetched) in fetched_results:
                 fetched_sources += 1

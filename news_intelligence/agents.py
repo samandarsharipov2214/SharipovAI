@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 import time
 from collections import deque
 from datetime import UTC, datetime
@@ -124,24 +125,27 @@ class SourceAgent:
 
 def _analyze(definition: SourceDefinition, article: NewsArticle, fetched: SourceFetch) -> NewsEnvelope:
     text = f"{article.title} {article.summary}".lower()
-    bullish = sum(1 for word in _BULLISH if word in text)
-    bearish = sum(1 for word in _BEARISH if word in text)
+    bullish = sum(1 for word in _BULLISH if re.search(r"(?<!\w)" + re.escape(word) + r"(?!\w)", text))
+    bearish = sum(1 for word in _BEARISH if re.search(r"(?<!\w)" + re.escape(word) + r"(?!\w)", text))
     polarity = bullish - bearish
     sentiment = _clamp(polarity / max(bullish + bearish, 1), -1.0, 1.0)
 
-    market_hits = sum(1 for word in _MARKET_TERMS if word in text)
+    market_hits = sum(1 for word in _MARKET_TERMS if re.search(r"(?<!\w)" + re.escape(word) + r"(?!\w)", text))
     relevance = _clamp(0.25 + market_hits * 0.09, 0.0, 1.0)
     reliability = _clamp(float(definition.trust_score) / 100.0, 0.0, 1.0)
     if not fetched.verified:
         reliability = min(reliability, 0.25)
 
-    urgent_hits = sum(1 for word in _URGENT if word in text)
+    urgent_hits = sum(1 for word in _URGENT if re.search(r"(?<!\w)" + re.escape(word) + r"(?!\w)", text))
     urgency = "critical" if urgent_hits >= 2 and reliability >= 0.7 else "high" if urgent_hits else "medium" if abs(sentiment) >= 0.5 else "low"
     impact = "bullish" if sentiment > 0.15 else "bearish" if sentiment < -0.15 else "neutral"
     urgency_weight = {"low": 0.25, "medium": 0.5, "high": 0.8, "critical": 1.0}[urgency]
     score = round(_clamp((relevance * 0.35 + reliability * 0.4 + urgency_weight * 0.25) * 100.0, 0.0, 100.0), 2)
 
     reasons = [
+        "analysis_method=lexical_heuristic_v2",
+        "content_scope=feed_title_and_summary",
+        "fetch_verification_is_not_fact_verification",
         f"source_trust={definition.trust_score}",
         f"market_term_hits={market_hits}",
         f"urgent_term_hits={urgent_hits}",

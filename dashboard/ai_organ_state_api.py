@@ -228,6 +228,11 @@ class AIOrganRuntimeMonitor:
             evidence.append("news_worker_running")
         else:
             blockers.append("News Intelligence worker is not running")
+        sources = snapshot.get("agents", [])
+        degraded = [str(item.get("source_id") or "unknown") for item in sources
+                    if isinstance(item, dict) and item.get("status") != "active"]
+        if degraded:
+            blockers.append("News Intelligence sources degraded: " + ", ".join(degraded))
         last_cycle = int(snapshot.get("last_cycle_at_ms") or 0)
         self._append_freshness(evidence, blockers, "news_cycle", last_cycle)
         if snapshot.get("last_error"):

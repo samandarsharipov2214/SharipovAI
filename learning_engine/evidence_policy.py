@@ -89,12 +89,15 @@ class OutcomeEvidence:
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "OutcomeEvidence":
+        require_learning_eligibility(value)
         source = str(value.get("source") or value.get("environment") or "").strip().lower()
         if source not in _ALLOWED_SOURCES:
             raise ValueError("learning source must be paper or testnet")
-        evidence_class = str(value.get("evidence_class") or "verified_market").strip().lower()
+        evidence_class = str(value.get("evidence_class") or "").strip().lower()
         if evidence_class in _FORBIDDEN_CLASSES:
             raise ValueError("synthetic outcome evidence is forbidden")
+        if evidence_class not in {"verified_market", "verified_exchange", "verified_bybit", "verified_market_and_news"}:
+            raise ValueError("verified outcome evidence class is required")
         if value.get("verified_market_data") is not True:
             raise ValueError("verified market evidence is required")
         selected = str(value.get("selected_action") or "WAIT").strip().upper()
@@ -146,6 +149,17 @@ class OutcomeEvidence:
         payload = asdict(self)
         payload["agents"] = [item.to_dict() for item in self.agents]
         return payload
+
+
+def require_learning_eligibility(value: Mapping[str, Any]) -> None:
+    """Honor explicit quality exclusions independently of profit or loss.
+
+    Missing historical metadata is not evidence of a technical defect. Never
+    infer an exclusion from age, version, or a genuine negative financial result.
+    """
+    for flag in ("learning_eligible", "evidence_eligible", "data_verified"):
+        if flag in value and value[flag] is not True:
+            raise ValueError(f"outcome is not learning eligible: {flag}")
 
 
 def _identifier(value: Any, name: str) -> str:
