@@ -151,3 +151,40 @@ def test_unavailable_llm_is_not_presented_as_intelligent_analysis(monkeypatch):
     assert 'не результат анализа LLM' in result['reply']
     assert result['data']['intelligence']['response_mode'] == 'deterministic_fallback'
     assert result['data']['intelligence']['status'] == 'unavailable'
+
+
+def test_rejected_unattributed_example_does_not_block_clean_research(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from learning_engine import SelfLearningSupervisor
+    monkeypatch.setenv('SELF_LEARNING_SOURCE_EXPERIMENT_ID', 'independent-experiment')
+    db = ProjectDatabase(f'sqlite:///{tmp_path / "rejected.db"}')
+    db.initialize()
+    db.put_json('paper_decision_settlements', 'd', {**outcome(), 'learning_eligible': False}, expected_version=0)
+    worker = SelfLearningSupervisor(db)
+    called = []
+    def evaluate(summary):
+        called.append(summary)
+        return SimpleNamespace(eligible=False, to_dict=lambda: {'eligible': False})
+    monkeypatch.setattr(worker.challengers, 'evaluate_learning_summary', evaluate)
+    result = worker.run_once(now_ms=3000)
+    assert result['excluded_count'] == 1 and result['contaminated_count'] == 0
+    assert len(called) == 1
+    assert result['challenger']['status'] == 'insufficient_evidence'
+    assert worker.attribution.get('paper:d') is None
+
+
+def test_worker_survives_failed_startup_event_and_retries_next_cycle():
+    network = NewsAgentNetwork()
+    calls = []
+    waits = iter([False, True])
+    class Stop:
+        def wait(self, seconds):
+            return next(waits)
+    network._stop = Stop()
+    def event(kind, *args, **kwargs):
+        if kind == 'network_started':
+            raise OSError('temporary DB failure')
+    network.hub.event = event
+    network.cycle = lambda: calls.append('cycle')
+    network._run()
+    assert calls == ['cycle']

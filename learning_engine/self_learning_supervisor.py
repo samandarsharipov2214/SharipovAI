@@ -47,7 +47,7 @@ class SelfLearningSupervisor:
         timestamp = int(time.time() * 1000) if now_ms is None else int(now_ms)
         if timestamp <= 0:
             raise ValueError("now_ms must be positive")
-        processed = skipped = failed = excluded = 0
+        processed = skipped = failed = excluded = contaminated = 0
         errors: list[str] = []
         settlements = list_json_items(
             self.database,
@@ -71,6 +71,7 @@ class SelfLearningSupervisor:
                 require_learning_eligibility(settlement)
             except ValueError as exc:
                 excluded += 1
+                contaminated += self.attribution.get(outcome_id) is not None
                 self._record_source_quality(row, decision_id, excluded_reason=str(exc))
                 continue
             if self.attribution.get(outcome_id) is not None:
@@ -95,7 +96,7 @@ class SelfLearningSupervisor:
         summary["agents"] = self.attribution.agent_metrics(limit=10_000)
         challenger_result: dict[str, Any] = {}
         source_experiment = os.getenv("SELF_LEARNING_SOURCE_EXPERIMENT_ID", "").strip()
-        if source_experiment and not excluded:
+        if source_experiment and not contaminated:
             try:
                 evaluation = self.challengers.evaluate_learning_summary(summary)
                 if evaluation.eligible:
@@ -123,9 +124,9 @@ class SelfLearningSupervisor:
                     "error": f"{type(exc).__name__}: {exc}",
                 }
 
-        if excluded:
+        if contaminated:
             challenger_result = {"status": "blocked", "reason": "explicitly_excluded_settlement_evidence",
-                                 "excluded_count": excluded, "execution_authority": False}
+                                 "contaminated_count": contaminated, "execution_authority": False}
 
         try:
             development_result = self.development_learning.run_weekly_process_review(timestamp)
@@ -146,6 +147,7 @@ class SelfLearningSupervisor:
             "skipped_count": skipped,
             "failed_count": failed,
             "excluded_count": excluded,
+            "contaminated_count": contaminated,
             "errors": errors[-20:],
             "learning_summary": summary,
             "challenger": challenger_result,

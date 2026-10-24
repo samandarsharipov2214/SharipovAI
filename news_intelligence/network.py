@@ -153,11 +153,11 @@ class NewsAgentNetwork:
         return [agent.definition for agent in self.agents]
 
     def _run(self) -> None:
-        self.hub.event("network_started", "News Intelligence agent network started")
         try:
+            self.hub.event("network_started", "News Intelligence agent network started")
             self.cycle()
-        except Exception:
-            pass
+        except Exception as exc:
+            self._last_error = f"{type(exc).__name__}: {exc}"
         while not self._stop.wait(self.refresh_seconds):
             try:
                 self.cycle()
