@@ -138,3 +138,16 @@ def test_malformed_explicit_eligibility_fails_closed(flag, value):
 def test_unknown_outcome_class_is_not_assumed_verified(evidence_class):
     with pytest.raises(ValueError, match='verified outcome evidence class'):
         OutcomeEvidence.from_mapping({**outcome(), 'evidence_class': evidence_class})
+
+
+def test_unavailable_llm_is_not_presented_as_intelligent_analysis(monkeypatch):
+    import ai_chat_orchestrator as chat
+    from agent_intelligence import IntelligenceResult
+    monkeypatch.setattr(chat, '_network', lambda: None)
+    monkeypatch.setattr(chat, '_agent_chat', lambda *args: 'Rule-based explanation')
+    monkeypatch.setattr(chat, 'answer_with_intelligence', lambda **kwargs: IntelligenceResult(status='unavailable', error='HTTP 402'))
+    result = chat._answer_agent('risk_engine', 'Explain uncertainty', {}, intelligent=True, persist_bus=False)
+    assert 'AI-модель недоступна' in result['reply']
+    assert 'не результат анализа LLM' in result['reply']
+    assert result['data']['intelligence']['response_mode'] == 'deterministic_fallback'
+    assert result['data']['intelligence']['status'] == 'unavailable'
