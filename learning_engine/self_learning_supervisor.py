@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+import hashlib
+import json
 import math
 import threading
 import time
@@ -10,6 +12,7 @@ from typing import Any, Mapping
 from meta_ai_persistence import EVENT_NAMESPACE
 from storage import ProjectDatabase, list_json_items
 
+from .evidence_policy import OutcomeEvidence, require_learning_eligibility
 from .development_learning import DevelopmentLearningService
 from .outcome_attribution import OutcomeAttributionService
 from .research_challengers import ResearchChallengerService
@@ -44,14 +47,18 @@ class SelfLearningSupervisor:
         timestamp = int(time.time() * 1000) if now_ms is None else int(now_ms)
         if timestamp <= 0:
             raise ValueError("now_ms must be positive")
-        processed = skipped = failed = 0
+        processed = skipped = failed = excluded = contaminated = 0
         errors: list[str] = []
         settlements = list_json_items(
             self.database,
             _SETTLEMENT_NAMESPACE,
-            limit=10_000,
+            limit=10_001,
             newest_first=False,
         )
+        # One extra row proves whether the bounded quality audit is complete.
+        # Never authorize research from an unseen remainder of retained history.
+        coverage_complete = len(settlements) <= 10_000
+        settlements = settlements[:10_000]
         for row in settlements:
             settlement = row.get("value")
             if not isinstance(settlement, Mapping):
@@ -64,6 +71,13 @@ class SelfLearningSupervisor:
                 errors.append("settlement without decision_id")
                 continue
             outcome_id = f"paper:{decision_id}"
+            try:
+                require_learning_eligibility(settlement)
+            except ValueError as exc:
+                excluded += 1
+                contaminated += self.attribution.get(outcome_id) is not None
+                self._record_source_quality(row, decision_id, excluded_reason=str(exc))
+                continue
             if self.attribution.get(outcome_id) is not None:
                 skipped += 1
                 continue
@@ -74,6 +88,8 @@ class SelfLearningSupervisor:
                 if evidence["evidence_available_at_ms"] > timestamp:
                     skipped += 1
                     continue
+                OutcomeEvidence.from_mapping(evidence)
+                self._record_source_quality(row, decision_id)
                 self.attribution.record(evidence)
                 processed += 1
             except (KeyError, RuntimeError, TypeError, ValueError, OSError) as exc:
@@ -84,7 +100,7 @@ class SelfLearningSupervisor:
         summary["agents"] = self.attribution.agent_metrics(limit=10_000)
         challenger_result: dict[str, Any] = {}
         source_experiment = os.getenv("SELF_LEARNING_SOURCE_EXPERIMENT_ID", "").strip()
-        if source_experiment:
+        if source_experiment and not contaminated and coverage_complete:
             try:
                 evaluation = self.challengers.evaluate_learning_summary(summary)
                 if evaluation.eligible:
@@ -112,6 +128,13 @@ class SelfLearningSupervisor:
                     "error": f"{type(exc).__name__}: {exc}",
                 }
 
+        if not coverage_complete:
+            challenger_result = {"status": "blocked", "reason": "incomplete_settlement_quality_coverage",
+                                 "scanned_limit": 10_000, "execution_authority": False}
+        elif contaminated:
+            challenger_result = {"status": "blocked", "reason": "explicitly_excluded_settlement_evidence",
+                                 "contaminated_count": contaminated, "execution_authority": False}
+
         try:
             development_result = self.development_learning.run_weekly_process_review(timestamp)
         except (KeyError, RuntimeError, TypeError, ValueError, OSError) as exc:
@@ -126,10 +149,13 @@ class SelfLearningSupervisor:
             }
 
         state = {
-            "status": "degraded" if failed or development_result.get("status") in {"blocked", "error"} else "ok",
+            "status": "degraded" if failed or excluded or not coverage_complete or development_result.get("status") in {"blocked", "error"} else "ok",
             "processed_count": processed,
             "skipped_count": skipped,
             "failed_count": failed,
+            "excluded_count": excluded,
+            "contaminated_count": contaminated,
+            "settlement_quality_coverage_complete": coverage_complete,
             "errors": errors[-20:],
             "learning_summary": summary,
             "challenger": challenger_result,
@@ -147,6 +173,35 @@ class SelfLearningSupervisor:
             expected_version=int(current["version"]) if current else 0,
         )
         return state
+
+    def _record_source_quality(self, row: Mapping[str, Any], decision_id: str,
+                               *, excluded_reason: str = "") -> None:
+        """Durable lineage; never stamp legacy outcomes with today's build SHA.
+
+        The financial source remains untouched. Existing derived metrics are not
+        silently rewritten; explicit exclusions block challenger creation until
+        reviewed, including exclusions added after attribution was recorded.
+        """
+        settlement = row["value"]
+        encoded = json.dumps(settlement, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        payload = {
+            "source_namespace": _SETTLEMENT_NAMESPACE,
+            "source_key": str(row["key"]), "source_version": row["version"],
+            "source_updated_at_ms": row["updated_at_ms"],
+            "source_sha256": hashlib.sha256(encoded.encode()).hexdigest(),
+            "producer_sha": settlement.get("producer_sha") or None,
+            "producer_component": settlement.get("producer_component") or None,
+            "system_version": settlement.get("system_version") or None,
+            "version_provenance": "source_declared" if settlement.get("producer_sha") or settlement.get("system_version") else "unknown_legacy",
+            "quality_policy_version": 1,
+            "status": "excluded" if excluded_reason else "accepted",
+            "reason": excluded_reason or "explicit_verified_evidence_policy",
+            "execution_authority": False,
+        }
+        current = self.database.get_json("self_learning_source_quality", decision_id)
+        if current is None or current["value"] != payload:
+            self.database.put_json("self_learning_source_quality", decision_id, payload,
+                                   expected_version=int(current["version"]) if current else 0)
 
     def status(self) -> dict[str, Any]:
         current = self.database.get_json(_STATE_NAMESPACE, "current")
@@ -263,6 +318,7 @@ def _require_verified_settlement_evidence(settlement: Mapping[str, Any]) -> tupl
     non-True verified_market_data must not default to a verified class.
     """
 
+    require_learning_eligibility(settlement)
     raw_class = settlement.get("evidence_class") if "evidence_class" in settlement else None
     if raw_class is None:
         raise ValueError("settlement evidence_class is required")

@@ -171,9 +171,13 @@ def _answer_agent(
             if intelligence is not None and intelligence.status == "ok"
             else _agent_chat(agent_id, meta, question, state)
         )
+        if intelligence is not None and intelligence.status != "ok":
+            reply = ("AI-модель недоступна. Ниже — справочный ответ по правилам системы, "
+                     "а не результат анализа LLM.\n" + reply)
     provider = (
         {
             "status": intelligence.status,
+            "response_mode": "model" if intelligence.status == "ok" else "deterministic_fallback",
             "model": intelligence.model,
             "request_id": intelligence.request_id,
             "grounded": intelligence.grounded,

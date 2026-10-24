@@ -10,7 +10,6 @@ import hashlib
 import os
 import time
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any, Iterable
 
 import feedparser
@@ -143,8 +142,8 @@ def _article(definition: SourceDefinition, entry: Any) -> NewsArticle:
     link = str(_entry_value(entry, "link", "")).strip()
     summary = str(_entry_value(entry, "summary", _entry_value(entry, "description", ""))).strip()
     published = str(_entry_value(entry, "published", _entry_value(entry, "updated", ""))).strip()
-    if not published:
-        published = datetime.now(UTC).replace(microsecond=0).isoformat()
+    # Unknown publication time stays unknown. Retrieval time is recorded in
+    # SourceFetch and must not fabricate freshness or change duplicate identity.
     identity = "|".join((definition.source_id, link, title, published))
     article_id = hashlib.sha256(identity.encode("utf-8", errors="ignore")).hexdigest()
     return NewsArticle(

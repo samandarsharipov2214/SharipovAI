@@ -291,3 +291,44 @@ python -c "import dashboard; print(dashboard.app.title)"
 4. Проверить актуальные открытые PR и текущий `main`.
 5. Расширить существующего владельца вместо создания копии.
 6. После изменения выполнить тесты и описать фактический результат, а не предполагаемый.
+
+
+### Runtime evidence boundaries (2026-10-24)
+
+The deployed News Intelligence owner is `news_intelligence.network.NewsAgentNetwork`,
+exposed through `dashboard/news_agent_network_api.py`. Its source workers consume
+RSS/Atom titles and feed summaries, not guaranteed full articles. Their analysis
+is a transparent lexical heuristic, not an LLM fact checker. HTTP verification
+establishes retrieval, not truth. Unknown publication dates remain unknown and
+cannot enter Council's freshness-gated news vote. Publisher-family grouping and
+Council input lineage distinguish shared evidence from independent confirmation.
+Unavailable sources must degrade the organ status even when its worker is alive.
+
+News memory (`news_memory`, `news_article_evidence`, fetch observations) and
+Council/assessment/settlement evidence live in ProjectDatabase. SourceAgent RAM
+is a bounded cache; restart tests exercise persistent NewsHub deduplication.
+The separate chat provider configured by `AGENT_LLM_MODEL` is not proof that
+trading decisions are produced by that model.
+
+Self-learning must honor explicit `learning_eligible`, `evidence_eligible`, and
+`data_verified` exclusions at both settlement and attribution boundaries. Genuine
+losses remain valid evidence; age or a historical build alone does not prove a
+technical defect. `self_learning_source_quality` records source key/version/hash,
+source-declared producer revision (unknown when absent), and exclusion reason for
+newly evaluated or explicitly excluded settlements. Existing financial records
+and attributed history are never rewritten. If an already-attributed settlement
+is subsequently excluded, challenger creation is blocked pending a reviewed
+projection rebuild, rather than silently continuing from contaminated aggregates.
+Legacy outcomes without quality/version attestation require retrospective review;
+this mechanism does not certify them or promote a model automatically.
+
+New canonical settlements record the running `SHARIPOVAI_BUILD_SHA` as
+`producer_sha`, explicitly scoped to `canonical_runtime.settlement`; this is not
+an attestation of the earlier entry/model build. Replays preserve the original
+record. Missing/invalid build identifiers remain unknown.
+
+The quality sweep remains bounded to 10,000 settlements plus one sentinel row.
+If that does not cover retained history, challenger creation is blocked with
+`incomplete_settlement_quality_coverage`; an unseen recently updated exclusion
+must never be mistaken for a clean corpus. Larger corpora need a separately
+validated paginated quality audit, not an unbounded scan on the production VPS.
