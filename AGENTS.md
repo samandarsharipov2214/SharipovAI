@@ -37,7 +37,7 @@ Before adding an AI:
 
 ## Specialized News AI network
 Primary implementation:
-- `news_monitor/agent_network.py`
+- `news_intelligence/network.py` (canonical DB-backed runtime)
 - `dashboard/news_agent_network_api.py`
 
 Required properties for every news agent:

@@ -3,6 +3,16 @@ from __future__ import annotations
 from typing import Any
 
 import agent_intelligence
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def explicit_mock_provider_opt_in(monkeypatch):
+    # These tests mock the provider; production defaults remain offline.
+    monkeypatch.setenv("AI_PROVIDER_MODE", "external")
+    monkeypatch.setenv("AI_REMOTE_LLM_ENABLED", "1")
+    monkeypatch.setenv("AGENT_WEB_SEARCH_ENABLED", "1")
+
 
 
 def test_openrouter_completion_uses_role_and_grounded_web_citations(monkeypatch) -> None:
@@ -76,7 +86,7 @@ def test_provider_failure_is_explicit_and_never_uses_fake_web_answer(monkeypatch
     assert result.status == "unavailable"
     assert result.grounded is False
     assert result.citations == ()
-    assert "не настроен" in result.error
+    assert result.error in {"AI-провайдер не настроен", "invalid_provider_endpoint"}
 
 
 def test_untrusted_state_is_bounded_and_secrets_are_not_sent(monkeypatch) -> None:

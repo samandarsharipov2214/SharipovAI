@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Iterable
 
 import feedparser
@@ -18,20 +18,29 @@ import httpx
 from news_monitor.sources import default_sources
 
 from .models import NewsArticle, SourceFetch
+from .enrichment import plain_text
+from .full_text import PrimaryTextCollector
+
+SOURCE_REPLACEMENTS = {
+    'coinbase_blog': {'replacement': 'coinbase_status', 'reason': 'HTTP403; operational incidents only, corporate-blog coverage unavailable'},
+    'reuters_markets': {'replacement': 'marketwatch_top', 'reason': 'HTTP404; different financial publisher'},
+    'treasury_press': {'replacement': 'bank_of_england_news', 'reason': 'HTTP404; UK central bank, not US Treasury coverage'},
+    'cisa_alerts': {'replacement': 'bleepingcomputer', 'reason': 'HTTP403; independent security reporting, not official CISA advisories'},
+}
 
 
 _DEFAULT_SOURCE_IDS = (
-    "coinbase_blog",
+    "coinbase_status",
     "kraken_blog",
     "cointelegraph_rss",
     "coindesk_rss",
-    "reuters_markets",
+    "marketwatch_top",
     "cnbc_finance",
     "federal_reserve",
     "sec_press",
-    "treasury_press",
+    "bank_of_england_news",
     "ecb_press",
-    "cisa_alerts",
+    "bleepingcomputer",
     "bbc_world",
 )
 
@@ -62,6 +71,7 @@ class SourceCollector:
         configured_timeout = timeout_seconds if timeout_seconds is not None else _float_env("NEWS_AGENT_HTTP_TIMEOUT_SECONDS", 8.0)
         self.timeout_seconds = min(max(float(configured_timeout), 1.0), 20.0)
         self._client = client
+        self._primary_text = PrimaryTextCollector()
 
     def collect(self, definition: SourceDefinition) -> tuple[list[NewsArticle], SourceFetch]:
         requested_at_ms = int(time.time() * 1000)
@@ -83,6 +93,17 @@ class SourceCollector:
                 for entry in entries[:max_items]
                 if _entry_title(entry)
             ]
+            # At most two allowlisted primary pages per source cycle. Other
+            # publishers are limited to the text they explicitly syndicate.
+            if definition.source_id == 'federal_reserve' and os.getenv('NEWS_PRIMARY_TEXT_ENABLED', '1') == '1':
+                for index, article in enumerate(articles[:2]):
+                    content = self._primary_text.fetch(article.link)
+                    if content.get('status') == 'ok':
+                        articles[index] = replace(article, content=content['text'],
+                            content_scope='primary_text_truncated' if content['truncated'] else 'primary_full_text',
+                            content_observed_at_ms=content['observed_at_ms'], content_status='ok')
+                    else:
+                        articles[index] = replace(article, content_status=content['status'])
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
             articles = []
@@ -146,6 +167,8 @@ def _article(definition: SourceDefinition, entry: Any) -> NewsArticle:
     # SourceFetch and must not fabricate freshness or change duplicate identity.
     identity = "|".join((definition.source_id, link, title, published))
     article_id = hashlib.sha256(identity.encode("utf-8", errors="ignore")).hexdigest()
+    provided = _entry_value(entry, 'content', [])
+    body = plain_text(' '.join(str(x.get('value', '')) for x in provided[:2] if isinstance(x, dict))) if isinstance(provided, list) else ''
     return NewsArticle(
         article_id=article_id,
         title=title,
@@ -156,6 +179,9 @@ def _article(definition: SourceDefinition, entry: Any) -> NewsArticle:
         summary=summary,
         language=definition.language,
         source_type=definition.source_type,
+        content=body[:16000],
+        content_scope='publisher_feed_truncated' if len(body)>16000 else 'publisher_feed_body' if body else 'feed_title_and_summary',
+        content_status='publisher_provided' if body else 'not_collected',
     )
 
 

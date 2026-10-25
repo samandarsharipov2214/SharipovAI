@@ -17,6 +17,7 @@ def default_sources() -> list[NewsSource]:
         NewsSource("bybit_announcements", "Bybit Announcements", "official", "https://announcements.bybit.com", 92, "exchange", note="Official exchange announcements."),
         NewsSource("binance_announcements", "Binance Announcements", "official", "https://www.binance.com/en/support/announcement", 92, "exchange", note="Official exchange announcements."),
         NewsSource("coinbase_blog", "Coinbase Blog", "rss", "https://www.coinbase.com/blog/rss.xml", 88, "exchange"),
+        NewsSource("coinbase_status", "Coinbase Operational Status", "rss", "https://status.coinbase.com/history.rss", 88, "exchange", note="Official incident reports; not corporate-blog or market-news coverage."),
         NewsSource("kraken_blog", "Kraken Blog", "rss", "https://blog.kraken.com/feed", 86, "exchange"),
         NewsSource("okx_blog", "OKX Blog", "rss", "https://www.okx.com/learn/rss", 78, "exchange"),
         NewsSource("bitget_news", "Bitget News", "rss", "https://www.bitget.com/support/sections/12508313405721/rss", 72, "exchange", note="Use with confirmation."),

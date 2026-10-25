@@ -238,3 +238,17 @@ def test_every_current_symbol_requires_fresh_evidence(tmp_path, monkeypatch):
     db.append_event("decision_quality", "decision_assessment", "ETHUSDT", {}, created_at_ms=now[0])
     for probe in probes:
         assert any("stale" in reason for reason in probe()[1])
+
+
+def test_quality_metrics_survive_snapshot_and_monitor_restart(tmp_path, monkeypatch):
+    configure_safe(monkeypatch)
+    db = database(tmp_path)
+    app = prepared_app(db)
+    monitor = SafeAIOrganRuntimeMonitor(app, db, clock_ms=lambda:1_000)
+    first = monitor.refresh()
+    restored = SafeAIOrganRuntimeMonitor(app, db, clock_ms=lambda:1_000).snapshot()
+    for before, after in zip(first['organs'], restored['organs']):
+        assert before['metrics'] == after['metrics']
+        assert after['metrics']['observations'] == 1
+        assert after['metrics']['predictive_utility'] == 'NOT_VALIDATED'
+    assert first['provider_policy']['mode'] == restored['provider_policy']['mode'] == 'offline'

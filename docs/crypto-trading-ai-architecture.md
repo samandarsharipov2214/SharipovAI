@@ -332,3 +332,38 @@ If that does not cover retained history, challenger creation is blocked with
 `incomplete_settlement_quality_coverage`; an unseen recently updated exclusion
 must never be mistaken for a clean corpus. Larger corpora need a separately
 validated paginated quality audit, not an unbounded scan on the production VPS.
+
+
+## Free provider policy and measured news evidence
+
+Production pins `AI_PROVIDER_MODE=offline`, `AI_REMOTE_LLM_ENABLED=0` and disables
+chat web search. Existing keys alone cannot trigger chat, extraction or embedding
+requests. Offline responses explicitly report stored evidence, not LLM reasoning;
+lexical memory retrieval, the existing ridge forecast and deterministic organs
+continue working. Optional `local` accepts literal loopback endpoints only and
+never forwards remote memory credentials. External inference requires explicit
+mode plus opt-in; it is never a fallback. No local LLM is installed by this change.
+
+The default news set replaces failing Coinbase blog/Reuters/Treasury/CISA feeds
+with Coinbase Status/MarketWatch/Bank of England/BleepingComputer, respectively.
+Coverage differs: operational status is not corporate news; UK policy is not US
+Treasury policy; journalism is not an official CISA bulletin. Original source
+identities remain in the registry. Publisher-provided RSS bodies are retained.
+Only allowlisted Federal Reserve press releases receive bounded, cached full-text
+fetching, with robots and public-domain policy checks; blocked pages stay blocked.
+
+Article content has hashes and observation time separate from immutable article
+identity. Features become available no earlier than collection, preventing a
+historical publication time from admitting later-downloaded content into training.
+Language and claim type are heuristics, not truth certification. Cross-source
+similarity produces corroboration candidates; syndication and identical copies
+are not independent confirmation. News predictive utility remains NOT_VALIDATED;
+no trading weight, risk limit or model-promotion rule changes.
+
+Organ metrics distinguish process-scoped availability/probe latency from inference
+latency, historical attribution from causal utility, and forecast validation from
+runtime health. A changed already-attributed financial label quarantines learning
+until reviewed reconstruction; source financial history is preserved. Genuine
+losses remain useful evidence. Final holdout stays closed until the existing data
+coverage and review gates pass. Unvalidated models retain the existing SHADOW
+fallback and cannot authorize execution.

@@ -8,17 +8,19 @@ later fetch timestamp can never masquerade as an article evidence conflict.
 from __future__ import annotations
 
 import math
+import hashlib
 import os
 import time
 import uuid
 from collections import Counter, OrderedDict, deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Mapping
 
 from storage import ProjectDatabase, VersionConflict, count_json_items, list_json_items
 
 from .agents import SourceAgent
 from .models import NewsArticle, NewsEnvelope, SourceFetch
+from .enrichment import corroboration_candidates
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,11 +89,24 @@ class NewsHub:
             if self.database is not None:
                 self._persist_article_evidence(article)
                 self._record_fetch_observation(agent, article, fetched)
+                if article.content:
+                    content_key = article.article_id + ':' + hashlib.sha256(article.content.encode()).hexdigest()
+                    if self.database.get_json('news_article_content', content_key) is None:
+                        try:
+                            self.database.put_json('news_article_content', content_key,
+                                {'article_id':article.article_id, 'url':article.link, 'text':article.content,
+                                 'scope':article.content_scope, 'available_at_ms':max(article.content_observed_at_ms, fetched.received_at_ms),
+                                 'publication_time':article.published_at, 'execution_authority':False}, expected_version=0)
+                        except VersionConflict:
+                            pass  # Another observer preserved the same content hash.
 
             envelope = agent.register(article, fetched)
             if envelope is None:
                 duplicates += 1
                 continue
+            envelope = replace(envelope, analysis={**envelope.analysis,
+                'corroboration_candidates':corroboration_candidates(envelope, self._memory),
+                'independence_status':'NOT_ESTABLISHED'})
 
             if self.database is not None:
                 payload = envelope.to_dict()
@@ -158,6 +173,8 @@ class NewsHub:
     def state(self) -> dict[str, Any]:
         impacts = Counter(item.impact for item in self._memory)
         urgencies = Counter(item.urgency for item in self._memory)
+        delays = sorted(item.analysis['publication_delay_ms'] for item in self._memory
+                        if item.analysis.get('publication_delay_ms') is not None)
         if self.database is not None:
             article_total = count_json_items(self.database, self.memory_namespace)
             immutable_article_total = count_json_items(self.database, self.article_namespace)
@@ -178,6 +195,15 @@ class NewsHub:
             "database_backed": self.database is not None,
             "impact_counts": dict(impacts),
             "urgency_counts": dict(urgencies),
+            "quality_metrics": {
+                "window_articles": len(self._memory), "scope": "bounded_recent_memory",
+                "enriched_articles": sum(bool(item.article.content) for item in self._memory),
+                "classified_articles": sum(bool(item.analysis) for item in self._memory),
+                "publication_delay_median_ms": delays[len(delays)//2] if delays else None,
+                "known_publication_delay_count": len(delays),
+                "claim_types": dict(Counter(item.analysis.get('claim_type', 'legacy_unclassified') for item in self._memory)),
+                "predictive_utility": "NOT_VALIDATED", "trading_weights_changed": False,
+            },
             "latest": self.latest(),
         }
 
@@ -296,6 +322,10 @@ def _envelope_from_dict(value: Any) -> NewsEnvelope:
         summary=str(article_raw.get("summary", "")),
         language=str(article_raw.get("language", "")),
         source_type=str(article_raw.get("source_type", "")),
+        content=str(article_raw.get('content', '')),
+        content_scope=str(article_raw.get('content_scope', 'feed_title_and_summary')),
+        content_observed_at_ms=int(article_raw.get('content_observed_at_ms', 0)),
+        content_status=str(article_raw.get('content_status', 'not_collected')),
     )
     fetched = SourceFetch(
         source_id=str(fetched_raw.get("source_id", "")),
@@ -323,6 +353,7 @@ def _envelope_from_dict(value: Any) -> NewsEnvelope:
         score=_finite(value.get("score"), "score"),
         reasons=tuple(str(item) for item in (value.get("reasons") or [])),
         detected_at=str(value.get("detected_at", "")),
+        analysis=dict(value.get('analysis') or {}),
     )
 
 

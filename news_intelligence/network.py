@@ -11,7 +11,7 @@ from storage import ProjectDatabase
 
 from .agents import SourceAgent
 from .hub import NewsHub
-from .sources import SourceCollector, SourceDefinition, source_definitions
+from .sources import SourceCollector, SourceDefinition, source_definitions, SOURCE_REPLACEMENTS
 
 
 class NewsAgentNetwork:
@@ -132,6 +132,7 @@ class NewsAgentNetwork:
             "last_error": self._last_error,
             "database_backed": self.database is not None,
             "agents": [agent.status() for agent in self.agents],
+            "source_coverage_changes": SOURCE_REPLACEMENTS,
             "hub": self.hub.state(),
         }
 

@@ -78,7 +78,22 @@ class SelfLearningSupervisor:
                 contaminated += self.attribution.get(outcome_id) is not None
                 self._record_source_quality(row, decision_id, excluded_reason=str(exc))
                 continue
-            if self.attribution.get(outcome_id) is not None:
+            existing_outcome = self.attribution.get(outcome_id)
+            if existing_outcome is not None:
+                # A revised financial label cannot silently retain an older
+                # attribution as clean training evidence. Preserve both records
+                # and block challengers pending a reviewed projection repair.
+                if 'net_pnl' in existing_outcome:
+                    try:
+                        unchanged = math.isclose(float(existing_outcome['net_pnl']),
+                                                 float(settlement['net_pnl']), rel_tol=0, abs_tol=1e-9)
+                    except (KeyError, TypeError, ValueError, OverflowError):
+                        unchanged = False
+                    if not unchanged:
+                        excluded += 1; contaminated += 1
+                        self._record_source_quality(row, decision_id,
+                                                    excluded_reason='attributed_financial_label_changed')
+                        continue
                 # Upgrades must audit legacy inputs even when their outcome was
                 # already attributed. Persist lineage without replaying metrics
                 # or inventing a producer version for old financial records.

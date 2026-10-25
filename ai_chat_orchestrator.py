@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import time
+from storage import ProjectDatabase, list_json_items
 from typing import Any
 
 from agent_intelligence import answer_with_intelligence
@@ -234,18 +236,38 @@ def _timeline(agent_id: str, meta: dict[str, Any], saved: dict[str, Any]) -> dic
 
 
 def _answer_news() -> dict[str, Any]:
-    news = _safe_call(analyzed_news_payload, {})
-    agents = _safe_call(run_news_agents, {})
-    items = list(news.get("items", []))[:4] if isinstance(news, dict) else []
-    summary = news.get("summary", {}) if isinstance(news, dict) else {}
-    supervisor = agents.get("supervisor", {}) if isinstance(agents, dict) else {}
-    lines = ["News Agent проверил новости и источники."]
+    """Read the canonical worker's evidence; never run the legacy news pipeline."""
+    items: list[dict[str, Any]] = []
+    observation: dict[str, Any] = {}
+    error = ""
+    try:
+        database = ProjectDatabase()
+        stored = database.get_json("ai_organ_runtime", "news_intelligence")
+        observation = dict((stored or {}).get("value") or {})
+        items = [row["value"] for row in list_json_items(database, "news_memory", limit=4, newest_first=True)]
+    except Exception as exc:
+        # Do not leak connection strings or provider credentials in user replies.
+        error = type(exc).__name__
+    checked = int(observation.get("checked_at_ms") or 0)
+    age_ms = int(time.time() * 1000) - checked
+    fresh = checked > 0 and 0 <= age_ms <= 300_000
+    lines = ["News Intelligence: сохранённые наблюдения, не анализ LLM.",
+             f"Состояние: {observation.get('status', 'unknown')}; время проверки UTC (epoch ms): {checked or 'unknown'}. "]
+    if not fresh:
+        lines.append("Нет свежего подтверждения работы сборщика; сохранённые статьи могут быть устаревшими.")
     for item in items:
-        lines.append(f"• {item.get('title','Новость')} — {item.get('source_name','источник')}, достоверность {item.get('credibility_percent', item.get('trust_score',0))}%")
-    if not items: lines.append("Свежих подтверждённых заголовков нет. BUY по слухам запрещён.")
-    lines.append(f"Средняя достоверность: {summary.get('average_credibility_percent',0)}%. Нужно подтверждение: {summary.get('needs_confirmation',0)}.")
-    if supervisor: lines.append(f"Решение Supervisor: {supervisor.get('decision','WATCH')}.")
-    return {"status": "ok", "intent": "news", "source_ai": "News Agent", "reply": "\n".join(lines), "data": {"summary": summary, "items": items}}
+        article = item.get("article") or {}
+        analysis = item.get("analysis") or {}
+        lines.append(f"• {article.get('title', 'Без заголовка')} — {article.get('source', 'unknown')}; "
+                     f"публикация: {article.get('published_at') or 'unknown'}; "
+                     f"тип сообщения: {analysis.get('claim_type', 'unclassified')}; {article.get('link', '')}")
+    if not items:
+        lines.append("Сохранённые новости недоступны.")
+    lines.append("Оценка источника не является вероятностью истинности. Независимое подтверждение и торговая полезность не установлены.")
+    return {"status": "ok" if items and fresh and not error else "unavailable",
+            "intent": "news", "source_ai": "News Intelligence", "reply": "\n".join(lines),
+            "data": {"items": items, "observation": observation, "fresh": fresh,
+                     "error_type": error, "response_mode": "canonical_evidence_report"}}
 
 
 def _answer_risk() -> dict[str, Any]:
