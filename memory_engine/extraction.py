@@ -50,6 +50,7 @@ class OpenAICompatibleJSONClient:
         response = httpx.post(
             self.endpoint,
             headers=_provider_headers(self.api_key),
+            trust_env=provider_policy()["mode"] != "local",
             json={
                 "model": self.model,
                 "temperature": 0,
@@ -81,6 +82,7 @@ class OpenAICompatibleEmbeddingProvider:
         response = httpx.post(
             self.endpoint,
             headers=_provider_headers(self.api_key),
+            trust_env=provider_policy()["mode"] != "local",
             json={"model": self.model, "input": text},
             timeout=self.timeout,
         )
@@ -166,7 +168,7 @@ def embedding_provider_from_settings(settings: MemorySettings) -> EmbeddingProvi
 
 def _provider_headers(configured_key: str) -> dict[str, str]:
     # A remote memory key is never repurposed for a local-model process.
-    key = os.getenv("AI_LOCAL_LLM_API_KEY", "") if provider_policy()["mode"] == "local" else configured_key
+    key = os.getenv("AI_LOCAL_LLM_API_KEY", "").strip() if provider_policy()["mode"] == "local" else configured_key
     headers = {"Content-Type": "application/json"}
     if key:
         headers["Authorization"] = f"Bearer {key}"

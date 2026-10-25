@@ -226,3 +226,34 @@ def test_offline_memory_queue_survives_restart_and_resumes(tmp_path,monkeypatch)
     restarted.extractor.client=SimpleNamespace(complete_json=lambda **kwargs:{'facts':[]})
     assert restarted.extract_pending()['processed']==1
     assert service.repository.list_pending_raw_logs(limit=10)==[]
+
+
+@pytest.mark.parametrize('component',['chat','json','embedding'])
+@pytest.mark.parametrize('local_key',['',' local-test-key '])
+def test_real_loopback_transport_without_remote_keys_or_proxy(monkeypatch, component, local_key):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import threading
+    received=[]
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers['Content-Length']))
+            received.append(self.headers.get('Authorization'))
+            body=json.dumps({'choices':[{'message':{'content':'{}'}}], 'data':[{'embedding':[0.1]}]}).encode()
+            self.send_response(200);self.send_header('Content-Type','application/json')
+            self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
+        def log_message(self,*args):pass
+    server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
+    thread=threading.Thread(target=lambda:server.serve_forever(poll_interval=.01),daemon=True);thread.start()
+    monkeypatch.setenv('AI_PROVIDER_MODE','local');monkeypatch.setenv('AI_LOCAL_LLM_API_KEY',local_key)
+    monkeypatch.setenv('HTTP_PROXY','http://127.0.0.1:1');monkeypatch.setenv('ALL_PROXY','http://127.0.0.1:1')
+    monkeypatch.setenv('NO_PROXY','')
+    url=f'http://127.0.0.1:{server.server_port}/v1'
+    monkeypatch.setenv('AGENT_LLM_BASE_URL',url);monkeypatch.setenv('AGENT_LLM_MODEL','local-test')
+    monkeypatch.setenv('AGENT_LLM_API_KEY','remote-secret-must-not-leak')
+    try:
+        if component=='chat':assert ask().status=='ok'
+        elif component=='json':assert OpenAICompatibleJSONClient(base_url=url,api_key='remote-secret',model='local').complete_json(system='s',user='u')=={}
+        else:assert OpenAICompatibleEmbeddingProvider(base_url=url,api_key='remote-secret',model='local').embed('u')==[.1]
+        assert received==[f'Bearer {local_key.strip()}' if local_key.strip() else None]
+    finally:
+        server.shutdown();server.server_close();thread.join(timeout=2)

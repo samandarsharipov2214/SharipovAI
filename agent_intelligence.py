@@ -164,14 +164,14 @@ def answer_with_intelligence(
             }
         ]
 
+    headers = {"Content-Type": "application/json", "X-OpenRouter-Title": "SharipovAI"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     try:
         response = httpx.post(
             endpoint,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-                "X-OpenRouter-Title": "SharipovAI",
-            },
+            headers=headers,
+            trust_env=provider_policy()["mode"] != "local",
             json=provider_payload,
             timeout=_bounded_float("AGENT_LLM_TIMEOUT_SECONDS", 35.0, 5.0, 60.0),
             follow_redirects=False,
