@@ -30,7 +30,10 @@ class PrimaryTextCollector:
             return response.status_code, b''.join(chunks).decode('utf-8', errors='replace')
 
     def fetch(self, url: str) -> dict:
-        parsed = urlsplit(url)
+        try:
+            parsed = urlsplit(url)
+        except ValueError:
+            return {"status": "not_allowlisted"}
         if (parsed.scheme != 'https' or parsed.netloc != HOST or parsed.query or parsed.fragment
                 or not parsed.path.startswith('/newsevents/pressreleases/') or not parsed.path.endswith('.htm')):
             return {'status': 'not_allowlisted'}

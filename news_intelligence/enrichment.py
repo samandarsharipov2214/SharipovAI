@@ -52,6 +52,14 @@ def plain_text(html: str, *, article_only: bool = False) -> str:
     return re.sub(r'\s+', ' ', ' '.join(parser.parts)).strip()
 
 
+def publisher_host(url: str) -> str | None:
+    try:
+        parsed = urlsplit(url)
+        return parsed.hostname if parsed.scheme in {'http', 'https'} else None
+    except ValueError:
+        return None
+
+
 def descriptors(article, fetched) -> dict:
     text = plain_text(f'{article.title} {article.summary} {article.content}')[:24000]
     lower = text.lower()
@@ -77,7 +85,7 @@ def descriptors(article, fetched) -> dict:
     delay = fetched.received_at_ms - published * 1000 if published is not None else None
     return {'method': 'bounded_rules_v1', 'detected_language': language, 'language_method': 'script_heuristic',
             'assets': assets, 'claim_type': kind, 'fact_confirmed': False,
-            'primary_url': article.link, 'publisher_host': urlsplit(article.link).hostname,
+            'primary_url': article.link, 'publisher_host': publisher_host(article.link),
             'publication_delay_ms': delay if delay is not None and delay >= 0 else None,
             'publication_time_status': 'unknown' if delay is None else 'future' if delay < 0 else 'known',
             'content_scope': article.content_scope, 'content_characters': len(article.content),
@@ -98,11 +106,11 @@ def corroboration_candidates(envelope, memory) -> list[dict]:
     tokens = set(re.findall(r'[a-z]{3,}', article.title.lower()))
     if at is None or len(tokens) < 5:
         return []
-    host = urlsplit(article.link).hostname
+    host = publisher_host(article.link)
     result = []
     for other in list(memory)[-200:]:
         b = other.article; bt = publication_seconds(b.published_at)
-        if (not host or host == urlsplit(b.link).hostname or article.source == b.source
+        if (not host or host == publisher_host(b.link) or article.source == b.source
                 or bt is None or abs(at-bt) > 86400):
             continue
         combined = f'{article.summary} {b.summary}'.lower()

@@ -183,3 +183,11 @@ def test_local_memory_never_forwards_remote_credentials(monkeypatch, kind):
     client = (OpenAICompatibleJSONClient if kind=='json' else OpenAICompatibleEmbeddingProvider)(
         base_url='http://127.0.0.1:8080/v1', api_key='remote-key-must-not-leak', model='local')
     assert client.complete_json(system='s',user='u')=={} if kind=='json' else client.embed('u')==[0.1,0.2]
+
+
+def test_malformed_publisher_url_does_not_interrupt_news_analysis():
+    a = replace(article(), link='https://[malformed')
+    assert descriptors(a, fetched())['publisher_host'] is None
+    assert PrimaryTextCollector().fetch(a.link)['status']=='not_allowlisted'
+    envelope = SourceAgent(definition=definition()).register(a, fetched())
+    assert corroboration_candidates(envelope, [envelope])==[]
