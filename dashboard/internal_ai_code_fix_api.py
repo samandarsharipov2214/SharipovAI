@@ -7,6 +7,7 @@ import secrets
 from typing import Any, Literal
 
 import httpx
+from ai_provider_policy import provider_block_reason
 from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -84,6 +85,10 @@ def install_internal_ai_code_fix_api(app: FastAPI) -> None:
         api_key = os.getenv("GEMINI_API_KEY", "").strip() or os.getenv("GOOGLE_API_KEY", "").strip()
         if not api_key:
             raise HTTPException(status_code=503, detail={"status": "gemini_not_configured"})
+
+        reason = provider_block_reason(_GEMINI_ENDPOINT)
+        if reason:
+            raise HTTPException(status_code=503, detail={"status":"inference_disabled", "reason":reason})
 
         model = _model_name()
         request_id = f"fix-{secrets.token_hex(8)}"

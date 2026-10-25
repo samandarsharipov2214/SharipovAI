@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import time
 from storage import ProjectDatabase, list_json_items
+from news_intelligence.council_lineage import publication_seconds
 from typing import Any
 
 from agent_intelligence import answer_with_intelligence
@@ -248,25 +249,39 @@ def _answer_news() -> dict[str, Any]:
     except Exception as exc:
         # Do not leak connection strings or provider credentials in user replies.
         error = type(exc).__name__
+    now_ms = int(time.time() * 1000)
     checked = int(observation.get("checked_at_ms") or 0)
-    age_ms = int(time.time() * 1000) - checked
-    fresh = checked > 0 and 0 <= age_ms <= 300_000
+    evidence = observation.get("evidence") or []
+    cycle_at = next((int(item.split("=", 1)[1]) for item in evidence
+                     if str(item).startswith("news_cycle_at_ms=") and item.split("=", 1)[1].isdigit()), 0)
+    collector_fresh = (observation.get("status") == "healthy" and not observation.get("blockers")
+                       and "news_worker_running" in evidence and checked > 0 and cycle_at > 0
+                       and 0 <= now_ms - checked <= 300_000 and 0 <= now_ms - cycle_at <= 300_000)
+    for item in items:
+        publication = publication_seconds((item.get("article") or {}).get("published_at"))
+        fetched = item.get("fetched") or {}
+        observed = int(fetched.get("received_at_ms") or 0)
+        item["fresh"] = (collector_fresh and publication is not None and fetched.get("verified") is True
+                         and 0 <= now_ms - publication * 1000 <= 86_400_000
+                         and observed > 0 and 0 <= now_ms - observed <= 86_400_000)
+    fresh = collector_fresh and any(item["fresh"] for item in items)
     lines = ["News Intelligence: сохранённые наблюдения, не анализ LLM.",
              f"Состояние: {observation.get('status', 'unknown')}; время проверки UTC (epoch ms): {checked or 'unknown'}. "]
     if not fresh:
-        lines.append("Нет свежего подтверждения работы сборщика; сохранённые статьи могут быть устаревшими.")
+        lines.append("Свежесть сборщика и статей не подтверждена; сохранённые записи могут быть устаревшими.")
     for item in items:
         article = item.get("article") or {}
         analysis = item.get("analysis") or {}
         lines.append(f"• {article.get('title', 'Без заголовка')} — {article.get('source', 'unknown')}; "
                      f"публикация: {article.get('published_at') or 'unknown'}; "
+                     f"актуальность: {'recent' if item['fresh'] else 'historical_or_unverified'}; "
                      f"тип сообщения: {analysis.get('claim_type', 'unclassified')}; {article.get('link', '')}")
     if not items:
         lines.append("Сохранённые новости недоступны.")
     lines.append("Оценка источника не является вероятностью истинности. Независимое подтверждение и торговая полезность не установлены.")
     return {"status": "ok" if items and fresh and not error else "unavailable",
             "intent": "news", "source_ai": "News Intelligence", "reply": "\n".join(lines),
-            "data": {"items": items, "observation": observation, "fresh": fresh,
+            "data": {"items": items, "observation": observation, "fresh": fresh, "collector_fresh": collector_fresh,
                      "error_type": error, "response_mode": "canonical_evidence_report"}}
 
 

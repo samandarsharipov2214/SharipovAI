@@ -338,7 +338,9 @@ validated paginated quality audit, not an unbounded scan on the production VPS.
 
 Production pins `AI_PROVIDER_MODE=offline`, `AI_REMOTE_LLM_ENABLED=0` and disables
 chat web search. Existing keys alone cannot trigger chat, extraction or embedding
-requests. Offline responses explicitly report stored evidence, not LLM reasoning;
+requests. Browser Gemini and the internal code-fix gateway obey the same lock.
+Policy-blocked memory extraction leaves its durable queue PENDING for a later
+authorized provider; it does not mark unavailable inference as processed. Offline responses explicitly report stored evidence, not LLM reasoning;
 lexical memory retrieval, the existing ridge forecast and deterministic organs
 continue working. Optional `local` accepts literal loopback endpoints only and
 never forwards remote memory credentials. External inference requires explicit

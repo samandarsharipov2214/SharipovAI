@@ -10,7 +10,7 @@ from typing import Any
 from storage import ProjectDatabase
 
 from .config import MemorySettings
-from .extraction import EmbeddingProvider, FactExtractor, embedding_provider_from_settings
+from .extraction import EmbeddingProvider, ExtractionUnavailable, FactExtractor, embedding_provider_from_settings
 from .metrics import set_memory_circuit_open
 from .models import ContextItem, FactCreate, MemoryStatus, RawLog, RawLogCreate, RawLogStatus
 from .repository import MemoryRepository
@@ -226,6 +226,12 @@ class MemoryService:
                 self.repository.mark_raw_log(raw.log_id, RawLogStatus.PROCESSED)
                 processed += 1
                 self._record_success()
+            except ExtractionUnavailable as exc:
+                # Policy-disabled inference is not a completed empty extraction.
+                # Preserve this and subsequent PENDING logs, without a retry loop.
+                return {"status": "blocked", "reason": str(exc), "processed": processed,
+                        "facts": saved, "pending_preserved": True,
+                        "automatic_activation": False, "execution_authority": False}
             except Exception as exc:
                 errors.append(f"{raw.log_id}:{type(exc).__name__}")
                 try:

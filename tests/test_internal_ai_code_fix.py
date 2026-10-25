@@ -120,3 +120,18 @@ def test_ai_fixer_rejects_patch_before_sandbox(tmp_path: Path):
     assert candidate.accepted is False
     assert any("protected path" in reason for reason in candidate.reasons)
     assert candidate.sandbox_path == ""
+
+
+def test_offline_policy_blocks_internal_gemini_even_with_key(monkeypatch):
+    import dashboard.internal_ai_code_fix_api as api
+    from fastapi.testclient import TestClient
+    monkeypatch.setenv('AI_PROVIDER_MODE','offline')
+    monkeypatch.setenv('GEMINI_API_KEY','existing-key-not-authority')
+    monkeypatch.setattr(api,'require_internal_service',lambda request:None)
+    def forbidden(**kwargs):
+        raise AssertionError('provider client must not be constructed')
+    monkeypatch.setattr(api.httpx,'AsyncClient',forbidden)
+    app=FastAPI();api.install_internal_ai_code_fix_api(app)
+    response=TestClient(app).post('/internal/ai/code-fix',json={'message':'status','request_sha256':'a'*64})
+    assert response.status_code==503
+    assert response.json()['detail']['reason']=='offline_policy_no_model_requests'

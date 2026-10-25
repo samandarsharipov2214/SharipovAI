@@ -13,6 +13,10 @@ from .config import MemorySettings
 from .models import RawLog
 
 
+class ExtractionUnavailable(RuntimeError):
+    """No inference occurred; the input must remain pending for a later provider."""
+
+
 class ExtractedFact(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -113,7 +117,7 @@ class FactExtractor:
             return []
         if self.client is None:
             if provider_block_reason(self.settings.llm_base_url):
-                return []  # Keep raw evidence; no invented extracted facts.
+                raise ExtractionUnavailable(provider_block_reason(self.settings.llm_base_url))
             raise RuntimeError("memory extraction is enabled but MEMORY_LLM_* is incomplete")
         text = raw.content[: self.settings.max_input_chars]
         payload = self.client.complete_json(

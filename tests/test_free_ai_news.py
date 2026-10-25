@@ -156,12 +156,12 @@ def test_news_answer_uses_canonical_memory_without_legacy_fetch(tmp_path, monkey
     import ai_chat_orchestrator as chat
     db = ProjectDatabase(f'sqlite:///{tmp_path / "chat.db"}')
     db.initialize()
-    db.put_json('ai_organ_runtime', 'news_intelligence', {'status':'healthy', 'checked_at_ms':1000})
+    db.put_json('ai_organ_runtime', 'news_intelligence', {'status':'healthy', 'checked_at_ms':1792886401000, 'evidence':['news_worker_running', 'news_cycle_at_ms=1792886401000']})
     db.put_json('news_memory', 'article', {'article':{'title':'Real stored evidence', 'source':'Publisher',
                 'published_at':'2026-10-25T00:00:00Z', 'link':'https://example.com/a'},
-                'analysis':{'claim_type':'unconfirmed_report'}})
+                'fetched':{'verified':True,'received_at_ms':1792886401000}, 'analysis':{'claim_type':'unconfirmed_report'}})
     monkeypatch.setattr(chat, 'ProjectDatabase', lambda:db)
-    monkeypatch.setattr(chat.time, 'time', lambda:1.5)
+    monkeypatch.setattr(chat.time, 'time', lambda:1792886401.5)
     monkeypatch.setattr(chat, 'run_news_agents', lambda:pytest.fail('legacy network must not run'))
     result = chat._answer_news()
     assert result['status']=='ok' and result['data']['fresh']
@@ -191,3 +191,38 @@ def test_malformed_publisher_url_does_not_interrupt_news_analysis():
     assert PrimaryTextCollector().fetch(a.link)['status']=='not_allowlisted'
     envelope = SourceAgent(definition=definition()).register(a, fetched())
     assert corroboration_candidates(envelope, [envelope])==[]
+
+
+@pytest.mark.parametrize('status,cycle', [('blocked',1792886401000),('degraded',1792886401000),('healthy',1)])
+def test_new_monitor_probe_does_not_hide_news_outage(tmp_path,monkeypatch,status,cycle):
+    import ai_chat_orchestrator as chat
+    db=ProjectDatabase(f'sqlite:///{tmp_path / "outage.db"}');db.initialize()
+    db.put_json('ai_organ_runtime','news_intelligence',{'status':status,'checked_at_ms':1792886401000,
+        'evidence':['news_worker_running',f'news_cycle_at_ms={cycle}']})
+    db.put_json('news_memory','old',{'article':{'title':'Old article','published_at':'2020-01-01T00:00:00Z'},
+        'fetched':{'verified':True,'received_at_ms':1577836800000}})
+    monkeypatch.setattr(chat,'ProjectDatabase',lambda:db)
+    monkeypatch.setattr(chat.time,'time',lambda:1792886401.5)
+    result=chat._answer_news()
+    assert result['status']=='unavailable' and not result['data']['fresh']
+    assert not result['data']['collector_fresh']
+
+
+def test_offline_memory_queue_survives_restart_and_resumes(tmp_path,monkeypatch):
+    from memory_engine import MemoryService,MemorySettings
+    from memory_engine.models import RawLogStatus
+    monkeypatch.setenv('AI_PROVIDER_MODE','offline')
+    db=ProjectDatabase(f'sqlite:///{tmp_path / "pending.db"}')
+    settings=MemorySettings(enabled=True,extraction_enabled=True,llm_base_url='https://example.com/v1',llm_api_key='test',llm_model='test')
+    service=MemoryService(db,settings=settings);service.initialize()
+    raw=service.record_dialog(team_id='sharipovai',user_id='owner',agent_id='learning_engine',session_id='s',message='real observation',source_ref='test')
+    for _ in range(2):
+        result=MemoryService(db,settings=settings).extract_pending()
+        assert result['status']=='blocked' and result['processed']==0 and result['pending_preserved']
+        assert [r.log_id for r in service.repository.list_pending_raw_logs(limit=10)]==[raw.log_id]
+    # An authorized test client can later process that same retained input.
+    monkeypatch.setenv('AI_PROVIDER_MODE','external');monkeypatch.setenv('AI_REMOTE_LLM_ENABLED','1')
+    restarted=MemoryService(db,settings=settings)
+    restarted.extractor.client=SimpleNamespace(complete_json=lambda **kwargs:{'facts':[]})
+    assert restarted.extract_pending()['processed']==1
+    assert service.repository.list_pending_raw_logs(limit=10)==[]

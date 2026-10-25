@@ -272,6 +272,7 @@ class AIOrganRuntimeMonitor:
         if degraded:
             blockers.append("News Intelligence sources degraded: " + ", ".join(degraded))
         last_cycle = int(snapshot.get("last_cycle_at_ms") or 0)
+        evidence.append(f"news_cycle_at_ms={last_cycle}")
         self._append_freshness(evidence, blockers, "news_cycle", last_cycle)
         if snapshot.get("last_error"):
             blockers.append(f"News Intelligence last cycle error: {snapshot.get('last_error')}")
