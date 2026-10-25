@@ -2,13 +2,19 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, Protocol, Sequence
 
 import httpx
+from ai_provider_policy import provider_block_reason, provider_policy, require_provider
 from pydantic import BaseModel, ConfigDict, Field
 
 from .config import MemorySettings
 from .models import RawLog
+
+
+class ExtractionUnavailable(RuntimeError):
+    """No inference occurred; the input must remain pending for a later provider."""
 
 
 class ExtractedFact(BaseModel):
@@ -32,7 +38,7 @@ class OpenAICompatibleJSONClient:
     """Small OpenAI-compatible JSON client with no calls until extraction is enabled."""
 
     def __init__(self, *, base_url: str, api_key: str, model: str, timeout: float = 30.0) -> None:
-        if not base_url or not api_key or not model:
+        if not base_url or not model or (not api_key and provider_policy()["mode"] != "local"):
             raise ValueError("base_url, api_key and model are required")
         self.endpoint = _endpoint(base_url, "chat/completions")
         self.api_key = api_key
@@ -40,9 +46,11 @@ class OpenAICompatibleJSONClient:
         self.timeout = timeout
 
     def complete_json(self, *, system: str, user: str) -> Any:
+        require_provider(self.endpoint)
         response = httpx.post(
             self.endpoint,
-            headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+            headers=_provider_headers(self.api_key),
+            trust_env=provider_policy()["mode"] != "local",
             json={
                 "model": self.model,
                 "temperature": 0,
@@ -62,7 +70,7 @@ class OpenAICompatibleJSONClient:
 
 class OpenAICompatibleEmbeddingProvider:
     def __init__(self, *, base_url: str, api_key: str, model: str, timeout: float = 30.0) -> None:
-        if not base_url or not api_key or not model:
+        if not base_url or not model or (not api_key and provider_policy()["mode"] != "local"):
             raise ValueError("base_url, api_key and model are required")
         self.endpoint = _endpoint(base_url, "embeddings")
         self.api_key = api_key
@@ -70,9 +78,11 @@ class OpenAICompatibleEmbeddingProvider:
         self.timeout = timeout
 
     def embed(self, text: str) -> Sequence[float]:
+        require_provider(self.endpoint)
         response = httpx.post(
             self.endpoint,
-            headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+            headers=_provider_headers(self.api_key),
+            trust_env=provider_policy()["mode"] != "local",
             json={"model": self.model, "input": text},
             timeout=self.timeout,
         )
@@ -94,7 +104,9 @@ class FactExtractor:
     @classmethod
     def from_settings(cls, settings: MemorySettings) -> "FactExtractor":
         client: JSONCompletionClient | None = None
-        if settings.extraction_enabled and settings.llm_base_url and settings.llm_api_key and settings.llm_model:
+        if (settings.extraction_enabled and settings.llm_base_url
+                and (settings.llm_api_key or provider_policy()["mode"] == "local")
+                and settings.llm_model and not provider_block_reason(settings.llm_base_url)):
             client = OpenAICompatibleJSONClient(
                 base_url=settings.llm_base_url,
                 api_key=settings.llm_api_key,
@@ -106,6 +118,8 @@ class FactExtractor:
         if not self.settings.enabled or not self.settings.extraction_enabled:
             return []
         if self.client is None:
+            if provider_block_reason(self.settings.llm_base_url):
+                raise ExtractionUnavailable(provider_block_reason(self.settings.llm_base_url))
             raise RuntimeError("memory extraction is enabled but MEMORY_LLM_* is incomplete")
         text = raw.content[: self.settings.max_input_chars]
         payload = self.client.complete_json(
@@ -136,10 +150,12 @@ class FactExtractor:
 
 
 def embedding_provider_from_settings(settings: MemorySettings) -> EmbeddingProvider | None:
+    if provider_block_reason(settings.embedding_base_url):
+        return None  # Existing bounded lexical retrieval remains available.
     if not (
         settings.enabled
         and settings.embedding_base_url
-        and settings.embedding_api_key
+        and (settings.embedding_api_key or provider_policy()["mode"] == "local")
         and settings.embedding_model
     ):
         return None
@@ -148,6 +164,15 @@ def embedding_provider_from_settings(settings: MemorySettings) -> EmbeddingProvi
         api_key=settings.embedding_api_key,
         model=settings.embedding_model,
     )
+
+
+def _provider_headers(configured_key: str) -> dict[str, str]:
+    # A remote memory key is never repurposed for a local-model process.
+    key = os.getenv("AI_LOCAL_LLM_API_KEY", "").strip() if provider_policy()["mode"] == "local" else configured_key
+    headers = {"Content-Type": "application/json"}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    return headers
 
 
 def _endpoint(base_url: str, suffix: str) -> str:

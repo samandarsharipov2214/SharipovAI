@@ -51,6 +51,8 @@ def test_payload_is_strictly_typed(monkeypatch) -> None:
 
 
 def test_successful_gateway_uses_server_key_header_and_sanitized_response(monkeypatch) -> None:
+    monkeypatch.setenv("AI_PROVIDER_MODE", "external")
+    monkeypatch.setenv("AI_REMOTE_LLM_ENABLED", "1")
     captured: dict[str, Any] = {}
 
     class FakeResponse:
@@ -102,3 +104,15 @@ def test_successful_gateway_uses_server_key_header_and_sanitized_response(monkey
     assert captured["request"]["headers"]["X-Goog-Api-Key"] == "server-secret-must-not-leak"
     assert "server-secret-must-not-leak" not in response.text
     assert captured["request"]["json"]["contents"][-1]["parts"][0]["text"] == "Какой статус?"
+
+
+def test_offline_cost_lock_blocks_existing_gemini_key(monkeypatch):
+    monkeypatch.setenv('AI_PROVIDER_MODE', 'offline')
+    monkeypatch.setenv('AI_REMOTE_LLM_ENABLED', '0')
+    monkeypatch.setenv('GEMINI_API_KEY', 'existing-key-not-authority')
+    def forbidden(**kwargs):
+        raise AssertionError('provider client must not be constructed')
+    monkeypatch.setattr(gemini_api.httpx, 'AsyncClient', forbidden)
+    response = TestClient(_app(monkeypatch)).post('/api/ai/chat', json={'message':'status','history':[]})
+    assert response.status_code==503
+    assert response.json()['detail']['reason']=='offline_policy_no_model_requests'

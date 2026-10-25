@@ -5,7 +5,7 @@ or synthetic article is created by this module.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 
@@ -20,6 +20,10 @@ class NewsArticle:
     summary: str
     language: str
     source_type: str
+    content: str = ""
+    content_scope: str = "feed_title_and_summary"
+    content_observed_at_ms: int = 0
+    content_status: str = "not_collected"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -57,6 +61,7 @@ class NewsEnvelope:
     score: float
     reasons: tuple[str, ...]
     detected_at: str
+    analysis: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -73,6 +78,7 @@ class NewsEnvelope:
             "score": self.score,
             "reasons": list(self.reasons),
             "detected_at": self.detected_at,
+            "analysis": self.analysis,
         }
 
 

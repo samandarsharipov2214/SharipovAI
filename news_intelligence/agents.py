@@ -16,6 +16,7 @@ from typing import Any
 
 from .models import NewsArticle, NewsEnvelope, SourceFetch
 from .sources import SourceDefinition
+from .enrichment import descriptors
 
 _BULLISH = (
     "approval", "approved", "adoption", "inflow", "partnership", "upgrade",
@@ -167,6 +168,7 @@ def _analyze(definition: SourceDefinition, article: NewsArticle, fetched: Source
         score=score,
         reasons=tuple(reasons),
         detected_at=datetime.now(UTC).replace(microsecond=0).isoformat(),
+        analysis=descriptors(article, fetched),
     )
 
 

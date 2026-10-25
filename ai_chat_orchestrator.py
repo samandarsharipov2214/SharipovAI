@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import time
+from storage import ProjectDatabase, list_json_items
+from news_intelligence.council_lineage import publication_seconds
 from typing import Any
 
 from agent_intelligence import answer_with_intelligence
@@ -234,18 +237,52 @@ def _timeline(agent_id: str, meta: dict[str, Any], saved: dict[str, Any]) -> dic
 
 
 def _answer_news() -> dict[str, Any]:
-    news = _safe_call(analyzed_news_payload, {})
-    agents = _safe_call(run_news_agents, {})
-    items = list(news.get("items", []))[:4] if isinstance(news, dict) else []
-    summary = news.get("summary", {}) if isinstance(news, dict) else {}
-    supervisor = agents.get("supervisor", {}) if isinstance(agents, dict) else {}
-    lines = ["News Agent проверил новости и источники."]
+    """Read the canonical worker's evidence; never run the legacy news pipeline."""
+    items: list[dict[str, Any]] = []
+    observation: dict[str, Any] = {}
+    error = ""
+    try:
+        database = ProjectDatabase()
+        stored = database.get_json("ai_organ_runtime", "news_intelligence")
+        observation = dict((stored or {}).get("value") or {})
+        items = [row["value"] for row in list_json_items(database, "news_memory", limit=4, newest_first=True)]
+    except Exception as exc:
+        # Do not leak connection strings or provider credentials in user replies.
+        error = type(exc).__name__
+    now_ms = int(time.time() * 1000)
+    checked = int(observation.get("checked_at_ms") or 0)
+    evidence = observation.get("evidence") or []
+    cycle_at = next((int(item.split("=", 1)[1]) for item in evidence
+                     if str(item).startswith("news_cycle_at_ms=") and item.split("=", 1)[1].isdigit()), 0)
+    collector_fresh = (observation.get("status") == "healthy" and not observation.get("blockers")
+                       and "news_worker_running" in evidence and checked > 0 and cycle_at > 0
+                       and 0 <= now_ms - checked <= 300_000 and 0 <= now_ms - cycle_at <= 300_000)
     for item in items:
-        lines.append(f"• {item.get('title','Новость')} — {item.get('source_name','источник')}, достоверность {item.get('credibility_percent', item.get('trust_score',0))}%")
-    if not items: lines.append("Свежих подтверждённых заголовков нет. BUY по слухам запрещён.")
-    lines.append(f"Средняя достоверность: {summary.get('average_credibility_percent',0)}%. Нужно подтверждение: {summary.get('needs_confirmation',0)}.")
-    if supervisor: lines.append(f"Решение Supervisor: {supervisor.get('decision','WATCH')}.")
-    return {"status": "ok", "intent": "news", "source_ai": "News Agent", "reply": "\n".join(lines), "data": {"summary": summary, "items": items}}
+        publication = publication_seconds((item.get("article") or {}).get("published_at"))
+        fetched = item.get("fetched") or {}
+        observed = int(fetched.get("received_at_ms") or 0)
+        item["fresh"] = (collector_fresh and publication is not None and fetched.get("verified") is True
+                         and 0 <= now_ms - publication * 1000 <= 86_400_000
+                         and observed > 0 and 0 <= now_ms - observed <= 86_400_000)
+    fresh = collector_fresh and any(item["fresh"] for item in items)
+    lines = ["News Intelligence: сохранённые наблюдения, не анализ LLM.",
+             f"Состояние: {observation.get('status', 'unknown')}; время проверки UTC (epoch ms): {checked or 'unknown'}. "]
+    if not fresh:
+        lines.append("Свежесть сборщика и статей не подтверждена; сохранённые записи могут быть устаревшими.")
+    for item in items:
+        article = item.get("article") or {}
+        analysis = item.get("analysis") or {}
+        lines.append(f"• {article.get('title', 'Без заголовка')} — {article.get('source', 'unknown')}; "
+                     f"публикация: {article.get('published_at') or 'unknown'}; "
+                     f"актуальность: {'recent' if item['fresh'] else 'historical_or_unverified'}; "
+                     f"тип сообщения: {analysis.get('claim_type', 'unclassified')}; {article.get('link', '')}")
+    if not items:
+        lines.append("Сохранённые новости недоступны.")
+    lines.append("Оценка источника не является вероятностью истинности. Независимое подтверждение и торговая полезность не установлены.")
+    return {"status": "ok" if items and fresh and not error else "unavailable",
+            "intent": "news", "source_ai": "News Intelligence", "reply": "\n".join(lines),
+            "data": {"items": items, "observation": observation, "fresh": fresh, "collector_fresh": collector_fresh,
+                     "error_type": error, "response_mode": "canonical_evidence_report"}}
 
 
 def _answer_risk() -> dict[str, Any]:

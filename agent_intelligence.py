@@ -19,6 +19,7 @@ from typing import Any, Mapping, Sequence
 from urllib.parse import urlsplit
 
 import httpx
+from ai_provider_policy import provider_block_reason, provider_policy
 
 
 _MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{1,160}$")
@@ -110,7 +111,12 @@ def answer_with_intelligence(
     model = os.getenv("AGENT_LLM_MODEL", "").strip() or os.getenv(
         "MEMORY_LLM_MODEL", ""
     ).strip()
-    if not base_url or not api_key or not model:
+    blocked = provider_block_reason(base_url)
+    if blocked:
+        return IntelligenceResult(status="unavailable", error=blocked)
+    if provider_policy()["mode"] == "local":
+        api_key = os.getenv("AI_LOCAL_LLM_API_KEY", "").strip()
+    if not base_url or (not api_key and provider_policy()["mode"] != "local") or not model:
         return IntelligenceResult(status="unavailable", error="AI-провайдер не настроен")
     if not _MODEL_RE.fullmatch(model):
         return IntelligenceResult(status="unavailable", error="Модель AI-провайдера некорректна")
@@ -150,7 +156,7 @@ def answer_with_intelligence(
             },
         ],
     }
-    if urlsplit(endpoint).hostname == "openrouter.ai" and _truthy("AGENT_WEB_SEARCH_ENABLED", True):
+    if urlsplit(endpoint).hostname == "openrouter.ai" and _truthy("AGENT_WEB_SEARCH_ENABLED", False):
         provider_payload["tools"] = [
             {
                 "type": "openrouter:web_search",
@@ -158,14 +164,14 @@ def answer_with_intelligence(
             }
         ]
 
+    headers = {"Content-Type": "application/json", "X-OpenRouter-Title": "SharipovAI"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     try:
         response = httpx.post(
             endpoint,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-                "X-OpenRouter-Title": "SharipovAI",
-            },
+            headers=headers,
+            trust_env=provider_policy()["mode"] != "local",
             json=provider_payload,
             timeout=_bounded_float("AGENT_LLM_TIMEOUT_SECONDS", 35.0, 5.0, 60.0),
             follow_redirects=False,
@@ -221,7 +227,7 @@ EXECUTION_KILL_SWITCH, LIVE/TESTNET/MAINNET, риск-лимиты, production, 
 def _completion_endpoint(base_url: str) -> str:
     clean = base_url.rstrip("/")
     parsed = urlsplit(clean)
-    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+    if provider_block_reason(clean) or not parsed.hostname or parsed.username or parsed.password:
         return ""
     return clean if clean.endswith("/chat/completions") else f"{clean}/chat/completions"
 

@@ -11,12 +11,13 @@ import math
 import os
 import threading
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Callable
 
 from fastapi import FastAPI
 
 from ai_architecture_registry import CANONICAL_AI_ORGANS
+from ai_provider_policy import provider_policy
 from exchange_connector.bybit_execution import effective_testnet_notional_cap_usdt
 from risk_engine import CanonicalRiskService
 from storage import ProjectDatabase, list_json_items
@@ -30,6 +31,7 @@ class OrganRuntimeState:
     evidence: tuple[str, ...]
     blockers: tuple[str, ...]
     checked_at_ms: int
+    metrics: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -56,6 +58,7 @@ class AIOrganRuntimeMonitor:
         self._thread: threading.Thread | None = None
         self._lock = threading.RLock()
         self._last_error = ""
+        self._observations: dict[str, tuple[int, int]] = {}
 
     def start(self) -> None:
         self.refresh()
@@ -115,6 +118,7 @@ class AIOrganRuntimeMonitor:
             "monitor_running": bool(self._thread and self._thread.is_alive()),
             "last_error": last_error,
             "evidence_max_age_seconds": self.evidence_max_age_seconds,
+            "provider_policy": provider_policy(),
         }
 
     def _run(self) -> None:
@@ -141,13 +145,47 @@ class AIOrganRuntimeMonitor:
         responsibility = {organ.id: organ.responsibility for organ in CANONICAL_AI_ORGANS}
         states = []
         for organ in CANONICAL_AI_ORGANS:
+            started = time.perf_counter()
             try:
                 evidence, blockers = getattr(self, "_" + organ.id)()
             except Exception as exc:
                 # A failed service/read must not erase observations for every
                 # other organ. Do not copy DB connection details into status.
                 evidence, blockers = [], [f"critical: {organ.id} probe failed: {type(exc).__name__}"]
-            states.append(self._state(organ.id, responsibility, now, evidence, blockers))
+            state = self._state(organ.id, responsibility, now, evidence, blockers)
+            with self._lock:
+                observations, failures = self._observations.get(organ.id, (0, 0))
+                observations += 1; failures += int(bool(blockers))
+                self._observations[organ.id] = observations, failures
+            # Probe latency is not inference latency; uptime is not predictive
+            # accuracy. Attribution is historical association, not causal value.
+            try:
+                row = self.database.get_json('self_learning_agent_metrics_v2', organ.id)
+                learned = row.get('value', {}) if row else {}
+            except Exception:
+                learned = {}  # Missing quality telemetry cannot hide other organs.
+            quality = {key: learned.get(key) for key in ('outcome_count', 'direction_accuracy',
+                       'mean_confidence_error', 'attributed_pnl', 'attributed_drawdown')}
+            metrics = {'probe_latency_ms': round((time.perf_counter()-started)*1000, 3),
+                       'observations': observations, 'degraded_observations': failures,
+                       'availability_fraction': (observations-failures)/observations,
+                       'counter_scope': 'current_monitor_process', 'blocker_count': len(blockers),
+                       'evidence_count': len(evidence), 'historical_attribution': quality,
+                       'predictive_utility': 'NOT_VALIDATED', 'legacy_version_quality': 'not_certified',
+                       'implementation': 'ridge_forecast_and_rules' if organ.id=='market_intelligence'
+                           else 'outcome_attribution_and_offline_validation' if organ.id=='learning_engine'
+                           else 'lexical_rules' if organ.id=='news_intelligence' else 'deterministic_rules'}
+            if organ.id == 'market_intelligence':
+                service = getattr(getattr(self.app.state, 'autonomous_paper_loop', None), 'forecast_service', None)
+                try:
+                    health = service.status() if service is not None else {}
+                    metrics['forecast_health'] = {key:health.get(key) for key in (
+                        'status','promotion_status','validation_failures','forecast_coverage',
+                        'last_generated_at_ms','rejected_evaluations','profitability_proven')}
+                    metrics['model_fallback'] = 'SHADOW_NO_EXECUTION_UNTIL_VALIDATION_AND_REVIEW'
+                except Exception:
+                    metrics['forecast_health'] = {'status':'UNAVAILABLE'}
+            states.append(replace(state, metrics=metrics))
         return states
 
     @staticmethod
@@ -234,6 +272,7 @@ class AIOrganRuntimeMonitor:
         if degraded:
             blockers.append("News Intelligence sources degraded: " + ", ".join(degraded))
         last_cycle = int(snapshot.get("last_cycle_at_ms") or 0)
+        evidence.append(f"news_cycle_at_ms={last_cycle}")
         self._append_freshness(evidence, blockers, "news_cycle", last_cycle)
         if snapshot.get("last_error"):
             blockers.append(f"News Intelligence last cycle error: {snapshot.get('last_error')}")
@@ -486,6 +525,7 @@ def _summary(states: list[OrganRuntimeState], *, now_ms: int) -> dict[str, Any]:
         "counts": counts,
         "organs": [state.to_dict() for state in states],
         "database_backed": True,
+        "provider_policy": provider_policy(),
     }
 
 
@@ -497,6 +537,7 @@ def _state_from_dict(value: dict[str, Any]) -> OrganRuntimeState:
         evidence=tuple(str(item) for item in value.get("evidence", [])),
         blockers=tuple(str(item) for item in value.get("blockers", [])),
         checked_at_ms=int(value.get("checked_at_ms", 0)),
+        metrics=dict(value.get("metrics") or {}),
     )
 
 

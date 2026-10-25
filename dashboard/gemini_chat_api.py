@@ -12,6 +12,7 @@ from typing import Any, Literal
 from urllib.parse import urlsplit
 
 import httpx
+from ai_provider_policy import provider_block_reason
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
@@ -246,6 +247,10 @@ def install_gemini_chat_api(app: FastAPI) -> None:
         ).strip()
         if not api_key:
             raise HTTPException(status_code=503, detail={"status": "gemini_not_configured"})
+
+        reason = provider_block_reason(_GEMINI_ENDPOINT)
+        if reason:
+            raise HTTPException(status_code=503, detail={"status": "inference_disabled", "reason": reason})
 
         model = _model_name()
         request_id = f"gem-{secrets.token_hex(8)}"
