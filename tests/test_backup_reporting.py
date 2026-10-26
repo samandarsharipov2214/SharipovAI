@@ -1,5 +1,7 @@
 """Backup observer failures cannot corrupt work or conceal service failures."""
 import os
+import fcntl
+import json
 import subprocess
 from pathlib import Path
 
@@ -30,7 +32,9 @@ def test_closed_ssh_output_does_not_abort_work_or_change_failure_code(tmp_path, 
 @pytest.mark.parametrize("status,failed,reason", [
     ('{bad json', False, 'status is invalid'),
     ('{"schema":1,"outcome":"VERIFIED","exit_code":75}', False, 'status is invalid'),
+    ('{"schema":1,"outcome":"SKIPPED_ACTIVE_DEPLOYMENT","exit_code":0}', False, 'status is invalid'),
     ('{"schema":1,"outcome":"SKIPPED_ACTIVE_EXPORT","exit_code":75}', True, 'service is failed'),
+    ('{"schema":1,"outcome":"SKIPPED_ACTIVE_DEPLOYMENT","exit_code":75}', True, 'service is failed'),
 ])
 def test_invalid_receipt_or_current_service_failure_cannot_be_masked(tmp_path, status, failed, reason):
     bin_dir = tmp_path / "bin"
@@ -59,14 +63,47 @@ def test_timer_records_export_result_without_requiring_tracked_executable_bit(tm
     state = tmp_path / "state"
     result = subprocess.run(["bash", str(DEPLOY / "backup_timer_run.sh")], capture_output=True,
                             timeout=5, env=os.environ | {"APP_DIR": str(app),
+                                "LOCK_FILE": str(tmp_path / "deploy.lock"),
                                 "SHARIPOVAI_BACKUP_TIMER_STATE_DIR": str(state)})
     assert result.returncode == (1 if code == 1 else 0)
     receipt = json.loads((state / "last_timer_run.json").read_text())
     assert receipt["outcome"] == outcome and receipt["exit_code"] == code
 
 
+def test_scheduled_backup_skips_active_deployment_without_claiming_verified(tmp_path):
+    app = tmp_path / "app"
+    (app / "deploy/vps").mkdir(parents=True)
+    marker = tmp_path / "exported"
+    (app / "deploy/vps/export_backup.sh").write_text('touch "$EXPORT_MARKER"\n')
+    state = tmp_path / "state"
+    lock_path = tmp_path / "deploy.lock"
+    with lock_path.open("w") as owner:
+        fcntl.flock(owner, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        result = subprocess.run(["bash", str(DEPLOY / "backup_timer_run.sh")], capture_output=True,
+            timeout=5, env=os.environ | {"APP_DIR": str(app), "LOCK_FILE": str(lock_path),
+            "EXPORT_MARKER": str(marker), "SHARIPOVAI_BACKUP_TIMER_STATE_DIR": str(state)})
+    assert result.returncode == 0 and not marker.exists()
+    receipt = json.loads((state / "last_timer_run.json").read_text())
+    assert receipt["outcome"] == "SKIPPED_ACTIVE_DEPLOYMENT" and receipt["exit_code"] == 75
+
+
+def test_scheduled_export_holds_shared_deployment_lock_until_it_finishes(tmp_path):
+    app = tmp_path / "app"
+    (app / "deploy/vps").mkdir(parents=True)
+    # The exporter checks that an updater cannot acquire its exclusive lock.
+    (app / "deploy/vps/export_backup.sh").write_text('flock -xn "$LOCK_FILE" true && exit 1\nexit 0\n')
+    lock_path = tmp_path / "deploy.lock"
+    result = subprocess.run(["bash", str(DEPLOY / "backup_timer_run.sh")], capture_output=True,
+        timeout=5, env=os.environ | {"APP_DIR": str(app), "LOCK_FILE": str(lock_path),
+        "SHARIPOVAI_BACKUP_TIMER_STATE_DIR": str(tmp_path / "state")})
+    assert result.returncode == 0
+    with lock_path.open("r") as owner:
+        fcntl.flock(owner, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
 @pytest.mark.parametrize('allow,expected', [('0',1),('1',0)])
-def test_new_timer_can_reuse_verified_deployment_backup_without_false_trigger(tmp_path,allow,expected):
+@pytest.mark.parametrize('outcome', [None, 'SKIPPED_ACTIVE_DEPLOYMENT'])
+def test_new_timer_can_reuse_verified_deployment_backup_without_false_trigger(tmp_path,allow,expected,outcome):
     import hashlib
     backup=tmp_path/'deploy/vps/backups'; backup.mkdir(parents=True)
     archive=backup/'snapshot.tar.gz'; archive.write_bytes(b'verified-test-archive')
@@ -80,8 +117,11 @@ case "$*" in *NextElapseUSecRealtime*) printf 'future-calendar-run\\n';; esac
 exit 0
 ''')
     cmd.chmod(0o755)
+    receipt = tmp_path / 'status.json'
+    if outcome:
+        receipt.write_text(json.dumps({'schema':1,'outcome':outcome,'exit_code':75}))
     result=subprocess.run(['bash',str(DEPLOY/'verify_backup_timer.sh')],capture_output=True,timeout=5,
         env=os.environ|{'APP_DIR':str(tmp_path),'PATH':str(bin_dir)+os.pathsep+os.environ['PATH'],
                         'BACKUP_ALLOW_UNTRIGGERED_TIMER':allow,
-                        'SHARIPOVAI_BACKUP_TIMER_STATUS_FILE':str(tmp_path/'absent.json')})
+                        'SHARIPOVAI_BACKUP_TIMER_STATUS_FILE':str(receipt)})
     assert result.returncode==expected, result.stderr

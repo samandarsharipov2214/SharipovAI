@@ -6,10 +6,12 @@ APP_DIR=${APP_DIR:-/opt/sharipovai-repo}
 EXPORTER="$APP_DIR/deploy/vps/export_backup.sh"
 STATE_DIR=${SHARIPOVAI_BACKUP_TIMER_STATE_DIR:-/var/lib/sharipovai/backup}
 STATUS_FILE="$STATE_DIR/last_timer_run.json"
+DEPLOY_LOCK=${LOCK_FILE:-/run/lock/sharipovai-deploy.lock}
 
 fail() { printf '[backup-timer] ERROR: %s\n' "$*" >&2; exit 1; }
 [[ "$APP_DIR" == /* && "$APP_DIR" != *$'\n'* && "$APP_DIR" != *'/../'* ]] || fail 'APP_DIR must be a safe absolute path'
 [[ "$STATE_DIR" == /* && "$STATE_DIR" != *$'\n'* && "$STATE_DIR" != *'/../'* ]] || fail 'state directory must be a safe absolute path'
+[[ "$DEPLOY_LOCK" == /* && "$DEPLOY_LOCK" != *$'\n'* && "$DEPLOY_LOCK" != *'/../'* ]] || fail 'deployment lock must be a safe absolute path'
 [[ -r "$EXPORTER" ]] || fail "backup exporter is missing or not readable: $EXPORTER"
 mkdir -p -m 0700 "$STATE_DIR"
 
@@ -31,6 +33,16 @@ PY
   chmod 0600 "$tmp"
   mv -f "$tmp" "$STATUS_FILE"
 }
+
+# Hold the updater's shared lock for the whole scheduled export. Checking only
+# .export.lock allowed a new hourly backup during the updater's build/cutover.
+# The updater's own mandatory exporter runs directly under its exclusive lock.
+exec 8>"$DEPLOY_LOCK"
+if ! flock -sn 8; then
+  write_status SKIPPED_ACTIVE_DEPLOYMENT 75
+  printf '[backup-timer] SKIPPED_ACTIVE_DEPLOYMENT: supervised release owns the lock\n'
+  exit 0
+fi
 
 set +e
 SHARIPOVAI_BACKUP_LOCK_BUSY_EXIT=75 bash "$EXPORTER"
