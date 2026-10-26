@@ -2,7 +2,11 @@
 from __future__ import annotations
 
 import io
+import gzip
+import hashlib
+import json
 import os
+import sqlite3
 import subprocess
 import tarfile
 from pathlib import Path
@@ -69,6 +73,49 @@ def test_budget_stops_when_concurrent_work_consumes_disk():
     with pytest.raises(RuntimeError, match="budget exhausted"):
         writer.write(b"second")
     assert output.getvalue() == b"first"
+
+
+def test_empty_compressor_writes_do_not_probe_disk_but_real_writes_keep_floor(monkeypatch):
+    scope = embedded("LOGICAL_SNAPSHOT")
+    probes = []
+    def available(_):
+        probes.append(True)
+        return SimpleNamespace(free=FLOOR + MIB + 8)
+    monkeypatch.setattr(scope["shutil"], "disk_usage", available)
+    budget = scope["StagingBudget"](".", FLOOR)
+    output = io.BytesIO()
+    assert budget.write(output, b"") == 0
+    assert len(probes) == 1 and budget.remaining == 8
+    monkeypatch.setattr(scope["shutil"], "disk_usage", lambda _: SimpleNamespace(free=FLOOR))
+    with pytest.raises(RuntimeError, match="disk budget exhausted"):
+        budget.write(output, b"a")
+    assert not output.getvalue()
+
+
+def test_balanced_compression_retains_exact_sqlite_stream_and_readback(tmp_path, monkeypatch):
+    scope = embedded("LOGICAL_SNAPSHOT")
+    levels = []
+    original = gzip.GzipFile
+    def observed(*args, **kwargs):
+        if kwargs.get("mode") == "wb":
+            levels.append(kwargs.get("compresslevel"))
+        return original(*args, **kwargs)
+    monkeypatch.setattr(gzip, "GzipFile", observed)
+    with sqlite3.connect(":memory:") as source:
+        source.execute("CREATE TABLE ledger(id INTEGER PRIMARY KEY, amount REAL, evidence TEXT, digest BLOB)")
+        source.execute("INSERT INTO ledger VALUES(1, ?, ?, ?)", (-1.25, "real loss\n世界\x00tail", b"\x00\xff"))
+        source.commit()
+        target = tmp_path / "history.gz"
+        result = scope["logical_snapshot"](source, target, scope["StagingBudget"](tmp_path, 0))
+        raw = gzip.decompress(target.read_bytes())
+        assert levels == [6]
+        assert hashlib.sha256(raw).hexdigest() == result["stream_sha256"]
+        assert len(raw) == result["uncompressed_bytes"]
+        with sqlite3.connect(tmp_path / "restored.db") as restored:
+            for statement in raw.splitlines():
+                restored.execute(json.loads(statement))
+            assert restored.execute("PRAGMA integrity_check").fetchall() == [("ok",)]
+            assert restored.execute("SELECT * FROM ledger").fetchall() == source.execute("SELECT * FROM ledger").fetchall()
 
 
 def test_budget_rejects_floor_without_opening_an_archive():
