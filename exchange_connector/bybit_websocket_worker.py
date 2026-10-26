@@ -105,8 +105,12 @@ class BybitWebSocketWorker:
 
     def status(self) -> dict[str, Any]:
         state_status = self.state.status()
+        missing = sorted(set(self.symbols) - set(state_status.get("quote_ages_seconds", {})))
         return {
             **state_status,
+            "verified": state_status.get("verified") is True and not missing,
+            "missing_symbols": missing,
+            "quote_max_age_seconds": self.state.max_age_seconds,
             "enabled": self.enabled(),
             "worker_running": bool(self._thread and self._thread.is_alive()),
             "url": self.url,

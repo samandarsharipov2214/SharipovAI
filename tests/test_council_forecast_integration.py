@@ -56,6 +56,23 @@ def test_constructor_initializes_optional_service_and_cycle_metrics(tmp_path, mo
     assert loop.work_metrics()["cycle_count_this_process"] == 1
 
 
+def test_failed_cycle_is_not_a_successful_heartbeat(tmp_path, monkeypatch):
+    loop, _, _, _, _ = _build_loop(tmp_path, monkeypatch)
+    def fail():
+        raise RuntimeError('injected fixture failure')
+    monkeypatch.setattr(loop, '_capture_tick', fail)
+    with pytest.raises(RuntimeError):
+        loop.tick()
+    metrics = loop.work_metrics()
+    assert metrics['last_successful_cycle_at_ms'] == 0
+    assert metrics['cycle_errors_this_process'] == 1
+    assert metrics['last_cycle_error'] == 'RuntimeError'
+    monkeypatch.setattr(loop, '_capture_tick', lambda: None)
+    loop.tick()
+    assert loop.work_metrics()['last_successful_cycle_at_ms'] > 0
+    assert loop.work_metrics()['last_cycle_error'] == ''
+
+
 def test_absent_optional_service_rejects_even_a_persisted_promoted_forecast(tmp_path, monkeypatch):
     loop, stream, plan, runtime, clock = configured(tmp_path, monkeypatch)
     forecast = loop.forecast_service.forecast(SYMBOL, stream.current, as_of_ms=clock.now_ms())

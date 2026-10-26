@@ -43,6 +43,7 @@ class SafeAIOrganRuntimeMonitor(AIOrganRuntimeMonitor):
         while not self._stop.wait(self.interval_seconds):
             try:
                 self.refresh()
+                self._recovery_cycle()
             except Exception as exc:
                 with self._lock:
                     self._last_error = f"{type(exc).__name__}: {exc}"

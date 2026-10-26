@@ -195,6 +195,10 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
             self._wait_count_at_start = int(self._state.get("suppressed_wait_events", 0) or 0)
             self._cycle_count = 0
             self._last_cycle_duration = None
+            self._last_cycle_at_ms = 0
+            self._last_successful_cycle_at_ms = 0
+            self._cycle_errors = 0
+            self._last_cycle_error = ""
             self._monitor_started = time.monotonic()
 
     def tick(self) -> None:
@@ -202,8 +206,16 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         started = time.monotonic()
         try:
             self._capture_tick()
+        except Exception as exc:
+            self._cycle_errors += 1
+            self._last_cycle_error = type(exc).__name__
+            raise
+        else:
+            self._last_successful_cycle_at_ms = int(time.time() * 1000)
+            self._last_cycle_error = ""
         finally:
             self._cycle_count += 1
+            self._last_cycle_at_ms = int(time.time() * 1000)
             self._last_cycle_duration = time.monotonic() - started
 
     def _capture_tick(self) -> None:
@@ -1927,6 +1939,10 @@ class CouncilAuthorizedPaperLoop(AutonomousPaperLoop):
         elapsed = max(time.monotonic() - self._monitor_started, .001)
         suppressed = int(self._state.get("suppressed_wait_events", 0) or 0)
         return {"cycle_count_this_process": self._cycle_count,
+            "last_cycle_at_ms": self._last_cycle_at_ms,
+            "last_successful_cycle_at_ms": self._last_successful_cycle_at_ms,
+            "cycle_errors_this_process": self._cycle_errors,
+            "last_cycle_error": self._last_cycle_error,
             "last_cycle_duration_seconds": self._last_cycle_duration, "tick_seconds": self.tick_seconds,
             "suppressed_wait_lifetime": suppressed,
             "suppressed_wait_this_process": max(0, suppressed - self._wait_count_at_start),
