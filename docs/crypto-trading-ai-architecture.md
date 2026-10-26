@@ -369,3 +369,36 @@ until reviewed reconstruction; source financial history is preserved. Genuine
 losses remain useful evidence. Final holdout stays closed until the existing data
 coverage and review gates pass. Unvalidated models retain the existing SHADOW
 fallback and cannot authorize execution.
+
+
+### Functional progress and bounded runtime recovery
+
+The existing 30-second AI-organ monitor owns the watchdog; no new service,
+model or financial executor is introduced. `metrics.functional_results` records
+source timestamps, age, deadline and validity; `last_valid_result_at_ms` is not
+the monitor heartbeat. Future-dated evidence is invalid. General Controller and
+Virtual Execution require a recently successful PAPER cycle; failed cycles have
+separate counters/timestamps and cannot refresh that success. A connected Bybit
+socket is only fully verified when all configured symbols have fresh quotes.
+WAIT or a risk refusal can be a successfully completed cycle, not an execution.
+
+The watchdog may only call the existing idempotent `start()` for an initialized,
+dead market/news/learning thread. It never kills live/stalled threads, starts a
+financial worker, restarts Docker, changes policy, or calls an LLM. Intentional
+stop, disabled policy, shutdown, load >1.5, available RAM <1 GiB or free disk
+<2 GiB prevent recovery. File-size observations cover the canonical SQLite/WAL
+without modifying them or running a full integrity scan.
+An optimistic database claim is persisted before start. There are at most three
+attempts per worker (60/300/1800-second backoff), retained across monitor/process
+restart; exhausted budgets require investigation, never automatic reset. A start
+remains pending until a later healthy observation contains a fresh functional
+result newer than the claim. Ordinary worker liveness is not recovery success.
+
+Claims and verification live in `system_runtime/ai_worker_recovery:<organ>`;
+summary lives in `system_runtime/ai_worker_recovery`, written only on outcome
+change or every five minutes to bound write amplification. The existing API
+returns this alongside nine-organ status. Runtime probes continuously observe real quote delivery ages, disconnects, source
+failures and progress. The existing host self-healing checks HTTP and backups.
+A successful manual DNS/TLS probe is evidence at that time, not a promise of
+continuous DNS/TLS reachability or a substitute for fresh source results.
+No periodic full SQLite integrity scan or new external API polling is added.

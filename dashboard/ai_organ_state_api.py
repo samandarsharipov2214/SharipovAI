@@ -22,6 +22,8 @@ from exchange_connector.bybit_execution import effective_testnet_notional_cap_us
 from risk_engine import CanonicalRiskService
 from storage import ProjectDatabase, list_json_items
 
+from .ai_runtime_watchdog import RuntimeWatchdog
+
 
 @dataclass(frozen=True, slots=True)
 class OrganRuntimeState:
@@ -58,6 +60,10 @@ class AIOrganRuntimeMonitor:
         self._thread: threading.Thread | None = None
         self._lock = threading.RLock()
         self._last_error = ""
+        self._refresh_lock = threading.RLock()
+        self._probe_results: dict[str, dict[str, Any]] = {}
+        self._runtime_detail: dict[str, Any] = {}
+        self.watchdog = RuntimeWatchdog(app, database, self.clock_ms)
         self._observations: dict[str, tuple[int, int]] = {}
 
     def start(self) -> None:
@@ -75,6 +81,10 @@ class AIOrganRuntimeMonitor:
             thread.join(timeout=2.0)
 
     def refresh(self) -> dict[str, Any]:
+        with self._refresh_lock:
+            return self._refresh_once()
+
+    def _refresh_once(self) -> dict[str, Any]:
         states = self._evaluate()
         now = self.clock_ms()
         for state in states:
@@ -119,12 +129,14 @@ class AIOrganRuntimeMonitor:
             "last_error": last_error,
             "evidence_max_age_seconds": self.evidence_max_age_seconds,
             "provider_policy": provider_policy(),
+            "recovery": (self.database.get_json('system_runtime', 'ai_worker_recovery') or {}).get('value'),
         }
 
     def _run(self) -> None:
         while not self._stop.wait(self.interval_seconds):
             try:
                 self.refresh()
+                self._recovery_cycle()
             except Exception as exc:
                 with self._lock:
                     self._last_error = f"{type(exc).__name__}: {exc}"
@@ -146,6 +158,8 @@ class AIOrganRuntimeMonitor:
         states = []
         for organ in CANONICAL_AI_ORGANS:
             started = time.perf_counter()
+            self._probe_results = {}
+            self._runtime_detail = {}
             try:
                 evidence, blockers = getattr(self, "_" + organ.id)()
             except Exception as exc:
@@ -166,7 +180,11 @@ class AIOrganRuntimeMonitor:
                 learned = {}  # Missing quality telemetry cannot hide other organs.
             quality = {key: learned.get(key) for key in ('outcome_count', 'direction_accuracy',
                        'mean_confidence_error', 'attributed_pnl', 'attributed_drawdown')}
-            metrics = {'probe_latency_ms': round((time.perf_counter()-started)*1000, 3),
+            valid_results = [v['at_ms'] for v in self._probe_results.values() if v['valid']]
+            metrics = {'functional_results': dict(self._probe_results),
+                       'last_valid_result_at_ms': min(valid_results) if valid_results else None,
+                       'runtime': dict(self._runtime_detail),
+                       'probe_latency_ms': round((time.perf_counter()-started)*1000, 3),
                        'observations': observations, 'degraded_observations': failures,
                        'availability_fraction': (observations-failures)/observations,
                        'counter_scope': 'current_monitor_process', 'blocker_count': len(blockers),
@@ -215,6 +233,7 @@ class AIOrganRuntimeMonitor:
             evidence.append("control_plane_api_installed")
         else:
             blockers.append("control plane API is not installed")
+        self._paper_progress(evidence, blockers)
         runtime_database = getattr(self.app.state, "project_database", None)
         if _same_database(runtime_database, self.database):
             evidence.append("shared_project_database")
@@ -234,6 +253,16 @@ class AIOrganRuntimeMonitor:
             blockers.append(f"market worker status failed: {type(exc).__name__}: {exc}")
             return evidence, blockers
         evidence.append("canonical_bybit_public_worker")
+        self._runtime_detail.update({key: status.get(key) for key in
+            ('connected', 'disconnect_count', 'quote_count', 'missing_symbols', 'quote_ages_seconds', 'last_error')})
+        expected = set(status.get('symbols') or ())
+        ages = status.get('quote_ages_seconds') or {}
+        if expected and expected - set(ages):
+            blockers.append('configured symbols lack quotes: ' + ', '.join(sorted(expected-set(ages))))
+        for symbol, age in ages.items():
+            if isinstance(age, (int, float)) and math.isfinite(age):
+                self._append_freshness(evidence, blockers, 'quote:' + symbol,
+                    self.clock_ms() - int(age * 1000), maximum=float(status.get('quote_max_age_seconds') or 2.0))
         if status.get("database_backed") is True:
             evidence.append("verified_quotes_persisted")
         else:
@@ -271,6 +300,8 @@ class AIOrganRuntimeMonitor:
                     if isinstance(item, dict) and item.get("status") != "active"]
         if degraded:
             blockers.append("News Intelligence sources degraded: " + ", ".join(degraded))
+        self._runtime_detail.update({key: snapshot.get(key) for key in
+            ('cycle_count', 'last_cycle_duration_ms', 'last_error')})
         last_cycle = int(snapshot.get("last_cycle_at_ms") or 0)
         evidence.append(f"news_cycle_at_ms={last_cycle}")
         self._append_freshness(evidence, blockers, "news_cycle", last_cycle)
@@ -327,6 +358,7 @@ class AIOrganRuntimeMonitor:
             return evidence, blockers
         evidence.append("canonical_council_paper_runtime")
         thread = getattr(loop, "_thread", None)
+        self._paper_progress(evidence, blockers)
         configured = _truthy_default("AUTONOMOUS_PAPER_ENABLED", True)
         running = bool(thread and thread.is_alive())
         if configured and running:
@@ -408,6 +440,8 @@ class AIOrganRuntimeMonitor:
                 maximum=max(self.evidence_max_age_seconds, 180.0),
             )
             value = current.get("value") if isinstance(current.get("value"), dict) else {}
+            self._runtime_detail.update({key: value.get(key) for key in
+                ('status', 'learning_summary', 'errors', 'updated_at_ms')})
             evidence.append(f"verified_outcomes={value.get('learning_summary', {}).get('verified_outcome_count', 0)}")
             if value.get("status") in {"error", "blocked"}:
                 blockers.append(f"self-learning supervisor status={value.get('status')}")
@@ -419,6 +453,7 @@ class AIOrganRuntimeMonitor:
             evidence.append("global_auth_guard")
         else:
             blockers.append("critical: global authentication guard is absent")
+        self._append_freshness(evidence, blockers, 'safety_policy_probe', self.clock_ms())
         if _truthy("EXECUTION_KILL_SWITCH"):
             evidence.append("execution_kill_switch_active")
         else:
@@ -432,6 +467,25 @@ class AIOrganRuntimeMonitor:
         else:
             evidence.append("legacy_exchange_credentials_blocked")
         return evidence, blockers
+
+    def _paper_progress(self, evidence, blockers):
+        loop = getattr(self.app.state, 'autonomous_paper_loop', None)
+        metrics = getattr(loop, 'work_metrics', None)
+        if not _truthy_default('AUTONOMOUS_PAPER_ENABLED', True):
+            return
+        if not callable(metrics):
+            blockers.append('canonical PAPER cycle progress unavailable')
+            return
+        value = metrics()
+        self._runtime_detail.update(value)
+        self._append_freshness(evidence, blockers, 'paper_successful_cycle',
+            int(value.get('last_successful_cycle_at_ms') or 0),
+            maximum=max(60.0, float(value.get('tick_seconds') or 5.0) * 6))
+        if value.get('last_cycle_error'):
+            blockers.append('last PAPER cycle failed: ' + str(value['last_cycle_error']))
+
+    def _recovery_cycle(self):
+        return self.watchdog.cycle(stopping=self._stop.is_set())
 
     def _append_latest_json(
         self,
@@ -485,9 +539,13 @@ class AIOrganRuntimeMonitor:
         if timestamp_ms <= 0:
             blockers.append(f"{label} timestamp is missing")
             return
-        age = max(0.0, (self.clock_ms() - timestamp_ms) / 1000.0)
+        age = (self.clock_ms() - timestamp_ms) / 1000.0
         limit = self.evidence_max_age_seconds if maximum is None else float(maximum)
+        self._probe_results[label] = {'at_ms': timestamp_ms, 'age_seconds': age,
+            'maximum_age_seconds': limit, 'valid': 0 <= age <= limit}
         evidence.append(f"{label}_age_seconds={age:.3f}")
+        if age < 0:
+            blockers.append(f"{label} evidence is future-dated")
         if age > limit:
             blockers.append(f"{label} evidence is stale ({age:.1f}s > {limit:.1f}s)")
 
