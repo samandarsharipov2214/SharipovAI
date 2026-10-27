@@ -10,8 +10,8 @@ Operator env (all default off / empty):
   start a fresh default state without wiping the previous book in the database.
 - ``AUTONOMOUS_PAPER_REBASE_TO_INITIAL=1`` — fail-closed opt-in to reset the
   live cash/equity/peak book to ``initial_cash`` when positions are empty.
-  Trades and events stay. Default off so tests and production cannot silently
-  wipe a book. VPS rebase is a later deploy step.
+  Consumed once per book, including an already aligned book. Trades and events
+  stay. Subsequent restarts preserve gains/losses even if the opt-in remains set.
 
 ``PAPER_FLAT_RECOVERY_POSITION_FACTOR`` — when the book is FLAT and equity is
 below ``initial_cash``, a new BUY is sized at half of ``max_position_percent``.
@@ -19,6 +19,7 @@ below ``initial_cash``, a new BUY is sized at half of ``max_position_percent``.
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -74,24 +75,37 @@ def maybe_rebase_paper_book(
     """
     if not rebase_to_initial_enabled():
         return state, ""
+    # This opt-in is a one-time capital operation, not a startup balance target.
+    # Legacy rebased books remain untouched: missing old provenance must never
+    # be repaired by inventing a baseline or resetting their current capital.
+    if state.get("paper_rebased_to_initial"):
+        return state, ""
     positions = state.get("positions")
     if not isinstance(positions, dict) or positions:
         return state, ""
+    if state.get("pending_authorized_executions") or state.get("pending_protective_executions"):
+        return state, ""
+    target = _finite_or(initial_cash, None)
+    if target is None or target <= 0:
+        raise ValueError("paper rebase requires positive finite initial cash")
     cash = _finite_or(state.get("cash"), 0.0) or 0.0
     equity = _finite_or(state.get("equity"), cash) or cash
     peak = _finite_or(state.get("peak_equity"), equity) or equity
-    recorded = state.get("configured_initial_cash")
-    recorded_cash = None if recorded in (None, "") else _finite_or(recorded, None)
-    already_aligned = (
-        abs(cash - initial_cash) <= 1e-12
-        and abs(equity - initial_cash) <= 1e-12
-        and abs(peak - initial_cash) <= 1e-12
-        and recorded_cash is not None
-        and abs(recorded_cash - initial_cash) <= 1e-12
-    )
-    if already_aligned:
-        return state, ""
     next_state = dict(state)
+    next_state["paper_capital_rebase"] = {
+        "schema_version": 1,
+        "recorded_at_ms": int(time.time() * 1000),
+        "source": "explicit_one_time_paper_rebase",
+        "cash_before": cash,
+        "equity_before": equity,
+        "peak_equity_before": peak,
+        "configured_initial_cash_before": _finite_or(state.get("configured_initial_cash"), None),
+        "realized_pnl_before": _finite_or(state.get("realized_pnl"), None),
+        "total_fees_before": _finite_or(state.get("total_fees"), None),
+        "cash_after": target,
+        "capital_adjustment": target - cash,
+        "historical_capital_reconstructed": False,
+    }
     next_state["cash"] = float(initial_cash)
     next_state["equity"] = float(initial_cash)
     next_state["peak_equity"] = float(initial_cash)
