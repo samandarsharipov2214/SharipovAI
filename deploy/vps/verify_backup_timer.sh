@@ -49,12 +49,12 @@ try:
     value = json.load(open(sys.argv[1], encoding="utf-8"))
 except (OSError, ValueError, TypeError) as exc:
     raise SystemExit(f"invalid timer status: {exc}")
-if value.get("schema") != 1 or value.get("outcome") not in {"VERIFIED", "SKIPPED_ACTIVE_EXPORT", "FAILED"}:
+if value.get("schema") != 1 or value.get("outcome") not in {"VERIFIED", "SKIPPED_ACTIVE_EXPORT", "SKIPPED_ACTIVE_DEPLOYMENT", "FAILED"}:
     raise SystemExit("invalid timer status schema or outcome")
 code = value.get("exit_code")
 if (type(code) is not int or not 0 <= code <= 255
         or value["outcome"] == "VERIFIED" and code != 0
-        or value["outcome"] == "SKIPPED_ACTIVE_EXPORT" and code != 75
+        or value["outcome"] in {"SKIPPED_ACTIVE_EXPORT", "SKIPPED_ACTIVE_DEPLOYMENT"} and code != 75
         or value["outcome"] == "FAILED" and code == 0):
     raise SystemExit("invalid timer status exit code")
 print(value["outcome"])

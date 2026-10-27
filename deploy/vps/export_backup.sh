@@ -380,6 +380,7 @@ import os
 import shutil
 import sqlite3
 import sys
+import time
 from pathlib import Path
 
 source = Path("/source")
@@ -437,6 +438,8 @@ class StagingBudget:
         self.remaining = shutil.disk_usage(root).free - floor - 1024 * 1024
 
     def write(self, stream, data):
+        if not data:
+            return 0
         if len(data) > self.remaining or shutil.disk_usage(self.root).free < self.floor + len(data) + 1024 * 1024:
             raise RuntimeError("logical snapshot disk budget exhausted")
         count = stream.write(data)
@@ -483,7 +486,9 @@ def logical_snapshot(src, target, budget):
     statements = raw_bytes = 0
     logical_bytes = src.execute("PRAGMA page_count").fetchone()[0] * src.execute("PRAGMA page_size").fetchone()[0]
     with target.open("xb") as stream:
-        with gzip.GzipFile(fileobj=BudgetStream(stream, budget), mode="wb", mtime=0) as output:
+        # Level 9 spent scarce CPU on marginal size savings while pinning the
+        # source WAL. Keep the lossless format, readback and hard byte budget.
+        with gzip.GzipFile(fileobj=BudgetStream(stream, budget), mode="wb", mtime=0, compresslevel=6) as output:
             for statement in src.iterdump():
                 if virtual_inserts and statement.startswith(virtual_inserts):
                     continue
@@ -514,6 +519,9 @@ for db in sorted(source.iterdir()):
     if db.suffix.lower() not in sqlite_suffixes:
         continue
     target_db = destination / db.name
+    started = time.monotonic()
+    print(json.dumps({"phase": "database_start", "database": db.name,
+                      "format": snapshot_format}), flush=True)
     with sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True) as src:
         check_space()
         src.execute("BEGIN")
@@ -521,6 +529,8 @@ for db in sorted(source.iterdir()):
         if snapshot_format == "logical":
             if src.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
                 raise RuntimeError("source SQLite quick_check failed")
+            print(json.dumps({"phase": "source_verified", "database": db.name,
+                              "elapsed_seconds": round(time.monotonic() - started, 3)}), flush=True)
             target = target_db.with_name(db.name + ".sql.jsonl.gz")
             metadata = logical_snapshot(src, target, budget)
             metadata.update(path=target.name, database_path=db.name)
@@ -533,6 +543,8 @@ for db in sorted(source.iterdir()):
                     raise RuntimeError("snapshot SQLite quick_check failed")
         if src.in_transaction:
             src.execute("ROLLBACK")
+    print(json.dumps({"phase": "database_snapshot_verified", "database": db.name,
+                      "elapsed_seconds": round(time.monotonic() - started, 3)}), flush=True)
 if logical_databases:
     (destination / ".sqlite-logical.json").write_text(json.dumps(logical_databases))
 
