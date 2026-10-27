@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
+
+import pytest
 
 from autonomous_trading.council_provider import _risk_blocks
 from autonomous_trading.loop import AutonomousPaperLoop
@@ -158,6 +161,72 @@ def test_rebase_helper_does_nothing_unless_env_set(monkeypatch) -> None:
     skipped, skipped_reason = maybe_rebase_paper_book(held, initial_cash=100.0)
     assert skipped["cash"] == 9_200.0
     assert skipped_reason == ""
+
+
+@pytest.mark.parametrize("cash", [112.0, 87.0])
+def test_rebase_does_not_erase_later_pnl_after_restart(monkeypatch, cash):
+    monkeypatch.setenv("AUTONOMOUS_PAPER_REBASE_TO_INITIAL", "1")
+    original = {"cash": 9200., "equity": 9200., "peak_equity": 10000.,
+                "positions": {}, "realized_pnl": -800., "total_fees": 790.,
+                "trades": [{"trade_id": "historical"}], "events": []}
+    rebased, _ = maybe_rebase_paper_book(original, initial_cash=100.)
+    assert original["cash"] == 9200.  # Input and history are never rewritten.
+    receipt = rebased["paper_capital_rebase"]
+    assert receipt["cash_before"] == 9200. and receipt["capital_adjustment"] == -9100.
+    assert receipt["realized_pnl_before"] == -800. and receipt["total_fees_before"] == 790.
+    assert receipt["historical_capital_reconstructed"] is False
+    persisted = json.loads(json.dumps(rebased))
+    persisted.update(cash=cash, equity=cash, realized_pnl=-800. + cash - 100.)
+    after, reason = maybe_rebase_paper_book(persisted, initial_cash=100.)
+    assert after is persisted and reason == "" and after["cash"] == cash
+    assert after["paper_capital_rebase"] == receipt and after["trades"] == original["trades"]
+
+
+def test_aligned_book_consumes_rebase_once_before_later_trades(monkeypatch):
+    monkeypatch.setenv("AUTONOMOUS_PAPER_REBASE_TO_INITIAL", "1")
+    state = {"cash": 100., "equity": 100., "peak_equity": 100.,
+             "configured_initial_cash": 100., "positions": {}}
+    rebased, _ = maybe_rebase_paper_book(state, initial_cash=100.)
+    assert rebased["paper_rebased_to_initial"] is True
+    assert rebased["paper_capital_rebase"]["capital_adjustment"] == 0.
+    rebased.update(cash=105., equity=105.)
+    assert maybe_rebase_paper_book(rebased, initial_cash=100.) == (rebased, "")
+
+
+def test_legacy_rebase_cannot_invent_missing_capital_history(monkeypatch):
+    monkeypatch.setenv("AUTONOMOUS_PAPER_REBASE_TO_INITIAL", "1")
+    state = {"cash": 100.18884, "equity": 100.18884, "positions": {},
+             "paper_rebased_to_initial": True}
+    after, reason = maybe_rebase_paper_book(state, initial_cash=100.)
+    assert after is state and reason == ""
+    assert "paper_capital_rebase" not in after
+
+
+@pytest.mark.parametrize("pending", ["pending_authorized_executions", "pending_protective_executions"])
+def test_rebase_waits_for_pending_execution(monkeypatch, pending):
+    monkeypatch.setenv("AUTONOMOUS_PAPER_REBASE_TO_INITIAL", "1")
+    state = {"cash": 9200., "equity": 9200., "positions": {}, pending: {"BTCUSDT": "reserved"}}
+    assert maybe_rebase_paper_book(state, initial_cash=100.) == (state, "")
+
+
+def test_one_time_rebase_survives_database_reload(tmp_path, monkeypatch):
+    first = _loop(tmp_path, monkeypatch)
+    monkeypatch.setenv("AUTONOMOUS_PAPER_REBASE_TO_INITIAL", "1")
+    second = AutonomousPaperLoop(FakeStream(_quote()), database=first.database)
+    receipt = dict(second._state["paper_capital_rebase"])
+    # Isolated database only: represent a later flat book after valid profits.
+    second._state.update(cash=112., equity=112., realized_pnl=12.)
+    second._save_database_state()
+    third = AutonomousPaperLoop(FakeStream(_quote()), database=first.database)
+    assert third._state["cash"] == 112.
+    assert third._state["paper_capital_rebase"] == receipt
+
+
+@pytest.mark.parametrize("initial", [float("nan"), float("inf"), 0., -1.])
+def test_rebase_rejects_invalid_target(monkeypatch, initial):
+    monkeypatch.setenv("AUTONOMOUS_PAPER_REBASE_TO_INITIAL", "1")
+    with pytest.raises(ValueError, match="positive finite"):
+        maybe_rebase_paper_book({"cash": 100., "positions": {}}, initial_cash=initial)
 
 
 def test_mainnet_still_compiled_out_and_kill_switch_untouched() -> None:
